@@ -1,0 +1,30 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - gosimple
+    - ineffassign
+    - bodyclose
+    - errorlint
+    - gosec
+    - misspell
+    - noctx
+    - sqlclosecheck
+    - revive
+  settings:
+    staticcheck:
+      checks: ["all"]
+    revive:
+      rules:
+        - name: exported
+
+formatters:
+  enable:
+    - gofmt
+
+run:
+  timeout: 5m

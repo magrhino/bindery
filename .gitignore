@@ -1,0 +1,48 @@
+# Binaries
+/bindery
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go
+/vendor/
+*.test
+coverage.out
+coverage.html
+
+# Frontend
+web/node_modules/
+web/dist/
+web/.vite/
+web/tsconfig.tsbuildinfo
+
+# Embedded frontend build artifacts (rebuilt by CI/Makefile)
+internal/webui/dist/assets/
+internal/webui/dist/index.html
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config / runtime
+*.db
+*.db-shm
+*.db-wal
+/config/
+/data/
+
+# Docker
+.docker/
+
+# Environment
+.env
+.env.local
+.env.*.local

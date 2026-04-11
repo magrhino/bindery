@@ -1,0 +1,12 @@
+apiVersion: v2
+name: bindery
+description: Automated book download manager for Usenet
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/vavallee/bindery
+sources:
+  - https://github.com/vavallee/bindery
+maintainers:
+  - name: vavallee
+    url: https://github.com/vavallee
