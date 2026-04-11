@@ -63,6 +63,15 @@ func (h *IndexerHandler) Create(w http.ResponseWriter, r *http.Request) {
 		idx.Categories = []int{7000, 7020}
 	}
 
+	// Check for duplicate URL
+	existing, _ := h.indexers.List(r.Context())
+	for _, e := range existing {
+		if e.URL == idx.URL {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "indexer with this URL already exists"})
+			return
+		}
+	}
+
 	if err := h.indexers.Create(r.Context(), &idx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

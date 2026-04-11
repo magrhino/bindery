@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -193,6 +194,13 @@ func (h *AuthorHandler) fetchAuthorBooks(author *models.Author) {
 		return
 	}
 
+	// Track titles we've already added (case-insensitive) to avoid OL duplicates
+	existingBooks, _ := h.books.ListByAuthor(ctx, author.ID)
+	seenTitles := make(map[string]bool)
+	for _, eb := range existingBooks {
+		seenTitles[strings.ToLower(eb.Title)] = true
+	}
+
 	var added int
 	for _, b := range books {
 		// Only add books by this author
@@ -202,10 +210,18 @@ func (h *AuthorHandler) fetchAuthorBooks(author *models.Author) {
 		b.AuthorID = author.ID
 		b.Monitored = author.Monitored
 
+		// Skip if foreign ID already exists
 		existing, _ := h.books.GetByForeignID(ctx, b.ForeignID)
 		if existing != nil {
 			continue
 		}
+
+		// Skip duplicate titles (OpenLibrary often has multiple works for the same book)
+		normalizedTitle := strings.ToLower(b.Title)
+		if seenTitles[normalizedTitle] {
+			continue
+		}
+		seenTitles[normalizedTitle] = true
 
 		if err := h.books.Create(ctx, &b); err != nil {
 			slog.Warn("failed to create book", "title", b.Title, "error", err)

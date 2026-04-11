@@ -44,7 +44,7 @@ func (c *Client) AddURL(ctx context.Context, nzbURL, title, category string, pri
 		"nzbname":  {title},
 		"cat":      {category},
 		"priority": {fmt.Sprintf("%d", priority)},
-		"pp":       {"1"}, // repair only, skip unpack for books
+		"pp":       {"3"}, // repair + unpack + delete archives
 	}
 
 	var resp AddURLResponse
