@@ -10,8 +10,8 @@ service:
   port: 8787
 
 ingress:
-  enabled: true
-  host: bindery.autonomy.ninja
+  enabled: false
+  host: bindery.example.com
   entryPoints:
     - internal-https
   certResolver: internal
@@ -24,9 +24,9 @@ persistence:
     mountPath: /config
 
 nfs:
-  enabled: true
-  server: 192.168.1.4
-  path: /volume1/MEDIA
+  enabled: false
+  server: ""
+  path: /volume1/media
   mountPath: /media
 
 env:
@@ -34,8 +34,8 @@ env:
   BINDERY_DB_PATH: /config/bindery.db
   BINDERY_DATA_DIR: /config
   BINDERY_LOG_LEVEL: info
-  BINDERY_DOWNLOAD_DIR: /media/downloads/complete/books
-  BINDERY_LIBRARY_DIR: /media/BOOKS
+  BINDERY_DOWNLOAD_DIR: /downloads
+  BINDERY_LIBRARY_DIR: /books
 
 resources:
   requests:
