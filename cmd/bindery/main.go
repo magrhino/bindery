@@ -9,7 +9,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/vavallee/bindery/internal/api"
 	"github.com/vavallee/bindery/internal/config"
+	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/metadata"
+	"github.com/vavallee/bindery/internal/metadata/googlebooks"
+	"github.com/vavallee/bindery/internal/metadata/openlibrary"
 	"github.com/vavallee/bindery/internal/webui"
 )
 
@@ -40,13 +45,35 @@ func main() {
 		"port", cfg.Port,
 	)
 
+	// Database
+	database, err := db.Open(cfg.DBPath)
+	if err != nil {
+		slog.Error("failed to open database", "error", err)
+		os.Exit(1)
+	}
+	defer database.Close()
+
+	// Metadata providers
+	olClient := openlibrary.New()
+	var enrichers []metadata.Provider
+
+	// Google Books enricher (optional, needs API key from settings)
+	settingsRepo := db.NewSettingsRepo(database)
+	if setting, _ := settingsRepo.Get(nil, "google_books_api_key"); setting != nil && setting.Value != "" {
+		enrichers = append(enrichers, googlebooks.New(setting.Value))
+		slog.Info("google books enrichment enabled")
+	}
+
+	metaAgg := metadata.NewAggregator(olClient, enrichers...)
+	searchHandler := api.NewSearchHandler(metaAgg)
+
+	// Router
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5))
 
-	// API routes
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -59,6 +86,11 @@ func main() {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"version":"` + version + `","commit":"` + commit + `","buildDate":"` + date + `"}`))
 		})
+
+		// Metadata search (no DB writes, pure lookup)
+		r.Get("/search/author", searchHandler.SearchAuthors)
+		r.Get("/search/book", searchHandler.SearchBooks)
+		r.Get("/book/lookup", searchHandler.LookupByISBN)
 	})
 
 	// Serve embedded frontend
@@ -69,7 +101,6 @@ func main() {
 	}
 	fileServer := http.FileServer(http.FS(distFS))
 	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		// Try to serve the exact file first
 		path := r.URL.Path[1:]
 		if path == "" {
 			path = "index.html"
@@ -78,7 +109,6 @@ func main() {
 			fileServer.ServeHTTP(w, r)
 			return
 		}
-		// Fall back to index.html for SPA routing
 		r.URL.Path = "/"
 		fileServer.ServeHTTP(w, r)
 	})
