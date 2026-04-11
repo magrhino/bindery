@@ -43,8 +43,8 @@ func (s *Scanner) CheckDownloads(ctx context.Context) {
 
 	sab := sabnzbd.New(client.Host, client.Port, client.APIKey, client.UseSSL)
 
-	// Check history for completed downloads
-	history, err := sab.GetHistory(ctx, client.Category, 50)
+	// Check history for completed downloads (no category filter — match by NZO ID)
+	history, err := sab.GetHistory(ctx, "", 50)
 	if err != nil {
 		slog.Debug("failed to fetch SABnzbd history", "error", err)
 		return
