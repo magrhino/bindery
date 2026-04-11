@@ -57,6 +57,8 @@ func main() {
 	authorRepo := db.NewAuthorRepo(database)
 	bookRepo := db.NewBookRepo(database)
 	indexerRepo := db.NewIndexerRepo(database)
+	dlClientRepo := db.NewDownloadClientRepo(database)
+	downloadRepo := db.NewDownloadRepo(database)
 	settingsRepo := db.NewSettingsRepo(database)
 
 	// Metadata providers
@@ -76,6 +78,8 @@ func main() {
 	authorHandler := api.NewAuthorHandler(authorRepo, bookRepo, metaAgg)
 	bookHandler := api.NewBookHandler(bookRepo)
 	indexerHandler := api.NewIndexerHandler(indexerRepo, bookRepo, idxSearcher)
+	dlClientHandler := api.NewDownloadClientHandler(dlClientRepo)
+	queueHandler := api.NewQueueHandler(downloadRepo, dlClientRepo)
 
 	// Router
 	r := chi.NewRouter()
@@ -126,6 +130,19 @@ func main() {
 		r.Delete("/indexer/{id}", indexerHandler.Delete)
 		r.Post("/indexer/{id}/test", indexerHandler.Test)
 		r.Get("/indexer/search", indexerHandler.SearchQuery)
+
+		// Download clients
+		r.Get("/downloadclient", dlClientHandler.List)
+		r.Post("/downloadclient", dlClientHandler.Create)
+		r.Get("/downloadclient/{id}", dlClientHandler.Get)
+		r.Put("/downloadclient/{id}", dlClientHandler.Update)
+		r.Delete("/downloadclient/{id}", dlClientHandler.Delete)
+		r.Post("/downloadclient/{id}/test", dlClientHandler.Test)
+
+		// Queue
+		r.Get("/queue", queueHandler.List)
+		r.Post("/queue/grab", queueHandler.Grab)
+		r.Delete("/queue/{id}", queueHandler.Delete)
 	})
 
 	// Serve embedded frontend
