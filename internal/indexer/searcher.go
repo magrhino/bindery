@@ -215,3 +215,69 @@ func protocolForType(t string) string {
 	}
 	return "usenet"
 }
+
+// knownForeignTags contains uppercase markers commonly found in Usenet/torrent
+// release titles that indicate a non-English release. Add more as needed.
+var knownForeignTags = []string{
+	// French
+	"FRENCH", "FRANCAIS", ".VF.", ".VF ", "VF.", " VF ", "VOSTFR", ".VOSTFR.",
+	// German
+	"GERMAN", "DEUTSCH",
+	// Spanish
+	"SPANISH", "ESPANOL", "ESPAÑOL",
+	// Dutch
+	"DUTCH", "NETHERLANDS",
+	// Italian
+	"ITALIAN", "ITALIANO",
+	// Portuguese
+	"PORTUGUESE", "PORTUGUES",
+	// Russian
+	"RUSSIAN", "RUSSE",
+	// Japanese
+	"JAPANESE", "JAPONAIS",
+	// Chinese
+	"CHINESE", "MANDARIN",
+	// Korean
+	"KOREAN",
+	// Arabic
+	"ARABIC", "ARABE",
+	// Swedish / Nordic
+	"SWEDISH", "SVENSKA", "NORWEGIAN", "DANISH",
+	// Polish
+	"POLISH", "POLSKI",
+	// Czech
+	"CZECH",
+	// Turkish
+	"TURKISH",
+	// Hindi
+	"HINDI",
+}
+
+// FilterByLanguage removes results whose titles contain known foreign-language
+// markers when lang is "en". When lang is "any" (or empty), all results pass.
+func FilterByLanguage(results []newznab.SearchResult, lang string) []newznab.SearchResult {
+	if lang == "" || lang == "any" {
+		return results
+	}
+	// Only English filtering is implemented; other specific lang targets fall
+	// through unfiltered (future work).
+	if lang != "en" {
+		return results
+	}
+
+	filtered := make([]newznab.SearchResult, 0, len(results))
+	for _, r := range results {
+		upper := strings.ToUpper(r.Title)
+		foreign := false
+		for _, tag := range knownForeignTags {
+			if strings.Contains(upper, strings.ToUpper(tag)) {
+				foreign = true
+				break
+			}
+		}
+		if !foreign {
+			filtered = append(filtered, r)
+		}
+	}
+	return filtered
+}

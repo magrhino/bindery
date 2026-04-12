@@ -116,8 +116,15 @@ func (s *Scheduler) searchWanted() {
 		return
 	}
 
+	// Read preferred language once for all books in this run
+	lang := "en"
+	if langSetting, _ := s.settings.Get(ctx, "search.preferredLanguage"); langSetting != nil {
+		lang = langSetting.Value
+	}
+
 	for _, book := range wanted {
 		results := s.searcher.SearchBook(ctx, idxs, book.Title, "")
+		results = indexer.FilterByLanguage(results, lang)
 		if len(results) == 0 {
 			continue
 		}

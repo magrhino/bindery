@@ -18,10 +18,11 @@ type IndexerHandler struct {
 	books    *db.BookRepo
 	authors  *db.AuthorRepo
 	searcher *indexer.Searcher
+	settings *db.SettingsRepo
 }
 
-func NewIndexerHandler(indexers *db.IndexerRepo, books *db.BookRepo, authors *db.AuthorRepo, searcher *indexer.Searcher) *IndexerHandler {
-	return &IndexerHandler{indexers: indexers, books: books, authors: authors, searcher: searcher}
+func NewIndexerHandler(indexers *db.IndexerRepo, books *db.BookRepo, authors *db.AuthorRepo, searcher *indexer.Searcher, settings *db.SettingsRepo) *IndexerHandler {
+	return &IndexerHandler{indexers: indexers, books: books, authors: authors, searcher: searcher, settings: settings}
 }
 
 func (h *IndexerHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -147,6 +148,14 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := h.searcher.SearchBook(r.Context(), idxs, book.Title, authorName)
+
+	// Apply language filter
+	lang := "en"
+	if s, _ := h.settings.Get(r.Context(), "search.preferredLanguage"); s != nil {
+		lang = s.Value
+	}
+	results = indexer.FilterByLanguage(results, lang)
+
 	writeJSON(w, http.StatusOK, results)
 }
 
