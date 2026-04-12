@@ -14,15 +14,16 @@ import (
 )
 
 type IndexerHandler struct {
-	indexers *db.IndexerRepo
-	books    *db.BookRepo
-	authors  *db.AuthorRepo
-	searcher *indexer.Searcher
-	settings *db.SettingsRepo
+	indexers  *db.IndexerRepo
+	books     *db.BookRepo
+	authors   *db.AuthorRepo
+	searcher  *indexer.Searcher
+	settings  *db.SettingsRepo
+	blocklist *db.BlocklistRepo
 }
 
-func NewIndexerHandler(indexers *db.IndexerRepo, books *db.BookRepo, authors *db.AuthorRepo, searcher *indexer.Searcher, settings *db.SettingsRepo) *IndexerHandler {
-	return &IndexerHandler{indexers: indexers, books: books, authors: authors, searcher: searcher, settings: settings}
+func NewIndexerHandler(indexers *db.IndexerRepo, books *db.BookRepo, authors *db.AuthorRepo, searcher *indexer.Searcher, settings *db.SettingsRepo, blocklist *db.BlocklistRepo) *IndexerHandler {
+	return &IndexerHandler{indexers: indexers, books: books, authors: authors, searcher: searcher, settings: settings, blocklist: blocklist}
 }
 
 func (h *IndexerHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -147,7 +148,15 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 		authorName = author.Name
 	}
 
-	results := h.searcher.SearchBook(r.Context(), idxs, book.Title, authorName)
+	crit := indexer.MatchCriteria{
+		Title:  book.Title,
+		Author: authorName,
+	}
+	if book.ReleaseDate != nil {
+		crit.Year = book.ReleaseDate.Year()
+	}
+
+	results := h.searcher.SearchBook(r.Context(), idxs, crit)
 
 	// Apply language filter
 	lang := "en"
@@ -155,6 +164,17 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 		lang = s.Value
 	}
 	results = indexer.FilterByLanguage(results, lang)
+
+	// Filter out blocklisted GUIDs so they never surface again.
+	if h.blocklist != nil {
+		filtered := make([]newznab.SearchResult, 0, len(results))
+		for _, res := range results {
+			if blocked, _ := h.blocklist.IsBlocked(r.Context(), res.GUID); !blocked {
+				filtered = append(filtered, res)
+			}
+		}
+		results = filtered
+	}
 
 	writeJSON(w, http.StatusOK, results)
 }

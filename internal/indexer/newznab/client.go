@@ -52,15 +52,25 @@ func (c *Client) Search(ctx context.Context, query string, categories []int) ([]
 	return c.parseResults(rss.Channel.Items), nil
 }
 
-// BookSearch uses the book-specific search endpoint (t=book) if available.
-// Falls back to "author title" combined search, then title-only if that yields nothing.
+// BookSearch tries a series of query variants against a Newznab/Torznab
+// indexer and returns the first variant that yields results. Query order:
+//
+//  1. Structured t=book with title+author (primary title only — subtitles
+//     are dropped for the query; filterRelevant still matches on the full).
+//  2. t=search "Lastname Title" — most disambiguating freeform tier for
+//     short titles (e.g. "Russell The Sparrow" beats "The Sparrow" alone).
+//  3. t=search "Author Title" — full author name + title.
+//  4. t=search "Title" — last-resort fallback.
 func (c *Client) BookSearch(ctx context.Context, title, author string, categories []int) ([]SearchResult, error) {
-	// Try t=book first (not all indexers support this)
+	queryTitle := primaryTitleForQuery(title)
+	surname := authorSurname(author)
+	cats := intSliceToCSV(categories)
+
+	// Tier 1: structured t=book
 	if author != "" {
-		cats := intSliceToCSV(categories)
 		u := fmt.Sprintf("%s/api?t=book&apikey=%s&title=%s&author=%s&cat=%s&limit=100",
 			c.baseURL, url.QueryEscape(c.apiKey),
-			url.QueryEscape(title), url.QueryEscape(author), cats)
+			url.QueryEscape(queryTitle), url.QueryEscape(author), cats)
 
 		var rss rssResponse
 		if err := c.getXML(ctx, u, &rss); err == nil && len(rss.Channel.Items) > 0 && rss.Channel.Response.Total < 1000 {
@@ -68,16 +78,42 @@ func (c *Client) BookSearch(ctx context.Context, title, author string, categorie
 		}
 	}
 
-	// Try "author title" combined generic search
-	if author != "" {
-		results, err := c.Search(ctx, author+" "+title, categories)
+	// Tier 2: surname + title (short, disambiguating)
+	if surname != "" && !strings.EqualFold(surname, author) {
+		results, err := c.Search(ctx, surname+" "+queryTitle, categories)
 		if err == nil && len(results) > 0 {
 			return results, nil
 		}
 	}
 
-	// Fall back to title-only — catches releases filed without the author name
-	return c.Search(ctx, title, categories)
+	// Tier 3: full author + title
+	if author != "" {
+		results, err := c.Search(ctx, author+" "+queryTitle, categories)
+		if err == nil && len(results) > 0 {
+			return results, nil
+		}
+	}
+
+	// Tier 4: title only
+	return c.Search(ctx, queryTitle, categories)
+}
+
+// primaryTitleForQuery returns the portion of a book title before a colon,
+// so "Dune: Messiah" queries as "Dune". Indexers rarely have the subtitle
+// in the release name and including it can cause all-keyword-match failures.
+func primaryTitleForQuery(title string) string {
+	if i := strings.Index(title, ":"); i > 0 {
+		return strings.TrimSpace(title[:i])
+	}
+	return title
+}
+
+func authorSurname(author string) string {
+	fields := strings.Fields(author)
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[len(fields)-1]
 }
 
 // Test verifies the indexer is reachable and the API key is valid.

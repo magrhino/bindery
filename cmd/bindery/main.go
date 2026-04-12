@@ -96,7 +96,7 @@ func main() {
 
 	// Scheduler
 	sched := scheduler.New(importScanner, idxSearcher, metaAgg,
-		authorRepo, bookRepo, indexerRepo, downloadRepo, dlClientRepo, settingsRepo)
+		authorRepo, bookRepo, indexerRepo, downloadRepo, dlClientRepo, settingsRepo, blocklistRepo)
 	sched.Start()
 	defer sched.Stop()
 
@@ -107,7 +107,7 @@ func main() {
 	searchHandler := api.NewSearchHandler(metaAgg)
 	authorHandler := api.NewAuthorHandler(authorRepo, bookRepo, metaAgg, settingsRepo)
 	bookHandler := api.NewBookHandler(bookRepo)
-	indexerHandler := api.NewIndexerHandler(indexerRepo, bookRepo, authorRepo, idxSearcher, settingsRepo)
+	indexerHandler := api.NewIndexerHandler(indexerRepo, bookRepo, authorRepo, idxSearcher, settingsRepo, blocklistRepo)
 	dlClientHandler := api.NewDownloadClientHandler(dlClientRepo)
 	queueHandler := api.NewQueueHandler(downloadRepo, dlClientRepo, bookRepo, historyRepo)
 	fileHandler := api.NewFileHandler(bookRepo)

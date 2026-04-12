@@ -10,6 +10,7 @@ import (
 	"github.com/vavallee/bindery/internal/downloader/sabnzbd"
 	"github.com/vavallee/bindery/internal/importer"
 	"github.com/vavallee/bindery/internal/indexer"
+	"github.com/vavallee/bindery/internal/indexer/newznab"
 	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
 )
@@ -27,6 +28,7 @@ type Scheduler struct {
 	downloads *db.DownloadRepo
 	clients   *db.DownloadClientRepo
 	settings  *db.SettingsRepo
+	blocklist *db.BlocklistRepo
 }
 
 // New creates a new scheduler.
@@ -40,6 +42,7 @@ func New(
 	downloads *db.DownloadRepo,
 	clients *db.DownloadClientRepo,
 	settings *db.SettingsRepo,
+	blocklist *db.BlocklistRepo,
 ) *Scheduler {
 	return &Scheduler{
 		cron:      cron.New(cron.WithSeconds()),
@@ -52,6 +55,7 @@ func New(
 		downloads: downloads,
 		clients:   clients,
 		settings:  settings,
+		blocklist: blocklist,
 	}
 }
 
@@ -123,8 +127,23 @@ func (s *Scheduler) searchWanted() {
 	}
 
 	for _, book := range wanted {
-		results := s.searcher.SearchBook(ctx, idxs, book.Title, "")
+		authorName := ""
+		if a, _ := s.authors.GetByID(ctx, book.AuthorID); a != nil {
+			authorName = a.Name
+		}
+		crit := indexer.MatchCriteria{
+			Title:  book.Title,
+			Author: authorName,
+		}
+		if book.ReleaseDate != nil {
+			crit.Year = book.ReleaseDate.Year()
+		}
+
+		results := s.searcher.SearchBook(ctx, idxs, crit)
 		results = indexer.FilterByLanguage(results, lang)
+
+		// Drop blocklisted results before picking a winner.
+		results = filterBlocklisted(ctx, s.blocklist, results)
 		if len(results) == 0 {
 			continue
 		}
@@ -133,6 +152,7 @@ func (s *Scheduler) searchWanted() {
 		best := results[0]
 		slog.Info("auto-grabbing wanted book",
 			"book", book.Title,
+			"author", authorName,
 			"result", best.Title,
 			"indexer", best.IndexerName,
 			"size", best.Size,
@@ -148,6 +168,7 @@ func (s *Scheduler) searchWanted() {
 			Size:             best.Size,
 			Status:           models.DownloadStatusQueued,
 			Protocol:         "usenet",
+			Quality:          indexer.ParseRelease(best.Title).Format,
 		}
 
 		// Check for duplicate
@@ -176,6 +197,21 @@ func (s *Scheduler) searchWanted() {
 		s.downloads.UpdateStatus(ctx, dl.ID, models.DownloadStatusDownloading)
 		slog.Info("sent to SABnzbd", "title", best.Title)
 	}
+}
+
+// filterBlocklisted drops any result whose GUID is in the blocklist. A nil
+// or erroring repo is treated as "nothing blocked".
+func filterBlocklisted(ctx context.Context, bl *db.BlocklistRepo, results []newznab.SearchResult) []newznab.SearchResult {
+	if bl == nil {
+		return results
+	}
+	out := make([]newznab.SearchResult, 0, len(results))
+	for _, r := range results {
+		if blocked, _ := bl.IsBlocked(ctx, r.GUID); !blocked {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func (s *Scheduler) refreshMetadata() {

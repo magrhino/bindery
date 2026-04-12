@@ -11,6 +11,7 @@ import (
 
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/downloader/sabnzbd"
+	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/models"
 )
 
@@ -112,6 +113,7 @@ func (h *QueueHandler) Grab(w http.ResponseWriter, r *http.Request) {
 		Size:             req.Size,
 		Status:           models.DownloadStatusQueued,
 		Protocol:         "usenet",
+		Quality:          indexer.ParseRelease(req.Title).Format,
 	}
 	if err := h.downloads.Create(r.Context(), dl); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
