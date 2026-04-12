@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, NavLink, Link } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { api } from './api/client'
 import AuthorsPage from './pages/AuthorsPage'
@@ -30,7 +30,14 @@ function App() {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex items-center justify-between h-14">
               <div className="flex items-center gap-6 overflow-x-auto">
-                <h1 className="text-lg font-bold tracking-tight flex-shrink-0">Bindery</h1>
+                <Link to="/" className="flex items-center gap-2 flex-shrink-0 group">
+                  <img
+                    src="/favicon.png"
+                    alt="Bindery"
+                    className="w-8 h-8 rounded-full transition-transform group-hover:scale-105"
+                  />
+                  <h1 className="text-lg font-bold tracking-tight">Bindery</h1>
+                </Link>
                 <nav className="flex gap-1 flex-shrink-0">
                   <NavLink to="/" end className={linkClass}>Authors</NavLink>
                   <NavLink to="/books" className={linkClass}>Books</NavLink>
