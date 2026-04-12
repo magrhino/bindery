@@ -4,6 +4,19 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
+## [v0.4.2] — 2026-04-12
+
+### Light mode
+
+#### Added
+- Light theme using a slate palette, with an iOS-style toggle in **Settings → General → Appearance**. First-load default respects the browser's `prefers-color-scheme`; saved preference lives in `localStorage` under `bindery.theme` and syncs instantly across tabs via the `dark` class on `<html>`.
+- Pre-paint bootstrap script in `index.html` applies the saved theme before React hydrates, eliminating the dark-to-light flash on page load.
+- New `useTheme` hook (`web/src/theme.ts`) and `ThemeToggle` component (`web/src/components/ThemeToggle.tsx`) that both modules outside Settings can reuse later.
+
+#### Changed
+- Every hardcoded `zinc-*` utility class across the UI (App shell, all 10 pages, Pagination, AddAuthorModal) now has a paired `dark:` variant. Light mode is the default, dark mode activates when `<html>` has the `dark` class. No semantic-color token refactor — just the standard Tailwind class-based strategy.
+- `tailwind.config.js` was already set to `darkMode: 'class'` — no config change needed.
+
 ## [v0.4.1] — 2026-04-12
 
 ### Security & quality patch
@@ -150,6 +163,7 @@ Initial public release.
 - Single-binary distribution with embedded React frontend.
 - Distroless Docker image and Helm chart.
 
+[v0.4.2]: https://github.com/vavallee/bindery/releases/tag/v0.4.2
 [v0.4.1]: https://github.com/vavallee/bindery/releases/tag/v0.4.1
 [v0.4.0]: https://github.com/vavallee/bindery/releases/tag/v0.4.0
 [v0.3.0]: https://github.com/vavallee/bindery/releases/tag/v0.3.0

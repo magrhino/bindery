@@ -51,7 +51,7 @@ export default function AuthorsPage() {
   useEffect(() => { reset() }, [search, sort, reset])
 
   const sortBtnCls = (active: boolean) =>
-    `px-3 py-1 rounded-md text-xs font-medium transition-colors ${active ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'}`
+    `px-3 py-1 rounded-md text-xs font-medium transition-colors ${active ? 'bg-slate-300 dark:bg-zinc-700 text-slate-900 dark:text-white' : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/50 dark:hover:bg-zinc-800/50'}`
 
   return (
     <div>
@@ -72,7 +72,7 @@ export default function AuthorsPage() {
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="Search authors..."
-          className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600 placeholder-zinc-600"
+          className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600 placeholder-slate-400 dark:placeholder-zinc-600"
         />
         <div className="flex gap-1">
           <button onClick={() => setSort('az')} className={sortBtnCls(sort === 'az')}>A–Z</button>
@@ -82,46 +82,46 @@ export default function AuthorsPage() {
       </div>
 
       {loading ? (
-        <div className="text-zinc-500">Loading...</div>
+        <div className="text-slate-600 dark:text-zinc-500">Loading...</div>
       ) : filtered.length === 0 && authors.length === 0 ? (
-        <div className="text-center py-16 text-zinc-500">
+        <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
           <p className="text-lg mb-2">No authors yet</p>
           <p className="text-sm">Click "Add Author" to start tracking your favorite authors</p>
         </div>
       ) : filtered.length === 0 ? (
-        <div className="text-center py-16 text-zinc-500">
+        <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
           <p>No authors match "{search}"</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {pageItems.map(author => (
-            <div key={author.id} className="border border-zinc-800 rounded-lg bg-zinc-900 overflow-hidden">
+            <div key={author.id} className="border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 overflow-hidden">
               <div className="flex gap-3 p-4">
                 {author.imageUrl ? (
                   <img src={author.imageUrl} alt={author.authorName} className="w-16 h-16 rounded-full object-cover flex-shrink-0" />
                 ) : (
-                  <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center flex-shrink-0 text-xl font-bold text-zinc-600">
+                  <div className="w-16 h-16 rounded-full bg-slate-200 dark:bg-zinc-800 flex items-center justify-center flex-shrink-0 text-xl font-bold text-slate-500 dark:text-zinc-600">
                     {author.authorName.charAt(0)}
                   </div>
                 )}
                 <div className="min-w-0">
                   <h3 className="font-semibold truncate">{author.authorName}</h3>
-                  <p className="text-xs text-zinc-500 mt-1 line-clamp-2">
+                  <p className="text-xs text-slate-600 dark:text-zinc-500 mt-1 line-clamp-2">
                     {author.description || 'No description available'}
                   </p>
                 </div>
               </div>
-              <div className="flex items-center justify-between px-4 py-2 bg-zinc-800/50 border-t border-zinc-800">
+              <div className="flex items-center justify-between px-4 py-2 bg-slate-200/50 dark:bg-zinc-800/50 border-t border-slate-200 dark:border-zinc-800">
                 <button
                   onClick={() => handleToggleMonitored(author)}
-                  className={`text-xs px-2 py-1 rounded ${author.monitored ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-700 text-zinc-400'}`}
+                  className={`text-xs px-2 py-1 rounded ${author.monitored ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-300 dark:bg-zinc-700 text-slate-600 dark:text-zinc-400'}`}
                 >
                   {author.monitored ? 'Monitored' : 'Unmonitored'}
                 </button>
                 <div className="flex gap-2">
                   <button
                     onClick={() => api.refreshAuthor(author.id).then(load)}
-                    className="text-xs text-zinc-400 hover:text-white"
+                    className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white"
                     title="Refresh metadata"
                   >
                     Refresh

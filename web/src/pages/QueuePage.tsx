@@ -21,7 +21,7 @@ export default function QueuePage() {
   }
 
   const statusColors: Record<string, string> = {
-    queued: 'text-zinc-400',
+    queued: 'text-slate-600 dark:text-zinc-400',
     downloading: 'text-blue-400',
     completed: 'text-emerald-400',
     failed: 'text-red-400',
@@ -39,30 +39,30 @@ export default function QueuePage() {
       <h2 className="text-2xl font-bold mb-6">Queue</h2>
 
       {loading ? (
-        <div className="text-zinc-500">Loading...</div>
+        <div className="text-slate-600 dark:text-zinc-500">Loading...</div>
       ) : queue.length === 0 ? (
-        <div className="text-center py-16 text-zinc-500">
+        <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
           <p>Queue is empty</p>
         </div>
       ) : (
         <div className="space-y-2">
           {queue.map(item => (
-            <div key={item.id} className="flex items-center justify-between p-4 border border-zinc-800 rounded-lg bg-zinc-900">
+            <div key={item.id} className="flex items-center justify-between p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
               <div className="min-w-0 flex-1">
                 <h3 className="font-medium text-sm truncate">{item.title}</h3>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs">
-                  <span className={statusColors[item.status] || 'text-zinc-400'}>
+                  <span className={statusColors[item.status] || 'text-slate-600 dark:text-zinc-400'}>
                     {item.status}
                   </span>
-                  <span className="text-zinc-500">{formatSize(item.size)}</span>
+                  <span className="text-slate-600 dark:text-zinc-500">{formatSize(item.size)}</span>
                   {item.percentage && (
                     <span className="text-blue-400">{item.percentage}%</span>
                   )}
                   {item.timeLeft && (
-                    <span className="text-zinc-500">{item.timeLeft} remaining</span>
+                    <span className="text-slate-600 dark:text-zinc-500">{item.timeLeft} remaining</span>
                   )}
                   {item.protocol && (
-                    <span className="text-zinc-600">{item.protocol}</span>
+                    <span className="text-slate-500 dark:text-zinc-600">{item.protocol}</span>
                   )}
                 </div>
                 {item.errorMessage && (
@@ -71,7 +71,7 @@ export default function QueuePage() {
                   </div>
                 )}
                 {item.percentage && (
-                  <div className="mt-2 h-1 bg-zinc-800 rounded-full overflow-hidden">
+                  <div className="mt-2 h-1 bg-slate-200 dark:bg-zinc-800 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-blue-500 transition-all"
                       style={{ width: `${item.percentage}%` }}

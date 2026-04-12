@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { api, Indexer, DownloadClient, NotificationConfig, QualityProfile, MetadataProfile } from '../api/client'
+import ThemeToggle from '../components/ThemeToggle'
 
 type Tab = 'indexers' | 'clients' | 'notifications' | 'quality' | 'metadata' | 'general'
 
-const inputCls = 'w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600'
+const inputCls = 'w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600'
 const tabCls = (active: boolean) =>
-  `px-4 py-2 rounded-md text-sm font-medium transition-colors ${active ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'}`
+  `px-4 py-2 rounded-md text-sm font-medium transition-colors ${active ? 'bg-slate-200 dark:bg-zinc-800 text-slate-900 dark:text-white' : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/50 dark:hover:bg-zinc-800/50'}`
 
 export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>('indexers')
@@ -59,30 +60,30 @@ export default function SettingsPage() {
             </button>
           </div>
           {indexers.length === 0 ? (
-            <p className="text-zinc-500 text-sm">No indexers configured. Add a Newznab indexer to search for books.</p>
+            <p className="text-slate-600 dark:text-zinc-500 text-sm">No indexers configured. Add a Newznab indexer to search for books.</p>
           ) : (
             <div className="space-y-2">
               {indexers.map(idx => (
                 <div key={idx.id}>
-                  <div className="flex items-center justify-between p-4 border border-zinc-800 rounded-lg bg-zinc-900">
+                  <div className="flex items-center justify-between p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
                     <div className="flex items-center gap-3 min-w-0">
                       <button
                         onClick={async () => {
                           const updated = await api.updateIndexer(idx.id, { ...idx, enabled: !idx.enabled })
                           setIndexers(indexers.map(i => i.id === idx.id ? updated : i))
                         }}
-                        className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${idx.enabled ? 'bg-emerald-600' : 'bg-zinc-700'}`}
+                        className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${idx.enabled ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
                         title={idx.enabled ? 'Disable' : 'Enable'}
                       >
                         <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${idx.enabled ? 'translate-x-4' : ''}`} />
                       </button>
                       <div className="min-w-0">
-                        <h4 className={`font-medium text-sm ${!idx.enabled ? 'text-zinc-500' : ''}`}>{idx.name}</h4>
-                        <p className="text-xs text-zinc-500 truncate">{idx.url}</p>
+                        <h4 className={`font-medium text-sm ${!idx.enabled ? 'text-slate-600 dark:text-zinc-500' : ''}`}>{idx.name}</h4>
+                        <p className="text-xs text-slate-600 dark:text-zinc-500 truncate">{idx.url}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-3 flex-shrink-0">
-                      <button onClick={() => setEditingIndexer(editingIndexer === idx.id ? null : idx.id)} className="text-xs text-zinc-400 hover:text-white">Edit</button>
+                      <button onClick={() => setEditingIndexer(editingIndexer === idx.id ? null : idx.id)} className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white">Edit</button>
                       <button
                         onClick={async () => {
                           try {
@@ -92,7 +93,7 @@ export default function SettingsPage() {
                             alert('Test failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
                           }
                         }}
-                        className="text-xs text-zinc-400 hover:text-white"
+                        className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white"
                       >
                         Test
                       </button>
@@ -137,30 +138,30 @@ export default function SettingsPage() {
             </button>
           </div>
           {clients.length === 0 ? (
-            <p className="text-zinc-500 text-sm">No download clients configured. Add SABnzbd to enable downloads.</p>
+            <p className="text-slate-600 dark:text-zinc-500 text-sm">No download clients configured. Add SABnzbd to enable downloads.</p>
           ) : (
             <div className="space-y-2">
               {clients.map(c => (
                 <div key={c.id}>
-                  <div className="flex items-center justify-between p-4 border border-zinc-800 rounded-lg bg-zinc-900">
+                  <div className="flex items-center justify-between p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
                     <div className="flex items-center gap-3 min-w-0">
                       <button
                         onClick={async () => {
                           const updated = await api.updateDownloadClient(c.id, { ...c, enabled: !c.enabled })
                           setClients(clients.map(x => x.id === c.id ? updated : x))
                         }}
-                        className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${c.enabled ? 'bg-emerald-600' : 'bg-zinc-700'}`}
+                        className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${c.enabled ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
                         title={c.enabled ? 'Disable' : 'Enable'}
                       >
                         <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${c.enabled ? 'translate-x-4' : ''}`} />
                       </button>
                       <div className="min-w-0">
-                        <h4 className={`font-medium text-sm ${!c.enabled ? 'text-zinc-500' : ''}`}>{c.name}</h4>
-                        <p className="text-xs text-zinc-500">{c.host}:{c.port} ({c.category})</p>
+                        <h4 className={`font-medium text-sm ${!c.enabled ? 'text-slate-600 dark:text-zinc-500' : ''}`}>{c.name}</h4>
+                        <p className="text-xs text-slate-600 dark:text-zinc-500">{c.host}:{c.port} ({c.category})</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-3 flex-shrink-0">
-                      <button onClick={() => setEditingClient(editingClient === c.id ? null : c.id)} className="text-xs text-zinc-400 hover:text-white">Edit</button>
+                      <button onClick={() => setEditingClient(editingClient === c.id ? null : c.id)} className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white">Edit</button>
                       <button
                         onClick={async () => {
                           try {
@@ -170,7 +171,7 @@ export default function SettingsPage() {
                             alert('Test failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
                           }
                         }}
-                        className="text-xs text-zinc-400 hover:text-white"
+                        className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white"
                       >
                         Test
                       </button>
@@ -215,12 +216,12 @@ export default function SettingsPage() {
             </button>
           </div>
           {notifications.length === 0 ? (
-            <p className="text-zinc-500 text-sm">No notifications configured. Add a webhook to receive event alerts.</p>
+            <p className="text-slate-600 dark:text-zinc-500 text-sm">No notifications configured. Add a webhook to receive event alerts.</p>
           ) : (
             <div className="space-y-2">
               {notifications.map(n => (
                 <div key={n.id}>
-                  <div className="p-4 border border-zinc-800 rounded-lg bg-zinc-900">
+                  <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-start gap-3 min-w-0">
                         <button
@@ -228,25 +229,25 @@ export default function SettingsPage() {
                             const updated = await api.updateNotification(n.id, { ...n, enabled: !n.enabled })
                             setNotifications(notifications.map(x => x.id === n.id ? updated : x))
                           }}
-                          className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 mt-0.5 ${n.enabled ? 'bg-emerald-600' : 'bg-zinc-700'}`}
+                          className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 mt-0.5 ${n.enabled ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
                           title={n.enabled ? 'Disable' : 'Enable'}
                         >
                           <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${n.enabled ? 'translate-x-4' : ''}`} />
                         </button>
                         <div className="min-w-0">
-                          <h4 className={`font-medium text-sm ${!n.enabled ? 'text-zinc-500' : ''}`}>{n.name}</h4>
-                          <p className="text-xs text-zinc-500 truncate mt-0.5">{n.url}</p>
+                          <h4 className={`font-medium text-sm ${!n.enabled ? 'text-slate-600 dark:text-zinc-500' : ''}`}>{n.name}</h4>
+                          <p className="text-xs text-slate-600 dark:text-zinc-500 truncate mt-0.5">{n.url}</p>
                           <div className="flex flex-wrap gap-1 mt-2">
-                            {n.onGrab && <span className="text-[10px] px-1.5 py-0.5 bg-zinc-800 text-zinc-400 rounded">On Grab</span>}
-                            {n.onImport && <span className="text-[10px] px-1.5 py-0.5 bg-zinc-800 text-zinc-400 rounded">On Import</span>}
-                            {n.onUpgrade && <span className="text-[10px] px-1.5 py-0.5 bg-zinc-800 text-zinc-400 rounded">On Upgrade</span>}
-                            {n.onFailure && <span className="text-[10px] px-1.5 py-0.5 bg-zinc-800 text-zinc-400 rounded">On Failure</span>}
-                            {n.onHealth && <span className="text-[10px] px-1.5 py-0.5 bg-zinc-800 text-zinc-400 rounded">On Health</span>}
+                            {n.onGrab && <span className="text-[10px] px-1.5 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">On Grab</span>}
+                            {n.onImport && <span className="text-[10px] px-1.5 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">On Import</span>}
+                            {n.onUpgrade && <span className="text-[10px] px-1.5 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">On Upgrade</span>}
+                            {n.onFailure && <span className="text-[10px] px-1.5 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">On Failure</span>}
+                            {n.onHealth && <span className="text-[10px] px-1.5 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">On Health</span>}
                           </div>
                         </div>
                       </div>
                       <div className="flex items-center gap-3 flex-shrink-0">
-                        <button onClick={() => setEditingNotification(editingNotification === n.id ? null : n.id)} className="text-xs text-zinc-400 hover:text-white">Edit</button>
+                        <button onClick={() => setEditingNotification(editingNotification === n.id ? null : n.id)} className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white">Edit</button>
                         <button
                           onClick={async () => {
                             try {
@@ -256,7 +257,7 @@ export default function SettingsPage() {
                               alert('Test failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
                             }
                           }}
-                          className="text-xs text-zinc-400 hover:text-white"
+                          className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white"
                         >
                           Test
                         </button>
@@ -297,22 +298,22 @@ export default function SettingsPage() {
         <div>
           <h3 className="text-lg font-semibold mb-4">Quality Profiles</h3>
           {qualityProfiles.length === 0 ? (
-            <p className="text-zinc-500 text-sm">No quality profiles configured.</p>
+            <p className="text-slate-600 dark:text-zinc-500 text-sm">No quality profiles configured.</p>
           ) : (
             <div className="space-y-3">
               {qualityProfiles.map(p => (
-                <div key={p.id} className="p-4 border border-zinc-800 rounded-lg bg-zinc-900">
+                <div key={p.id} className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
                   <div className="flex items-center justify-between mb-2">
                     <h4 className="font-medium text-sm">{p.name}</h4>
-                    <div className="flex items-center gap-3 text-xs text-zinc-500">
-                      <span>Cutoff: <span className="text-zinc-300">{p.cutoff}</span></span>
+                    <div className="flex items-center gap-3 text-xs text-slate-600 dark:text-zinc-500">
+                      <span>Cutoff: <span className="text-slate-700 dark:text-zinc-300">{p.cutoff}</span></span>
                       {p.upgradeAllowed && <span className="text-emerald-400">Upgrades allowed</span>}
                     </div>
                   </div>
                   {p.items && p.items.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-2">
                       {p.items.map((item, i) => (
-                        <span key={i} className={`text-[10px] px-2 py-0.5 rounded ${item.allowed ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-800 text-zinc-600'}`}>
+                        <span key={i} className={`text-[10px] px-2 py-0.5 rounded ${item.allowed ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-200 dark:bg-zinc-800 text-slate-500 dark:text-zinc-600'}`}>
                           {item.quality}
                         </span>
                       ))}
@@ -330,23 +331,23 @@ export default function SettingsPage() {
         <div>
           <h3 className="text-lg font-semibold mb-4">Metadata Profiles</h3>
           {metadataProfiles.length === 0 ? (
-            <p className="text-zinc-500 text-sm">No metadata profiles configured.</p>
+            <p className="text-slate-600 dark:text-zinc-500 text-sm">No metadata profiles configured.</p>
           ) : (
             <div className="space-y-3">
               {metadataProfiles.map(p => (
-                <div key={p.id} className="p-4 border border-zinc-800 rounded-lg bg-zinc-900">
+                <div key={p.id} className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
                   <div className="flex items-start justify-between">
                     <div>
                       <h4 className="font-medium text-sm">{p.name}</h4>
-                      <div className="flex flex-wrap gap-3 mt-2 text-xs text-zinc-400">
-                        <span>Min popularity: <span className="text-zinc-200">{p.minPopularity}</span></span>
-                        <span>Min pages: <span className="text-zinc-200">{p.minPages}</span></span>
-                        {p.allowedLanguages && <span>Languages: <span className="text-zinc-200">{p.allowedLanguages}</span></span>}
+                      <div className="flex flex-wrap gap-3 mt-2 text-xs text-slate-600 dark:text-zinc-400">
+                        <span>Min popularity: <span className="text-slate-800 dark:text-zinc-200">{p.minPopularity}</span></span>
+                        <span>Min pages: <span className="text-slate-800 dark:text-zinc-200">{p.minPages}</span></span>
+                        {p.allowedLanguages && <span>Languages: <span className="text-slate-800 dark:text-zinc-200">{p.allowedLanguages}</span></span>}
                       </div>
                       <div className="flex flex-wrap gap-1.5 mt-2">
-                        {p.skipMissingDate && <span className="text-[10px] px-2 py-0.5 bg-zinc-800 text-zinc-400 rounded">Skip missing date</span>}
-                        {p.skipMissingIsbn && <span className="text-[10px] px-2 py-0.5 bg-zinc-800 text-zinc-400 rounded">Skip missing ISBN</span>}
-                        {p.skipPartBooks && <span className="text-[10px] px-2 py-0.5 bg-zinc-800 text-zinc-400 rounded">Skip part books</span>}
+                        {p.skipMissingDate && <span className="text-[10px] px-2 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">Skip missing date</span>}
+                        {p.skipMissingIsbn && <span className="text-[10px] px-2 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">Skip missing ISBN</span>}
+                        {p.skipPartBooks && <span className="text-[10px] px-2 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">Skip part books</span>}
                       </div>
                     </div>
                     <button
@@ -418,22 +419,36 @@ function GeneralTab() {
     }
   }
 
-  if (loading) return <div className="text-zinc-500">Loading...</div>
+  if (loading) return <div className="text-slate-600 dark:text-zinc-500">Loading...</div>
 
   return (
     <div className="space-y-8">
+      {/* Appearance */}
+      <section>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">Appearance</h3>
+        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
+          <div className="flex items-center justify-between">
+            <div>
+              <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">Theme</label>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-1">Light or dark interface. Defaults to your OS preference on first visit.</p>
+            </div>
+            <ThemeToggle />
+          </div>
+        </div>
+      </section>
+
       {/* Downloads */}
       <section>
-        <h3 className="text-base font-semibold mb-3 text-zinc-200">Downloads</h3>
-        <div className="p-4 border border-zinc-800 rounded-lg bg-zinc-900 space-y-3">
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">Downloads</h3>
+        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-3">
           <div>
-            <label className="block text-xs text-zinc-400 mb-1">Preferred Language</label>
-            <p className="text-xs text-zinc-500 mb-2">Filter search results to the selected language. Releases with detected foreign-language tags in the title will be excluded.</p>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Preferred Language</label>
+            <p className="text-xs text-slate-600 dark:text-zinc-500 mb-2">Filter search results to the selected language. Releases with detected foreign-language tags in the title will be excluded.</p>
             <div className="flex gap-2">
               <select
                 value={settings['search.preferredLanguage'] ?? 'en'}
                 onChange={e => setSettings(s => ({ ...s, 'search.preferredLanguage': e.target.value }))}
-                className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600"
+                className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
               >
                 <option value="any">Any (no filter)</option>
                 <option value="en">English</option>
@@ -452,16 +467,16 @@ function GeneralTab() {
 
       {/* Naming */}
       <section>
-        <h3 className="text-base font-semibold mb-3 text-zinc-200">File Naming</h3>
-        <div className="p-4 border border-zinc-800 rounded-lg bg-zinc-900 space-y-3">
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">File Naming</h3>
+        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-3">
           <div>
-            <label className="block text-xs text-zinc-400 mb-1">Book Naming Template</label>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Book Naming Template</label>
             <div className="flex gap-2">
               <input
                 value={settings['naming.bookTemplate'] ?? ''}
                 onChange={e => setSettings(s => ({ ...s, 'naming.bookTemplate': e.target.value }))}
                 placeholder="{Author Name}/{Book Title}"
-                className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600"
+                className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
               />
               <button
                 onClick={() => saveSetting('naming.bookTemplate')}
@@ -477,25 +492,25 @@ function GeneralTab() {
 
       {/* API Keys */}
       <section>
-        <h3 className="text-base font-semibold mb-3 text-zinc-200">API Keys</h3>
-        <div className="p-4 border border-zinc-800 rounded-lg bg-zinc-900 space-y-4">
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">API Keys</h3>
+        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-4">
           <div>
-            <label className="block text-xs text-zinc-400 mb-1">Bindery API Key</label>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Bindery API Key</label>
             <div className="flex items-center gap-2">
-              <code className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm font-mono text-zinc-300 truncate">
+              <code className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm font-mono text-slate-700 dark:text-zinc-300 truncate">
                 {settings['api.key'] || '(not set)'}
               </code>
             </div>
           </div>
           <div>
-            <label className="block text-xs text-zinc-400 mb-1">Google Books API Key</label>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Google Books API Key</label>
             <div className="flex gap-2">
               <input
                 value={settings['googlebooks.apiKey'] ?? ''}
                 onChange={e => setSettings(s => ({ ...s, 'googlebooks.apiKey': e.target.value }))}
                 placeholder="AIza..."
                 type="password"
-                className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600"
+                className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
               />
               <button
                 onClick={() => saveSetting('googlebooks.apiKey')}
@@ -511,12 +526,12 @@ function GeneralTab() {
 
       {/* Backup */}
       <section>
-        <h3 className="text-base font-semibold mb-3 text-zinc-200">Backup & Restore</h3>
-        <div className="p-4 border border-zinc-800 rounded-lg bg-zinc-900 space-y-3">
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">Backup & Restore</h3>
+        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-3">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-zinc-300">Create a backup of all Bindery configuration</p>
-              <p className="text-xs text-zinc-500 mt-0.5">Includes authors, books, indexers, and settings</p>
+              <p className="text-sm text-slate-700 dark:text-zinc-300">Create a backup of all Bindery configuration</p>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">Includes authors, books, indexers, and settings</p>
             </div>
             <button
               onClick={handleBackup}
@@ -527,11 +542,11 @@ function GeneralTab() {
             </button>
           </div>
           {backups.length > 0 && (
-            <div className="mt-3 border-t border-zinc-800 pt-3">
-              <p className="text-xs text-zinc-500 mb-2">Existing backups:</p>
+            <div className="mt-3 border-t border-slate-200 dark:border-zinc-800 pt-3">
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mb-2">Existing backups:</p>
               <ul className="space-y-1">
                 {backups.map(b => (
-                  <li key={b} className="text-xs text-zinc-400 font-mono">{b}</li>
+                  <li key={b} className="text-xs text-slate-600 dark:text-zinc-400 font-mono">{b}</li>
                 ))}
               </ul>
             </div>
@@ -554,10 +569,10 @@ function EditIndexerForm({ indexer, onClose, onSaved }: { indexer: Indexer; onCl
   }
 
   return (
-    <div className="mt-1 p-4 border border-zinc-700 rounded-lg bg-zinc-800/50 space-y-3">
+    <div className="mt-1 p-4 border border-slate-300 dark:border-zinc-700 rounded-lg bg-slate-200/50 dark:bg-zinc-800/50 space-y-3">
       <div className="flex gap-2">
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600" />
-        <select value={type} onChange={e => setType(e.target.value)} className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600">
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
+        <select value={type} onChange={e => setType(e.target.value)} className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
           <option value="newznab">Newznab (Usenet)</option>
           <option value="torznab">Torznab (Torrent)</option>
         </select>
@@ -565,7 +580,7 @@ function EditIndexerForm({ indexer, onClose, onSaved }: { indexer: Indexer; onCl
       <input value={url} onChange={e => setUrl(e.target.value)} placeholder="URL" className={inputCls} />
       <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="API Key" type="password" className={inputCls} />
       <div className="flex gap-2 justify-end">
-        <button onClick={onClose} className="px-3 py-1.5 text-sm text-zinc-400">Cancel</button>
+        <button onClick={onClose} className="px-3 py-1.5 text-sm text-slate-600 dark:text-zinc-400">Cancel</button>
         <button onClick={submit} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium">Save</button>
       </div>
     </div>
@@ -586,22 +601,22 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
   }
 
   return (
-    <div className="mt-1 p-4 border border-zinc-700 rounded-lg bg-zinc-800/50 space-y-3">
+    <div className="mt-1 p-4 border border-slate-300 dark:border-zinc-700 rounded-lg bg-slate-200/50 dark:bg-zinc-800/50 space-y-3">
       <div className="flex gap-2">
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600" />
-        <select value={type} onChange={e => setType(e.target.value)} className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600">
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
+        <select value={type} onChange={e => setType(e.target.value)} className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
           <option value="sabnzbd">SABnzbd</option>
           <option value="qbittorrent">qBittorrent</option>
         </select>
       </div>
       <div className="flex gap-2">
-        <input value={host} onChange={e => setHost(e.target.value)} placeholder="Host" className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600" />
-        <input value={port} onChange={e => setPort(e.target.value)} placeholder="Port" className="w-24 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600" />
+        <input value={host} onChange={e => setHost(e.target.value)} placeholder="Host" className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
+        <input value={port} onChange={e => setPort(e.target.value)} placeholder="Port" className="w-24 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
       </div>
       <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={type === 'qbittorrent' ? 'Password' : 'API Key'} type="password" className={inputCls} />
       <input value={category} onChange={e => setCategory(e.target.value)} placeholder="Category" className={inputCls} />
       <div className="flex gap-2 justify-end">
-        <button onClick={onClose} className="px-3 py-1.5 text-sm text-zinc-400">Cancel</button>
+        <button onClick={onClose} className="px-3 py-1.5 text-sm text-slate-600 dark:text-zinc-400">Cancel</button>
         <button onClick={submit} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium">Save</button>
       </div>
     </div>
@@ -627,11 +642,11 @@ function EditNotificationForm({ notification, onClose, onSaved }: { notification
     `px-3 py-1.5 rounded text-xs font-medium border transition-colors cursor-pointer select-none ${
       active
         ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
-        : 'bg-zinc-800 border-zinc-700 text-zinc-400'
+        : 'bg-slate-200 dark:bg-zinc-800 border-slate-300 dark:border-zinc-700 text-slate-600 dark:text-zinc-400'
     }`
 
   return (
-    <div className="mt-1 p-4 border border-zinc-700 rounded-lg bg-zinc-800/50 space-y-4">
+    <div className="mt-1 p-4 border border-slate-300 dark:border-zinc-700 rounded-lg bg-slate-200/50 dark:bg-zinc-800/50 space-y-4">
       <div className="grid grid-cols-2 gap-3">
         <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className={inputCls} />
         <select value={method} onChange={e => setMethod(e.target.value)} className={inputCls}>
@@ -642,7 +657,7 @@ function EditNotificationForm({ notification, onClose, onSaved }: { notification
       </div>
       <input value={url} onChange={e => setUrl(e.target.value)} placeholder="Webhook URL" className={inputCls} />
       <div>
-        <p className="text-xs text-zinc-400 mb-2">Trigger on:</p>
+        <p className="text-xs text-slate-600 dark:text-zinc-400 mb-2">Trigger on:</p>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => setOnGrab(!onGrab)} className={toggleCls(onGrab)}>Grab</button>
           <button type="button" onClick={() => setOnImport(!onImport)} className={toggleCls(onImport)}>Import</button>
@@ -652,7 +667,7 @@ function EditNotificationForm({ notification, onClose, onSaved }: { notification
         </div>
       </div>
       <div className="flex gap-2 justify-end">
-        <button onClick={onClose} className="px-3 py-1.5 text-sm text-zinc-400">Cancel</button>
+        <button onClick={onClose} className="px-3 py-1.5 text-sm text-slate-600 dark:text-zinc-400">Cancel</button>
         <button onClick={submit} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium">Save</button>
       </div>
     </div>
@@ -672,10 +687,10 @@ function AddIndexerForm({ onClose, onAdded }: { onClose: () => void; onAdded: (i
   }
 
   return (
-    <div className="mt-4 p-4 border border-zinc-700 rounded-lg bg-zinc-800/50 space-y-3">
+    <div className="mt-4 p-4 border border-slate-300 dark:border-zinc-700 rounded-lg bg-slate-200/50 dark:bg-zinc-800/50 space-y-3">
       <div className="flex gap-2">
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="Name (e.g. NZBGeek)" className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600" />
-        <select value={type} onChange={e => setType(e.target.value as 'newznab' | 'torznab')} className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600">
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="Name (e.g. NZBGeek)" className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
+        <select value={type} onChange={e => setType(e.target.value as 'newznab' | 'torznab')} className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
           <option value="newznab">Newznab</option>
           <option value="torznab">Torznab</option>
         </select>
@@ -683,7 +698,7 @@ function AddIndexerForm({ onClose, onAdded }: { onClose: () => void; onAdded: (i
       <input value={url} onChange={e => setUrl(e.target.value)} placeholder="URL (e.g. https://api.nzbgeek.info)" className={inputCls} />
       <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="API Key" type="password" className={inputCls} />
       <div className="flex gap-2 justify-end">
-        <button onClick={onClose} className="px-3 py-1.5 text-sm text-zinc-400">Cancel</button>
+        <button onClick={onClose} className="px-3 py-1.5 text-sm text-slate-600 dark:text-zinc-400">Cancel</button>
         <button onClick={submit} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium">Save</button>
       </div>
     </div>
@@ -706,22 +721,22 @@ function AddClientForm({ onClose, onAdded }: { onClose: () => void; onAdded: (c:
   }
 
   return (
-    <div className="mt-4 p-4 border border-zinc-700 rounded-lg bg-zinc-800/50 space-y-3">
+    <div className="mt-4 p-4 border border-slate-300 dark:border-zinc-700 rounded-lg bg-slate-200/50 dark:bg-zinc-800/50 space-y-3">
       <div className="flex gap-2">
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600" />
-        <select value={type} onChange={e => { setType(e.target.value as 'sabnzbd' | 'qbittorrent'); setPort(e.target.value === 'qbittorrent' ? '8080' : '8080') }} className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600">
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
+        <select value={type} onChange={e => { setType(e.target.value as 'sabnzbd' | 'qbittorrent'); setPort(e.target.value === 'qbittorrent' ? '8080' : '8080') }} className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
           <option value="sabnzbd">SABnzbd</option>
           <option value="qbittorrent">qBittorrent</option>
         </select>
       </div>
       <div className="flex gap-2">
-        <input value={host} onChange={e => setHost(e.target.value)} placeholder="Host" className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600" />
-        <input value={port} onChange={e => setPort(e.target.value)} placeholder="Port" className="w-24 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600" />
+        <input value={host} onChange={e => setHost(e.target.value)} placeholder="Host" className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
+        <input value={port} onChange={e => setPort(e.target.value)} placeholder="Port" className="w-24 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
       </div>
       <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={type === 'qbittorrent' ? 'Password' : 'API Key'} type="password" className={inputCls} />
       <input value={category} onChange={e => setCategory(e.target.value)} placeholder="Category" className={inputCls} />
       <div className="flex gap-2 justify-end">
-        <button onClick={onClose} className="px-3 py-1.5 text-sm text-zinc-400">Cancel</button>
+        <button onClick={onClose} className="px-3 py-1.5 text-sm text-slate-600 dark:text-zinc-400">Cancel</button>
         <button onClick={submit} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium">Save</button>
       </div>
     </div>
@@ -752,11 +767,11 @@ function AddNotificationForm({ onClose, onAdded }: { onClose: () => void; onAdde
     `px-3 py-1.5 rounded text-xs font-medium border transition-colors cursor-pointer select-none ${
       active
         ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
-        : 'bg-zinc-800 border-zinc-700 text-zinc-400'
+        : 'bg-slate-200 dark:bg-zinc-800 border-slate-300 dark:border-zinc-700 text-slate-600 dark:text-zinc-400'
     }`
 
   return (
-    <div className="mt-4 p-4 border border-zinc-700 rounded-lg bg-zinc-800/50 space-y-4">
+    <div className="mt-4 p-4 border border-slate-300 dark:border-zinc-700 rounded-lg bg-slate-200/50 dark:bg-zinc-800/50 space-y-4">
       <div className="grid grid-cols-2 gap-3">
         <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className={inputCls} />
         <select value={method} onChange={e => setMethod(e.target.value)} className={inputCls}>
@@ -767,7 +782,7 @@ function AddNotificationForm({ onClose, onAdded }: { onClose: () => void; onAdde
       </div>
       <input value={url} onChange={e => setUrl(e.target.value)} placeholder="Webhook URL" className={inputCls} />
       <div>
-        <p className="text-xs text-zinc-400 mb-2">Trigger on:</p>
+        <p className="text-xs text-slate-600 dark:text-zinc-400 mb-2">Trigger on:</p>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => setOnGrab(!onGrab)} className={toggleCls(onGrab)}>Grab</button>
           <button type="button" onClick={() => setOnImport(!onImport)} className={toggleCls(onImport)}>Import</button>
@@ -777,7 +792,7 @@ function AddNotificationForm({ onClose, onAdded }: { onClose: () => void; onAdde
         </div>
       </div>
       <div className="flex gap-2 justify-end">
-        <button onClick={onClose} className="px-3 py-1.5 text-sm text-zinc-400">Cancel</button>
+        <button onClick={onClose} className="px-3 py-1.5 text-sm text-slate-600 dark:text-zinc-400">Cancel</button>
         <button onClick={submit} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium">Save</button>
       </div>
     </div>

@@ -79,25 +79,25 @@ export default function BlocklistPage() {
               {deleting ? 'Deleting...' : `Delete selected (${selected.size})`}
             </button>
           )}
-          <span className="text-sm text-zinc-500">{entries.length} entries</span>
+          <span className="text-sm text-slate-600 dark:text-zinc-500">{entries.length} entries</span>
         </div>
       </div>
 
       {loading ? (
-        <div className="text-zinc-500">Loading...</div>
+        <div className="text-slate-600 dark:text-zinc-500">Loading...</div>
       ) : entries.length === 0 ? (
-        <div className="text-center py-16 text-zinc-500">
+        <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
           <p className="text-lg mb-2">Blocklist is empty</p>
           <p className="text-sm">Failed downloads are automatically added here to prevent re-grabbing</p>
         </div>
       ) : (
         <>
           {/* Desktop table */}
-          <div className="hidden sm:block border border-zinc-800 rounded-lg overflow-hidden">
+          <div className="hidden sm:block border border-slate-200 dark:border-zinc-800 rounded-lg overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="bg-zinc-900 border-b border-zinc-800">
+                  <tr className="bg-slate-100 dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800">
                     <th className="px-4 py-3 w-10">
                       <input
                         type="checkbox"
@@ -106,15 +106,15 @@ export default function BlocklistPage() {
                         className="accent-emerald-500"
                       />
                     </th>
-                    <th className="text-left px-4 py-3 text-xs font-medium text-zinc-400 uppercase tracking-wider">Title</th>
-                    <th className="text-left px-4 py-3 text-xs font-medium text-zinc-400 uppercase tracking-wider">Reason</th>
-                    <th className="text-left px-4 py-3 text-xs font-medium text-zinc-400 uppercase tracking-wider">Date</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">Title</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">Reason</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">Date</th>
                     <th className="px-4 py-3" />
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-800">
+                <tbody className="divide-y divide-slate-200 dark:divide-zinc-800">
                   {pageItems.map(entry => (
-                    <tr key={entry.id} className={`transition-colors hover:bg-zinc-800/50 ${selected.has(entry.id) ? 'bg-zinc-800/30' : 'bg-zinc-900/50'}`}>
+                    <tr key={entry.id} className={`transition-colors hover:bg-slate-200/50 dark:hover:bg-zinc-800/50 ${selected.has(entry.id) ? 'bg-slate-200/30 dark:bg-zinc-800/30' : 'bg-slate-100/50 dark:bg-zinc-900/50'}`}>
                       <td className="px-4 py-3">
                         <input
                           type="checkbox"
@@ -124,9 +124,9 @@ export default function BlocklistPage() {
                         />
                       </td>
                       <td className="px-4 py-3 max-w-xs">
-                        <p className="text-zinc-200 truncate" title={entry.title}>{entry.title}</p>
+                        <p className="text-slate-800 dark:text-zinc-200 truncate" title={entry.title}>{entry.title}</p>
                         {entry.guid && (
-                          <p className="text-[10px] text-zinc-600 mt-0.5 font-mono truncate">{entry.guid}</p>
+                          <p className="text-[10px] text-slate-500 dark:text-zinc-600 mt-0.5 font-mono truncate">{entry.guid}</p>
                         )}
                       </td>
                       <td className="px-4 py-3">
@@ -134,7 +134,7 @@ export default function BlocklistPage() {
                           {entry.reason || 'Unknown'}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-zinc-400 whitespace-nowrap text-xs">
+                      <td className="px-4 py-3 text-slate-600 dark:text-zinc-400 whitespace-nowrap text-xs">
                         {formatDate(entry.createdAt)}
                       </td>
                       <td className="px-4 py-3 text-right">
@@ -161,12 +161,12 @@ export default function BlocklistPage() {
                 onChange={toggleAll}
                 className="accent-emerald-500"
               />
-              <span className="text-xs text-zinc-500">Select all</span>
+              <span className="text-xs text-slate-600 dark:text-zinc-500">Select all</span>
             </div>
             {pageItems.map(entry => (
               <div
                 key={entry.id}
-                className={`border border-zinc-800 rounded-lg p-3 transition-colors ${selected.has(entry.id) ? 'bg-zinc-800/30' : 'bg-zinc-900/50'}`}
+                className={`border border-slate-200 dark:border-zinc-800 rounded-lg p-3 transition-colors ${selected.has(entry.id) ? 'bg-slate-200/30 dark:bg-zinc-800/30' : 'bg-slate-100/50 dark:bg-zinc-900/50'}`}
               >
                 <div className="flex items-start gap-3">
                   <input
@@ -176,15 +176,15 @@ export default function BlocklistPage() {
                     className="accent-emerald-500 mt-0.5 flex-shrink-0"
                   />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm text-zinc-200 break-words">{entry.title}</p>
+                    <p className="text-sm text-slate-800 dark:text-zinc-200 break-words">{entry.title}</p>
                     {entry.guid && (
-                      <p className="text-[10px] text-zinc-600 mt-0.5 font-mono truncate">{entry.guid}</p>
+                      <p className="text-[10px] text-slate-500 dark:text-zinc-600 mt-0.5 font-mono truncate">{entry.guid}</p>
                     )}
                     <div className="flex flex-wrap items-center gap-2 mt-2">
                       <span className="text-xs px-2 py-0.5 rounded bg-red-500/20 text-red-400">
                         {entry.reason || 'Unknown'}
                       </span>
-                      <span className="text-[10px] text-zinc-500">{formatDate(entry.createdAt)}</span>
+                      <span className="text-[10px] text-slate-600 dark:text-zinc-500">{formatDate(entry.createdAt)}</span>
                     </div>
                   </div>
                   <button

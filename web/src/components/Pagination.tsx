@@ -33,12 +33,12 @@ export default function Pagination({
   }
 
   const btnBase = 'px-2.5 py-1 rounded text-xs font-medium transition-colors'
-  const btn = `${btnBase} text-zinc-400 hover:text-white hover:bg-zinc-800 disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed`
-  const btnActive = `${btnBase} bg-zinc-700 text-white`
+  const btn = `${btnBase} text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed`
+  const btnActive = `${btnBase} bg-slate-300 dark:bg-zinc-700 text-slate-900 dark:text-white`
 
   return (
-    <div className="flex flex-col items-center gap-3 mt-6 pt-4 border-t border-zinc-800 sm:flex-row sm:justify-between">
-      <div className="text-xs text-zinc-500">
+    <div className="flex flex-col items-center gap-3 mt-6 pt-4 border-t border-slate-200 dark:border-zinc-800 sm:flex-row sm:justify-between">
+      <div className="text-xs text-slate-600 dark:text-zinc-500">
         {start}–{end} of {totalItems}
       </div>
       <div className="flex flex-wrap justify-center items-center gap-1">
@@ -46,7 +46,7 @@ export default function Pagination({
         <button onClick={() => onPageChange(page - 1)} disabled={page === 1} className={btn}>‹ Prev</button>
         {pages.map((p, i) =>
           p === 'ellipsis' ? (
-            <span key={`e${i}`} className="px-1 text-xs text-zinc-600">…</span>
+            <span key={`e${i}`} className="px-1 text-xs text-slate-500 dark:text-zinc-600">…</span>
           ) : (
             <button key={p} onClick={() => onPageChange(p)} className={p === page ? btnActive : btn}>
               {p}
@@ -57,11 +57,11 @@ export default function Pagination({
         <button onClick={() => onPageChange(totalPages)} disabled={page === totalPages} className={btn}>Last »</button>
       </div>
       <div className="flex items-center gap-2">
-        <span className="text-xs text-zinc-500">Per page:</span>
+        <span className="text-xs text-slate-600 dark:text-zinc-500">Per page:</span>
         <select
           value={pageSize}
           onChange={e => onPageSizeChange(Number(e.target.value))}
-          className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-zinc-600"
+          className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-2 py-1 text-xs text-slate-800 dark:text-zinc-200 focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
         >
           {pageSizeOptions.map(n => (
             <option key={n} value={n}>{n}</option>

@@ -74,14 +74,14 @@ export default function CalendarPage() {
         {!isCurrentMonth && (
           <button
             onClick={goToToday}
-            className="px-3 py-1.5 text-xs text-zinc-400 hover:text-white border border-zinc-700 rounded transition-colors"
+            className="px-3 py-1.5 text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white border border-slate-300 dark:border-zinc-700 rounded transition-colors"
           >
             Today
           </button>
         )}
         <button
           onClick={prevMonth}
-          className="px-3 py-1.5 text-sm text-zinc-400 hover:text-white bg-zinc-800 hover:bg-zinc-700 rounded transition-colors"
+          className="px-3 py-1.5 text-sm text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 rounded transition-colors"
         >
           ‹
         </button>
@@ -90,7 +90,7 @@ export default function CalendarPage() {
         </span>
         <button
           onClick={nextMonth}
-          className="px-3 py-1.5 text-sm text-zinc-400 hover:text-white bg-zinc-800 hover:bg-zinc-700 rounded transition-colors"
+          className="px-3 py-1.5 text-sm text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 rounded transition-colors"
         >
           ›
         </button>
@@ -103,15 +103,15 @@ export default function CalendarPage() {
       <CalendarHeader />
 
       {loading ? (
-        <div className="text-zinc-500">Loading...</div>
+        <div className="text-slate-600 dark:text-zinc-500">Loading...</div>
       ) : (
         <>
           {/* Grid calendar — hidden on mobile, shown sm+ */}
-          <div className="hidden sm:block border border-zinc-800 rounded-lg overflow-hidden">
+          <div className="hidden sm:block border border-slate-200 dark:border-zinc-800 rounded-lg overflow-hidden">
             {/* Day headers */}
-            <div className="grid grid-cols-7 bg-zinc-900 border-b border-zinc-800">
+            <div className="grid grid-cols-7 bg-slate-100 dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800">
               {DAY_NAMES.map(d => (
-                <div key={d} className="py-2 text-center text-xs font-medium text-zinc-500 uppercase tracking-wider">
+                <div key={d} className="py-2 text-center text-xs font-medium text-slate-600 dark:text-zinc-500 uppercase tracking-wider">
                   {d}
                 </div>
               ))}
@@ -125,14 +125,14 @@ export default function CalendarPage() {
                 return (
                   <div
                     key={idx}
-                    className={`min-h-[100px] p-2 border-b border-r border-zinc-800 ${
-                      day ? 'bg-zinc-900/50' : 'bg-zinc-900/20'
+                    className={`min-h-[100px] p-2 border-b border-r border-slate-200 dark:border-zinc-800 ${
+                      day ? 'bg-slate-100/50 dark:bg-zinc-900/50' : 'bg-slate-100/20 dark:bg-zinc-900/20'
                     } ${idx % 7 === 6 ? 'border-r-0' : ''}`}
                   >
                     {day && (
                       <>
                         <div className={`text-xs font-medium mb-1 w-6 h-6 flex items-center justify-center rounded-full ${
-                          isToday ? 'bg-emerald-600 text-white' : 'text-zinc-400'
+                          isToday ? 'bg-emerald-600 text-white' : 'text-slate-600 dark:text-zinc-400'
                         }`}>
                           {day}
                         </div>
@@ -156,10 +156,10 @@ export default function CalendarPage() {
           </div>
 
           {/* Compact grid for mobile — shown below sm */}
-          <div className="sm:hidden border border-zinc-800 rounded-lg overflow-hidden mb-4">
-            <div className="grid grid-cols-7 bg-zinc-900 border-b border-zinc-800">
+          <div className="sm:hidden border border-slate-200 dark:border-zinc-800 rounded-lg overflow-hidden mb-4">
+            <div className="grid grid-cols-7 bg-slate-100 dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800">
               {DAY_NAMES_SHORT.map((d, i) => (
-                <div key={i} className="py-2 text-center text-xs font-medium text-zinc-500">
+                <div key={i} className="py-2 text-center text-xs font-medium text-slate-600 dark:text-zinc-500">
                   {d}
                 </div>
               ))}
@@ -171,14 +171,14 @@ export default function CalendarPage() {
                 return (
                   <div
                     key={idx}
-                    className={`aspect-square flex flex-col items-center justify-center border-b border-r border-zinc-800 text-xs ${
+                    className={`aspect-square flex flex-col items-center justify-center border-b border-r border-slate-200 dark:border-zinc-800 text-xs ${
                       idx % 7 === 6 ? 'border-r-0' : ''
-                    } ${day ? 'bg-zinc-900/50' : 'bg-zinc-900/20'}`}
+                    } ${day ? 'bg-slate-100/50 dark:bg-zinc-900/50' : 'bg-slate-100/20 dark:bg-zinc-900/20'}`}
                   >
                     {day && (
                       <>
                         <span className={`w-6 h-6 flex items-center justify-center rounded-full text-xs ${
-                          isToday ? 'bg-emerald-600 text-white' : 'text-zinc-400'
+                          isToday ? 'bg-emerald-600 text-white' : 'text-slate-600 dark:text-zinc-400'
                         }`}>
                           {day}
                         </span>
@@ -195,27 +195,27 @@ export default function CalendarPage() {
 
           {/* Agenda list — always visible, primary view on mobile */}
           {hasReleases ? (
-            <div className="mt-4 border border-zinc-800 rounded-lg overflow-hidden">
-              <div className="px-4 py-2 bg-zinc-900 border-b border-zinc-800">
-                <p className="text-xs text-zinc-400 font-medium">
+            <div className="mt-4 border border-slate-200 dark:border-zinc-800 rounded-lg overflow-hidden">
+              <div className="px-4 py-2 bg-slate-100 dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800">
+                <p className="text-xs text-slate-600 dark:text-zinc-400 font-medium">
                   Releasing in {MONTH_NAMES[viewMonth]} {viewYear}
                 </p>
               </div>
-              <div className="divide-y divide-zinc-800">
+              <div className="divide-y divide-slate-200 dark:divide-zinc-800">
                 {Object.entries(booksByDay)
                   .sort(([a], [b]) => Number(a) - Number(b))
                   .flatMap(([day, dayBooks]) =>
                     dayBooks.map(book => (
                       <div key={book.id} className="flex items-center gap-3 px-4 py-3">
-                        <span className="text-xs text-zinc-500 w-12 flex-shrink-0">
+                        <span className="text-xs text-slate-600 dark:text-zinc-500 w-12 flex-shrink-0">
                           {MONTH_NAMES[viewMonth].slice(0, 3)} {day}
                         </span>
                         {book.imageUrl && (
                           <img src={book.imageUrl} alt="" className="w-8 h-10 object-cover rounded flex-shrink-0" />
                         )}
-                        <span className="text-sm text-zinc-200 min-w-0 truncate">{book.title}</span>
+                        <span className="text-sm text-slate-800 dark:text-zinc-200 min-w-0 truncate">{book.title}</span>
                         {book.author && (
-                          <span className="text-xs text-zinc-500 flex-shrink-0 hidden sm:block">
+                          <span className="text-xs text-slate-600 dark:text-zinc-500 flex-shrink-0 hidden sm:block">
                             {book.author.authorName}
                           </span>
                         )}
@@ -225,7 +225,7 @@ export default function CalendarPage() {
               </div>
             </div>
           ) : (
-            <p className="mt-4 text-center text-sm text-zinc-600">
+            <p className="mt-4 text-center text-sm text-slate-500 dark:text-zinc-600">
               No monitored books releasing this month
             </p>
           )}

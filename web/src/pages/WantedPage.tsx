@@ -69,7 +69,7 @@ export default function WantedPage() {
     <div>
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold">Wanted</h2>
-        <span className="text-sm text-zinc-500">{filtered.length} of {books.length}</span>
+        <span className="text-sm text-slate-600 dark:text-zinc-500">{filtered.length} of {books.length}</span>
       </div>
 
       <input
@@ -77,24 +77,24 @@ export default function WantedPage() {
         value={search}
         onChange={e => setSearch(e.target.value)}
         placeholder="Search by title or author..."
-        className="w-full mb-4 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600 placeholder-zinc-600"
+        className="w-full mb-4 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600 placeholder-slate-400 dark:placeholder-zinc-600"
       />
 
       {loading ? (
-        <div className="text-zinc-500">Loading...</div>
+        <div className="text-slate-600 dark:text-zinc-500">Loading...</div>
       ) : books.length === 0 ? (
-        <div className="text-center py-16 text-zinc-500">
+        <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
           <p>No wanted books. Add an author to start tracking.</p>
         </div>
       ) : filtered.length === 0 ? (
-        <div className="text-center py-16 text-zinc-500">
+        <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
           <p>No books match your search.</p>
         </div>
       ) : (
         <div className="space-y-2">
           {pageItems.map(book => (
             <div key={book.id}>
-              <div className="flex items-center justify-between p-3 border border-zinc-800 rounded-lg bg-zinc-900">
+              <div className="flex items-center justify-between p-3 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
                 <div className="flex items-center gap-3 min-w-0">
                   {book.imageUrl && (
                     <img src={book.imageUrl} alt="" className="w-10 h-14 object-cover rounded flex-shrink-0" />
@@ -102,21 +102,21 @@ export default function WantedPage() {
                   <div className="min-w-0">
                     <h3 className="font-medium text-sm truncate">{book.title}</h3>
                     {book.releaseDate && (
-                      <p className="text-xs text-zinc-500">{new Date(book.releaseDate).getFullYear()}</p>
+                      <p className="text-xs text-slate-600 dark:text-zinc-500">{new Date(book.releaseDate).getFullYear()}</p>
                     )}
                   </div>
                 </div>
                 <button
                   onClick={() => searchBook(book)}
                   disabled={searchingId === book.id}
-                  className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-xs font-medium flex-shrink-0 disabled:opacity-50"
+                  className="px-3 py-1.5 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 rounded text-xs font-medium flex-shrink-0 disabled:opacity-50"
                 >
                   {searchingId === book.id ? 'Searching...' : 'Search'}
                 </button>
               </div>
 
               {showResults === book.id && results.length === 0 && (
-                <div className="mt-1 mb-3 px-3 py-2 bg-zinc-800/50 rounded text-xs text-zinc-500">
+                <div className="mt-1 mb-3 px-3 py-2 bg-slate-200/50 dark:bg-zinc-800/50 rounded text-xs text-slate-600 dark:text-zinc-500">
                   No results found on any indexer.
                 </div>
               )}
@@ -124,10 +124,10 @@ export default function WantedPage() {
               {showResults === book.id && results.length > 0 && (
                 <div className="mt-1 mb-3 space-y-1">
                   {results.slice(0, 10).map(r => (
-                    <div key={r.guid} className="flex items-center justify-between p-2 bg-zinc-800/50 rounded text-xs">
+                    <div key={r.guid} className="flex items-center justify-between p-2 bg-slate-200/50 dark:bg-zinc-800/50 rounded text-xs">
                       <div className="min-w-0 mr-3">
                         <span className="truncate block">{r.title}</span>
-                        <span className="text-zinc-500 truncate block">{r.indexerName} &middot; {formatSize(r.size)} &middot; {r.grabs} grabs</span>
+                        <span className="text-slate-600 dark:text-zinc-500 truncate block">{r.indexerName} &middot; {formatSize(r.size)} &middot; {r.grabs} grabs</span>
                       </div>
                       <button
                         onClick={() => grab(r, book.id)}

@@ -11,7 +11,7 @@ const EVENT_TYPE_COLORS: Record<string, string> = {
   importFailed: 'bg-red-500/20 text-red-400',
   deleted: 'bg-red-500/20 text-red-400',
   renamed: 'bg-purple-500/20 text-purple-400',
-  ignored: 'bg-zinc-700 text-zinc-400',
+  ignored: 'bg-slate-300 dark:bg-zinc-700 text-slate-600 dark:text-zinc-400',
   bookFileRenamed: 'bg-purple-500/20 text-purple-400',
 }
 
@@ -72,7 +72,7 @@ export default function HistoryPage() {
         <select
           value={typeFilter}
           onChange={e => handleFilterChange(e.target.value)}
-          className="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm text-zinc-200 focus:outline-none focus:border-zinc-600"
+          className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-1.5 text-sm text-slate-800 dark:text-zinc-200 focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
         >
           <option value="">All event types</option>
           {eventTypes.map(t => (
@@ -82,48 +82,48 @@ export default function HistoryPage() {
       </div>
 
       {loading ? (
-        <div className="text-zinc-500">Loading...</div>
+        <div className="text-slate-600 dark:text-zinc-500">Loading...</div>
       ) : events.length === 0 ? (
-        <div className="text-center py-16 text-zinc-500">
+        <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
           <p>No history events found</p>
         </div>
       ) : (
         <>
           {/* Desktop table */}
-          <div className="hidden sm:block border border-zinc-800 rounded-lg overflow-hidden">
+          <div className="hidden sm:block border border-slate-200 dark:border-zinc-800 rounded-lg overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="bg-zinc-900 border-b border-zinc-800">
-                    <th className="text-left px-4 py-3 text-xs font-medium text-zinc-400 uppercase tracking-wider">Event Type</th>
-                    <th className="text-left px-4 py-3 text-xs font-medium text-zinc-400 uppercase tracking-wider">Source Title</th>
-                    <th className="text-left px-4 py-3 text-xs font-medium text-zinc-400 uppercase tracking-wider">Date</th>
+                  <tr className="bg-slate-100 dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800">
+                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">Event Type</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">Source Title</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">Date</th>
                     <th className="px-4 py-3" />
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-800">
+                <tbody className="divide-y divide-slate-200 dark:divide-zinc-800">
                   {pageItems.map(event => {
                     const parsed = parseEventData(event.data)
                     const detail = parsed.message || parsed.path || ''
                     const isError = event.eventType === 'downloadFailed' || event.eventType === 'importFailed'
                     return (
-                      <tr key={event.id} className="bg-zinc-900/50 hover:bg-zinc-800/50 transition-colors">
+                      <tr key={event.id} className="bg-slate-100/50 dark:bg-zinc-900/50 hover:bg-slate-200/50 dark:hover:bg-zinc-800/50 transition-colors">
                         <td className="px-4 py-3 align-top">
-                          <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${EVENT_TYPE_COLORS[event.eventType] ?? 'bg-zinc-700 text-zinc-400'}`}>
+                          <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${EVENT_TYPE_COLORS[event.eventType] ?? 'bg-slate-300 dark:bg-zinc-700 text-slate-600 dark:text-zinc-400'}`}>
                             {event.eventType}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-zinc-200 max-w-md">
+                        <td className="px-4 py-3 text-slate-800 dark:text-zinc-200 max-w-md">
                           <div className="truncate" title={event.sourceTitle}>
-                            {event.sourceTitle || <span className="text-zinc-600">—</span>}
+                            {event.sourceTitle || <span className="text-slate-500 dark:text-zinc-600">—</span>}
                           </div>
                           {detail && (
-                            <div className={`mt-1 text-xs break-words ${isError ? 'text-red-400' : 'text-zinc-500'}`}>
+                            <div className={`mt-1 text-xs break-words ${isError ? 'text-red-400' : 'text-slate-600 dark:text-zinc-500'}`}>
                               {detail}
                             </div>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-zinc-400 whitespace-nowrap align-top text-xs">
+                        <td className="px-4 py-3 text-slate-600 dark:text-zinc-400 whitespace-nowrap align-top text-xs">
                           {formatDate(event.createdAt)}
                         </td>
                         <td className="px-4 py-3 text-right align-top whitespace-nowrap">
@@ -158,18 +158,18 @@ export default function HistoryPage() {
               const detail = parsed.message || parsed.path || ''
               const isError = event.eventType === 'downloadFailed' || event.eventType === 'importFailed'
               return (
-                <div key={event.id} className="border border-zinc-800 rounded-lg bg-zinc-900/50 p-3">
+                <div key={event.id} className="border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100/50 dark:bg-zinc-900/50 p-3">
                   <div className="flex items-start justify-between gap-2 mb-2">
-                    <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium flex-shrink-0 ${EVENT_TYPE_COLORS[event.eventType] ?? 'bg-zinc-700 text-zinc-400'}`}>
+                    <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium flex-shrink-0 ${EVENT_TYPE_COLORS[event.eventType] ?? 'bg-slate-300 dark:bg-zinc-700 text-slate-600 dark:text-zinc-400'}`}>
                       {event.eventType}
                     </span>
-                    <span className="text-[10px] text-zinc-500">{formatDate(event.createdAt)}</span>
+                    <span className="text-[10px] text-slate-600 dark:text-zinc-500">{formatDate(event.createdAt)}</span>
                   </div>
-                  <p className="text-sm text-zinc-200 break-words mb-1">
-                    {event.sourceTitle || <span className="text-zinc-600">—</span>}
+                  <p className="text-sm text-slate-800 dark:text-zinc-200 break-words mb-1">
+                    {event.sourceTitle || <span className="text-slate-500 dark:text-zinc-600">—</span>}
                   </p>
                   {detail && (
-                    <p className={`text-xs break-words mb-2 ${isError ? 'text-red-400' : 'text-zinc-500'}`}>
+                    <p className={`text-xs break-words mb-2 ${isError ? 'text-red-400' : 'text-slate-600 dark:text-zinc-500'}`}>
                       {detail}
                     </p>
                   )}

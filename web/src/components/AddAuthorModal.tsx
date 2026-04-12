@@ -45,8 +45,8 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50" onClick={onClose}>
-      <div className="bg-zinc-900 border border-zinc-700 rounded-lg w-full max-w-lg shadow-2xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
-        <div className="p-4 border-b border-zinc-800">
+      <div className="bg-slate-100 dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 rounded-lg w-full max-w-lg shadow-2xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="p-4 border-b border-slate-200 dark:border-zinc-800">
           <h3 className="text-lg font-semibold">Add Author</h3>
         </div>
 
@@ -58,7 +58,7 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
               onChange={e => setQuery(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && search()}
               placeholder="Search by author name..."
-              className="flex-1 bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
+              className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
               autoFocus
             />
             <button
@@ -74,11 +74,11 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
             {results.map(author => (
               <div
                 key={author.foreignAuthorId}
-                className="flex items-center justify-between p-3 rounded-md bg-zinc-800/50 hover:bg-zinc-800"
+                className="flex items-center justify-between p-3 rounded-md bg-slate-200/50 dark:bg-zinc-800/50 hover:bg-slate-200 dark:hover:bg-zinc-800"
               >
                 <div className="min-w-0">
                   <div className="font-medium text-sm">{author.authorName}</div>
-                  <div className="text-xs text-zinc-500 flex flex-wrap gap-x-3">
+                  <div className="text-xs text-slate-600 dark:text-zinc-500 flex flex-wrap gap-x-3">
                     {author.disambiguation && <span>Top work: {author.disambiguation}</span>}
                     {author.statistics?.bookCount ? <span>{author.statistics.bookCount} books</span> : null}
                     {author.ratingsCount ? <span>{author.ratingsCount} ratings</span> : null}
@@ -94,13 +94,13 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
               </div>
             ))}
             {results.length === 0 && !searching && query && (
-              <p className="text-sm text-zinc-500 text-center py-4">No results found</p>
+              <p className="text-sm text-slate-600 dark:text-zinc-500 text-center py-4">No results found</p>
             )}
           </div>
         </div>
 
-        <div className="p-4 border-t border-zinc-800 flex justify-end">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-zinc-400 hover:text-white">Cancel</button>
+        <div className="p-4 border-t border-slate-200 dark:border-zinc-800 flex justify-end">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white">Cancel</button>
         </div>
       </div>
     </div>
