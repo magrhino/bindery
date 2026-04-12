@@ -17,7 +17,9 @@ import (
 	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/metadata/googlebooks"
+	"github.com/vavallee/bindery/internal/metadata/hardcover"
 	"github.com/vavallee/bindery/internal/metadata/openlibrary"
+	"github.com/vavallee/bindery/internal/notifier"
 	"github.com/vavallee/bindery/internal/scheduler"
 	"github.com/vavallee/bindery/internal/webui"
 )
@@ -63,6 +65,16 @@ func main() {
 	dlClientRepo := db.NewDownloadClientRepo(database)
 	downloadRepo := db.NewDownloadRepo(database)
 	settingsRepo := db.NewSettingsRepo(database)
+	historyRepo := db.NewHistoryRepo(database)
+	blocklistRepo := db.NewBlocklistRepo(database)
+	notificationRepo := db.NewNotificationRepo(database)
+	qualityProfileRepo := db.NewQualityProfileRepo(database)
+	seriesRepo := db.NewSeriesRepo(database)
+	tagRepo := db.NewTagRepo(database)
+	importListRepo := db.NewImportListRepo(database)
+	metadataProfileRepo := db.NewMetadataProfileRepo(database)
+	delayProfileRepo := db.NewDelayProfileRepo(database)
+	customFormatRepo := db.NewCustomFormatRepo(database)
 
 	// Metadata providers
 	olClient := openlibrary.New()
@@ -71,6 +83,8 @@ func main() {
 		enrichers = append(enrichers, googlebooks.New(setting.Value))
 		slog.Info("google books enrichment enabled")
 	}
+	enrichers = append(enrichers, hardcover.New())
+	slog.Info("hardcover enrichment enabled")
 	metaAgg := metadata.NewAggregator(olClient, enrichers...)
 
 	// Indexer searcher
@@ -78,13 +92,16 @@ func main() {
 
 	// Import scanner
 	namingTemplate := defaultNamingTemplate(settingsRepo)
-	importScanner := importer.NewScanner(downloadRepo, dlClientRepo, bookRepo, authorRepo, cfg.LibraryDir, namingTemplate)
+	importScanner := importer.NewScanner(downloadRepo, dlClientRepo, bookRepo, authorRepo, historyRepo, cfg.LibraryDir, namingTemplate)
 
 	// Scheduler
 	sched := scheduler.New(importScanner, idxSearcher, metaAgg,
 		authorRepo, bookRepo, indexerRepo, downloadRepo, dlClientRepo, settingsRepo)
 	sched.Start()
 	defer sched.Stop()
+
+	// Notifier
+	notif := notifier.New(notificationRepo)
 
 	// API handlers
 	searchHandler := api.NewSearchHandler(metaAgg)
@@ -94,6 +111,18 @@ func main() {
 	dlClientHandler := api.NewDownloadClientHandler(dlClientRepo)
 	queueHandler := api.NewQueueHandler(downloadRepo, dlClientRepo)
 	fileHandler := api.NewFileHandler(bookRepo)
+	historyHandler := api.NewHistoryHandler(historyRepo)
+	blocklistHandler := api.NewBlocklistHandler(blocklistRepo)
+	notificationHandler := api.NewNotificationHandler(notificationRepo, notif)
+	qualityProfileHandler := api.NewQualityProfileHandler(qualityProfileRepo)
+	settingsHandler := api.NewSettingsHandler(settingsRepo)
+	seriesHandler := api.NewSeriesHandler(seriesRepo)
+	tagHandler := api.NewTagHandler(tagRepo)
+	importListHandler := api.NewImportListHandler(importListRepo)
+	metadataProfileHandler := api.NewMetadataProfileHandler(metadataProfileRepo)
+	delayProfileHandler := api.NewDelayProfileHandler(delayProfileRepo)
+	customFormatHandler := api.NewCustomFormatHandler(customFormatRepo)
+	backupHandler := api.NewBackupHandler(cfg.DBPath, cfg.DataDir)
 
 	// Router
 	r := chi.NewRouter()
@@ -103,6 +132,8 @@ func main() {
 	r.Use(middleware.Compress(5))
 
 	r.Route("/api/v1", func(r chi.Router) {
+		r.Use(apiKeyMiddleware(cfg.APIKey))
+
 		// System
 		r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -158,6 +189,81 @@ func main() {
 		r.Get("/queue", queueHandler.List)
 		r.Post("/queue/grab", queueHandler.Grab)
 		r.Delete("/queue/{id}", queueHandler.Delete)
+
+		// History
+		r.Get("/history", historyHandler.List)
+		r.Delete("/history/{id}", historyHandler.Delete)
+
+		// Blocklist
+		r.Get("/blocklist", blocklistHandler.List)
+		r.Delete("/blocklist/bulk", blocklistHandler.BulkDelete)
+		r.Delete("/blocklist/{id}", blocklistHandler.Delete)
+
+		// Notifications
+		r.Get("/notification", notificationHandler.List)
+		r.Post("/notification", notificationHandler.Create)
+		r.Get("/notification/{id}", notificationHandler.Get)
+		r.Put("/notification/{id}", notificationHandler.Update)
+		r.Delete("/notification/{id}", notificationHandler.Delete)
+		r.Post("/notification/{id}/test", notificationHandler.Test)
+
+		// Quality Profiles
+		r.Get("/qualityprofile", qualityProfileHandler.List)
+		r.Get("/qualityprofile/{id}", qualityProfileHandler.Get)
+
+		// Settings
+		r.Get("/setting", settingsHandler.List)
+		r.Get("/setting/{key}", settingsHandler.Get)
+		r.Put("/setting/{key}", settingsHandler.Set)
+		r.Delete("/setting/{key}", settingsHandler.Delete)
+
+		// Series
+		r.Get("/series", seriesHandler.List)
+		r.Get("/series/{id}", seriesHandler.Get)
+
+		// Tags
+		r.Get("/tag", tagHandler.List)
+		r.Post("/tag", tagHandler.Create)
+		r.Delete("/tag/{id}", tagHandler.Delete)
+
+		// Import lists
+		r.Get("/importlist", importListHandler.List)
+		r.Post("/importlist", importListHandler.Create)
+		r.Get("/importlist/{id}", importListHandler.Get)
+		r.Put("/importlist/{id}", importListHandler.Update)
+		r.Delete("/importlist/{id}", importListHandler.Delete)
+
+		// Import list exclusions
+		r.Get("/importlistexclusion", importListHandler.ListExclusions)
+		r.Post("/importlistexclusion", importListHandler.CreateExclusion)
+		r.Delete("/importlistexclusion/{id}", importListHandler.DeleteExclusion)
+
+		// Metadata profiles
+		r.Get("/metadataprofile", metadataProfileHandler.List)
+		r.Post("/metadataprofile", metadataProfileHandler.Create)
+		r.Get("/metadataprofile/{id}", metadataProfileHandler.Get)
+		r.Put("/metadataprofile/{id}", metadataProfileHandler.Update)
+		r.Delete("/metadataprofile/{id}", metadataProfileHandler.Delete)
+
+		// Delay profiles
+		r.Get("/delayprofile", delayProfileHandler.List)
+		r.Post("/delayprofile", delayProfileHandler.Create)
+		r.Get("/delayprofile/{id}", delayProfileHandler.Get)
+		r.Put("/delayprofile/{id}", delayProfileHandler.Update)
+		r.Delete("/delayprofile/{id}", delayProfileHandler.Delete)
+
+		// Custom formats
+		r.Get("/customformat", customFormatHandler.List)
+		r.Post("/customformat", customFormatHandler.Create)
+		r.Get("/customformat/{id}", customFormatHandler.Get)
+		r.Put("/customformat/{id}", customFormatHandler.Update)
+		r.Delete("/customformat/{id}", customFormatHandler.Delete)
+
+		// Backups
+		r.Get("/backup", backupHandler.List)
+		r.Post("/backup", backupHandler.Create)
+		r.Post("/backup/{filename}/restore", backupHandler.Restore)
+		r.Delete("/backup/{filename}", backupHandler.Delete)
 	})
 
 	// Serve embedded frontend
@@ -193,4 +299,30 @@ func defaultNamingTemplate(settings *db.SettingsRepo) string {
 		return s.Value
 	}
 	return ""
+}
+
+func apiKeyMiddleware(apiKey string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if apiKey == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if r.URL.Path == "/api/v1/health" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			key := r.Header.Get("X-Api-Key")
+			if key == "" {
+				key = r.URL.Query().Get("apikey")
+			}
+			if key != apiKey {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }

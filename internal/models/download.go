@@ -16,6 +16,15 @@ type DownloadClient struct {
 	Enabled  bool      `json:"enabled"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
+
+	// Username and Password are used by download clients that authenticate with
+	// credentials rather than an API key (e.g. qBittorrent).
+	// Storage note: for qBittorrent, Username is persisted in the url_base column
+	// and Password is persisted in the api_key column of the download_clients table,
+	// since those fields are unused by qBittorrent. These virtual fields are
+	// populated by the application layer and are not stored as separate DB columns.
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 type Download struct {

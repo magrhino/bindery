@@ -6,6 +6,10 @@ import BooksPage from './pages/BooksPage'
 import WantedPage from './pages/WantedPage'
 import QueuePage from './pages/QueuePage'
 import SettingsPage from './pages/SettingsPage'
+import HistoryPage from './pages/HistoryPage'
+import SeriesPage from './pages/SeriesPage'
+import CalendarPage from './pages/CalendarPage'
+import BlocklistPage from './pages/BlocklistPage'
 
 function App() {
   const [version, setVersion] = useState('')
@@ -25,18 +29,22 @@ function App() {
         <header className="border-b border-zinc-800">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex items-center justify-between h-14">
-              <div className="flex items-center gap-6">
-                <h1 className="text-lg font-bold tracking-tight">Bindery</h1>
-                <nav className="flex gap-1">
+              <div className="flex items-center gap-6 overflow-x-auto">
+                <h1 className="text-lg font-bold tracking-tight flex-shrink-0">Bindery</h1>
+                <nav className="flex gap-1 flex-shrink-0">
                   <NavLink to="/" end className={linkClass}>Authors</NavLink>
                   <NavLink to="/books" className={linkClass}>Books</NavLink>
                   <NavLink to="/wanted" className={linkClass}>Wanted</NavLink>
                   <NavLink to="/queue" className={linkClass}>Queue</NavLink>
+                  <NavLink to="/history" className={linkClass}>History</NavLink>
+                  <NavLink to="/series" className={linkClass}>Series</NavLink>
+                  <NavLink to="/calendar" className={linkClass}>Calendar</NavLink>
+                  <NavLink to="/blocklist" className={linkClass}>Blocklist</NavLink>
                   <NavLink to="/settings" className={linkClass}>Settings</NavLink>
                 </nav>
               </div>
               {version && (
-                <span className="text-xs text-zinc-600">v{version}</span>
+                <span className="text-xs text-zinc-600 flex-shrink-0 ml-4">v{version}</span>
               )}
             </div>
           </div>
@@ -48,6 +56,10 @@ function App() {
             <Route path="/books" element={<BooksPage />} />
             <Route path="/wanted" element={<WantedPage />} />
             <Route path="/queue" element={<QueuePage />} />
+            <Route path="/history" element={<HistoryPage />} />
+            <Route path="/series" element={<SeriesPage />} />
+            <Route path="/calendar" element={<CalendarPage />} />
+            <Route path="/blocklist" element={<BlocklistPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>
         </main>

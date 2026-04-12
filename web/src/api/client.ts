@@ -65,6 +65,64 @@ export const api = {
   listQueue: () => request<QueueItem[]>('/queue'),
   grab: (data: GrabRequest) => request<Download>('/queue/grab', { method: 'POST', body: JSON.stringify(data) }),
   deleteFromQueue: (id: number) => request<void>(`/queue/${id}`, { method: 'DELETE' }),
+
+  // History
+  listHistory: (params?: { bookId?: number; eventType?: string }) => {
+    const q = new URLSearchParams()
+    if (params?.bookId) q.set('bookId', String(params.bookId))
+    if (params?.eventType) q.set('eventType', params.eventType)
+    const qs = q.toString()
+    return request<HistoryEvent[]>(`/history${qs ? '?' + qs : ''}`)
+  },
+  deleteHistory: (id: number) => request<void>(`/history/${id}`, { method: 'DELETE' }),
+
+  // Blocklist
+  listBlocklist: () => request<BlocklistEntry[]>('/blocklist'),
+  deleteBlocklistEntry: (id: number) => request<void>(`/blocklist/${id}`, { method: 'DELETE' }),
+  bulkDeleteBlocklist: (ids: number[]) => request<void>('/blocklist/bulk', { method: 'DELETE', body: JSON.stringify({ ids }) }),
+
+  // Notifications
+  listNotifications: () => request<NotificationConfig[]>('/notification'),
+  addNotification: (data: Partial<NotificationConfig>) => request<NotificationConfig>('/notification', { method: 'POST', body: JSON.stringify(data) }),
+  updateNotification: (id: number, data: Partial<NotificationConfig>) => request<NotificationConfig>(`/notification/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteNotification: (id: number) => request<void>(`/notification/${id}`, { method: 'DELETE' }),
+  testNotification: (id: number) => request<{ message: string }>(`/notification/${id}/test`, { method: 'POST' }),
+
+  // Quality Profiles
+  listQualityProfiles: () => request<QualityProfile[]>('/qualityprofile'),
+
+  // Series
+  listSeries: () => request<Series[]>('/series'),
+  getSeries: (id: number) => request<Series>(`/series/${id}`),
+
+  // Tags
+  listTags: () => request<Tag[]>('/tag'),
+  addTag: (name: string) => request<Tag>('/tag', { method: 'POST', body: JSON.stringify({ name }) }),
+  deleteTag: (id: number) => request<void>(`/tag/${id}`, { method: 'DELETE' }),
+
+  // Settings
+  listSettings: () => request<Array<{ key: string; value: string }>>('/setting'),
+  getSetting: (key: string) => request<{ key: string; value: string }>(`/setting/${key}`),
+  setSetting: (key: string, value: string) => request<void>(`/setting/${key}`, { method: 'PUT', body: JSON.stringify({ value }) }),
+
+  // Backup
+  listBackups: () => request<string[]>('/backup'),
+  createBackup: () => request<{ filename: string }>('/backup', { method: 'POST' }),
+
+  // Metadata Profiles
+  listMetadataProfiles: () => request<MetadataProfile[]>('/metadataprofile'),
+  addMetadataProfile: (data: Partial<MetadataProfile>) => request<MetadataProfile>('/metadataprofile', { method: 'POST', body: JSON.stringify(data) }),
+  deleteMetadataProfile: (id: number) => request<void>(`/metadataprofile/${id}`, { method: 'DELETE' }),
+
+  // Delay Profiles
+  listDelayProfiles: () => request<DelayProfile[]>('/delayprofile'),
+  addDelayProfile: (data: Partial<DelayProfile>) => request<DelayProfile>('/delayprofile', { method: 'POST', body: JSON.stringify(data) }),
+  deleteDelayProfile: (id: number) => request<void>(`/delayprofile/${id}`, { method: 'DELETE' }),
+
+  // Custom Formats
+  listCustomFormats: () => request<CustomFormat[]>('/customformat'),
+  addCustomFormat: (data: Partial<CustomFormat>) => request<CustomFormat>('/customformat', { method: 'POST', body: JSON.stringify(data) }),
+  deleteCustomFormat: (id: number) => request<void>(`/customformat/${id}`, { method: 'DELETE' }),
 }
 
 // Types
@@ -153,4 +211,96 @@ export interface GrabRequest {
   size: number
   bookId?: number
   indexerId?: number
+}
+
+export interface HistoryEvent {
+  id: number
+  bookId?: number
+  eventType: string
+  sourceTitle: string
+  data: string
+  createdAt: string
+}
+
+export interface BlocklistEntry {
+  id: number
+  bookId?: number
+  guid: string
+  title: string
+  indexerId?: number
+  reason: string
+  createdAt: string
+}
+
+export interface NotificationConfig {
+  id: number
+  name: string
+  type: string
+  url: string
+  method: string
+  headers: string
+  onGrab: boolean
+  onImport: boolean
+  onUpgrade: boolean
+  onFailure: boolean
+  onHealth: boolean
+  enabled: boolean
+}
+
+export interface QualityProfile {
+  id: number
+  name: string
+  upgradeAllowed: boolean
+  cutoff: string
+  items: Array<{ quality: string; allowed: boolean }>
+}
+
+export interface Series {
+  id: number
+  foreignSeriesId: string
+  title: string
+  description: string
+  books?: Array<{
+    seriesId: number
+    bookId: number
+    positionInSeries: string
+    book?: Book
+  }>
+}
+
+export interface Tag {
+  id: number
+  name: string
+}
+
+export interface MetadataProfile {
+  id: number
+  name: string
+  minPopularity: number
+  minPages: number
+  skipMissingDate: boolean
+  skipMissingIsbn: boolean
+  skipPartBooks: boolean
+  allowedLanguages: string
+}
+
+export interface DelayProfile {
+  id: number
+  usenetDelay: number
+  torrentDelay: number
+  preferredProtocol: string
+  enableUsenet: boolean
+  enableTorrent: boolean
+  order: number
+}
+
+export interface CustomFormat {
+  id: number
+  name: string
+  conditions: Array<{
+    type: string
+    pattern: string
+    negate: boolean
+    required: boolean
+  }>
 }

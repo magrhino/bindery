@@ -84,4 +84,5 @@ type SearchResult struct {
 	Grabs       int    `json:"grabs"`
 	Author      string `json:"author"`
 	BookTitle   string `json:"bookTitle"`
+	Protocol    string `json:"protocol"` // "usenet" or "torrent"
 }

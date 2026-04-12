@@ -7,6 +7,7 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/downloader/sabnzbd"
 	"github.com/vavallee/bindery/internal/importer"
 	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/metadata"
@@ -153,8 +154,20 @@ func (s *Scheduler) searchWanted() {
 			continue
 		}
 
-		// TODO: send to SABnzbd (reuse queue handler logic)
-		// For now, mark as queued for manual grab
+		sab := sabnzbd.New(client.Host, client.Port, client.APIKey, client.UseSSL)
+		resp, err := sab.AddURL(ctx, best.NZBURL, best.Title, client.Category, 0)
+		if err != nil {
+			slog.Error("failed to send to SABnzbd", "title", best.Title, "error", err)
+			s.downloads.SetError(ctx, dl.ID, err.Error())
+			continue
+		}
+
+		if len(resp.NzoIDs) > 0 {
+			nzoID := resp.NzoIDs[0]
+			s.downloads.SetNzoID(ctx, dl.ID, nzoID)
+		}
+		s.downloads.UpdateStatus(ctx, dl.ID, models.DownloadStatusDownloading)
+		slog.Info("sent to SABnzbd", "title", best.Title)
 	}
 }
 

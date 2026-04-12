@@ -46,10 +46,12 @@ func (s *Searcher) SearchBook(ctx context.Context, indexers []models.Indexer, ti
 				return
 			}
 
-			// Tag results with indexer info
+			// Tag results with indexer info and protocol
+			protocol := protocolForType(idx.Type)
 			for i := range hits {
 				hits[i].IndexerID = idx.ID
 				hits[i].IndexerName = idx.Name
+				hits[i].Protocol = protocol
 			}
 
 			mu.Lock()
@@ -91,9 +93,11 @@ func (s *Searcher) SearchQuery(ctx context.Context, indexers []models.Indexer, q
 				return
 			}
 
+			protocol := protocolForType(idx.Type)
 			for i := range hits {
 				hits[i].IndexerID = idx.ID
 				hits[i].IndexerName = idx.Name
+				hits[i].Protocol = protocol
 			}
 
 			mu.Lock()
@@ -169,11 +173,45 @@ func dedupe(results []newznab.SearchResult) []newznab.SearchResult {
 
 func rankResults(results []newznab.SearchResult) {
 	sort.Slice(results, func(i, j int) bool {
-		// Prefer more grabs (indicates healthier NZB)
+		qi := models.QualityRank[detectQuality(results[i].Title)]
+		qj := models.QualityRank[detectQuality(results[j].Title)]
+		// Primary: quality rank descending
+		if qi != qj {
+			return qi > qj
+		}
+		// Secondary: more grabs (indicates healthier release)
 		if results[i].Grabs != results[j].Grabs {
 			return results[i].Grabs > results[j].Grabs
 		}
-		// Then by size descending (larger usually means better quality)
+		// Tertiary: size descending
 		return results[i].Size > results[j].Size
 	})
+}
+
+// detectQuality scans a result title for known quality keywords and returns
+// the best (highest-ranked) match found.
+func detectQuality(title string) string {
+	lower := strings.ToLower(title)
+	best := "unknown"
+	bestRank := 0
+	for q, rank := range models.QualityRank {
+		if q == "unknown" {
+			continue
+		}
+		if strings.Contains(lower, q) {
+			if rank > bestRank {
+				bestRank = rank
+				best = q
+			}
+		}
+	}
+	return best
+}
+
+// protocolForType maps an indexer type string to its protocol name.
+func protocolForType(t string) string {
+	if t == "torznab" {
+		return "torrent"
+	}
+	return "usenet"
 }

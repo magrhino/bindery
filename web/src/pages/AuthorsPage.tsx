@@ -1,11 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { api, Author } from '../api/client'
 import AddAuthorModal from '../components/AddAuthorModal'
+
+type SortMode = 'az' | 'za' | 'recent'
 
 export default function AuthorsPage() {
   const [authors, setAuthors] = useState<Author[]>([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
+  const [search, setSearch] = useState('')
+  const [sort, setSort] = useState<SortMode>('az')
 
   const load = () => {
     setLoading(true)
@@ -25,9 +29,27 @@ export default function AuthorsPage() {
     load()
   }
 
+  const filtered = useMemo(() => {
+    let list = authors
+    if (search.trim()) {
+      const q = search.trim().toLowerCase()
+      list = list.filter(a =>
+        a.authorName.toLowerCase().includes(q) ||
+        (a.description && a.description.toLowerCase().includes(q))
+      )
+    }
+    if (sort === 'az') list = [...list].sort((a, b) => a.authorName.localeCompare(b.authorName))
+    else if (sort === 'za') list = [...list].sort((a, b) => b.authorName.localeCompare(a.authorName))
+    // 'recent' keeps server order (typically by id desc)
+    return list
+  }, [authors, search, sort])
+
+  const sortBtnCls = (active: boolean) =>
+    `px-3 py-1 rounded-md text-xs font-medium transition-colors ${active ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'}`
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold">Authors</h2>
         <button
           onClick={() => setShowAdd(true)}
@@ -37,16 +59,36 @@ export default function AuthorsPage() {
         </button>
       </div>
 
+      {/* Search & Sort controls */}
+      <div className="flex flex-col sm:flex-row gap-3 mb-6">
+        <input
+          type="search"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search authors..."
+          className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600 placeholder-zinc-600"
+        />
+        <div className="flex gap-1">
+          <button onClick={() => setSort('az')} className={sortBtnCls(sort === 'az')}>A–Z</button>
+          <button onClick={() => setSort('za')} className={sortBtnCls(sort === 'za')}>Z–A</button>
+          <button onClick={() => setSort('recent')} className={sortBtnCls(sort === 'recent')}>Recent</button>
+        </div>
+      </div>
+
       {loading ? (
         <div className="text-zinc-500">Loading...</div>
-      ) : authors.length === 0 ? (
+      ) : filtered.length === 0 && authors.length === 0 ? (
         <div className="text-center py-16 text-zinc-500">
           <p className="text-lg mb-2">No authors yet</p>
           <p className="text-sm">Click "Add Author" to start tracking your favorite authors</p>
         </div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-16 text-zinc-500">
+          <p>No authors match "{search}"</p>
+        </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {authors.map(author => (
+          {filtered.map(author => (
             <div key={author.id} className="border border-zinc-800 rounded-lg bg-zinc-900 overflow-hidden">
               <div className="flex gap-3 p-4">
                 {author.imageUrl ? (
