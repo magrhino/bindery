@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { api, Book, SearchResult } from '../api/client'
 import Pagination, { usePagination } from '../components/Pagination'
 
@@ -8,10 +8,20 @@ export default function WantedPage() {
   const [searchingId, setSearchingId] = useState<number | null>(null)
   const [results, setResults] = useState<SearchResult[]>([])
   const [showResults, setShowResults] = useState<number | null>(null)
+  const [search, setSearch] = useState('')
 
   useEffect(() => {
     api.listWanted().then(setBooks).catch(console.error).finally(() => setLoading(false))
   }, [])
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return books
+    const q = search.trim().toLowerCase()
+    return books.filter(b =>
+      b.title.toLowerCase().includes(q) ||
+      (b.author?.authorName && b.author.authorName.toLowerCase().includes(q))
+    )
+  }, [books, search])
 
   const searchBook = async (book: Book) => {
     setSearchingId(book.id)
@@ -44,7 +54,9 @@ export default function WantedPage() {
     }
   }
 
-  const { pageItems, paginationProps } = usePagination(books, 50)
+  const { pageItems, paginationProps, reset } = usePagination(filtered, 50)
+
+  useEffect(() => { reset() }, [search])
 
   const formatSize = (bytes: number) => {
     if (bytes > 1073741824) return (bytes / 1073741824).toFixed(1) + ' GB'
@@ -54,13 +66,28 @@ export default function WantedPage() {
 
   return (
     <div>
-      <h2 className="text-2xl font-bold mb-6">Wanted ({books.length})</h2>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-2xl font-bold">Wanted</h2>
+        <span className="text-sm text-zinc-500">{filtered.length} of {books.length}</span>
+      </div>
+
+      <input
+        type="search"
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        placeholder="Search by title or author..."
+        className="w-full mb-4 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600 placeholder-zinc-600"
+      />
 
       {loading ? (
         <div className="text-zinc-500">Loading...</div>
       ) : books.length === 0 ? (
         <div className="text-center py-16 text-zinc-500">
           <p>No wanted books. Add an author to start tracking.</p>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-16 text-zinc-500">
+          <p>No books match your search.</p>
         </div>
       ) : (
         <div className="space-y-2">
