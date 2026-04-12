@@ -43,15 +43,20 @@ func (c *Client) SearchAuthors(ctx context.Context, query string) ([]models.Auth
 
 	authors := make([]models.Author, 0, len(resp.Docs))
 	for _, doc := range resp.Docs {
-		authors = append(authors, models.Author{
+		a := models.Author{
 			ForeignID:        doc.Key,
 			Name:             doc.Name,
 			SortName:         sortName(doc.Name),
+			Disambiguation:   doc.TopWork,
 			AverageRating:    doc.RatingsAvg,
 			RatingsCount:     doc.RatingsCount,
 			MetadataProvider: "openlibrary",
 			Monitored:        true,
-		})
+		}
+		a.Statistics = &models.AuthorStats{
+			BookCount: doc.WorkCount,
+		}
+		authors = append(authors, a)
 	}
 	return authors, nil
 }

@@ -76,9 +76,13 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
                 key={author.foreignAuthorId}
                 className="flex items-center justify-between p-3 rounded-md bg-zinc-800/50 hover:bg-zinc-800"
               >
-                <div>
+                <div className="min-w-0">
                   <div className="font-medium text-sm">{author.authorName}</div>
-                  <div className="text-xs text-zinc-500">ID: {author.foreignAuthorId}</div>
+                  <div className="text-xs text-zinc-500 flex flex-wrap gap-x-3">
+                    {author.disambiguation && <span>Top work: {author.disambiguation}</span>}
+                    {author.statistics?.bookCount ? <span>{author.statistics.bookCount} books</span> : null}
+                    {author.ratingsCount ? <span>{author.ratingsCount} ratings</span> : null}
+                  </div>
                 </div>
                 <button
                   onClick={() => addAuthor(author)}

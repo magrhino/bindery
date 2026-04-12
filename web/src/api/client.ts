@@ -133,8 +133,12 @@ export interface Author {
   sortName: string
   description: string
   imageUrl: string
+  disambiguation: string
+  ratingsCount: number
+  averageRating: number
   monitored: boolean
   books?: Book[]
+  statistics?: { bookCount: number; availableBookCount: number; wantedBookCount: number }
 }
 
 export interface Book {
