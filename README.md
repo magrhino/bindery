@@ -49,7 +49,7 @@
 - **Quality-aware ranking** — Results sorted by detected format quality, then by grabs/size
 - **Custom formats** — Regex-based release scoring for freeleech, retail tags, etc.
 - **Delay profiles** — Wait N hours before grabbing to let higher-quality releases appear
-- **Blocklist** — Prevent re-grabbing releases that failed
+- **Blocklist** — Prevent re-grabbing releases that failed; add entries directly from History with one click
 - **Failure visibility** — Download errors surfaced in Queue (active) and History (permanent)
 
 ### Import & organize
@@ -74,9 +74,10 @@
 
 ### UI
 - **Modern React SPA** — Clean, dark-mode interface built with React 19 + TypeScript + Tailwind
+- **Mobile-friendly** — Responsive layout with hamburger nav, card views for History/Blocklist, agenda view for Calendar
 - **Pagination everywhere** — First/Prev/Next/Last + page numbers + configurable page size on all list pages
 - **Search, filter, sort** — On Authors, Books, Wanted, and History pages
-- **Calendar view** — Upcoming book releases from monitored authors
+- **Calendar view** — Upcoming book releases from monitored authors, with compact dot-indicator grid on mobile
 - **Full REST API** — Every feature accessible via HTTP for scripting and integration
 
 ### Packaging
@@ -218,17 +219,18 @@ OpenLibrary          Google Books, Hardcover.app
 Bindery exposes a full REST API under `/api/v1`. A few highlights:
 
 ```
-GET    /api/v1/health              - server health
-GET    /api/v1/author              - list authors
-POST   /api/v1/author              - add author (triggers async book fetch)
-GET    /api/v1/book?status=wanted  - filter books by status
-POST   /api/v1/book/{id}/search    - manual indexer search for a book
-GET    /api/v1/queue               - active downloads with live SABnzbd overlay
-POST   /api/v1/queue/grab          - submit a search result to download client
-GET    /api/v1/history             - grab/import/failure events
-GET    /api/v1/blocklist           - blocked releases
-POST   /api/v1/notification/{id}/test - fire a test webhook
-POST   /api/v1/backup              - snapshot the database
+GET    /api/v1/health                    - server health
+GET    /api/v1/author                    - list authors
+POST   /api/v1/author                    - add author (triggers async book fetch)
+GET    /api/v1/book?status=wanted        - filter books by status
+POST   /api/v1/book/{id}/search          - manual indexer search for a book
+GET    /api/v1/queue                     - active downloads with live SABnzbd overlay
+POST   /api/v1/queue/grab                - submit a search result to download client
+GET    /api/v1/history                   - grab/import/failure events
+POST   /api/v1/history/{id}/blocklist    - add a history event's release to the blocklist
+GET    /api/v1/blocklist                 - blocked releases
+POST   /api/v1/notification/{id}/test    - fire a test webhook
+POST   /api/v1/backup                    - snapshot the database
 ```
 
 Set `BINDERY_API_KEY` and pass it via `X-Api-Key` header for external access.
