@@ -67,8 +67,10 @@ function App() {
               </nav>
 
               <div className="flex items-center gap-3">
-                {version && /^\d+\.\d+/.test(version) && (
-                  <span className="hidden md:block text-xs text-zinc-600">v{version}</span>
+                {version && (
+                  <span className="hidden md:block text-xs text-zinc-600">
+                    {/^\d+\.\d+/.test(version) ? `v${version}` : version}
+                  </span>
                 )}
                 {/* Hamburger */}
                 <button
@@ -106,9 +108,9 @@ function App() {
                   </NavLink>
                 ))}
               </nav>
-              {version && /^\d+\.\d+/.test(version) && (
+              {version && (
                 <div className="px-4 py-2 text-xs text-zinc-600 border-t border-zinc-800">
-                  v{version}
+                  {/^\d+\.\d+/.test(version) ? `v${version}` : version}
                 </div>
               )}
             </div>

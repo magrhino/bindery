@@ -544,17 +544,24 @@ function GeneralTab() {
 
 function EditIndexerForm({ indexer, onClose, onSaved }: { indexer: Indexer; onClose: () => void; onSaved: (idx: Indexer) => void }) {
   const [name, setName] = useState(indexer.name)
+  const [type, setType] = useState(indexer.type || 'newznab')
   const [url, setUrl] = useState(indexer.url)
   const [apiKey, setApiKey] = useState(indexer.apiKey)
 
   const submit = async () => {
-    const updated = await api.updateIndexer(indexer.id, { ...indexer, name, url, apiKey })
+    const updated = await api.updateIndexer(indexer.id, { ...indexer, name, type, url, apiKey })
     onSaved(updated)
   }
 
   return (
     <div className="mt-1 p-4 border border-zinc-700 rounded-lg bg-zinc-800/50 space-y-3">
-      <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className={inputCls} />
+      <div className="flex gap-2">
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600" />
+        <select value={type} onChange={e => setType(e.target.value)} className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600">
+          <option value="newznab">Newznab (Usenet)</option>
+          <option value="torznab">Torznab (Torrent)</option>
+        </select>
+      </div>
       <input value={url} onChange={e => setUrl(e.target.value)} placeholder="URL" className={inputCls} />
       <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="API Key" type="password" className={inputCls} />
       <div className="flex gap-2 justify-end">
@@ -567,24 +574,31 @@ function EditIndexerForm({ indexer, onClose, onSaved }: { indexer: Indexer; onCl
 
 function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; onClose: () => void; onSaved: (c: DownloadClient) => void }) {
   const [name, setName] = useState(client.name)
+  const [type, setType] = useState(client.type || 'sabnzbd')
   const [host, setHost] = useState(client.host)
   const [port, setPort] = useState(String(client.port))
   const [apiKey, setApiKey] = useState(client.apiKey)
   const [category, setCategory] = useState(client.category)
 
   const submit = async () => {
-    const updated = await api.updateDownloadClient(client.id, { ...client, name, host, port: parseInt(port), apiKey, category })
+    const updated = await api.updateDownloadClient(client.id, { ...client, name, type, host, port: parseInt(port), apiKey, category })
     onSaved(updated)
   }
 
   return (
     <div className="mt-1 p-4 border border-zinc-700 rounded-lg bg-zinc-800/50 space-y-3">
-      <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className={inputCls} />
+      <div className="flex gap-2">
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600" />
+        <select value={type} onChange={e => setType(e.target.value)} className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600">
+          <option value="sabnzbd">SABnzbd</option>
+          <option value="qbittorrent">qBittorrent</option>
+        </select>
+      </div>
       <div className="flex gap-2">
         <input value={host} onChange={e => setHost(e.target.value)} placeholder="Host" className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600" />
         <input value={port} onChange={e => setPort(e.target.value)} placeholder="Port" className="w-24 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600" />
       </div>
-      <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="API Key" type="password" className={inputCls} />
+      <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={type === 'qbittorrent' ? 'Password' : 'API Key'} type="password" className={inputCls} />
       <input value={category} onChange={e => setCategory(e.target.value)} placeholder="Category" className={inputCls} />
       <div className="flex gap-2 justify-end">
         <button onClick={onClose} className="px-3 py-1.5 text-sm text-zinc-400">Cancel</button>
@@ -647,17 +661,25 @@ function EditNotificationForm({ notification, onClose, onSaved }: { notification
 
 function AddIndexerForm({ onClose, onAdded }: { onClose: () => void; onAdded: (idx: Indexer) => void }) {
   const [name, setName] = useState('')
+  const [type, setType] = useState<'newznab' | 'torznab'>('newznab')
   const [url, setUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
 
   const submit = async () => {
-    const idx = await api.addIndexer({ name, url, apiKey, type: 'newznab', categories: [7000, 7020], enabled: true })
+    const cats = type === 'torznab' ? [7000, 7020] : [7000, 7020]
+    const idx = await api.addIndexer({ name, url, apiKey, type, categories: cats, enabled: true })
     onAdded(idx)
   }
 
   return (
     <div className="mt-4 p-4 border border-zinc-700 rounded-lg bg-zinc-800/50 space-y-3">
-      <input value={name} onChange={e => setName(e.target.value)} placeholder="Name (e.g. NZBGeek)" className={inputCls} />
+      <div className="flex gap-2">
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="Name (e.g. NZBGeek)" className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600" />
+        <select value={type} onChange={e => setType(e.target.value as 'newznab' | 'torznab')} className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600">
+          <option value="newznab">Newznab</option>
+          <option value="torznab">Torznab</option>
+        </select>
+      </div>
       <input value={url} onChange={e => setUrl(e.target.value)} placeholder="URL (e.g. https://api.nzbgeek.info)" className={inputCls} />
       <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="API Key" type="password" className={inputCls} />
       <div className="flex gap-2 justify-end">
@@ -670,6 +692,7 @@ function AddIndexerForm({ onClose, onAdded }: { onClose: () => void; onAdded: (i
 
 function AddClientForm({ onClose, onAdded }: { onClose: () => void; onAdded: (c: DownloadClient) => void }) {
   const [name, setName] = useState('SABnzbd')
+  const [type, setType] = useState<'sabnzbd' | 'qbittorrent'>('sabnzbd')
   const [host, setHost] = useState('')
   const [port, setPort] = useState('8080')
   const [apiKey, setApiKey] = useState('')
@@ -677,19 +700,25 @@ function AddClientForm({ onClose, onAdded }: { onClose: () => void; onAdded: (c:
 
   const submit = async () => {
     const c = await api.addDownloadClient({
-      name, host, port: parseInt(port), apiKey, category, type: 'sabnzbd', enabled: true,
+      name, host, port: parseInt(port), apiKey, category, type, enabled: true,
     })
     onAdded(c)
   }
 
   return (
     <div className="mt-4 p-4 border border-zinc-700 rounded-lg bg-zinc-800/50 space-y-3">
-      <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className={inputCls} />
+      <div className="flex gap-2">
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600" />
+        <select value={type} onChange={e => { setType(e.target.value as 'sabnzbd' | 'qbittorrent'); setPort(e.target.value === 'qbittorrent' ? '8080' : '8080') }} className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600">
+          <option value="sabnzbd">SABnzbd</option>
+          <option value="qbittorrent">qBittorrent</option>
+        </select>
+      </div>
       <div className="flex gap-2">
         <input value={host} onChange={e => setHost(e.target.value)} placeholder="Host" className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600" />
         <input value={port} onChange={e => setPort(e.target.value)} placeholder="Port" className="w-24 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600" />
       </div>
-      <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="API Key" type="password" className={inputCls} />
+      <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={type === 'qbittorrent' ? 'Password' : 'API Key'} type="password" className={inputCls} />
       <input value={category} onChange={e => setCategory(e.target.value)} placeholder="Category" className={inputCls} />
       <div className="flex gap-2 justify-end">
         <button onClick={onClose} className="px-3 py-1.5 text-sm text-zinc-400">Cancel</button>
