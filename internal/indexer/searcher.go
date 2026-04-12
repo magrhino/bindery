@@ -132,14 +132,26 @@ func sigWords(s string) []string {
 	return out
 }
 
+// normResultTitle replaces NZB filename separators (dots, underscores, dashes)
+// with spaces so keyword matching works regardless of release naming style.
+func normResultTitle(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '.' || r == '_' || r == '-' {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
 // filterRelevant removes results that don't match the significant words of the title.
-// All significant title words must appear in the result. If the title has no
-// significant words (e.g. all stop words), author keywords are used instead.
+// All significant title words must appear in the result. For ambiguous titles with
+// only one significant word (e.g. "The Sparrow" → ["sparrow"]), at least one author
+// keyword must also match — otherwise every book with "sparrow" in the title passes.
+// If the title has no significant words at all, author keywords are used instead.
 func filterRelevant(results []newznab.SearchResult, title, author string) []newznab.SearchResult {
 	titleKws := sigWords(title)
 	authorKws := sigWords(author)
 
-	// Decide what must match: prefer title keywords; fall back to author keywords
 	required := titleKws
 	if len(required) == 0 {
 		required = authorKws
@@ -148,10 +160,15 @@ func filterRelevant(results []newznab.SearchResult, title, author string) []newz
 		return results
 	}
 
+	// For short/ambiguous titles (one significant word), also require the author
+	// to appear in the result title so unrelated books sharing a word are excluded.
+	requireAuthor := len(titleKws) == 1 && len(authorKws) > 0
+
 	var filtered []newznab.SearchResult
 	for _, r := range results {
-		lower := strings.ToLower(r.Title)
-		// Every required keyword must appear in the result title
+		lower := strings.ToLower(normResultTitle(r.Title))
+
+		// All required title keywords must be present
 		ok := true
 		for _, kw := range required {
 			if !strings.Contains(lower, kw) {
@@ -159,9 +176,25 @@ func filterRelevant(results []newznab.SearchResult, title, author string) []newz
 				break
 			}
 		}
-		if ok {
-			filtered = append(filtered, r)
+		if !ok {
+			continue
 		}
+
+		// Short-title guard: at least one author keyword must also appear
+		if requireAuthor {
+			authorMatch := false
+			for _, kw := range authorKws {
+				if strings.Contains(lower, kw) {
+					authorMatch = true
+					break
+				}
+			}
+			if !authorMatch {
+				continue
+			}
+		}
+
+		filtered = append(filtered, r)
 	}
 	return filtered
 }
