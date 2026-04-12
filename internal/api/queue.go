@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -17,10 +18,11 @@ type QueueHandler struct {
 	downloads *db.DownloadRepo
 	clients   *db.DownloadClientRepo
 	books     *db.BookRepo
+	history   *db.HistoryRepo
 }
 
-func NewQueueHandler(downloads *db.DownloadRepo, clients *db.DownloadClientRepo, books *db.BookRepo) *QueueHandler {
-	return &QueueHandler{downloads: downloads, clients: clients, books: books}
+func NewQueueHandler(downloads *db.DownloadRepo, clients *db.DownloadClientRepo, books *db.BookRepo, history *db.HistoryRepo) *QueueHandler {
+	return &QueueHandler{downloads: downloads, clients: clients, books: books, history: history}
 }
 
 // QueueItem combines local download record with live SABnzbd status.
@@ -122,6 +124,7 @@ func (h *QueueHandler) Grab(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Error("failed to send to sabnzbd", "error", err, "title", req.Title)
 		h.downloads.SetError(r.Context(), dl.ID, err.Error())
+		h.recordHistory(r.Context(), models.HistoryEventDownloadFailed, req.Title, req.BookID, map[string]string{"message": err.Error()})
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to send to SABnzbd: " + err.Error()})
 		return
 	}
@@ -135,8 +138,30 @@ func (h *QueueHandler) Grab(w http.ResponseWriter, r *http.Request) {
 	h.downloads.UpdateStatus(r.Context(), dl.ID, models.DownloadStatusDownloading)
 	dl.Status = models.DownloadStatusDownloading
 
+	h.recordHistory(r.Context(), models.HistoryEventGrabbed, req.Title, req.BookID, map[string]interface{}{
+		"size":      req.Size,
+		"indexerId": req.IndexerID,
+	})
+
 	slog.Info("download grabbed", "title", req.Title, "nzoId", dl.SABnzbdNzoID)
 	writeJSON(w, http.StatusAccepted, dl)
+}
+
+// recordHistory is a helper to write a history event, swallowing errors.
+func (h *QueueHandler) recordHistory(ctx context.Context, eventType, sourceTitle string, bookID *int64, data interface{}) {
+	if h.history == nil {
+		return
+	}
+	dataJSON, _ := json.Marshal(data)
+	evt := &models.HistoryEvent{
+		BookID:      bookID,
+		EventType:   eventType,
+		SourceTitle: sourceTitle,
+		Data:        string(dataJSON),
+	}
+	if err := h.history.Create(ctx, evt); err != nil {
+		slog.Warn("failed to record history", "error", err)
+	}
 }
 
 func (h *QueueHandler) Delete(w http.ResponseWriter, r *http.Request) {

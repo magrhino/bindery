@@ -109,7 +109,7 @@ func main() {
 	bookHandler := api.NewBookHandler(bookRepo)
 	indexerHandler := api.NewIndexerHandler(indexerRepo, bookRepo, authorRepo, idxSearcher)
 	dlClientHandler := api.NewDownloadClientHandler(dlClientRepo)
-	queueHandler := api.NewQueueHandler(downloadRepo, dlClientRepo, bookRepo)
+	queueHandler := api.NewQueueHandler(downloadRepo, dlClientRepo, bookRepo, historyRepo)
 	fileHandler := api.NewFileHandler(bookRepo)
 	historyHandler := api.NewHistoryHandler(historyRepo)
 	blocklistHandler := api.NewBlocklistHandler(blocklistRepo)
