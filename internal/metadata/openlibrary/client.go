@@ -178,6 +178,9 @@ func (c *Client) GetAuthorWorks(ctx context.Context, authorForeignID string) ([]
 		return nil, fmt.Errorf("get author works %s: %w", authorForeignID, err)
 	}
 
+	// Supplement with language data from the search index (best-effort; don't fail on error)
+	langMap := c.authorWorkLanguages(ctx, authorForeignID)
+
 	books := make([]models.Book, 0, len(resp.Entries))
 	for _, entry := range resp.Entries {
 		workID := strings.TrimPrefix(entry.Key, "/works/")
@@ -187,6 +190,7 @@ func (c *Client) GetAuthorWorks(ctx context.Context, authorForeignID string) ([]
 			SortTitle:        entry.Title,
 			Description:      extractText(entry.Description),
 			Genres:           truncateSlice(entry.Subjects, 10),
+			Language:         langMap[workID],
 			MetadataProvider: "openlibrary",
 			Monitored:        true,
 			Status:           models.BookStatusWanted,
@@ -202,6 +206,41 @@ func (c *Client) GetAuthorWorks(ctx context.Context, authorForeignID string) ([]
 		books = append(books, b)
 	}
 	return books, nil
+}
+
+// authorWorkLanguages calls the OL search index to get the primary language for each
+// work by this author. Returns a map of workID (e.g. "OL123W") → language code (e.g. "eng").
+// Errors are silently swallowed — language data is best-effort.
+func (c *Client) authorWorkLanguages(ctx context.Context, authorForeignID string) map[string]string {
+	u := fmt.Sprintf("%s/search.json?author_key=%s&fields=key,language&limit=200", baseURL, authorForeignID)
+	var resp struct {
+		Docs []struct {
+			Key      string   `json:"key"`
+			Language []string `json:"language"`
+		} `json:"docs"`
+	}
+	if err := c.getJSON(ctx, u, &resp); err != nil {
+		slog.Debug("could not fetch language data for author works", "author", authorForeignID, "error", err)
+		return nil
+	}
+
+	m := make(map[string]string, len(resp.Docs))
+	for _, doc := range resp.Docs {
+		if len(doc.Language) == 0 {
+			continue
+		}
+		workID := strings.TrimPrefix(doc.Key, "/works/")
+		// Prefer "eng" if present among the languages, otherwise use the first entry.
+		lang := doc.Language[0]
+		for _, l := range doc.Language {
+			if l == "eng" {
+				lang = "eng"
+				break
+			}
+		}
+		m[workID] = lang
+	}
+	return m
 }
 
 func (c *Client) GetEditions(ctx context.Context, bookForeignID string) ([]models.Edition, error) {

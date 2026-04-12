@@ -15,13 +15,14 @@ import (
 )
 
 type AuthorHandler struct {
-	authors *db.AuthorRepo
-	books   *db.BookRepo
-	meta    *metadata.Aggregator
+	authors  *db.AuthorRepo
+	books    *db.BookRepo
+	meta     *metadata.Aggregator
+	settings *db.SettingsRepo
 }
 
-func NewAuthorHandler(authors *db.AuthorRepo, books *db.BookRepo, meta *metadata.Aggregator) *AuthorHandler {
-	return &AuthorHandler{authors: authors, books: books, meta: meta}
+func NewAuthorHandler(authors *db.AuthorRepo, books *db.BookRepo, meta *metadata.Aggregator, settings *db.SettingsRepo) *AuthorHandler {
+	return &AuthorHandler{authors: authors, books: books, meta: meta, settings: settings}
 }
 
 func (h *AuthorHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -195,6 +196,19 @@ func (h *AuthorHandler) fetchAuthorBooks(author *models.Author) {
 		return
 	}
 
+	// Read preferred language setting; default to "eng" (English only)
+	preferredLang := "eng"
+	if s, _ := h.settings.Get(ctx, "search.preferredLanguage"); s != nil {
+		switch s.Value {
+		case "any":
+			preferredLang = "any"
+		case "en":
+			preferredLang = "eng"
+		default:
+			preferredLang = s.Value
+		}
+	}
+
 	// Track titles we've already added (case-insensitive) to avoid OL duplicates
 	existingBooks, _ := h.books.ListByAuthor(ctx, author.ID)
 	seenTitles := make(map[string]bool)
@@ -202,10 +216,18 @@ func (h *AuthorHandler) fetchAuthorBooks(author *models.Author) {
 		seenTitles[strings.ToLower(eb.Title)] = true
 	}
 
-	var added int
+	var added, skippedLang int
 	for _, b := range books {
 		b.AuthorID = author.ID
 		b.Monitored = author.Monitored
+
+		// Filter by language: skip books whose language is known and doesn't match.
+		// Books with an empty language (data unavailable) are always kept.
+		if preferredLang != "any" && b.Language != "" && b.Language != preferredLang {
+			skippedLang++
+			slog.Debug("skipping non-preferred-language book", "title", b.Title, "language", b.Language, "preferred", preferredLang)
+			continue
+		}
 
 		// Skip if foreign ID already exists
 		existing, _ := h.books.GetByForeignID(ctx, b.ForeignID)
@@ -226,5 +248,5 @@ func (h *AuthorHandler) fetchAuthorBooks(author *models.Author) {
 		}
 		added++
 	}
-	slog.Info("author books synced", "author", author.Name, "added", added, "total", len(books))
+	slog.Info("author books synced", "author", author.Name, "added", added, "skipped_language", skippedLang, "total", len(books))
 }
