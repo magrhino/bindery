@@ -12,6 +12,14 @@ const statusColors: Record<string, string> = {
   skipped: 'bg-zinc-700 text-zinc-400',
 }
 
+const statusLabel: Record<string, string> = {
+  wanted: 'Wanted',
+  downloading: 'Downloading',
+  downloaded: 'Downloaded',
+  imported: 'In Library',
+  skipped: 'Skipped',
+}
+
 export default function BooksPage() {
   const [books, setBooks] = useState<Book[]>([])
   const [loading, setLoading] = useState(true)
@@ -75,13 +83,13 @@ export default function BooksPage() {
           className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-600 placeholder-zinc-600"
         />
         <div className="flex gap-1 flex-wrap">
-          {(['', 'wanted', 'downloading', 'downloaded', 'imported', 'skipped'] as const).map(s => (
+          {(['', 'wanted', 'downloading', 'imported', 'skipped'] as const).map(s => (
             <button
               key={s}
               onClick={() => setStatusFilter(s)}
               className={statusBtnCls(statusFilter === s)}
             >
-              {s || 'All'}
+              {s ? (statusLabel[s] ?? s) : 'All'}
             </button>
           ))}
         </div>
@@ -114,7 +122,7 @@ export default function BooksPage() {
                   </div>
                 )}
                 <div className={`absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] font-medium ${statusColors[book.status] || 'bg-zinc-700 text-zinc-400'}`}>
-                  {book.status}
+                  {statusLabel[book.status] ?? book.status}
                 </div>
               </div>
               <div className="p-2">
