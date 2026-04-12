@@ -61,7 +61,15 @@ export default function QueuePage() {
                   {item.timeLeft && (
                     <span className="text-zinc-500">{item.timeLeft} remaining</span>
                   )}
+                  {item.protocol && (
+                    <span className="text-zinc-600">{item.protocol}</span>
+                  )}
                 </div>
+                {item.errorMessage && (
+                  <div className="mt-1 text-xs text-red-400 bg-red-400/10 rounded px-2 py-1">
+                    {item.errorMessage}
+                  </div>
+                )}
                 {item.percentage && (
                   <div className="mt-2 h-1 bg-zinc-800 rounded-full overflow-hidden">
                     <div

@@ -184,6 +184,8 @@ export interface Download {
   title: string
   status: string
   size: number
+  protocol: string
+  errorMessage: string
 }
 
 export interface QueueItem extends Download {

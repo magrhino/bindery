@@ -16,10 +16,11 @@ import (
 type QueueHandler struct {
 	downloads *db.DownloadRepo
 	clients   *db.DownloadClientRepo
+	books     *db.BookRepo
 }
 
-func NewQueueHandler(downloads *db.DownloadRepo, clients *db.DownloadClientRepo) *QueueHandler {
-	return &QueueHandler{downloads: downloads, clients: clients}
+func NewQueueHandler(downloads *db.DownloadRepo, clients *db.DownloadClientRepo, books *db.BookRepo) *QueueHandler {
+	return &QueueHandler{downloads: downloads, clients: clients, books: books}
 }
 
 // QueueItem combines local download record with live SABnzbd status.
@@ -160,6 +161,15 @@ func (h *QueueHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		if err == nil && client != nil {
 			sab := sabnzbd.New(client.Host, client.Port, client.APIKey, client.UseSSL)
 			_ = sab.Delete(r.Context(), *target.SABnzbdNzoID, true)
+		}
+	}
+
+	// Reset book status back to wanted so it reappears on the Wanted page
+	if target.BookID != nil {
+		book, _ := h.books.GetByID(r.Context(), *target.BookID)
+		if book != nil && (book.Status == models.BookStatusDownloading || book.Status == models.BookStatusDownloaded) {
+			book.Status = models.BookStatusWanted
+			h.books.Update(r.Context(), book)
 		}
 	}
 
