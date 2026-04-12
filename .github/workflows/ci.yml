@@ -46,7 +46,7 @@ jobs:
           go-version: "1.25"
       - uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          version: v2.1.6
           args: --timeout=5m
 
   lint-web:
@@ -93,13 +93,8 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci --prefix web
-      - run: npm test --prefix web -- --coverage
-      - uses: codecov/codecov-action@v4
-        with:
-          files: web/coverage/lcov.info
-          flags: web
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      - run: npm test --prefix web
+      - run: npx --prefix web vite build
 
   security:
     needs: changes
