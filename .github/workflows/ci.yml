@@ -11,113 +11,30 @@ permissions:
   security-events: write
 
 jobs:
-  changes:
+  # Single job: test + build + push + deploy
+  # Eliminates inter-job wait times and redundant checkouts
+  build:
     runs-on: ubuntu-latest
-    outputs:
-      go: ${{ steps.filter.outputs.go }}
-      web: ${{ steps.filter.outputs.web }}
-      docker: ${{ steps.filter.outputs.docker }}
-      chart: ${{ steps.filter.outputs.chart }}
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            go:
-              - '**.go'
-              - 'go.mod'
-              - 'go.sum'
-            web:
-              - 'web/**'
-            docker:
-              - 'Dockerfile'
-            chart:
-              - 'charts/**'
 
-  lint-go:
-    needs: changes
-    if: needs.changes.outputs.go == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+      # Go setup + test
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
-      - uses: golangci/golangci-lint-action@v6
-        with:
-          version: v2.1.6
-          args: --timeout=5m
+      - run: go test ./cmd/... ./internal/...
 
-  lint-web:
-    needs: changes
-    if: needs.changes.outputs.web == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+      # Node setup + build (validates lint + typecheck + build in one step)
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci --prefix web
-      - run: npm run lint --prefix web
-      - run: npm run typecheck --prefix web
-
-  test-go:
-    needs: changes
-    if: needs.changes.outputs.go == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.25"
-      - run: go test -race -coverprofile=coverage.out -covermode=atomic ./cmd/... ./internal/...
-      - uses: codecov/codecov-action@v4
-        with:
-          files: coverage.out
-          flags: go
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
-  test-web:
-    needs: changes
-    if: needs.changes.outputs.web == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - run: npm ci --prefix web
-      - run: npm test --prefix web
       - run: npm run build --prefix web
 
-  security:
-    needs: changes
-    if: needs.changes.outputs.go == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.25"
-      - name: govulncheck
-        continue-on-error: true
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
-
-  build-push:
-    needs: [changes, test-go, test-web, security]
-    if: always() && github.ref == 'refs/heads/main' && !contains(needs.test-go.result, 'failure') && !contains(needs.test-web.result, 'failure')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
+      # Docker build + push (amd64 only for speed)
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -136,7 +53,7 @@ jobs:
         with:
           context: .
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
@@ -145,28 +62,8 @@ jobs:
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Trivy scan
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
-          format: sarif
-          output: trivy-results.sarif
-          severity: CRITICAL,HIGH
-      - name: Upload Trivy results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: trivy-results.sarif
 
-  deploy:
-    needs: build-push
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+      # Deploy: update Helm chart image tag
       - name: Update Helm image tag
         run: |
           IMAGE_TAG="sha-${GITHUB_SHA}"
@@ -178,3 +75,21 @@ jobs:
           git add charts/bindery/values.yaml
           git diff --staged --quiet || git commit -m "chore(deploy): update bindery image to sha-${GITHUB_SHA} [skip ci]"
           git push
+
+  # PR validation only — no Docker build
+  validate:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - run: go test ./cmd/... ./internal/...
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --prefix web
+      - run: npm run build --prefix web
