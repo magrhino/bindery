@@ -67,7 +67,7 @@ function App() {
               </nav>
 
               <div className="flex items-center gap-3">
-                {version && (
+                {version && /^\d+\.\d+/.test(version) && (
                   <span className="hidden md:block text-xs text-zinc-600">v{version}</span>
                 )}
                 {/* Hamburger */}
@@ -106,7 +106,7 @@ function App() {
                   </NavLink>
                 ))}
               </nav>
-              {version && (
+              {version && /^\d+\.\d+/.test(version) && (
                 <div className="px-4 py-2 text-xs text-zinc-600 border-t border-zinc-800">
                   v{version}
                 </div>
