@@ -47,7 +47,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=sha,format=long
+            type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
       - uses: docker/build-push-action@v6
@@ -68,7 +68,7 @@ jobs:
       - name: Update Helm image tag
         if: github.ref == 'refs/heads/main'
         run: |
-          IMAGE_TAG="sha-${GITHUB_SHA}"
+          IMAGE_TAG="sha-${GITHUB_SHA::7}"
           sed -i "s|tag:.*|tag: \"${IMAGE_TAG}\"|" charts/bindery/values.yaml
       - name: Commit and push
         if: github.ref == 'refs/heads/main'
@@ -76,7 +76,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add charts/bindery/values.yaml
-          git diff --staged --quiet || git commit -m "chore(deploy): update bindery image to sha-${GITHUB_SHA} [skip ci]"
+          git diff --staged --quiet || git commit -m "chore(deploy): update bindery image to sha-${GITHUB_SHA::7} [skip ci]"
           git push
 
   # Lint + security — runs in parallel with build, non-blocking
