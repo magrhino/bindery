@@ -1,3 +1,5 @@
+// Package config loads Bindery's runtime configuration from environment
+// variables with sensible defaults.
 package config
 
 import "os"

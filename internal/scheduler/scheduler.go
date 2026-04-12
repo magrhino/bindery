@@ -1,3 +1,6 @@
+// Package scheduler runs Bindery's periodic background jobs (wanted-book
+// search, download-status polling, metadata refresh, library rescan) via
+// robfig/cron.
 package scheduler
 
 import (

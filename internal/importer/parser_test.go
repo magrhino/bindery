@@ -4,10 +4,10 @@ import "testing"
 
 func TestParseFilename(t *testing.T) {
 	tests := []struct {
-		input     string
-		wantTitle string
+		input      string
+		wantTitle  string
 		wantAuthor string
-		wantISBN  string
+		wantISBN   string
 		wantFormat string
 	}{
 		{

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -130,6 +131,10 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5))
+
+	if cfg.APIKey == "" {
+		slog.Warn("authentication disabled — set BINDERY_API_KEY to require X-Api-Key on /api/v1/*")
+	}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(apiKeyMiddleware(cfg.APIKey))
@@ -289,7 +294,15 @@ func main() {
 
 	addr := ":" + cfg.Port
 	slog.Info("listening", "addr", addr)
-	if err := http.ListenAndServe(addr, r); err != nil {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	if err := srv.ListenAndServe(); err != nil {
 		slog.Error("server failed", "error", err)
 		os.Exit(1)
 	}

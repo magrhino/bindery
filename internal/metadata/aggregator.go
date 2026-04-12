@@ -1,3 +1,5 @@
+// Package metadata aggregates book and author data from multiple public
+// sources (OpenLibrary, Google Books, Hardcover) behind a unified interface.
 package metadata
 
 import (
@@ -150,9 +152,9 @@ func (a *Aggregator) enrichBook(ctx context.Context, book *models.Book) {
 
 // ttlCache is a simple in-process cache with TTL expiry.
 type ttlCache struct {
-	mu      sync.RWMutex
-	items   map[string]cacheItem
-	ttl     time.Duration
+	mu    sync.RWMutex
+	items map[string]cacheItem
+	ttl   time.Duration
 }
 
 type cacheItem struct {

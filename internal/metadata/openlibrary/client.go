@@ -1,3 +1,5 @@
+// Package openlibrary provides the primary book metadata client. It uses
+// OpenLibrary's documented public APIs to fetch authors, works, and editions.
 package openlibrary
 
 import (
@@ -254,12 +256,12 @@ func (c *Client) GetEditions(ctx context.Context, bookForeignID string) ([]model
 	for _, e := range resp.Entries {
 		editionID := strings.TrimPrefix(e.Key, "/books/")
 		ed := models.Edition{
-			ForeignID:   editionID,
-			Title:       e.Title,
-			Publisher:   first(e.Publishers),
-			Format:      e.PhysicalFormat,
-			NumPages:    nilIfZero(e.NumberOfPages),
-			Monitored:   true,
+			ForeignID: editionID,
+			Title:     e.Title,
+			Publisher: first(e.Publishers),
+			Format:    e.PhysicalFormat,
+			NumPages:  nilIfZero(e.NumberOfPages),
+			Monitored: true,
 		}
 		if len(e.ISBN13) > 0 {
 			ed.ISBN13 = &e.ISBN13[0]

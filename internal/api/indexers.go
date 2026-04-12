@@ -3,9 +3,6 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
-
-	"github.com/go-chi/chi/v5"
 
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/indexer"
@@ -39,7 +36,10 @@ func (h *IndexerHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *IndexerHandler) Get(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
 	idx, err := h.indexers.GetByID(r.Context(), id)
 	if err != nil || idx == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "indexer not found"})
@@ -82,7 +82,10 @@ func (h *IndexerHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *IndexerHandler) Update(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
 	existing, err := h.indexers.GetByID(r.Context(), id)
 	if err != nil || existing == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "indexer not found"})
@@ -103,7 +106,10 @@ func (h *IndexerHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *IndexerHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
 	if err := h.indexers.Delete(r.Context(), id); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -112,7 +118,10 @@ func (h *IndexerHandler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *IndexerHandler) Test(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
 	idx, err := h.indexers.GetByID(r.Context(), id)
 	if err != nil || idx == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "indexer not found"})
@@ -129,7 +138,10 @@ func (h *IndexerHandler) Test(w http.ResponseWriter, r *http.Request) {
 
 // SearchBook searches all enabled indexers for a specific book.
 func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
-	bookID, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	bookID, ok := parseID(w, r)
+	if !ok {
+		return
+	}
 	book, err := h.books.GetByID(r.Context(), bookID)
 	if err != nil || book == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})

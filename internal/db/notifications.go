@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -47,7 +48,7 @@ func (r *NotificationRepo) GetByID(ctx context.Context, id int64) (*models.Notif
 		FROM notifications WHERE id=?`, id)
 
 	n, err := r.scanRow(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	return n, err

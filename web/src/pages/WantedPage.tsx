@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { api, Book, SearchResult } from '../api/client'
-import Pagination, { usePagination } from '../components/Pagination'
+import Pagination from '../components/Pagination'
+import { usePagination } from '../components/usePagination'
 
 export default function WantedPage() {
   const [books, setBooks] = useState<Book[]>([])
@@ -56,7 +57,7 @@ export default function WantedPage() {
 
   const { pageItems, paginationProps, reset } = usePagination(filtered, 50)
 
-  useEffect(() => { reset() }, [search])
+  useEffect(() => { reset() }, [search, reset])
 
   const formatSize = (bytes: number) => {
     if (bytes > 1073741824) return (bytes / 1073741824).toFixed(1) + ' GB'

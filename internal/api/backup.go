@@ -1,3 +1,5 @@
+// Package api contains the HTTP handlers served under /api/v1 by the
+// chi router. Each file groups handlers for a single resource.
 package api
 
 import (

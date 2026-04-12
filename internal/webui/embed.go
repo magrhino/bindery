@@ -1,3 +1,5 @@
+// Package webui bundles the compiled React frontend assets into the Go
+// binary via go:embed so Bindery ships as a single executable.
 package webui
 
 import "embed"

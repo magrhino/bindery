@@ -1,3 +1,5 @@
+// Package newznab provides a client for Newznab- and Torznab-compatible
+// indexers used for book search.
 package newznab
 
 import (

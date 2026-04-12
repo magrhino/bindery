@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { api, Book } from '../api/client'
-import Pagination, { usePagination } from '../components/Pagination'
+import Pagination from '../components/Pagination'
+import { usePagination } from '../components/usePagination'
 
 type SortMode = 'title-az' | 'title-za' | 'date-new' | 'date-old'
 
@@ -58,7 +59,7 @@ export default function BooksPage() {
 
   const { pageItems, paginationProps, reset } = usePagination(filtered, 50)
 
-  useEffect(() => { reset() }, [statusFilter, search, sort])
+  useEffect(() => { reset() }, [statusFilter, search, sort, reset])
 
   const statusBtnCls = (active: boolean) =>
     `px-3 py-1 rounded-md text-xs font-medium transition-colors ${active ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white'}`

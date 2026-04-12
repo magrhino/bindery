@@ -1,3 +1,5 @@
+// Package googlebooks provides a read-only client for the Google Books API,
+// used as a metadata enricher for author and book details.
 package googlebooks
 
 import (

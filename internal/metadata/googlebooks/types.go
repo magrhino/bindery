@@ -11,19 +11,19 @@ type volumeItem struct {
 }
 
 type volumeInfo struct {
-	Title               string            `json:"title"`
-	Authors             []string          `json:"authors"`
-	Publisher           string            `json:"publisher"`
-	PublishedDate       string            `json:"publishedDate"`
-	Description         string            `json:"description"`
-	PageCount           int               `json:"pageCount"`
-	Categories          []string          `json:"categories"`
-	AverageRating       float64           `json:"averageRating"`
-	RatingsCount        int               `json:"ratingsCount"`
-	MaturityRating      string            `json:"maturityRating"`
-	ImageLinks          *imageLinks       `json:"imageLinks"`
-	IndustryIdentifiers []industryID      `json:"industryIdentifiers"`
-	Language            string            `json:"language"`
+	Title               string       `json:"title"`
+	Authors             []string     `json:"authors"`
+	Publisher           string       `json:"publisher"`
+	PublishedDate       string       `json:"publishedDate"`
+	Description         string       `json:"description"`
+	PageCount           int          `json:"pageCount"`
+	Categories          []string     `json:"categories"`
+	AverageRating       float64      `json:"averageRating"`
+	RatingsCount        int          `json:"ratingsCount"`
+	MaturityRating      string       `json:"maturityRating"`
+	ImageLinks          *imageLinks  `json:"imageLinks"`
+	IndustryIdentifiers []industryID `json:"industryIdentifiers"`
+	Language            string       `json:"language"`
 }
 
 type imageLinks struct {
@@ -32,6 +32,6 @@ type imageLinks struct {
 }
 
 type industryID struct {
-	Type       string `json:"type"`       // "ISBN_10" or "ISBN_13"
+	Type       string `json:"type"` // "ISBN_10" or "ISBN_13"
 	Identifier string `json:"identifier"`
 }

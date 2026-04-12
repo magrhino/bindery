@@ -9,9 +9,9 @@ type rssResponse struct {
 }
 
 type rssChannel struct {
-	Title    string        `xml:"title"`
-	Response nzbResponse   `xml:"response"`
-	Items    []rssItem     `xml:"item"`
+	Title    string      `xml:"title"`
+	Response nzbResponse `xml:"response"`
+	Items    []rssItem   `xml:"item"`
 }
 
 type nzbResponse struct {
@@ -53,8 +53,8 @@ type capsResponse struct {
 }
 
 type capsSearching struct {
-	Search      capsSearch `xml:"search"`
-	BookSearch  capsSearch `xml:"book-search"`
+	Search     capsSearch `xml:"search"`
+	BookSearch capsSearch `xml:"book-search"`
 }
 
 type capsSearch struct {
@@ -66,8 +66,8 @@ type capsCategories struct {
 }
 
 type capsCategory struct {
-	ID     string         `xml:"id,attr"`
-	Name   string         `xml:"name,attr"`
+	ID      string         `xml:"id,attr"`
+	Name    string         `xml:"name,attr"`
 	SubCats []capsCategory `xml:"subcat"`
 }
 

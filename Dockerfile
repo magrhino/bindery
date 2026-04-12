@@ -7,7 +7,7 @@ COPY web/ .
 RUN npm run build
 
 # Stage 2: Build Go binary
-FROM golang:1.25-alpine AS builder
+FROM golang:1.25.9-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -21,7 +21,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /bindery ./cmd/bindery
 
 # Stage 3: Minimal runtime
-FROM gcr.io/distroless/static-debian12
+FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=builder /bindery /bindery
+USER nonroot
 EXPOSE 8787
 ENTRYPOINT ["/bindery"]

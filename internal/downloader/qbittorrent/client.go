@@ -1,3 +1,5 @@
+// Package qbittorrent provides a client for the qBittorrent WebUI API v2,
+// used to submit magnet/torrent URLs and poll status for torrent downloads.
 package qbittorrent
 
 import (
@@ -220,7 +222,10 @@ func (c *Client) get(ctx context.Context, path string) ([]byte, error) {
 		if err := c.Login(ctx); err != nil {
 			return nil, err
 		}
-		req2, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+		req2, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+		if err != nil {
+			return nil, fmt.Errorf("build retry request for %s: %w", path, err)
+		}
 		resp2, err := c.http.Do(req2)
 		if err != nil {
 			return nil, fmt.Errorf("GET %s (retry): %w", path, err)

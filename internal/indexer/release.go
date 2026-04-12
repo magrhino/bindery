@@ -30,8 +30,8 @@ var (
 
 	formatTokens = []string{"epub", "azw3", "azw", "mobi", "pdf", "djvu", "cbr", "cbz", "fb2", "lit", "rtf", "txt", "m4b", "m4a", "flac", "mp3", "ogg"}
 
-	regexCache   = sync.Map{} // map[string]*regexp.Regexp
-	articleSet   = map[string]bool{"a": true, "an": true, "the": true, "and": true, "or": true, "of": true}
+	regexCache = sync.Map{} // map[string]*regexp.Regexp
+	articleSet = map[string]bool{"a": true, "an": true, "the": true, "and": true, "or": true, "of": true}
 )
 
 // NormalizeRelease lowercases s and replaces NZB separators with single spaces.
@@ -111,7 +111,7 @@ func ParseRelease(title string) ParsedRelease {
 	upper := strings.ToUpper(title)
 	p.Retail = strings.Contains(upper, "RETAIL")
 	p.Unabridged = strings.Contains(upper, "UNABRIDGED")
-	p.Abridged = p.Unabridged == false && strings.Contains(upper, "ABRIDGED")
+	p.Abridged = !p.Unabridged && strings.Contains(upper, "ABRIDGED")
 
 	return p
 }

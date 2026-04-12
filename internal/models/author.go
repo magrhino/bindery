@@ -1,3 +1,5 @@
+// Package models defines the domain types shared across the API, database,
+// scheduler, and indexer layers.
 package models
 
 import "time"
@@ -21,12 +23,12 @@ type Author struct {
 	UpdatedAt             time.Time  `json:"updatedAt"`
 
 	// Joined data
-	Books      []Book      `json:"books,omitempty"`
+	Books      []Book       `json:"books,omitempty"`
 	Statistics *AuthorStats `json:"statistics,omitempty"`
 }
 
 type AuthorStats struct {
-	BookCount     int `json:"bookCount"`
+	BookCount      int `json:"bookCount"`
 	AvailableBooks int `json:"availableBookCount"`
-	WantedBooks   int `json:"wantedBookCount"`
+	WantedBooks    int `json:"wantedBookCount"`
 }

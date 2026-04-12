@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, BlocklistEntry } from '../api/client'
-import Pagination, { usePagination } from '../components/Pagination'
+import Pagination from '../components/Pagination'
+import { usePagination } from '../components/usePagination'
 
 function formatDate(s: string) {
   return new Date(s).toLocaleString(undefined, {

@@ -1,3 +1,5 @@
+// Package notifier dispatches webhook notifications for grab, import,
+// failure, and health events to user-configured HTTP endpoints.
 package notifier
 
 import (

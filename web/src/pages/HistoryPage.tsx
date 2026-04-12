@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, HistoryEvent } from '../api/client'
-import Pagination, { usePagination } from '../components/Pagination'
+import Pagination from '../components/Pagination'
+import { usePagination } from '../components/usePagination'
 
 const EVENT_TYPE_COLORS: Record<string, string> = {
   grabbed: 'bg-blue-500/20 text-blue-400',
@@ -62,7 +63,7 @@ export default function HistoryPage() {
 
   const { pageItems, paginationProps, reset } = usePagination(events, 100)
 
-  useEffect(() => { reset() }, [typeFilter])
+  useEffect(() => { reset() }, [typeFilter, reset])
 
   return (
     <div>

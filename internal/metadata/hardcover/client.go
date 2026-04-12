@@ -1,3 +1,5 @@
+// Package hardcover provides a read-only GraphQL client for hardcover.app,
+// used as a metadata enricher for community ratings and series data.
 package hardcover
 
 import (
@@ -227,10 +229,10 @@ type hcImage struct {
 }
 
 type hcAuthor struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
-	Slug string `json:"slug"`
-	Bio  string `json:"bio"`
+	ID    int      `json:"id"`
+	Name  string   `json:"name"`
+	Slug  string   `json:"slug"`
+	Bio   string   `json:"bio"`
 	Image *hcImage `json:"image"`
 }
 
@@ -239,14 +241,14 @@ type hcContribution struct {
 }
 
 type hcBook struct {
-	ID           int              `json:"id"`
-	Title        string           `json:"title"`
-	Slug         string           `json:"slug"`
-	Description  string           `json:"description"`
-	Image        *hcImage         `json:"image"`
-	ReleaseYear  *int             `json:"release_year"`
-	RatingsCount int              `json:"ratings_count"`
-	Rating       float64          `json:"rating"`
+	ID            int              `json:"id"`
+	Title         string           `json:"title"`
+	Slug          string           `json:"slug"`
+	Description   string           `json:"description"`
+	Image         *hcImage         `json:"image"`
+	ReleaseYear   *int             `json:"release_year"`
+	RatingsCount  int              `json:"ratings_count"`
+	Rating        float64          `json:"rating"`
 	Contributions []hcContribution `json:"contributions"`
 }
 

@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -21,7 +22,7 @@ func (r *SettingsRepo) Get(ctx context.Context, key string) (*models.Setting, er
 	var s models.Setting
 	err := r.db.QueryRowContext(ctx, "SELECT key, value, updated_at FROM settings WHERE key=?", key).
 		Scan(&s.Key, &s.Value, &s.UpdatedAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

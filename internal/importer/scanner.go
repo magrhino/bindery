@@ -1,3 +1,6 @@
+// Package importer moves completed downloads into the configured library
+// directory using a configurable naming template, and reconciles pre-existing
+// library files against the tracked book database.
 package importer
 
 import (
@@ -107,13 +110,22 @@ func (s *Scanner) tryImport(ctx context.Context, dl *models.Download, downloadPa
 		return
 	}
 
-	// Resolve the book and author for naming
+	// Resolve the book and author for naming. Lookup errors are not fatal —
+	// we fall through to the "unmatched import" log below.
 	var book *models.Book
 	var author *models.Author
 	if dl.BookID != nil {
-		book, _ = s.books.GetByID(ctx, *dl.BookID)
-		if book != nil {
-			author, _ = s.authors.GetByID(ctx, book.AuthorID)
+		b, err := s.books.GetByID(ctx, *dl.BookID)
+		if err != nil {
+			slog.Warn("import: failed to load book", "bookId", *dl.BookID, "error", err)
+		} else if b != nil {
+			book = b
+			a, err := s.authors.GetByID(ctx, book.AuthorID)
+			if err != nil {
+				slog.Warn("import: failed to load author", "authorId", book.AuthorID, "error", err)
+			} else {
+				author = a
+			}
 		}
 	}
 

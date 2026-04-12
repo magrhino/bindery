@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -47,7 +48,7 @@ func (r *AuthorRepo) GetByID(ctx context.Context, id int64) (*models.Author, err
 		FROM authors WHERE id = ?`, id)
 
 	a, err := scanAuthorRow(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -64,7 +65,7 @@ func (r *AuthorRepo) GetByForeignID(ctx context.Context, foreignID string) (*mod
 		FROM authors WHERE foreign_id = ?`, foreignID)
 
 	a, err := scanAuthorRow(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

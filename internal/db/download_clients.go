@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -49,7 +50,7 @@ func (r *DownloadClientRepo) GetByID(ctx context.Context, id int64) (*models.Dow
 		FROM download_clients WHERE id=?`, id).
 		Scan(&c.ID, &c.Name, &c.Type, &c.Host, &c.Port, &c.APIKey,
 			&useSSL, &c.URLBase, &c.Category, &c.Priority, &enabled, &c.CreatedAt, &c.UpdatedAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -68,7 +69,7 @@ func (r *DownloadClientRepo) GetFirstEnabled(ctx context.Context) (*models.Downl
 		FROM download_clients WHERE enabled=1 ORDER BY priority LIMIT 1`).
 		Scan(&c.ID, &c.Name, &c.Type, &c.Host, &c.Port, &c.APIKey,
 			&useSSL, &c.URLBase, &c.Category, &c.Priority, &enabled, &c.CreatedAt, &c.UpdatedAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

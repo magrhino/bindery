@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -42,7 +43,7 @@ func (r *SeriesRepo) GetByID(ctx context.Context, id int64) (*models.Series, err
 
 	var s models.Series
 	err := row.Scan(&s.ID, &s.ForeignID, &s.Title, &s.Description, &s.CreatedAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

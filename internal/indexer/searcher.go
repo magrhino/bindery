@@ -1,3 +1,6 @@
+// Package indexer coordinates book searches across multiple Newznab/Torznab
+// indexers, filters and ranks the returned releases, and exposes a release-
+// name parser shared by the filter pipeline and the import path.
 package indexer
 
 import (
@@ -286,10 +289,8 @@ func rankResults(results []newznab.SearchResult, c MatchCriteria) {
 func scoreResult(r newznab.SearchResult, c MatchCriteria) float64 {
 	p := ParseRelease(r.Title)
 
-	quality := "unknown"
-	if p.Format != "" {
-		quality = p.Format
-	} else {
+	quality := p.Format
+	if quality == "" {
 		quality = detectQuality(r.Title)
 	}
 	score := float64(models.QualityRank[quality]) * 100

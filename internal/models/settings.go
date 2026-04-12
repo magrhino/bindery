@@ -15,7 +15,7 @@ var QualityRank = map[string]int{
 	"mobi":    4,
 	"epub":    5,
 	"azw3":    6,
-	"mp3":     7,  // audiobook
+	"mp3":     7, // audiobook
 	"m4a":     8,
 	"m4b":     9,
 	"flac":    10,
@@ -45,12 +45,12 @@ type RootFolder struct {
 }
 
 type QualityProfile struct {
-	ID             int64           `json:"id"`
-	Name           string          `json:"name"`
-	UpgradeAllowed bool            `json:"upgradeAllowed"`
-	Cutoff         string          `json:"cutoff"`
-	Items          []QualityItem   `json:"items"`
-	CreatedAt      time.Time       `json:"createdAt"`
+	ID             int64         `json:"id"`
+	Name           string        `json:"name"`
+	UpgradeAllowed bool          `json:"upgradeAllowed"`
+	Cutoff         string        `json:"cutoff"`
+	Items          []QualityItem `json:"items"`
+	CreatedAt      time.Time     `json:"createdAt"`
 }
 
 type QualityItem struct {
@@ -68,10 +68,10 @@ type HistoryEvent struct {
 }
 
 const (
-	HistoryEventGrabbed             = "grabbed"
-	HistoryEventImportFailed        = "importFailed"
-	HistoryEventBookImported        = "bookImported"
-	HistoryEventDownloadFailed      = "downloadFailed"
-	HistoryEventBookRenamed         = "bookRenamed"
+	HistoryEventGrabbed              = "grabbed"
+	HistoryEventImportFailed         = "importFailed"
+	HistoryEventBookImported         = "bookImported"
+	HistoryEventDownloadFailed       = "downloadFailed"
+	HistoryEventBookRenamed          = "bookRenamed"
 	HistoryEventDownloadFolderImport = "downloadFolderImported"
 )

@@ -3,17 +3,17 @@ package openlibrary
 // OpenLibrary API response types
 
 type searchResponse struct {
-	NumFound int          `json:"numFound"`
-	Docs     []searchDoc  `json:"docs"`
+	NumFound int         `json:"numFound"`
+	Docs     []searchDoc `json:"docs"`
 }
 
 type searchDoc struct {
-	Key              string   `json:"key"`                // e.g. "/works/OL123W"
+	Key              string   `json:"key"` // e.g. "/works/OL123W"
 	Title            string   `json:"title"`
 	AuthorName       []string `json:"author_name"`
-	AuthorKey        []string `json:"author_key"`         // e.g. ["OL123A"]
+	AuthorKey        []string `json:"author_key"` // e.g. ["OL123A"]
 	FirstPublishYear int      `json:"first_publish_year"`
-	CoverI           *int     `json:"cover_i"`            // cover ID
+	CoverI           *int     `json:"cover_i"` // cover ID
 	ISBN             []string `json:"isbn"`
 	Language         []string `json:"language"`
 	NumberOfPages    *int     `json:"number_of_pages_median"`
@@ -22,23 +22,23 @@ type searchDoc struct {
 }
 
 type authorSearchResponse struct {
-	NumFound int             `json:"numFound"`
+	NumFound int               `json:"numFound"`
 	Docs     []authorSearchDoc `json:"docs"`
 }
 
 type authorSearchDoc struct {
-	Key          string  `json:"key"`           // e.g. "OL123A"
-	Name         string  `json:"name"`
-	TopWork      string  `json:"top_work"`
-	WorkCount    int     `json:"work_count"`
-	BirthDate    string  `json:"birth_date"`
+	Key          string   `json:"key"` // e.g. "OL123A"
+	Name         string   `json:"name"`
+	TopWork      string   `json:"top_work"`
+	WorkCount    int      `json:"work_count"`
+	BirthDate    string   `json:"birth_date"`
 	TopSubjects  []string `json:"top_subjects"`
-	RatingsAvg   float64 `json:"ratings_average"`
-	RatingsCount int     `json:"ratings_count"`
+	RatingsAvg   float64  `json:"ratings_average"`
+	RatingsCount int      `json:"ratings_count"`
 }
 
 type authorWorksResponse struct {
-	Size    int              `json:"size"`
+	Size    int               `json:"size"`
 	Entries []authorWorkEntry `json:"entries"`
 }
 
@@ -51,12 +51,12 @@ type authorWorkEntry struct {
 }
 
 type workResponse struct {
-	Key         string        `json:"key"`         // "/works/OL123W"
-	Title       string        `json:"title"`
-	Description interface{}   `json:"description"` // can be string or {type, value}
-	Covers      []int         `json:"covers"`
-	Subjects    []string      `json:"subjects"`
-	Authors     []workAuthor  `json:"authors"`
+	Key         string       `json:"key"` // "/works/OL123W"
+	Title       string       `json:"title"`
+	Description interface{}  `json:"description"` // can be string or {type, value}
+	Covers      []int        `json:"covers"`
+	Subjects    []string     `json:"subjects"`
+	Authors     []workAuthor `json:"authors"`
 }
 
 type workAuthor struct {
@@ -66,13 +66,13 @@ type workAuthor struct {
 }
 
 type authorResponse struct {
-	Key             string      `json:"key"`
-	Name            string      `json:"name"`
-	PersonalName    string      `json:"personal_name"`
-	Bio             interface{} `json:"bio"` // can be string or {type, value}
-	BirthDate       string      `json:"birth_date"`
-	Photos          []int       `json:"photos"`
-	AlternateNames  []string    `json:"alternate_names"`
+	Key            string      `json:"key"`
+	Name           string      `json:"name"`
+	PersonalName   string      `json:"personal_name"`
+	Bio            interface{} `json:"bio"` // can be string or {type, value}
+	BirthDate      string      `json:"birth_date"`
+	Photos         []int       `json:"photos"`
+	AlternateNames []string    `json:"alternate_names"`
 }
 
 type editionsResponse struct {
@@ -80,33 +80,33 @@ type editionsResponse struct {
 }
 
 type editionEntry struct {
-	Key           string   `json:"key"`          // "/books/OL123M"
-	Title         string   `json:"title"`
-	ISBN13        []string `json:"isbn_13"`
-	ISBN10        []string `json:"isbn_10"`
-	Publishers    []string `json:"publishers"`
-	PublishDate   string   `json:"publish_date"`
-	PhysicalFormat string  `json:"physical_format"`
-	NumberOfPages int      `json:"number_of_pages"`
-	Languages     []struct {
+	Key            string   `json:"key"` // "/books/OL123M"
+	Title          string   `json:"title"`
+	ISBN13         []string `json:"isbn_13"`
+	ISBN10         []string `json:"isbn_10"`
+	Publishers     []string `json:"publishers"`
+	PublishDate    string   `json:"publish_date"`
+	PhysicalFormat string   `json:"physical_format"`
+	NumberOfPages  int      `json:"number_of_pages"`
+	Languages      []struct {
 		Key string `json:"key"` // "/languages/eng"
 	} `json:"languages"`
-	Covers       []int  `json:"covers"`
-	Description  interface{} `json:"description"`
+	Covers      []int       `json:"covers"`
+	Description interface{} `json:"description"`
 }
 
 type isbnResponse struct {
-	Key           string   `json:"key"`
-	Title         string   `json:"title"`
-	ISBN13        []string `json:"isbn_13"`
-	ISBN10        []string `json:"isbn_10"`
-	Publishers    []string `json:"publishers"`
-	PublishDate   string   `json:"publish_date"`
-	Works         []struct {
+	Key         string   `json:"key"`
+	Title       string   `json:"title"`
+	ISBN13      []string `json:"isbn_13"`
+	ISBN10      []string `json:"isbn_10"`
+	Publishers  []string `json:"publishers"`
+	PublishDate string   `json:"publish_date"`
+	Works       []struct {
 		Key string `json:"key"` // "/works/OL123W"
 	} `json:"works"`
-	Authors       []struct {
+	Authors []struct {
 		Key string `json:"key"` // "/authors/OL123A"
 	} `json:"authors"`
-	Covers       []int  `json:"covers"`
+	Covers []int `json:"covers"`
 }

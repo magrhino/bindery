@@ -1,3 +1,5 @@
+// Package sabnzbd provides a client for the SABnzbd JSON API, used to
+// submit NZB URLs and poll queue/history for Usenet downloads.
 package sabnzbd
 
 import (

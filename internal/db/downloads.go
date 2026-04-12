@@ -62,24 +62,22 @@ func (r *DownloadRepo) Create(ctx context.Context, d *models.Download) error {
 
 func (r *DownloadRepo) UpdateStatus(ctx context.Context, id int64, status string) error {
 	now := time.Now().UTC()
-	var timeCol string
+	// Status-to-column allow-list. The SQL strings are fixed literals so no
+	// user input ever reaches the query text.
 	switch status {
 	case models.DownloadStatusDownloading:
-		timeCol = "grabbed_at"
+		_, err := r.db.ExecContext(ctx, "UPDATE downloads SET status=?, grabbed_at=? WHERE id=?", status, now, id)
+		return err
 	case models.DownloadStatusCompleted:
-		timeCol = "completed_at"
+		_, err := r.db.ExecContext(ctx, "UPDATE downloads SET status=?, completed_at=? WHERE id=?", status, now, id)
+		return err
 	case models.DownloadStatusImported:
-		timeCol = "imported_at"
-	}
-
-	if timeCol != "" {
-		_, err := r.db.ExecContext(ctx,
-			fmt.Sprintf("UPDATE downloads SET status=?, %s=? WHERE id=?", timeCol),
-			status, now, id)
+		_, err := r.db.ExecContext(ctx, "UPDATE downloads SET status=?, imported_at=? WHERE id=?", status, now, id)
+		return err
+	default:
+		_, err := r.db.ExecContext(ctx, "UPDATE downloads SET status=? WHERE id=?", status, id)
 		return err
 	}
-	_, err := r.db.ExecContext(ctx, "UPDATE downloads SET status=? WHERE id=?", status, id)
-	return err
 }
 
 func (r *DownloadRepo) SetNzoID(ctx context.Context, id int64, nzoID string) error {

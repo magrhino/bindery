@@ -1,3 +1,5 @@
+// Package db contains the SQLite connection bootstrap, embedded migrations,
+// and per-resource repository types backing the rest of Bindery.
 package db
 
 import (

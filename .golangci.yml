@@ -6,7 +6,6 @@ linters:
     - govet
     - staticcheck
     - unused
-    - gosimple
     - ineffassign
     - bodyclose
     - errorlint
@@ -20,7 +19,101 @@ linters:
       checks: ["all"]
     revive:
       rules:
-        - name: exported
+        # Enforce no-unused-parameter style but not every-exported-symbol comments.
+        - name: var-naming
+        - name: early-return
+    misspell:
+      # "portugues" is a legitimate Portuguese release-name marker; "russe"
+      # is the French word for Russian (both used as foreign-tag markers).
+      ignore-rules:
+        - portugues
+        - russe
+    errcheck:
+      # Standard cleanup / fire-and-forget calls.
+      exclude-functions:
+        - (io.Closer).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Tx).Rollback
+        - (*os.File).Close
+        - os.Remove
+        - os.Setenv
+        - os.Unsetenv
+        - path/filepath.Walk
+        - (*github.com/robfig/cron/v3.Cron).AddFunc
+        - (*encoding/json.Encoder).Encode
+        - (net/http.ResponseWriter).Write
+    gosec:
+      excludes:
+        # Directory perms 0755 / file perms 0644 are fine for library files this
+        # process owns; we don't want umask paranoia in a homelab tool.
+        - G301
+        - G306
+        # File reads/opens inside our own download+library pipeline take paths
+        # we constructed or validated — gosec's taint analysis can't see that.
+        - G304
+        - G703
+        # slog writes structured JSON/logfmt; "log injection" doesn't apply.
+        - G706
+  exclusions:
+    paths:
+      - web/node_modules
+      - web/dist
+    rules:
+      # Test helpers can skip errcheck/gosec/noctx on their own setup calls.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - noctx
+          - unused
+      # CORS middleware writes OPTIONS response headers and can't meaningfully
+      # propagate a Write error.
+      - path: cmd/bindery/main\.go
+        linters:
+          - errcheck
+        text: "Error return value of .http.ResponseWriter..Write. is not checked"
+      # Background status-sync writes (scheduler polling, importer status
+      # updates, history events). Failures self-heal on the next cycle; logging
+      # a secondary error here adds noise, not signal.
+      - path: (internal/scheduler|internal/importer)/
+        linters:
+          - errcheck
+          - gosec
+        text: "Error return value of .*(SetError|SetNzoID|UpdateStatus|SetFilePath|Create|Update|Delete). is not checked"
+      - path: internal/scheduler/
+        linters:
+          - gosec
+        text: "G104:"
+      - path: internal/importer/
+        linters:
+          - gosec
+        text: "G104:"
+      # Queue handler: SABnzbd call errors are already returned to the client;
+      # the follow-up DB writes are best-effort cleanup.
+      - path: internal/api/queue\.go
+        linters:
+          - errcheck
+          - gosec
+        text: "Error return value of .*(SetError|SetNzoID|UpdateStatus|Update|Delete). is not checked"
+      - path: internal/api/queue\.go
+        linters:
+          - gosec
+        text: "G104:"
+      # API JSON writes: Encode errors on a ResponseWriter mean the client
+      # connection is already broken; no useful recovery.
+      - path: internal/api/
+        linters:
+          - gosec
+        text: "Errors unhandled"
+      # DB bootstrap file (db.go): Close-on-error is safe; migrations run at
+      # startup before any request context exists, so noctx/gosec/errcheck
+      # warnings on the init path are noise.
+      - path: internal/db/db\.go
+        linters:
+          - errcheck
+          - gosec
+          - noctx
 
 formatters:
   enable:

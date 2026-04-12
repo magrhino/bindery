@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -53,7 +54,7 @@ func (r *IndexerRepo) GetByID(ctx context.Context, id int64) (*models.Indexer, e
 		FROM indexers WHERE id=?`, id).
 		Scan(&idx.ID, &idx.Name, &idx.Type, &idx.URL, &idx.APIKey,
 			&catsJSON, &idx.Priority, &enabled, &supportsSearch, &idx.CreatedAt, &idx.UpdatedAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

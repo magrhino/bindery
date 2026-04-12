@@ -3,17 +3,17 @@ package models
 import "time"
 
 type DownloadClient struct {
-	ID       int64     `json:"id"`
-	Name     string    `json:"name"`
-	Type     string    `json:"type"`
-	Host     string    `json:"host"`
-	Port     int       `json:"port"`
-	APIKey   string    `json:"apiKey"`
-	UseSSL   bool      `json:"useSsl"`
-	URLBase  string    `json:"urlBase"`
-	Category string    `json:"category"`
-	Priority int       `json:"priority"`
-	Enabled  bool      `json:"enabled"`
+	ID        int64     `json:"id"`
+	Name      string    `json:"name"`
+	Type      string    `json:"type"`
+	Host      string    `json:"host"`
+	Port      int       `json:"port"`
+	APIKey    string    `json:"apiKey"`
+	UseSSL    bool      `json:"useSsl"`
+	URLBase   string    `json:"urlBase"`
+	Category  string    `json:"category"`
+	Priority  int       `json:"priority"`
+	Enabled   bool      `json:"enabled"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 

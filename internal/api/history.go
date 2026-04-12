@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -75,7 +76,11 @@ func (h *HistoryHandler) Blocklist(w http.ResponseWriter, r *http.Request) {
 
 	// Extract guid from the stored event data
 	var data map[string]interface{}
-	_ = json.Unmarshal([]byte(event.Data), &data)
+	if event.Data != "" {
+		if err := json.Unmarshal([]byte(event.Data), &data); err != nil {
+			slog.Warn("corrupt history event data", "id", event.ID, "error", err)
+		}
+	}
 	guid, _ := data["guid"].(string)
 
 	// Fall back to sourceTitle as a unique key if no guid stored

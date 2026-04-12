@@ -10,7 +10,7 @@ type CustomFormat struct {
 }
 
 type CustomCondition struct {
-	Type     string `json:"type"`    // "releaseTitle", "releaseGroup", "size", "indexerFlag"
+	Type     string `json:"type"` // "releaseTitle", "releaseGroup", "size", "indexerFlag"
 	Pattern  string `json:"pattern"`
 	Negate   bool   `json:"negate"`
 	Required bool   `json:"required"`

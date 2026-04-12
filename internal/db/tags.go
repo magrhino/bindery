@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/vavallee/bindery/internal/models"
@@ -99,7 +100,7 @@ func (r *TagRepo) SetAuthorTags(ctx context.Context, authorID int64, tagIDs []in
 func (r *TagRepo) GetByID(ctx context.Context, id int64) (*models.Tag, error) {
 	var t models.Tag
 	err := r.db.QueryRowContext(ctx, "SELECT id, name FROM tags WHERE id=?", id).Scan(&t.ID, &t.Name)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

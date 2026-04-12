@@ -1,7 +1,8 @@
 import { useEffect, useState, useMemo } from 'react'
 import { api, Author } from '../api/client'
 import AddAuthorModal from '../components/AddAuthorModal'
-import Pagination, { usePagination } from '../components/Pagination'
+import Pagination from '../components/Pagination'
+import { usePagination } from '../components/usePagination'
 
 type SortMode = 'az' | 'za' | 'recent'
 
@@ -47,7 +48,7 @@ export default function AuthorsPage() {
 
   const { pageItems, paginationProps, reset } = usePagination(filtered, 50)
 
-  useEffect(() => { reset() }, [search, sort])
+  useEffect(() => { reset() }, [search, sort, reset])
 
   const sortBtnCls = (active: boolean) =>
     `px-3 py-1 rounded-md text-xs font-medium transition-colors ${active ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'}`
