@@ -18,10 +18,10 @@ import (
 // Self-contained: no server-side session table. Rotating auth.session_secret
 // invalidates every outstanding cookie.
 const (
-	SessionCookieName     = "bindery_session"
-	SessionDuration       = 30 * 24 * time.Hour // when "remember me" is checked
-	SessionDurationShort  = 12 * time.Hour      // browser-session equivalent when not
-	sessionCookieVersion  = "v1"
+	SessionCookieName    = "bindery_session"
+	SessionDuration      = 30 * 24 * time.Hour // when "remember me" is checked
+	SessionDurationShort = 12 * time.Hour      // browser-session equivalent when not
+	sessionCookieVersion = "v1"
 )
 
 // SignSession returns a signed cookie value for the given user that expires at exp.

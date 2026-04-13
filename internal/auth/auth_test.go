@@ -151,16 +151,16 @@ func TestLoginLimiterExpiresOldEvents(t *testing.T) {
 // --- middleware integration --------------------------------------------------
 
 type fakeProvider struct {
-	mode    Mode
-	apiKey  string
-	secret  []byte
-	setup   bool
+	mode   Mode
+	apiKey string
+	secret []byte
+	setup  bool
 }
 
-func (f *fakeProvider) Mode() Mode           { return f.mode }
-func (f *fakeProvider) APIKey() string       { return f.apiKey }
+func (f *fakeProvider) Mode() Mode            { return f.mode }
+func (f *fakeProvider) APIKey() string        { return f.apiKey }
 func (f *fakeProvider) SessionSecret() []byte { return f.secret }
-func (f *fakeProvider) SetupRequired() bool  { return f.setup }
+func (f *fakeProvider) SetupRequired() bool   { return f.setup }
 
 func TestMiddlewareAllowsHealthWithoutAuth(t *testing.T) {
 	p := &fakeProvider{mode: ModeEnabled}
@@ -249,9 +249,9 @@ func TestMiddlewareAcceptsValidSessionCookie(t *testing.T) {
 
 type nopWriter struct{}
 
-func (nopWriter) Header() http.Header       { return http.Header{} }
+func (nopWriter) Header() http.Header         { return http.Header{} }
 func (nopWriter) Write(b []byte) (int, error) { return len(b), nil }
-func (nopWriter) WriteHeader(int)            {}
+func (nopWriter) WriteHeader(int)             {}
 
 type captureWriter struct {
 	status int

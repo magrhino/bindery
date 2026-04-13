@@ -16,7 +16,7 @@ var privateCIDRs = func() []*net.IPNet {
 		"127.0.0.0/8",
 		"169.254.0.0/16", // link-local v4
 		"::1/128",
-		"fc00::/7", // ULA v6
+		"fc00::/7",  // ULA v6
 		"fe80::/10", // link-local v6
 	}
 	out := make([]*net.IPNet, 0, len(cidrs))

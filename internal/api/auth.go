@@ -14,9 +14,11 @@ import (
 )
 
 // AuthSettings keys in the shared `settings` table.
+// gosec G101 flags these as "potential hardcoded credentials" because of the
+// names, but they're setting-key identifiers, not secret values.
 const (
-	SettingAuthAPIKey        = "auth.api_key"
-	SettingAuthSessionSecret = "auth.session_secret"
+	SettingAuthAPIKey        = "auth.api_key"        //nolint:gosec // setting key name, not a credential
+	SettingAuthSessionSecret = "auth.session_secret" //nolint:gosec // setting key name, not a credential
 	SettingAuthMode          = "auth.mode"
 )
 

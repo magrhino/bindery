@@ -64,7 +64,9 @@ func VerifyPassword(password, phc string) bool {
 	if err != nil {
 		return false
 	}
-	got := argon2.IDKey([]byte(password), salt, time, memory, threads, uint32(len(want)))
+	// len(want) is bounded by the PHC hash length we wrote (argonKeyLen = 32),
+	// so the uint32 conversion cannot overflow. gosec G115 is a false positive.
+	got := argon2.IDKey([]byte(password), salt, time, memory, threads, uint32(len(want))) //nolint:gosec // bounded by argonKeyLen
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
