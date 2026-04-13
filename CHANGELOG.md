@@ -6,7 +6,11 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased] — development branch
 
-The `development` branch carries the in-flight v0.5.0 feature set. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
+The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
+
+## [v0.5.0] — 2026-04-13
+
+### Audiobook support + Readarr-parity UX + migration paths
 
 ### Import cleanup
 - Ebook import no longer leaves the SABnzbd job folder behind. After every book file matches bindery's extension set and moves cleanly, the importer removes the source directory — PAR2, NFO, SFV, NZB, and sample leftovers go with it. Partial-failure runs are untouched so the files remain for investigation.
@@ -208,6 +212,7 @@ Initial public release.
 - Single-binary distribution with embedded React frontend.
 - Distroless Docker image and Helm chart.
 
+[v0.5.0]: https://github.com/vavallee/bindery/releases/tag/v0.5.0
 [v0.4.2]: https://github.com/vavallee/bindery/releases/tag/v0.4.2
 [v0.4.1]: https://github.com/vavallee/bindery/releases/tag/v0.4.1
 [v0.4.0]: https://github.com/vavallee/bindery/releases/tag/v0.4.0
