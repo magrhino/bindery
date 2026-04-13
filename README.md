@@ -311,6 +311,14 @@ Contributions welcome. Please:
 3. Ensure `go test ./...` passes and `cd web && npm run build` succeeds
 4. Open a Pull Request
 
+## Roadmap
+
+Tracked feature requests for future releases. Not a commitment — priorities shift based on user feedback and available time. Open an issue to propose additions.
+
+- **Multi-user support** — Per-user libraries, per-user monitored authors, per-user quality profiles. Today Bindery assumes a single user; the database schema and UI would need user scoping.
+- **OAuth / SSO** — Swap the current `X-Api-Key` model for OIDC (Authelia, Authentik, Keycloak, Google, GitHub). Support header-based auth for reverse-proxy setups that handle SSO upstream.
+- **External database support (MySQL / Postgres)** — Optional settings for DB host, credentials, and connection path so bindery can run against a shared MySQL/Postgres instance instead of the bundled SQLite file. Useful for multi-replica HA deployments.
+
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes.
