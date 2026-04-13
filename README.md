@@ -33,12 +33,10 @@
 
 ## Features
 
-> Audiobook support, routed book/author detail pages, grid/table views, and the CSV + Readarr database importers are currently only in the `development` branch (image tag `development` or `dev-<sha>`). They'll land on `main` in v0.5.0.
-
 ### Library management
 - **Author monitoring** — Add authors and Bindery tracks all their works automatically via OpenLibrary's author works endpoint
 - **Book tracking** — Per-book monitor toggle, status workflow (wanted → downloading → downloaded → imported)
-- **Ebooks and audiobooks** *(development)* — Mark any book as `ebook` or `audiobook`; the search pipeline picks the right Newznab categories (7020 vs 3030), ranker prefers the matching format, and the importer moves whole audiobook folders (multi-part `.m4b` / `.mp3`) as one unit into a separate audiobook library root.
+- **Ebooks and audiobooks** — Mark any book as `ebook` or `audiobook`; the search pipeline picks the right Newznab categories (7020 vs 3030), ranker prefers the matching format, and the importer moves whole audiobook folders (multi-part `.m4b` / `.mp3`) as one unit into a separate audiobook library root.
 - **Series support** — Books grouped by series with position tracking and dedicated Series page
 - **Edition tracking** — Multiple editions per work, with format, ISBN, publisher, page count
 - **Library scan** — Walk `/books/` and reconcile existing files with wanted books in the database
@@ -67,10 +65,10 @@
 - **OpenLibrary** (primary) — Authors, books, editions, covers, ISBN lookup
 - **Google Books** (enricher) — Richer descriptions and ratings
 - **Hardcover.app** (enricher) — Community ratings and series data via GraphQL
-- **Audnex** *(development)* — Audiobook narrator, duration, cover, and description by Audible ASIN via the free [api.audnex.us](https://api.audnex.us) wrapper. Trigger with `POST /api/v1/book/{id}/enrich-audiobook`.
+- **Audnex** — Audiobook narrator, duration, cover, and description by Audible ASIN via the free [api.audnex.us](https://api.audnex.us) wrapper. Trigger with `POST /api/v1/book/{id}/enrich-audiobook`.
 - No Goodreads scraping. All sources use documented, stable public APIs.
 
-### Migration *(development)*
+### Migration
 - **CSV import** — Upload a newline-separated list of author names (or a `name,monitored,searchOnAdd` CSV); each name is resolved against OpenLibrary.
 - **Readarr import** — Upload `readarr.db` directly. Authors are re-resolved via OpenLibrary (Goodreads IDs aren't portable since `bookinfo.club` is dead); Indexers, download clients, and blocklist entries port structurally. Run a library scan afterward to match existing files.
 - **CLI** — `bindery migrate csv <path>` and `bindery migrate readarr <path>` for first-time bulk imports without opening the UI.
@@ -87,8 +85,8 @@
 ### UI
 - **Light and dark themes** — iOS-style slider toggle in Settings → General → Appearance. First-load default respects the browser's `prefers-color-scheme`; preference persists to localStorage.
 - **Modern React SPA** — React 19 + TypeScript + Tailwind CSS 3, built with Vite.
-- **Detail pages** *(development)* — Routed `/book/:id` and `/author/:id` pages replace the previous modal flow. Deep-linkable, back-button friendly, hold per-book history inline.
-- **Grid / Table view toggle** *(development)* — Switch between poster-grid and dense-table views on the Books and Authors pages; choice persists per page.
+- **Detail pages** — Routed `/book/:id` and `/author/:id` pages replace the previous modal flow. Deep-linkable, back-button friendly, hold per-book history inline.
+- **Grid / Table view toggle** — Switch between poster-grid and dense-table views on the Books and Authors pages; choice persists per page.
 - **Mobile-friendly** — Responsive layout with hamburger nav, card views for History/Blocklist, agenda view for Calendar. Table views hide less-critical columns on narrow viewports.
 - **Pagination everywhere** — First/Prev/Next/Last + page numbers + configurable page size on all list pages
 - **Search, filter, sort** — On Authors, Books, Wanted, and History pages; Books filter chips include `Type: Ebook / Audiobook`.
@@ -115,7 +113,7 @@ docker run -d \
   ghcr.io/vavallee/bindery:latest
 ```
 
-**Tracks:** `:latest` = most recent tagged release, `:vX.Y.Z` = specific release, `:development` = bleeding edge (includes audiobook support and the Readarr importer). `:sha-<hash>` / `:dev-<hash>` tags also published per commit for pinning.
+**Tracks:** `:latest` = most recent tagged release, `:vX.Y.Z` = specific release, `:development` = bleeding edge from the `development` branch. `:sha-<hash>` / `:dev-<hash>` tags also published per commit for pinning.
 
 ### Docker Compose
 
@@ -148,13 +146,24 @@ See [`charts/bindery/values.yaml`](charts/bindery/values.yaml) for all configura
 
 ### Binary
 
-Download the latest release from [Releases](https://github.com/vavallee/bindery/releases) and run:
+Pre-built archives are attached to every [Release](https://github.com/vavallee/bindery/releases) for:
+
+| OS | Architectures | Runs on |
+|----|---------------|---------|
+| Linux | amd64, arm64, armv7, armv6 | x86_64 servers, Raspberry Pi 4 / 5 (64-bit), Pi 2 / 3 (32-bit), Pi Zero / 1 |
+| macOS | amd64, arm64 | Intel Macs, Apple Silicon |
+| Windows | amd64, arm64 | x86_64 desktops, Windows on ARM |
+
+Pick the archive matching your platform, verify against `bindery_vX.Y.Z_checksums.txt`, extract, and run:
 
 ```bash
+tar -xzf bindery_v0.5.0_linux_amd64.tar.gz
 ./bindery
 ```
 
 Open <http://localhost:8787> to access the web UI.
+
+The frontend is embedded in the binary via `go:embed` — no separate static-file hosting needed.
 
 ## Configuration
 
@@ -180,8 +189,8 @@ Bindery is configured through the web UI. Key screens under **Settings**:
 | `BINDERY_API_KEY` | _(empty)_ | Enforces `X-Api-Key` header on all `/api/v1/*` routes |
 | `BINDERY_DOWNLOAD_DIR` | `/downloads` | Where SABnzbd places completed downloads |
 | `BINDERY_LIBRARY_DIR` | `/books` | Destination for imported ebook files |
-| `BINDERY_AUDIOBOOK_DIR` *(development)* | falls back to `BINDERY_LIBRARY_DIR` | Destination for imported audiobook folders |
-| `BINDERY_DOWNLOAD_PATH_REMAP` *(development)* | _(empty)_ | Comma-separated `from:to` pairs rewriting paths reported by the download client into paths bindery can see. Needed when SAB and bindery run in separate containers with the shared storage mounted at different paths (e.g. `/downloads:/media`). Longest-prefix match wins. |
+| `BINDERY_AUDIOBOOK_DIR` | falls back to `BINDERY_LIBRARY_DIR` | Destination for imported audiobook folders |
+| `BINDERY_DOWNLOAD_PATH_REMAP` | _(empty)_ | Comma-separated `from:to` pairs rewriting paths reported by the download client into paths bindery can see. Needed when SAB and bindery run in separate containers with the shared storage mounted at different paths (e.g. `/downloads:/media`). Longest-prefix match wins. |
 
 ## Metadata Sources
 
@@ -278,6 +287,9 @@ cd web && npm run typecheck && npm run lint
 
 # Docker image
 docker build -t bindery:dev .
+
+# Release-style cross-compile (all platforms, no publish)
+goreleaser release --snapshot --clean
 ```
 
 ### Project structure
