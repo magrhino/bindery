@@ -63,16 +63,30 @@ func AllowUnauthPath(path string) bool {
 
 // Middleware returns the composite auth checker. Precedence per request:
 //
-//  1. Health / auth endpoints — always allowed
-//  2. Mode == disabled            — always allowed
-//  3. Mode == local-only + local  — always allowed
-//  4. Valid X-Api-Key header or ?apikey= query — allowed
-//  5. Valid signed session cookie — allowed, user_id attached to ctx
-//  6. Setup required && no users  — allowed (the frontend will force /setup)
+//  1. Always try to resolve identity from a valid session cookie, so handlers
+//     on unauth-allowed paths (e.g. /auth/status) can still see who's logged in.
+//  2. Health / auth endpoints — always allowed through
+//  3. Mode == disabled            — always allowed
+//  4. Mode == local-only + local  — always allowed
+//  5. Valid X-Api-Key header or ?apikey= query — allowed
+//  6. Valid signed session cookie — allowed
 //  7. Otherwise                   — 401
 func Middleware(p Provider) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Resolve identity up-front regardless of path. A successful
+			// cookie verification attaches the user id to ctx so unauth-path
+			// handlers (like /auth/status) can report "authenticated: true".
+			ctx := r.Context()
+			cookieValid := false
+			if c, err := r.Cookie(SessionCookieName); err == nil {
+				if uid, err := VerifySession(p.SessionSecret(), c.Value); err == nil {
+					ctx = context.WithValue(ctx, userIDCtxKey, uid)
+					cookieValid = true
+				}
+			}
+			r = r.WithContext(ctx)
+
 			if AllowUnauthPath(r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
@@ -86,20 +100,13 @@ func Middleware(p Provider) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-
-			// API key path — used by external integrations.
 			if key := requestAPIKey(r); key != "" && key == p.APIKey() {
 				next.ServeHTTP(w, r)
 				return
 			}
-
-			// Session cookie — used by the browser UI.
-			if c, err := r.Cookie(SessionCookieName); err == nil {
-				if uid, err := VerifySession(p.SessionSecret(), c.Value); err == nil {
-					ctx := context.WithValue(r.Context(), userIDCtxKey, uid)
-					next.ServeHTTP(w, r.WithContext(ctx))
-					return
-				}
+			if cookieValid {
+				next.ServeHTTP(w, r)
+				return
 			}
 
 			// First-run escape hatch: before any user exists, the UI needs to
