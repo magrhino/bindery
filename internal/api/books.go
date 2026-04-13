@@ -116,10 +116,13 @@ func (h *BookHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Note: file_path is deliberately NOT accepted here. It's set by the
+	// importer once a grab lands, and letting clients write it arbitrarily
+	// would let an API caller later trigger os.RemoveAll on that path via
+	// DELETE /book/{id}?deleteFiles=true or DELETE /book/{id}/file.
 	var req struct {
 		Monitored *bool   `json:"monitored"`
 		Status    *string `json:"status"`
-		FilePath  *string `json:"filePath"`
 		MediaType *string `json:"mediaType"`
 		ASIN      *string `json:"asin"`
 		Narrator  *string `json:"narrator"`
@@ -133,9 +136,6 @@ func (h *BookHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Status != nil {
 		book.Status = *req.Status
-	}
-	if req.FilePath != nil {
-		book.FilePath = *req.FilePath
 	}
 	if req.MediaType != nil {
 		if *req.MediaType != models.MediaTypeEbook && *req.MediaType != models.MediaTypeAudiobook {

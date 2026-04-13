@@ -71,7 +71,7 @@ func (h *BackupHandler) List(w http.ResponseWriter, r *http.Request) {
 // Create copies the current SQLite DB to the backups directory.
 func (h *BackupHandler) Create(w http.ResponseWriter, r *http.Request) {
 	dir := h.backupDir()
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create backup directory"})
 		return
 	}

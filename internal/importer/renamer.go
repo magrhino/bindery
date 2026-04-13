@@ -74,7 +74,7 @@ func (r *Renamer) apply(template string, author *models.Author, book *models.Boo
 // This handles cross-filesystem moves (e.g., NFS download dir → NFS library).
 func MoveFile(src, dst string) error {
 	// Ensure destination directory exists
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
 		return fmt.Errorf("create dir: %w", err)
 	}
 
@@ -121,7 +121,7 @@ func MoveDir(src, dst string) error {
 		return fmt.Errorf("destination already exists: %s", dst)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
 		return fmt.Errorf("create parent dir: %w", err)
 	}
 
@@ -141,7 +141,7 @@ func MoveDir(src, dst string) error {
 // copyDir recursively copies srcDir contents into dstDir, preserving the
 // internal layout. dstDir will be created (including parents).
 func copyDir(srcDir, dstDir string) error {
-	if err := os.MkdirAll(dstDir, 0755); err != nil {
+	if err := os.MkdirAll(dstDir, 0o750); err != nil {
 		return err
 	}
 	return filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {

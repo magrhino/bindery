@@ -4,7 +4,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/metadata"
@@ -46,7 +45,7 @@ func NewMigrateHandler(
 // a newline-separated list of author names or a CSV (name[,monitored
 // [,searchOnAdd]]). Top OpenLibrary match is chosen for each name.
 func (h *MigrateHandler) ImportCSV(w http.ResponseWriter, r *http.Request) {
-	file, err := acceptUpload(r, 5<<20) // 5 MB cap — CSV of names is tiny
+	file, err := acceptUpload(w, r, 5<<20) // 5 MB cap — CSV of names is tiny
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -65,7 +64,7 @@ func (h *MigrateHandler) ImportCSV(w http.ResponseWriter, r *http.Request) {
 // readarr.db (SQLite). It's saved to a temp file (sqlite driver wants a
 // path), imported, then deleted.
 func (h *MigrateHandler) ImportReadarr(w http.ResponseWriter, r *http.Request) {
-	file, err := acceptUpload(r, 1<<30) // 1 GB cap — readarr.db is usually < 100 MB
+	file, err := acceptUpload(w, r, 1<<30) // 1 GB cap — readarr.db is usually < 100 MB
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -98,17 +97,17 @@ func (h *MigrateHandler) ImportReadarr(w http.ResponseWriter, r *http.Request) {
 }
 
 // acceptUpload reads a multipart "file" field with a size cap, returning
-// the file reader. Caller must Close.
-func acceptUpload(r *http.Request, maxBytes int64) (io.ReadCloser, error) {
-	r.Body = http.MaxBytesReader(nil, r.Body, maxBytes)
+// the file reader. Caller must Close. Passing w to MaxBytesReader makes the
+// server respond 413 Request Entity Too Large automatically when the body
+// exceeds maxBytes, instead of the handler seeing a generic parse error.
+func acceptUpload(w http.ResponseWriter, r *http.Request, maxBytes int64) (io.ReadCloser, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		return nil, err
 	}
-	f, hdr, err := r.FormFile("file")
+	f, _, err := r.FormFile("file")
 	if err != nil {
 		return nil, err
 	}
-	_ = hdr // filename ignored; we derive format from the endpoint
-	_ = filepath.Base
 	return f, nil
 }
