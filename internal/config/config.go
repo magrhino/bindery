@@ -24,6 +24,9 @@ type Config struct {
 // applied to paths returned by the download client before bindery reads
 // them, for cases where SAB and bindery run in separate containers that
 // mount the same storage at different paths.
+// BINDERY_API_KEY is honoured as a one-time seed for the persisted API key
+// on first boot only. Once saved to the DB, rotating the key in the UI
+// takes precedence and the env var becomes a no-op.
 func Load() *Config {
 	return &Config{
 		Port:              envOr("BINDERY_PORT", "8787"),

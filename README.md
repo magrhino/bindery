@@ -80,7 +80,7 @@
 - **Import lists** — Auto-add authors/books from external sources; exclusion list to skip unwanted entries
 - **Tag system** — Scope indexers/profiles/notifications to specific authors
 - **Backup/restore** — Snapshot the SQLite database on demand
-- **API key auth** — Optional `X-Api-Key` header enforcement for external integrations
+- **Authentication** — First-run setup creates an admin account (argon2id password hashing, signed session cookies). Three modes: **Enabled** (always require login), **Local only** (bypass auth for private IPs — home network convenience), **Disabled** (no auth, for trusted reverse-proxy deployments). Per-account API key for external integrations. Per-IP rate limiting on the login endpoint.
 
 ### UI
 - **Light and dark themes** — iOS-style slider toggle in Settings → General → Appearance. First-load default respects the browser's `prefers-color-scheme`; preference persists to localStorage.
@@ -165,6 +165,30 @@ Open <http://localhost:8787> to access the web UI.
 
 The frontend is embedded in the binary via `go:embed` — no separate static-file hosting needed.
 
+### First-run setup
+
+On first launch Bindery bootstraps itself — **no environment variables are required for auth.**
+
+1. A random API key and session-signing secret are generated and stored in the SQLite database. Both are idempotent: they're generated once and reused on every subsequent boot.
+2. The first page load redirects to `/setup`. Create the administrator account (username + password, 8-character minimum). Bindery is single-administrator; there is no "register" flow once this account exists.
+3. After setup you're signed in automatically. Later visits redirect to `/login` if the session cookie has expired.
+
+**Default auth mode is `enabled`.** Change it in **Settings → General → Security** if you want:
+
+- `local-only` — skip auth for requests from private IPs (`10/8`, `172.16/12`, `192.168/16`, loopback, IPv6 ULA, link-local). Useful for home networks where the risk profile doesn't warrant a login wall.
+- `disabled` — no auth at all. Only safe behind a trusted reverse proxy that handles authentication upstream.
+
+The API key for scripts / Tautulli / custom integrations lives on the same page (show, copy, regenerate).
+
+### Upgrading from v0.5.x
+
+The auth overhaul is fully backwards-compatible on existing installs:
+
+- The new `users` table and `auth.*` settings are added by an additive migration. No manual step required.
+- If you had `BINDERY_API_KEY` set, it **seeds** the new key on first boot so existing integrations keep working. After that the key lives in the database; the env var is inert and can be removed from your compose file / secrets. Leaving it set won't hurt, but it no longer drives runtime behaviour.
+- Your next visit to the UI will redirect to `/setup` to create the admin account. Pick a password, and you're back in.
+- If you rely on calling the API without an API key (because `BINDERY_API_KEY` was unset in v0.5), switch to `local-only` mode after setup to preserve that behaviour for in-cluster traffic, or update your callers to send `X-Api-Key`.
+
 ## Configuration
 
 Bindery is configured through the web UI. Key screens under **Settings**:
@@ -176,7 +200,7 @@ Bindery is configured through the web UI. Key screens under **Settings**:
 | **Notifications** | Webhooks for grab/import/failure events |
 | **Quality** | View quality profiles (EPUB / MOBI / AZW3 / PDF ordering) |
 | **Metadata** | Optional Google Books API key and metadata profile filters |
-| **General** | Preferred language filter, naming template, API key, backup/restore |
+| **General** | Preferred language filter, naming template, **Security** (auth mode, API key, password change), backup/restore |
 
 ### Environment variables
 
@@ -186,7 +210,7 @@ Bindery is configured through the web UI. Key screens under **Settings**:
 | `BINDERY_DB_PATH` | `/config/bindery.db` | SQLite database path |
 | `BINDERY_DATA_DIR` | `/config` | Config directory (backups live here) |
 | `BINDERY_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
-| `BINDERY_API_KEY` | _(empty)_ | Enforces `X-Api-Key` header on all `/api/v1/*` routes |
+| `BINDERY_API_KEY` | _(empty)_ | **Seed only.** Bootstraps the initial API key on first launch if set; after that the key lives in the database and can be regenerated from the UI. Leave unset to get a random key. |
 | `BINDERY_DOWNLOAD_DIR` | `/downloads` | Where SABnzbd places completed downloads |
 | `BINDERY_LIBRARY_DIR` | `/books` | Destination for imported ebook files |
 | `BINDERY_AUDIOBOOK_DIR` | falls back to `BINDERY_LIBRARY_DIR` | Destination for imported audiobook folders |
@@ -261,7 +285,16 @@ POST   /api/v1/notification/{id}/test    - fire a test webhook
 POST   /api/v1/backup                    - snapshot the database
 ```
 
-Set `BINDERY_API_KEY` and pass it via `X-Api-Key` header for external access.
+### Authentication
+
+Every request to `/api/v1/*` (except `/health`, `/auth/status`, `/auth/login`, `/auth/logout`, `/auth/setup`) is authenticated. A request is allowed if **any** of:
+
+- Auth mode is **Disabled**.
+- Auth mode is **Local only** and the request originates from a private-range IP (`10/8`, `172.16/12`, `192.168/16`, `127/8`, IPv6 ULA, link-local, loopback).
+- A valid `X-Api-Key` header (or `?apikey=` query param) matches the stored key.
+- A valid `bindery_session` cookie is present.
+
+Otherwise the server responds with `401`. The API key lives in **Settings → General → Security** — copy it from there for scripts and integrations. Regenerating the key invalidates any existing consumers.
 
 ## Development
 
@@ -327,8 +360,10 @@ Contributions welcome. Please:
 
 Tracked feature requests for future releases. Not a commitment — priorities shift based on user feedback and available time. Open an issue to propose additions.
 
-- **Multi-user support** — Per-user libraries, per-user monitored authors, per-user quality profiles. Today Bindery assumes a single user; the database schema and UI would need user scoping.
-- **OAuth / SSO** — Swap the current `X-Api-Key` model for OIDC (Authelia, Authentik, Keycloak, Google, GitHub). Support header-based auth for reverse-proxy setups that handle SSO upstream.
+- **Multi-user support** — Per-user libraries, per-user monitored authors, per-user quality profiles. Today Bindery assumes a single administrator (the auth schema has a `users` table but is seeded with exactly one row); multi-user support needs role/permission scoping across the rest of the schema and UI.
+- **OIDC / SSO** — Plug a native OIDC client in alongside the existing session/API-key flow (Authelia, Authentik, Keycloak, Google, GitHub). Currently the suggested path is to put Bindery behind a reverse proxy that terminates SSO and set the auth mode to **Disabled** on the internal network.
+- **Reverse-proxy header trust** — Accept `X-Forwarded-User` / `Remote-User` from a configurable list of trusted upstream proxies so SSO-at-the-edge setups don't require the auth-mode-disabled escape hatch. Needs a trust list, header allowlist, and clear docs on the footgun (a misconfigured proxy becomes an auth bypass).
+- **CSRF tokens** — Session cookies today use `SameSite=Lax`, which blocks cross-site form posts. Adding an explicit CSRF token middleware would harden browser flows further and is on the list for a subsequent hardening pass.
 - **External database support (MySQL / Postgres)** — Optional settings for DB host, credentials, and connection path so bindery can run against a shared MySQL/Postgres instance instead of the bundled SQLite file. Useful for multi-replica HA deployments.
 - **Calibre library integration** — Treat a Calibre library as a first-class storage target, for users who already live in Calibre or want e-reader sync:
   - _Library import & sync_ — On startup, read an existing Calibre library (`metadata.opf` + `Author/Title (id)/…` folder layout) and ingest it as Bindery's catalogue. Detect out-of-band Calibre edits and re-sync.

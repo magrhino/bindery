@@ -1,21 +1,74 @@
 const BASE = '/api/v1'
 
+// Pages that render before the user is authenticated — reaching /auth/status
+// will 401 in enabled mode before setup, which is expected, and we must not
+// try to redirect to /login from the login/setup pages themselves.
+const PUBLIC_PATHS = new Set(['/login', '/setup'])
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
+    credentials: 'include', // send + accept the session cookie
     headers: { 'Content-Type': 'application/json' },
     ...options,
   })
+  if (res.status === 401 && !PUBLIC_PATHS.has(window.location.pathname)) {
+    // Session expired or missing — punt to login. The router there will
+    // bounce to /setup if no user exists yet.
+    window.location.href = '/login'
+    throw new Error('unauthorized')
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }))
     throw new Error(err.error || res.statusText)
   }
+  if (res.status === 204) return undefined as unknown as T
   return res.json()
+}
+
+export interface AuthStatus {
+  authenticated: boolean
+  setupRequired: boolean
+  username?: string
+  mode: 'enabled' | 'local-only' | 'disabled'
+}
+
+export interface AuthConfig {
+  mode: 'enabled' | 'local-only' | 'disabled'
+  apiKey: string
+  username: string
 }
 
 export const api = {
   // System
   health: () => request<{ status: string; version: string }>('/health'),
   status: () => request<{ version: string; commit: string; buildDate: string }>('/system/status'),
+
+  // Auth
+  authStatus: () => request<AuthStatus>('/auth/status'),
+  authLogin: (username: string, password: string, rememberMe: boolean) =>
+    request<{ ok: boolean; username: string }>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password, rememberMe }),
+    }),
+  authLogout: () => request<{ ok: boolean }>('/auth/logout', { method: 'POST' }),
+  authSetup: (username: string, password: string) =>
+    request<{ ok: boolean }>('/auth/setup', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  authConfig: () => request<AuthConfig>('/auth/config'),
+  authChangePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>('/auth/password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+  authRegenerateApiKey: () =>
+    request<{ apiKey: string }>('/auth/apikey/regenerate', { method: 'POST' }),
+  authSetMode: (mode: AuthStatus['mode']) =>
+    request<{ mode: string }>('/auth/mode', {
+      method: 'PUT',
+      body: JSON.stringify({ mode }),
+    }),
 
   // Metadata search
   searchAuthors: (term: string) => request<Author[]>(`/search/author?term=${encodeURIComponent(term)}`),

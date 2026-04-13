@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
-import { api, Indexer, DownloadClient, NotificationConfig, QualityProfile, MetadataProfile } from '../api/client'
+import { FormEvent, useEffect, useState } from 'react'
+import { api, AuthConfig, AuthStatus, Indexer, DownloadClient, NotificationConfig, QualityProfile, MetadataProfile } from '../api/client'
 import ThemeToggle from '../components/ThemeToggle'
+import { useAuth } from '../auth/AuthContext'
 
 type Tab = 'indexers' | 'clients' | 'notifications' | 'quality' | 'metadata' | 'general' | 'import'
 
@@ -639,18 +640,13 @@ function GeneralTab() {
         </div>
       </section>
 
+      {/* Security */}
+      <SecuritySection />
+
       {/* API Keys */}
       <section>
-        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">API Keys</h3>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">External API Keys</h3>
         <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-4">
-          <div>
-            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Bindery API Key</label>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm font-mono text-slate-700 dark:text-zinc-300 truncate">
-                {settings['api.key'] || '(not set)'}
-              </code>
-            </div>
-          </div>
           <div>
             <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Google Books API Key</label>
             <div className="flex gap-2">
@@ -945,5 +941,152 @@ function AddNotificationForm({ onClose, onAdded }: { onClose: () => void; onAdde
         <button onClick={submit} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium">Save</button>
       </div>
     </div>
+  )
+}
+
+function SecuritySection() {
+  const { status, refresh } = useAuth()
+  const [cfg, setCfg] = useState<AuthConfig | null>(null)
+  const [showKey, setShowKey] = useState(false)
+  const [regenerating, setRegenerating] = useState(false)
+  const [savingMode, setSavingMode] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => { loadCfg() }, [])
+
+  const loadCfg = () => {
+    api.authConfig().then(setCfg).catch(console.error)
+  }
+
+  const regenerate = async () => {
+    if (!confirm('Regenerate the API key? Existing integrations using the old key will stop working.')) return
+    setRegenerating(true)
+    try {
+      const r = await api.authRegenerateApiKey()
+      setCfg(c => c ? { ...c, apiKey: r.apiKey } : c)
+      setShowKey(true)
+    } catch (e) {
+      alert('Regenerate failed: ' + (e instanceof Error ? e.message : 'unknown'))
+    } finally {
+      setRegenerating(false)
+    }
+  }
+
+  const setMode = async (mode: AuthStatus['mode']) => {
+    setSavingMode(true)
+    try {
+      await api.authSetMode(mode)
+      await refresh()
+      loadCfg()
+    } catch (e) {
+      alert('Mode change failed: ' + (e instanceof Error ? e.message : 'unknown'))
+    } finally {
+      setSavingMode(false)
+    }
+  }
+
+  const copyKey = async () => {
+    if (!cfg?.apiKey) return
+    try {
+      await navigator.clipboard.writeText(cfg.apiKey)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch { /* clipboard blocked */ }
+  }
+
+  if (!cfg) return null
+
+  return (
+    <section>
+      <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">Security</h3>
+      <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-5">
+        <div>
+          <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Authentication Mode</label>
+          <p className="text-xs text-slate-600 dark:text-zinc-500 mb-2">
+            <strong>Enabled</strong>: always require login. <strong>Local only</strong>: skip login for requests from private IPs (home network). <strong>Disabled</strong>: no authentication — only safe behind a trusted reverse proxy.
+          </p>
+          <select
+            value={cfg.mode}
+            onChange={e => setMode(e.target.value as AuthStatus['mode'])}
+            disabled={savingMode}
+            className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
+          >
+            <option value="enabled">Enabled</option>
+            <option value="local-only">Local only (bypass for private IPs)</option>
+            <option value="disabled">Disabled (no auth)</option>
+          </select>
+        </div>
+
+        <div className="border-t border-slate-200 dark:border-zinc-800 pt-4">
+          <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">API Key</label>
+          <p className="text-xs text-slate-600 dark:text-zinc-500 mb-2">
+            Pass as <code className="font-mono">X-Api-Key</code> header or <code className="font-mono">?apikey=</code> query parameter. Used by external integrations (Tautulli, custom scripts, etc.).
+          </p>
+          <div className="flex gap-2">
+            <code className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm font-mono text-slate-700 dark:text-zinc-300 truncate">
+              {showKey ? cfg.apiKey : '••••••••••••••••••••••••••••••••'}
+            </code>
+            <button onClick={() => setShowKey(s => !s)} className="px-3 py-2 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 rounded text-xs font-medium">
+              {showKey ? 'Hide' : 'Show'}
+            </button>
+            <button onClick={copyKey} className="px-3 py-2 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 rounded text-xs font-medium">
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+            <button onClick={regenerate} disabled={regenerating} className="px-3 py-2 bg-amber-600 hover:bg-amber-500 rounded text-xs font-medium disabled:opacity-50">
+              {regenerating ? '...' : 'Regenerate'}
+            </button>
+          </div>
+        </div>
+
+        {status?.authenticated && (
+          <div className="border-t border-slate-200 dark:border-zinc-800 pt-4">
+            <ChangePasswordForm username={cfg.username} />
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function ChangePasswordForm({ username }: { username: string }) {
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [confirmPw, setConfirmPw] = useState('')
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setError('')
+    setSuccess(false)
+    if (next !== confirmPw) { setError('New passwords do not match'); return }
+    if (next.length < 8) { setError('Password must be at least 8 characters'); return }
+    setSubmitting(true)
+    try {
+      await api.authChangePassword(current, next)
+      setCurrent(''); setNext(''); setConfirmPw('')
+      setSuccess(true)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Change failed')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const inputCls = 'w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600'
+
+  return (
+    <form onSubmit={submit} className="space-y-2">
+      <label className="block text-xs text-slate-600 dark:text-zinc-400">Change password for <strong>{username}</strong></label>
+      <input type="password" autoComplete="current-password" placeholder="Current password" value={current} onChange={e => setCurrent(e.target.value)} className={inputCls} />
+      <input type="password" autoComplete="new-password" placeholder="New password" value={next} onChange={e => setNext(e.target.value)} className={inputCls} />
+      <input type="password" autoComplete="new-password" placeholder="Confirm new password" value={confirmPw} onChange={e => setConfirmPw(e.target.value)} className={inputCls} />
+      {error && <div className="text-xs text-red-600 dark:text-red-400">{error}</div>}
+      {success && <div className="text-xs text-emerald-600 dark:text-emerald-400">Password updated</div>}
+      <button type="submit" disabled={submitting || !current || !next} className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50">
+        {submitting ? 'Updating…' : 'Change password'}
+      </button>
+    </form>
   )
 }
