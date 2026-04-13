@@ -118,6 +118,9 @@ func (h *BookHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Monitored *bool   `json:"monitored"`
 		Status    *string `json:"status"`
 		FilePath  *string `json:"filePath"`
+		MediaType *string `json:"mediaType"`
+		ASIN      *string `json:"asin"`
+		Narrator  *string `json:"narrator"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -131,6 +134,19 @@ func (h *BookHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.FilePath != nil {
 		book.FilePath = *req.FilePath
+	}
+	if req.MediaType != nil {
+		if *req.MediaType != models.MediaTypeEbook && *req.MediaType != models.MediaTypeAudiobook {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mediaType must be 'ebook' or 'audiobook'"})
+			return
+		}
+		book.MediaType = *req.MediaType
+	}
+	if req.ASIN != nil {
+		book.ASIN = *req.ASIN
+	}
+	if req.Narrator != nil {
+		book.Narrator = *req.Narrator
 	}
 
 	if err := h.books.Update(r.Context(), book); err != nil {
