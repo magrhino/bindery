@@ -19,6 +19,8 @@ jobs:
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development' || startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # goreleaser needs full history + tags
 
       # Go setup + test
       - uses: actions/setup-go@v5
@@ -127,6 +129,18 @@ jobs:
           else
             printf '%s' "$NOTES" | gh release create "$VERSION" --title "$RELEASE_TITLE" --notes-file -
           fi
+
+      # Cross-compile release binaries and attach them to the GitHub Release
+      # created above. Runs only on tag push; `release.mode: append` in
+      # .goreleaser.yaml keeps the CHANGELOG-derived notes intact.
+      - name: GoReleaser (release binaries)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Lint + security — runs in parallel with build
   lint:
