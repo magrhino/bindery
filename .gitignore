@@ -11,6 +11,13 @@
 coverage.out
 coverage.html
 
+# codecov-action@v5 downloads these into the checkout on Linux runners.
+# Without this ignore, GoReleaser on tag pushes aborts with "git is in a
+# dirty state" because the codecov uploader runs earlier in the same job.
+/codecov
+/codecov.SHA256SUM
+/codecov.SHA256SUM.sig
+
 # Frontend
 web/node_modules/
 web/dist/
