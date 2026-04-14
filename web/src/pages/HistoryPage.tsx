@@ -79,7 +79,7 @@ export default function HistoryPage() {
 
   const eventTypes = Array.from(new Set(events.map(e => e.eventType))).sort()
 
-  const { pageItems, paginationProps, reset } = usePagination(events, 100)
+  const { pageItems, paginationProps, reset } = usePagination(events, 100, 'history')
 
   useEffect(() => { reset() }, [typeFilter, reset])
 

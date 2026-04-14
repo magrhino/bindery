@@ -64,7 +64,7 @@ export default function WantedPage() {
     }
   }
 
-  const { pageItems, paginationProps, reset } = usePagination(filtered, 50)
+  const { pageItems, paginationProps, reset } = usePagination(filtered, 50, 'wanted')
 
   useEffect(() => { reset() }, [search, reset])
 
