@@ -66,7 +66,7 @@ Pre-built archives are attached to every [Release](https://github.com/vavallee/b
 Pick the archive matching your platform, verify against `bindery_vX.Y.Z_checksums.txt`, extract, and run:
 
 ```bash
-tar -xzf bindery_v0.5.0_linux_amd64.tar.gz
+tar -xzf bindery_0.6.1_linux_amd64.tar.gz
 ./bindery
 ```
 
@@ -153,7 +153,7 @@ On first launch Bindery bootstraps itself — **no environment variables are req
 
 ### From v0.5.x to v0.6.x
 
-The auth overhaul landed in v0.6.0 is fully backwards-compatible on existing installs:
+The auth overhaul (first installable in v0.6.1; `v0.6.0` tag's release binaries never built) is fully backwards-compatible on existing installs:
 
 - The new `users` table and `auth.*` settings are added by an additive migration. No manual step required.
 - If you had `BINDERY_API_KEY` set, it **seeds** the new key on first boot so existing integrations keep working. After that the key lives in the database; the env var is inert and can be removed. Leaving it set won't hurt but it no longer drives runtime behaviour.

@@ -10,8 +10,10 @@ The `development` branch carries the in-flight feature set for the next release.
 
 ## [v0.6.1] — 2026-04-14
 
+v0.6.1 is the first installable build of the v0.6.0 feature set. The `v0.6.0` tag itself failed GoReleaser cross-compile: `describeDir` referenced `syscall.Stat_t` (POSIX-only) so `GOOS=windows` builds aborted and no binaries or `ghcr.io/vavallee/bindery:0.6.0` image were ever published. See v0.6.0 below for the full feature list.
+
 ### Fixed
-- GoReleaser was cross-compiling `internal/db/db.go` for `GOOS=windows` and hitting `undefined: syscall.Stat_t`, which aborted the Windows targets and failed the entire v0.6.0 tag release before any binaries or the `ghcr.io/vavallee/bindery:0.6.0` tag were published. `describeDir` (the Linux ownership hint in the SQLite "can't open" error path) is now split into `describe_unix.go` (POSIX uid/gid) and `describe_windows.go` (path + mode only). v0.6.1 ships the same feature set as v0.6.0; no runtime behaviour changes on Linux. The v0.6.0 GitHub release has been marked as draft since no assets were published under that tag.
+- Split `describeDir` (the Linux ownership hint in the SQLite "can't open" error path) into `describe_unix.go` (POSIX uid/gid via `syscall.Stat_t`) and `describe_windows.go` (path + mode only) via `//go:build` tags. No runtime behaviour change on Linux; unblocks `windows/amd64` and `windows/arm64` release binaries.
 
 ## [v0.6.0] — 2026-04-14
 
@@ -299,6 +301,8 @@ Initial public release.
 - Single-binary distribution with embedded React frontend.
 - Distroless Docker image and Helm chart.
 
+[v0.6.1]: https://github.com/vavallee/bindery/releases/tag/v0.6.1
+[v0.6.0]: https://github.com/vavallee/bindery/releases/tag/v0.6.0
 [v0.5.2]: https://github.com/vavallee/bindery/releases/tag/v0.5.2
 [v0.5.1]: https://github.com/vavallee/bindery/releases/tag/v0.5.1
 [v0.5.0]: https://github.com/vavallee/bindery/releases/tag/v0.5.0
