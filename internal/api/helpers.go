@@ -7,7 +7,15 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/vavallee/bindery/internal/models"
 )
+
+// BookSearcher triggers an immediate indexer search and auto-grab for a
+// single wanted book. Implemented by *scheduler.Scheduler.
+type BookSearcher interface {
+	SearchAndGrabBook(ctx context.Context, book models.Book)
+}
 
 func contextBackground() context.Context {
 	return context.Background()

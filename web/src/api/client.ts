@@ -224,6 +224,7 @@ export interface Book {
   narrator?: string
   durationSeconds?: number
   asin?: string
+  language?: string
   author?: Author
 }
 

@@ -8,6 +8,7 @@ import ViewToggle from '../components/ViewToggle'
 import { useView } from '../components/useView'
 
 type SortMode = 'az' | 'za' | 'recent'
+type MonitoredFilter = '' | 'monitored' | 'unmonitored'
 
 export default function AuthorsPage() {
   const [authors, setAuthors] = useState<Author[]>([])
@@ -15,6 +16,13 @@ export default function AuthorsPage() {
   const [showAdd, setShowAdd] = useState(false)
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<SortMode>('az')
+  const [monitoredFilter, setMonitoredFilter] = useState<MonitoredFilter>(() => {
+    try {
+      const v = localStorage.getItem('bindery.filter.authors.monitored')
+      if (v === 'monitored' || v === 'unmonitored') return v
+    } catch { /* ignore */ }
+    return ''
+  })
   const [view, setView] = useView('authors', 'grid')
 
   const load = () => {
@@ -23,6 +31,10 @@ export default function AuthorsPage() {
   }
 
   useEffect(() => { load() }, [])
+
+  useEffect(() => {
+    try { localStorage.setItem('bindery.filter.authors.monitored', monitoredFilter) } catch { /* ignore */ }
+  }, [monitoredFilter])
 
   const handleDelete = async (id: number) => {
     // Peek at the author's books so the confirm can offer to sweep files.
@@ -50,6 +62,8 @@ export default function AuthorsPage() {
 
   const filtered = useMemo(() => {
     let list = authors
+    if (monitoredFilter === 'monitored') list = list.filter(a => a.monitored)
+    else if (monitoredFilter === 'unmonitored') list = list.filter(a => !a.monitored)
     if (search.trim()) {
       const q = search.trim().toLowerCase()
       list = list.filter(a =>
@@ -61,11 +75,11 @@ export default function AuthorsPage() {
     else if (sort === 'za') list = [...list].sort((a, b) => b.authorName.localeCompare(a.authorName))
     // 'recent' keeps server order (typically by id desc)
     return list
-  }, [authors, search, sort])
+  }, [authors, monitoredFilter, search, sort])
 
   const { pageItems, paginationProps, reset } = usePagination(filtered, 50, 'authors')
 
-  useEffect(() => { reset() }, [search, sort, reset])
+  useEffect(() => { reset() }, [search, sort, monitoredFilter, reset])
 
   const sortBtnCls = (active: boolean) =>
     `px-3 py-1 rounded-md text-xs font-medium transition-colors ${active ? 'bg-slate-300 dark:bg-zinc-700 text-slate-900 dark:text-white' : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/50 dark:hover:bg-zinc-800/50'}`
@@ -86,7 +100,7 @@ export default function AuthorsPage() {
       </div>
 
       {/* Search & Sort controls */}
-      <div className="flex flex-col sm:flex-row gap-3 mb-6">
+      <div className="flex flex-col sm:flex-row gap-3 mb-4">
         <input
           type="search"
           value={search}
@@ -99,6 +113,14 @@ export default function AuthorsPage() {
           <button onClick={() => setSort('za')} className={sortBtnCls(sort === 'za')}>Z–A</button>
           <button onClick={() => setSort('recent')} className={sortBtnCls(sort === 'recent')}>Recent</button>
         </div>
+      </div>
+
+      {/* Monitored filter chips */}
+      <div className="flex gap-1 mb-6 flex-wrap">
+        <span className="text-xs text-slate-600 dark:text-zinc-500 mr-1 self-center">Monitored:</span>
+        <button onClick={() => setMonitoredFilter('')} className={sortBtnCls(monitoredFilter === '')}>All</button>
+        <button onClick={() => setMonitoredFilter('monitored')} className={sortBtnCls(monitoredFilter === 'monitored')}>Monitored</button>
+        <button onClick={() => setMonitoredFilter('unmonitored')} className={sortBtnCls(monitoredFilter === 'unmonitored')}>Unmonitored</button>
       </div>
 
       {loading ? (

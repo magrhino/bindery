@@ -13,6 +13,7 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
   const [adding, setAdding] = useState<string | null>(null)
   const [profiles, setProfiles] = useState<MetadataProfile[]>([])
   const [profileId, setProfileId] = useState<number | null>(null)
+  const [searchOnAdd, setSearchOnAdd] = useState(true)
 
   useEffect(() => {
     api.listMetadataProfiles().then(ps => {
@@ -44,7 +45,7 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
         foreignAuthorId: author.foreignAuthorId,
         authorName: author.authorName,
         monitored: true,
-        searchOnAdd: true,
+        searchOnAdd,
         metadataProfileId: profileId,
       })
       onAdded()
@@ -78,6 +79,16 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
               </select>
             </div>
           )}
+          <label className="flex items-center gap-2 text-sm mb-3 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={searchOnAdd}
+              onChange={e => setSearchOnAdd(e.target.checked)}
+              className="accent-emerald-500"
+            />
+            <span>Start search for books on add</span>
+          </label>
+
           <div className="flex gap-2">
             <input
               type="text"

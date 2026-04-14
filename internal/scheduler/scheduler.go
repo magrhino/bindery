@@ -103,6 +103,113 @@ func (s *Scheduler) Stop() {
 	slog.Info("scheduler stopped")
 }
 
+// SearchAndGrabBook performs an immediate indexer search for a single wanted
+// book and auto-grabs the top result. It is the same logic the 12-hour
+// wanted-scan uses, promoted so on-add and status-transition hooks can trigger
+// a search without waiting for the next scheduled run.
+func (s *Scheduler) SearchAndGrabBook(ctx context.Context, book models.Book) {
+	idxs, err := s.indexers.List(ctx)
+	if err != nil {
+		slog.Error("SearchAndGrabBook: failed to list indexers", "error", err)
+		return
+	}
+
+	lang := "en"
+	if langSetting, _ := s.settings.Get(ctx, "search.preferredLanguage"); langSetting != nil {
+		lang = langSetting.Value
+	}
+
+	authorName := ""
+	if a, _ := s.authors.GetByID(ctx, book.AuthorID); a != nil {
+		authorName = a.Name
+	}
+	crit := indexer.MatchCriteria{
+		Title:     book.Title,
+		Author:    authorName,
+		MediaType: book.MediaType,
+		ASIN:      book.ASIN,
+	}
+	if book.ReleaseDate != nil {
+		crit.Year = book.ReleaseDate.Year()
+	}
+
+	results := s.searcher.SearchBook(ctx, idxs, crit)
+	results = indexer.FilterByLanguage(results, lang)
+	results = filterBlocklisted(ctx, s.blocklist, results)
+	if len(results) == 0 {
+		return
+	}
+
+	best := results[0]
+
+	candidates, _ := s.clients.GetEnabledByProtocol(ctx, best.Protocol)
+	client := db.PickClientForMediaType(candidates, book.MediaType)
+	if client == nil {
+		client, _ = s.clients.GetFirstEnabled(ctx)
+	}
+	if client == nil {
+		slog.Debug("SearchAndGrabBook: no download client available", "book", book.Title)
+		return
+	}
+
+	slog.Info("auto-grabbing book",
+		"book", book.Title,
+		"author", authorName,
+		"result", best.Title,
+		"indexer", best.IndexerName,
+		"protocol", best.Protocol,
+		"client", client.Name,
+		"size", best.Size,
+	)
+
+	existing, _ := s.downloads.GetByGUID(ctx, best.GUID)
+	if existing != nil {
+		return
+	}
+
+	dl := &models.Download{
+		GUID:             best.GUID,
+		BookID:           &book.ID,
+		IndexerID:        &best.IndexerID,
+		DownloadClientID: &client.ID,
+		Title:            best.Title,
+		NZBURL:           best.NZBURL,
+		Size:             best.Size,
+		Status:           models.DownloadStatusQueued,
+		Protocol:         best.Protocol,
+		Quality:          indexer.ParseRelease(best.Title).Format,
+	}
+
+	if err := s.downloads.Create(ctx, dl); err != nil {
+		slog.Error("SearchAndGrabBook: failed to create download record", "error", err)
+		return
+	}
+
+	if best.Protocol == "torrent" {
+		qbt := qbittorrent.New(client.Host, client.Port, client.URLBase, client.APIKey, client.UseSSL)
+		if err := qbt.AddTorrent(ctx, best.NZBURL, client.Category, ""); err != nil {
+			slog.Error("SearchAndGrabBook: failed to send to qBittorrent", "title", best.Title, "error", err)
+			s.downloads.SetError(ctx, dl.ID, err.Error())
+			return
+		}
+		s.downloads.UpdateStatus(ctx, dl.ID, models.DownloadStatusDownloading)
+		slog.Info("sent to qBittorrent", "title", best.Title)
+	} else {
+		sab := sabnzbd.New(client.Host, client.Port, client.APIKey, client.UseSSL)
+		resp, err := sab.AddURL(ctx, best.NZBURL, best.Title, client.Category, 0)
+		if err != nil {
+			slog.Error("SearchAndGrabBook: failed to send to SABnzbd", "title", best.Title, "error", err)
+			s.downloads.SetError(ctx, dl.ID, err.Error())
+			return
+		}
+		if len(resp.NzoIDs) > 0 {
+			s.downloads.SetNzoID(ctx, dl.ID, resp.NzoIDs[0])
+		}
+		s.downloads.UpdateStatus(ctx, dl.ID, models.DownloadStatusDownloading)
+		slog.Info("sent to SABnzbd", "title", best.Title)
+	}
+}
+
 func (s *Scheduler) searchWanted() {
 	ctx := context.Background()
 
@@ -115,116 +222,8 @@ func (s *Scheduler) searchWanted() {
 		return
 	}
 
-	idxs, err := s.indexers.List(ctx)
-	if err != nil {
-		slog.Error("failed to list indexers", "error", err)
-		return
-	}
-
-	// Read preferred language once for all books in this run
-	lang := "en"
-	if langSetting, _ := s.settings.Get(ctx, "search.preferredLanguage"); langSetting != nil {
-		lang = langSetting.Value
-	}
-
 	for _, book := range wanted {
-		authorName := ""
-		if a, _ := s.authors.GetByID(ctx, book.AuthorID); a != nil {
-			authorName = a.Name
-		}
-		crit := indexer.MatchCriteria{
-			Title:     book.Title,
-			Author:    authorName,
-			MediaType: book.MediaType,
-			ASIN:      book.ASIN,
-		}
-		if book.ReleaseDate != nil {
-			crit.Year = book.ReleaseDate.Year()
-		}
-
-		results := s.searcher.SearchBook(ctx, idxs, crit)
-		results = indexer.FilterByLanguage(results, lang)
-
-		// Drop blocklisted results before picking a winner.
-		results = filterBlocklisted(ctx, s.blocklist, results)
-		if len(results) == 0 {
-			continue
-		}
-
-		// Auto-grab the top result
-		best := results[0]
-
-		// Select the download client that matches the result's protocol, preferring
-		// one whose category hints match the book's media type.
-		candidates, _ := s.clients.GetEnabledByProtocol(ctx, best.Protocol)
-		client := db.PickClientForMediaType(candidates, book.MediaType)
-		if client == nil {
-			// Fall back to any enabled client
-			client, _ = s.clients.GetFirstEnabled(ctx)
-		}
-		if client == nil {
-			slog.Debug("no download client available, skipping", "book", book.Title)
-			continue
-		}
-
-		slog.Info("auto-grabbing wanted book",
-			"book", book.Title,
-			"author", authorName,
-			"result", best.Title,
-			"indexer", best.IndexerName,
-			"protocol", best.Protocol,
-			"client", client.Name,
-			"size", best.Size,
-		)
-
-		// Check for duplicate
-		existing, _ := s.downloads.GetByGUID(ctx, best.GUID)
-		if existing != nil {
-			continue
-		}
-
-		dl := &models.Download{
-			GUID:             best.GUID,
-			BookID:           &book.ID,
-			IndexerID:        &best.IndexerID,
-			DownloadClientID: &client.ID,
-			Title:            best.Title,
-			NZBURL:           best.NZBURL,
-			Size:             best.Size,
-			Status:           models.DownloadStatusQueued,
-			Protocol:         best.Protocol,
-			Quality:          indexer.ParseRelease(best.Title).Format,
-		}
-
-		if err := s.downloads.Create(ctx, dl); err != nil {
-			slog.Error("failed to create download record", "error", err)
-			continue
-		}
-
-		if best.Protocol == "torrent" {
-			qbt := qbittorrent.New(client.Host, client.Port, client.URLBase, client.APIKey, client.UseSSL)
-			if err := qbt.AddTorrent(ctx, best.NZBURL, client.Category, ""); err != nil {
-				slog.Error("failed to send to qBittorrent", "title", best.Title, "error", err)
-				s.downloads.SetError(ctx, dl.ID, err.Error())
-				continue
-			}
-			s.downloads.UpdateStatus(ctx, dl.ID, models.DownloadStatusDownloading)
-			slog.Info("sent to qBittorrent", "title", best.Title)
-		} else {
-			sab := sabnzbd.New(client.Host, client.Port, client.APIKey, client.UseSSL)
-			resp, err := sab.AddURL(ctx, best.NZBURL, best.Title, client.Category, 0)
-			if err != nil {
-				slog.Error("failed to send to SABnzbd", "title", best.Title, "error", err)
-				s.downloads.SetError(ctx, dl.ID, err.Error())
-				continue
-			}
-			if len(resp.NzoIDs) > 0 {
-				nzoID := resp.NzoIDs[0]
-				s.downloads.SetNzoID(ctx, dl.ID, nzoID)
-			}
-			s.downloads.UpdateStatus(ctx, dl.ID, models.DownloadStatusDownloading)
-			slog.Info("sent to SABnzbd", "title", best.Title)
-		}
+		s.SearchAndGrabBook(ctx, book)
 	}
 }
 

@@ -45,7 +45,7 @@
 ### Search & downloads
 - **Newznab + Torznab** — Query multiple Usenet and torrent indexers in parallel, deduplicated and ranked
 - **SABnzbd + qBittorrent** — Full support for both Usenet and torrent download clients
-- **Auto-grab** — Scheduler searches for wanted books every 12h and automatically grabs the best result
+- **Auto-grab** — Scheduler searches for wanted books every 12h and automatically grabs the best result. Adding a new author or flipping a book to `wanted` fires an immediate search — no waiting for the next scheduled pass.
 - **Interactive search** — Manual per-book search from the Wanted page with full result details; Grab button shows a spinner while in-flight and a ✓ on success
 - **Smart matching** — Four-tier query fallback (`t=book` → `surname+title` → `author+title` → title); word-boundary keyword matching; contiguous-phrase requirement for multi-word titles; dual-author-anchor for ambiguous short titles; subtitle-aware (`Title: Subtitle`)
 - **Composite ranking** — Results scored by format quality, edition tags (RETAIL / UNABRIDGED / ABRIDGED), year match to the book's release year, grab count, size, and ISBN exact-match bonus
@@ -90,7 +90,7 @@
 - **Grid / Table view toggle** — Switch between poster-grid and dense-table views on the Books and Authors pages; choice persists per page.
 - **Mobile-friendly** — Responsive layout with hamburger nav, card views for History/Blocklist, agenda view for Calendar. Table views hide less-critical columns on narrow viewports.
 - **Pagination everywhere** — First/Prev/Next/Last + page numbers + configurable page size on all list pages; page size persists per-page in `localStorage`
-- **Search, filter, sort** — On Authors, Books, Wanted, and History pages; Books filter chips include `Type: Ebook / Audiobook`.
+- **Search, filter, sort** — On Authors, Books, Wanted, and History pages. Authors can be filtered by `Monitored / Unmonitored`. Author detail page sorts books by publication date and filters by type, status, or released/upcoming. Books filter chips include `Type: Ebook / Audiobook`; Books view shows the author inline.
 - **Calendar view** — Upcoming book releases from monitored authors, with compact dot-indicator grid on mobile
 - **Full REST API** — Every feature accessible via HTTP for scripting and integration
 

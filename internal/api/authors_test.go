@@ -7,13 +7,67 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
 )
+
+// searcherSpy records every SearchAndGrabBook call so tests can assert on it.
+type searcherSpy struct {
+	mu    sync.Mutex
+	calls []string // book titles in call order
+}
+
+func (s *searcherSpy) SearchAndGrabBook(_ context.Context, book models.Book) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, book.Title)
+}
+
+func (s *searcherSpy) titles() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.calls))
+	copy(out, s.calls)
+	return out
+}
+
+// stubMetaProvider is a fake metadata.Provider whose GetAuthorWorks returns
+// a caller-supplied book list, allowing FetchAuthorBooks to run without
+// hitting the real OpenLibrary API.
+type stubMetaProvider struct {
+	works []models.Book
+}
+
+func (p *stubMetaProvider) Name() string { return "stub" }
+func (p *stubMetaProvider) SearchAuthors(_ context.Context, _ string) ([]models.Author, error) {
+	return nil, nil
+}
+func (p *stubMetaProvider) SearchBooks(_ context.Context, _ string) ([]models.Book, error) {
+	return nil, nil
+}
+func (p *stubMetaProvider) GetAuthor(_ context.Context, _ string) (*models.Author, error) {
+	return nil, nil
+}
+func (p *stubMetaProvider) GetBook(_ context.Context, _ string) (*models.Book, error) {
+	return nil, nil
+}
+func (p *stubMetaProvider) GetEditions(_ context.Context, _ string) ([]models.Edition, error) {
+	return nil, nil
+}
+func (p *stubMetaProvider) GetBookByISBN(_ context.Context, _ string) (*models.Book, error) {
+	return nil, nil
+}
+
+// GetAuthorWorks satisfies the worksProvider sub-interface used by Aggregator.
+func (p *stubMetaProvider) GetAuthorWorks(_ context.Context, _ string) ([]models.Book, error) {
+	return p.works, nil
+}
 
 // TestDeleteAuthor_WithDeleteFiles verifies the ?deleteFiles=true branch
 // sweeps every book's on-disk path. The invariant under test is ordering:
@@ -77,7 +131,7 @@ func TestDeleteAuthor_WithDeleteFiles(t *testing.T) {
 		}
 	}
 
-	h := NewAuthorHandler(authorRepo, bookRepo, nil, nil, profileRepo)
+	h := NewAuthorHandler(authorRepo, bookRepo, nil, nil, nil, profileRepo, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/author/"+strconv.FormatInt(author.ID, 10)+"?deleteFiles=true", nil)
 	rctx := chi.NewRouteContext()
@@ -140,7 +194,7 @@ func TestDeleteAuthor_WithoutDeleteFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := NewAuthorHandler(authorRepo, bookRepo, nil, nil, profileRepo)
+	h := NewAuthorHandler(authorRepo, bookRepo, nil, nil, nil, profileRepo, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/author/"+strconv.FormatInt(author.ID, 10), nil)
 	rctx := chi.NewRouteContext()
@@ -155,5 +209,86 @@ func TestDeleteAuthor_WithoutDeleteFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("file should survive default delete, stat err=%v", err)
+	}
+}
+
+// TestFetchAuthorBooks_FiresSearchForMonitoredAuthor verifies that
+// FetchAuthorBooks calls SearchAndGrabBook once per newly created book when
+// the author is monitored. The stub metadata provider returns two works so we
+// expect exactly two search calls.
+func TestFetchAuthorBooks_FiresSearchForMonitoredAuthor(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+
+	ctx := context.Background()
+	author := &models.Author{
+		ForeignID: "OL500A", Name: "Test Author", SortName: "Author, Test",
+		MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+
+	stub := &stubMetaProvider{
+		works: []models.Book{
+			{ForeignID: "OL501W", Title: "First Book", SortTitle: "first book", Status: models.BookStatusWanted, Genres: []string{}, MetadataProvider: "openlibrary"},
+			{ForeignID: "OL502W", Title: "Second Book", SortTitle: "second book", Status: models.BookStatusWanted, Genres: []string{}, MetadataProvider: "openlibrary"},
+		},
+	}
+	agg := metadata.NewAggregator(stub)
+	spy := &searcherSpy{}
+
+	h := NewAuthorHandler(authorRepo, bookRepo, nil, agg, nil, profileRepo, spy)
+	h.FetchAuthorBooks(author)
+
+	titles := spy.titles()
+	if len(titles) != 2 {
+		t.Fatalf("expected 2 searcher calls, got %d: %v", len(titles), titles)
+	}
+}
+
+// TestFetchAuthorBooks_SkipsSearchWhenNotMonitored confirms that books added
+// for an unmonitored author do NOT trigger an indexer search — the user has
+// opted out of automatic activity for this author.
+func TestFetchAuthorBooks_SkipsSearchWhenNotMonitored(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+
+	ctx := context.Background()
+	author := &models.Author{
+		ForeignID: "OL600A", Name: "Unmonitored", SortName: "Unmonitored",
+		MetadataProvider: "openlibrary", Monitored: false,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+
+	stub := &stubMetaProvider{
+		works: []models.Book{
+			{ForeignID: "OL601W", Title: "Some Book", SortTitle: "some book", Status: models.BookStatusWanted, Genres: []string{}, MetadataProvider: "openlibrary"},
+		},
+	}
+	agg := metadata.NewAggregator(stub)
+	spy := &searcherSpy{}
+
+	h := NewAuthorHandler(authorRepo, bookRepo, nil, agg, nil, profileRepo, spy)
+	h.FetchAuthorBooks(author)
+
+	if titles := spy.titles(); len(titles) != 0 {
+		t.Errorf("expected no searcher calls for unmonitored author, got %v", titles)
 	}
 }

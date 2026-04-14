@@ -155,7 +155,17 @@ export default function BooksPage() {
                         <span className="text-slate-800 dark:text-zinc-200 truncate">{book.title}</span>
                       </Link>
                     </td>
-                    <td className="px-3 py-2 text-slate-600 dark:text-zinc-400 whitespace-nowrap hidden md:table-cell">{book.author?.authorName || '—'}</td>
+                    <td className="px-3 py-2 whitespace-nowrap hidden md:table-cell">
+                      {book.author ? (
+                        <Link
+                          to={`/author/${book.authorId}`}
+                          className="text-slate-600 dark:text-zinc-400 hover:text-emerald-500 dark:hover:text-emerald-400"
+                          onClick={e => e.stopPropagation()}
+                        >
+                          {book.author.authorName}
+                        </Link>
+                      ) : '—'}
+                    </td>
                     <td className="px-3 py-2 text-slate-600 dark:text-zinc-400 whitespace-nowrap hidden sm:table-cell">{book.releaseDate ? new Date(book.releaseDate).getFullYear() : '—'}</td>
                     <td className="px-3 py-2 text-xs whitespace-nowrap">
                       {book.mediaType === 'audiobook' ? '🎧 Audiobook' : '📖 Ebook'}
@@ -196,6 +206,9 @@ export default function BooksPage() {
               </div>
               <div className="p-2">
                 <h3 className="text-xs font-medium truncate" title={book.title}>{book.title}</h3>
+                {book.author && (
+                  <p className="text-[10px] text-slate-500 dark:text-zinc-500 truncate mt-0.5">{book.author.authorName}</p>
+                )}
                 <div className="flex items-center justify-between mt-0.5">
                   {book.releaseDate && (
                     <p className="text-[10px] text-slate-600 dark:text-zinc-500">{new Date(book.releaseDate).getFullYear()}</p>

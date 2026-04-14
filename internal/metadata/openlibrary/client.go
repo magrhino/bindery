@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -156,6 +157,16 @@ func (c *Client) GetBook(ctx context.Context, foreignID string) (*models.Book, e
 		b.ImageURL = fmt.Sprintf("%s/b/id/%d-L.jpg", coverURL, resp.Covers[0])
 	}
 
+	// Parse series membership.
+	for i, s := range resp.Series {
+		if s == "" {
+			continue
+		}
+		ref := parseSeriesRef(s)
+		ref.Primary = i == 0
+		b.SeriesRefs = append(b.SeriesRefs, ref)
+	}
+
 	// Resolve author
 	if len(resp.Authors) > 0 {
 		authorKey := strings.TrimPrefix(resp.Authors[0].Author.Key, "/authors/")
@@ -204,6 +215,15 @@ func (c *Client) GetAuthorWorks(ctx context.Context, authorForeignID string) ([]
 		b.Author = &models.Author{
 			ForeignID:        authorForeignID,
 			MetadataProvider: "openlibrary",
+		}
+		// Parse series membership from the OL series strings.
+		for i, s := range entry.Series {
+			if s == "" {
+				continue
+			}
+			ref := parseSeriesRef(s)
+			ref.Primary = i == 0
+			b.SeriesRefs = append(b.SeriesRefs, ref)
 		}
 		books = append(books, b)
 	}
@@ -380,4 +400,52 @@ func truncateSlice(s []string, max int) []string {
 		return s[:max]
 	}
 	return s
+}
+
+// rePoundPos matches a series position suffix like "#1" or "#1.5".
+var rePoundPos = regexp.MustCompile(`\s*#(\d+(?:\.\d+)?)\s*$`)
+
+// reBookPos matches variants like ", Book 1", " -- Book 2", " Book 3".
+var reBookPos = regexp.MustCompile(`(?:,?\s*-{1,2}\s*|,\s*|\s+)[Bb]ook\s+(\d+(?:\.\d+)?)\s*$`)
+
+// parseSeriesRef parses an OpenLibrary series string (e.g. "Dune Chronicles #1")
+// into a SeriesRef with a stable ForeignID slug, extracted title, and position.
+func parseSeriesRef(raw string) models.SeriesRef {
+	title := strings.TrimSpace(raw)
+	position := ""
+
+	if m := rePoundPos.FindStringSubmatchIndex(title); m != nil {
+		position = title[m[2]:m[3]]
+		title = strings.TrimSpace(title[:m[0]])
+	} else if m := reBookPos.FindStringSubmatchIndex(title); m != nil {
+		position = title[m[2]:m[3]]
+		title = strings.TrimSpace(title[:m[0]])
+	}
+
+	return models.SeriesRef{
+		ForeignID: "ol-series:" + seriesSlug(title),
+		Title:     title,
+		Position:  position,
+	}
+}
+
+// seriesSlug converts a series title to a lowercase slug suitable for use as a
+// foreign_id (e.g. "Dune Chronicles" → "dune-chronicles").
+func seriesSlug(title string) string {
+	var buf []byte
+	prevDash := false
+	for _, r := range strings.ToLower(title) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			buf = append(buf, byte(r)) //nolint:gosec // r is gated to ASCII range above
+			prevDash = false
+		} else if !prevDash && len(buf) > 0 {
+			buf = append(buf, '-')
+			prevDash = true
+		}
+	}
+	// trim trailing dash
+	for len(buf) > 0 && buf[len(buf)-1] == '-' {
+		buf = buf[:len(buf)-1]
+	}
+	return string(buf)
 }

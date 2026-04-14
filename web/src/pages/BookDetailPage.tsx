@@ -200,7 +200,12 @@ export default function BookDetailPage() {
               {book.status}
             </span>
             {book.releaseDate && (
-              <span className="text-slate-600 dark:text-zinc-500">{new Date(book.releaseDate).getFullYear()}</span>
+              <span className="text-slate-600 dark:text-zinc-500">
+                {new Date(book.releaseDate).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
+              </span>
+            )}
+            {book.language && (
+              <span className="text-slate-600 dark:text-zinc-500">{book.language}</span>
             )}
             {book.narrator && (
               <span className="text-slate-600 dark:text-zinc-500">Narrated by {book.narrator}</span>

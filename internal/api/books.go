@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -15,13 +16,14 @@ import (
 )
 
 type BookHandler struct {
-	books   *db.BookRepo
-	meta    *metadata.Aggregator
-	history *db.HistoryRepo
+	books    *db.BookRepo
+	meta     *metadata.Aggregator
+	history  *db.HistoryRepo
+	searcher BookSearcher
 }
 
-func NewBookHandler(books *db.BookRepo, meta *metadata.Aggregator, history *db.HistoryRepo) *BookHandler {
-	return &BookHandler{books: books, meta: meta, history: history}
+func NewBookHandler(books *db.BookRepo, meta *metadata.Aggregator, history *db.HistoryRepo, searcher BookSearcher) *BookHandler {
+	return &BookHandler{books: books, meta: meta, history: history, searcher: searcher}
 }
 
 // EnrichAudiobook fetches audnex data for the book's ASIN and updates
@@ -115,6 +117,7 @@ func (h *BookHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
 		return
 	}
+	oldStatus := book.Status
 
 	// Note: file_path is deliberately NOT accepted here. It's set by the
 	// importer once a grab lands, and letting clients write it arbitrarily
@@ -155,6 +158,19 @@ func (h *BookHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+
+	// Fire an immediate indexer search when a book transitions into wanted
+	// status (e.g. "Delete file" flips imported → wanted, or a manual status
+	// edit). Gate on searcher to keep tests that don't wire it nil-safe.
+	// Detach the request context so the search outlives the HTTP response
+	// but keeps any request-scoped values.
+	if h.searcher != nil && req.Status != nil &&
+		*req.Status == models.BookStatusWanted && oldStatus != models.BookStatusWanted {
+		b := *book
+		bgCtx := context.WithoutCancel(r.Context())
+		go h.searcher.SearchAndGrabBook(bgCtx, b)
+	}
+
 	writeJSON(w, http.StatusOK, book)
 }
 

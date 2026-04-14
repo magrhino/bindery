@@ -2,6 +2,16 @@ package models
 
 import "time"
 
+// SeriesRef carries series membership for a book returned by a metadata
+// provider. Not persisted in the books table — used during ingestion to
+// populate the series and series_books tables.
+type SeriesRef struct {
+	ForeignID string
+	Title     string
+	Position  string
+	Primary   bool
+}
+
 type Book struct {
 	ID                    int64      `json:"id"`
 	ForeignID             string     `json:"foreignBookId"`
@@ -33,6 +43,10 @@ type Book struct {
 	// Joined data
 	Author   *Author   `json:"author,omitempty"`
 	Editions []Edition `json:"editions,omitempty"`
+
+	// Transport-only: series data from the metadata provider, used during
+	// ingestion to populate series/series_books. Never stored in books table.
+	SeriesRefs []SeriesRef `json:"-"`
 }
 
 const (

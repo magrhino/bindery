@@ -48,6 +48,7 @@ type authorWorkEntry struct {
 	Description interface{} `json:"description"`
 	Covers      []int       `json:"covers"`
 	Subjects    []string    `json:"subjects"`
+	Series      []string    `json:"series"`
 }
 
 type workResponse struct {
@@ -57,6 +58,7 @@ type workResponse struct {
 	Covers      []int        `json:"covers"`
 	Subjects    []string     `json:"subjects"`
 	Authors     []workAuthor `json:"authors"`
+	Series      []string     `json:"series"`
 }
 
 type workAuthor struct {

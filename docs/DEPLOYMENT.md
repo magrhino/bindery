@@ -230,6 +230,26 @@ On first launch Bindery bootstraps itself — **no environment variables are req
 
 ## Upgrading
 
+### From v0.6.x to v0.7.0
+
+**Schema:** no changes. Drop-in binary or image replacement is safe.
+
+**Behavior change — auto-search on add is on by default.** Adding a new author or flipping a book to `wanted` now immediately fires an indexer search. Previously the scheduler waited up to 12 hours. If this is unwanted (e.g. you want to batch-add many authors before any searches fire), uncheck the new **Start search for books on add** box in the Add Author modal. Books that transition to `wanted` via API always trigger a search; a `search_on_status_change` setting will be added later if opt-out is requested — file an issue if you need it.
+
+**Backfill existing libraries (series data):** The `series` and `series_books` tables have existed since v0.1 but were never populated. Authors added before this release therefore have no series rows. After upgrading, run the one-shot reconcile command to backfill series data from OpenLibrary:
+
+```bash
+# Docker
+docker exec bindery /bindery reconcile-series
+
+# Binary / bare-metal
+./bindery reconcile-series
+```
+
+The command prints a JSON summary `{"linked":<n>,"skipped":<n>}` and exits. It is idempotent — safe to run more than once. Rate-limiting on OpenLibrary's side means large libraries (hundreds of authors) may take a few minutes; run it in a `screen` or `tmux` session if needed.
+
+After the backfill, the **Series** page in the UI will show all series that OpenLibrary associates with your authors' books.
+
 ### From v0.6.x to v0.6.4
 
 No migration steps required. Drop-in replacement.

@@ -10,12 +10,53 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/models"
 )
+
+// mockBookSearcher collects SearchAndGrabBook calls via a buffered channel so
+// goroutine-launched searches can be awaited in tests.
+type mockBookSearcher struct {
+	ch chan models.Book
+}
+
+func newMockBookSearcher() *mockBookSearcher {
+	return &mockBookSearcher{ch: make(chan models.Book, 8)}
+}
+
+func (m *mockBookSearcher) SearchAndGrabBook(_ context.Context, book models.Book) {
+	select {
+	case m.ch <- book:
+	default:
+	}
+}
+
+// waitForCall blocks until a search call arrives or the timeout elapses.
+func (m *mockBookSearcher) waitForCall(t *testing.T, timeout time.Duration) models.Book {
+	t.Helper()
+	select {
+	case b := <-m.ch:
+		return b
+	case <-time.After(timeout):
+		t.Fatal("timeout: SearchAndGrabBook was not called within deadline")
+		return models.Book{}
+	}
+}
+
+// assertNoCall fails the test if a search call arrives within the window.
+func (m *mockBookSearcher) assertNoCall(t *testing.T, window time.Duration) {
+	t.Helper()
+	select {
+	case b := <-m.ch:
+		t.Errorf("unexpected SearchAndGrabBook call for book %q", b.Title)
+	case <-time.After(window):
+		// good — nothing fired
+	}
+}
 
 // bookFixture spins up in-memory storage with an author + N books and
 // returns a wired BookHandler. The meta aggregator is nil — EnrichAudiobook
@@ -40,7 +81,7 @@ func bookFixture(t *testing.T) (*BookHandler, *db.BookRepo, *db.AuthorRepo, *mod
 	if err := authors.Create(ctx, author); err != nil {
 		t.Fatal(err)
 	}
-	return NewBookHandler(books, nil, history), books, authors, author, ctx
+	return NewBookHandler(books, nil, history, nil), books, authors, author, ctx
 }
 
 func withURLParam(req *http.Request, key, val string) *http.Request {
@@ -390,4 +431,87 @@ func TestEnrichAudiobook_RejectsMissingASIN(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for missing ASIN, got %d", rec.Code)
 	}
+}
+
+// bookFixtureWithSearcher is like bookFixture but wires a mock searcher.
+func bookFixtureWithSearcher(t *testing.T, searcher BookSearcher) (*BookHandler, *db.BookRepo, *models.Author, context.Context) {
+	t.Helper()
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	books := db.NewBookRepo(database)
+	authors := db.NewAuthorRepo(database)
+	history := db.NewHistoryRepo(database)
+
+	ctx := context.Background()
+	author := &models.Author{
+		ForeignID: "OL1A", Name: "Test Author", SortName: "Author, Test",
+		MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := authors.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	return NewBookHandler(books, nil, history, searcher), books, author, ctx
+}
+
+// TestBookUpdate_FiresSearchOnTransitionToWanted verifies that updating a book
+// from any non-wanted status to "wanted" immediately triggers an indexer
+// search. The call happens in a goroutine so we use the channel-based mock.
+func TestBookUpdate_FiresSearchOnTransitionToWanted(t *testing.T) {
+	searcher := newMockBookSearcher()
+	h, books, author, ctx := bookFixtureWithSearcher(t, searcher)
+
+	book := &models.Book{
+		ForeignID: "B99", AuthorID: author.ID, Title: "Transition Book", SortTitle: "transition book",
+		Status: "imported", MediaType: models.MediaTypeEbook,
+		Genres: []string{}, MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := books.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	body := bytes.NewBufferString(`{"status":"wanted"}`)
+	req := withURLParam(httptest.NewRequest(http.MethodPut, "/api/v1/book/"+strconv.FormatInt(book.ID, 10), body), "id", strconv.FormatInt(book.ID, 10))
+	rec := httptest.NewRecorder()
+	h.Update(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	got := searcher.waitForCall(t, time.Second)
+	if got.ID != book.ID {
+		t.Errorf("searcher called with wrong book id: got %d, want %d", got.ID, book.ID)
+	}
+}
+
+// TestBookUpdate_NoSearchWhenAlreadyWanted confirms that updating a field on a
+// book that is already "wanted" does NOT fire a duplicate search.
+func TestBookUpdate_NoSearchWhenAlreadyWanted(t *testing.T) {
+	searcher := newMockBookSearcher()
+	h, books, author, ctx := bookFixtureWithSearcher(t, searcher)
+
+	book := &models.Book{
+		ForeignID: "B88", AuthorID: author.ID, Title: "Already Wanted", SortTitle: "already wanted",
+		Status: models.BookStatusWanted, MediaType: models.MediaTypeEbook,
+		Genres: []string{}, MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := books.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	// Patch the media type — status stays "wanted" throughout, so no new search.
+	body := bytes.NewBufferString(`{"status":"wanted","mediaType":"audiobook"}`)
+	req := withURLParam(httptest.NewRequest(http.MethodPut, "/api/v1/book/"+strconv.FormatInt(book.ID, 10), body), "id", strconv.FormatInt(book.ID, 10))
+	rec := httptest.NewRecorder()
+	h.Update(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	searcher.assertNoCall(t, 50*time.Millisecond)
 }

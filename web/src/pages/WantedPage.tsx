@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import { api, Book, SearchResult } from '../api/client'
 import Pagination from '../components/Pagination'
 import { usePagination } from '../components/usePagination'
@@ -12,6 +13,7 @@ export default function WantedPage() {
   const [search, setSearch] = useState('')
   const [grabbingGuid, setGrabbingGuid] = useState<string | null>(null)
   const [grabbedGuid, setGrabbedGuid] = useState<string | null>(null)
+  const [unmonitoringId, setUnmonitoringId] = useState<number | null>(null)
 
   useEffect(() => {
     api.listWanted().then(setBooks).catch(console.error).finally(() => setLoading(false))
@@ -45,6 +47,18 @@ export default function WantedPage() {
       setBooks(books.map(b => b.id === book.id ? updated : b))
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to update')
+    }
+  }
+
+  const unmonitor = async (book: Book) => {
+    setUnmonitoringId(book.id)
+    try {
+      await api.updateBook(book.id, { monitored: false })
+      setBooks(books.filter(b => b.id !== book.id))
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to unmonitor')
+    } finally {
+      setUnmonitoringId(null)
     }
   }
 
@@ -118,7 +132,17 @@ export default function WantedPage() {
                     <img src={book.imageUrl} alt="" className="w-10 h-14 object-cover rounded flex-shrink-0" />
                   )}
                   <div className="min-w-0">
-                    <h3 className="font-medium text-sm truncate">{book.title}</h3>
+                    <Link to={`/book/${book.id}`} className="font-medium text-sm truncate block hover:text-emerald-500 dark:hover:text-emerald-400 transition-colors">
+                      {book.title}
+                    </Link>
+                    {book.author && (
+                      <Link
+                        to={`/author/${book.authorId}`}
+                        className="text-[11px] text-slate-500 dark:text-zinc-500 hover:text-emerald-500 dark:hover:text-emerald-400 transition-colors truncate block"
+                      >
+                        {book.author.authorName}
+                      </Link>
+                    )}
                     <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                       <select
                         value={book.mediaType || 'ebook'}
@@ -135,13 +159,23 @@ export default function WantedPage() {
                     )}
                   </div>
                 </div>
-                <button
-                  onClick={() => searchBook(book)}
-                  disabled={searchingId === book.id}
-                  className="px-3 py-1.5 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 rounded text-xs font-medium flex-shrink-0 disabled:opacity-50"
-                >
-                  {searchingId === book.id ? 'Searching...' : 'Search'}
-                </button>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    onClick={() => unmonitor(book)}
+                    disabled={unmonitoringId === book.id}
+                    className="px-2 py-1.5 bg-slate-200 dark:bg-zinc-800 hover:bg-amber-100 dark:hover:bg-amber-900/30 hover:text-amber-700 dark:hover:text-amber-400 rounded text-xs font-medium disabled:opacity-50 transition-colors"
+                    title="Stop monitoring this book"
+                  >
+                    {unmonitoringId === book.id ? '…' : 'Unmonitor'}
+                  </button>
+                  <button
+                    onClick={() => searchBook(book)}
+                    disabled={searchingId === book.id}
+                    className="px-3 py-1.5 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 rounded text-xs font-medium disabled:opacity-50"
+                  >
+                    {searchingId === book.id ? 'Searching...' : 'Search'}
+                  </button>
+                </div>
               </div>
 
               {showResults === book.id && results.length === 0 && (
