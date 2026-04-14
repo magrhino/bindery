@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,13 @@ import (
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/importer"
 )
+
+// fakeScanner records the context it received so the test can inspect it.
+type fakeScanner struct {
+	called chan context.Context
+}
+
+func (f *fakeScanner) ScanLibrary(ctx context.Context) { f.called <- ctx }
 
 func newLibraryHandler(t *testing.T) *LibraryHandler {
 	t.Helper()
@@ -26,6 +34,34 @@ func newLibraryHandler(t *testing.T) *LibraryHandler {
 		t.TempDir(), "", "", "", "",
 	)
 	return NewLibraryHandler(scanner)
+}
+
+// TestLibraryScan_ContextOutlivesRequest is a regression test for issue #55.
+// It verifies that cancelling the HTTP request context (which happens the
+// instant the 202 response is written) does not cancel the scan goroutine.
+func TestLibraryScan_ContextOutlivesRequest(t *testing.T) {
+	fake := &fakeScanner{called: make(chan context.Context, 1)}
+	h := &LibraryHandler{scanner: fake}
+
+	reqCtx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/library/scan", nil).WithContext(reqCtx)
+	h.Scan(httptest.NewRecorder(), req)
+
+	// Simulate the net/http server cancelling the request context after the
+	// handler returns (the 202 has been flushed to the client).
+	cancel()
+
+	// Wait for the goroutine to call ScanLibrary and deliver its context.
+	scanCtx := <-fake.called
+
+	// The scan context must still be live even though the request context was
+	// cancelled.
+	select {
+	case <-scanCtx.Done():
+		t.Fatal("scan context was cancelled when the request context was cancelled (issue #55 regression)")
+	default:
+		// pass — context.WithoutCancel keeps the scan alive
+	}
 }
 
 func TestLibraryScan_Returns202(t *testing.T) {
