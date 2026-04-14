@@ -40,13 +40,13 @@
 - **Ebooks and audiobooks** — Mark any book as `ebook` or `audiobook`; the search pipeline picks the right Newznab categories (7020 vs 3030), ranker prefers the matching format, and the importer moves whole audiobook folders (multi-part `.m4b` / `.mp3`) as one unit into a separate audiobook library root.
 - **Series support** — Books grouped by series with position tracking and dedicated Series page
 - **Edition tracking** — Multiple editions per work, with format, ISBN, publisher, page count
-- **Library scan** — Walk `/books/` and reconcile existing files with wanted books in the database
+- **Library scan** — Walk `/books/` and reconcile existing files with wanted books in the database; trigger on-demand from **Settings → General → Scan Library**
 
 ### Search & downloads
 - **Newznab + Torznab** — Query multiple Usenet and torrent indexers in parallel, deduplicated and ranked
 - **SABnzbd + qBittorrent** — Full support for both Usenet and torrent download clients
 - **Auto-grab** — Scheduler searches for wanted books every 12h and automatically grabs the best result
-- **Interactive search** — Manual per-book search from the Wanted page with full result details
+- **Interactive search** — Manual per-book search from the Wanted page with full result details; Grab button shows a spinner while in-flight and a ✓ on success
 - **Smart matching** — Four-tier query fallback (`t=book` → `surname+title` → `author+title` → title); word-boundary keyword matching; contiguous-phrase requirement for multi-word titles; dual-author-anchor for ambiguous short titles; subtitle-aware (`Title: Subtitle`)
 - **Composite ranking** — Results scored by format quality, edition tags (RETAIL / UNABRIDGED / ABRIDGED), year match to the book's release year, grab count, size, and ISBN exact-match bonus
 - **Quality profiles** — Preference order for EPUB / MOBI / AZW3 / PDF, with cutoff rules
@@ -89,7 +89,7 @@
 - **Detail pages** — Routed `/book/:id` and `/author/:id` pages replace the previous modal flow. Deep-linkable, back-button friendly, hold per-book history inline.
 - **Grid / Table view toggle** — Switch between poster-grid and dense-table views on the Books and Authors pages; choice persists per page.
 - **Mobile-friendly** — Responsive layout with hamburger nav, card views for History/Blocklist, agenda view for Calendar. Table views hide less-critical columns on narrow viewports.
-- **Pagination everywhere** — First/Prev/Next/Last + page numbers + configurable page size on all list pages
+- **Pagination everywhere** — First/Prev/Next/Last + page numbers + configurable page size on all list pages; page size persists per-page in `localStorage`
 - **Search, filter, sort** — On Authors, Books, Wanted, and History pages; Books filter chips include `Type: Ebook / Audiobook`.
 - **Calendar view** — Upcoming book releases from monitored authors, with compact dot-indicator grid on mobile
 - **Full REST API** — Every feature accessible via HTTP for scripting and integration
@@ -176,7 +176,7 @@ No Goodreads scraping. All sources use documented, stable public APIs.
 
 ### Download clients
 - **SABnzbd** — full support (NZB submission, queue/history polling, pause/resume/delete)
-- **qBittorrent** — WebUI API v2 with cookie-based auth (add magnet/URL, list/delete torrents)
+- **qBittorrent** — WebUI API v2 with Username/Password auth (add magnet/URL, list/delete torrents)
 
 ### Indexers
 - **Newznab** (Usenet) — NZBGeek, NZBFinder, NZBPlanet, DrunkenSlug, etc.

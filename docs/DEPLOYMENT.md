@@ -208,7 +208,7 @@ Multiple remaps are separated by commas: `BINDERY_DOWNLOAD_PATH_REMAP=/sab/compl
 | `BINDERY_DATA_DIR` | `/config` on Linux; `%APPDATA%\Bindery` on Windows; `~/Library/Application Support/Bindery` on macOS | Config directory (backups live here) |
 | `BINDERY_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `BINDERY_API_KEY` | _(empty)_ | **Seed only.** Bootstraps the initial API key on first launch if set; after that the key lives in the database and can be regenerated from the UI. |
-| `BINDERY_DOWNLOAD_DIR` | `/downloads` | Where SABnzbd places completed downloads |
+| `BINDERY_DOWNLOAD_DIR` | `/downloads` | Where the download client places completed downloads |
 | `BINDERY_LIBRARY_DIR` | `/books` | Destination for imported ebook files |
 | `BINDERY_AUDIOBOOK_DIR` | falls back to `BINDERY_LIBRARY_DIR` | Destination for imported audiobook folders |
 | `BINDERY_DOWNLOAD_PATH_REMAP` | _(empty)_ | Comma-separated `from:to` pairs rewriting paths reported by the download client into paths Bindery can access. Required when SABnzbd and Bindery mount the same storage at different paths. Longest-prefix match wins. See [Path remapping](#path-remapping-multi-container--multi-pod-setups). |
@@ -229,6 +229,14 @@ On first launch Bindery bootstraps itself — **no environment variables are req
 - `disabled` — no auth at all. Only safe behind a trusted reverse proxy that handles authentication upstream.
 
 ## Upgrading
+
+### From v0.6.x to v0.6.3
+
+No migration steps required. This is a bug-fix release.
+
+- **Standalone binary UI fix** — if you were running v0.6.0–v0.6.2 from a downloaded archive and saw only `.gitkeep` at `http://localhost:8787`, this is fixed. Re-download the v0.6.3 archive for your platform.
+- **Protocol routing** — torznab (torrent) indexers now route grabs to qBittorrent; newznab (Usenet) indexers route to SABnzbd. If you previously had torrent grabs fail silently, remove any failed queue entries and re-grab.
+- **qBittorrent credential fields** — the Settings form now shows Username/Password fields. Existing qBittorrent clients already have the correct values stored; the UI change is cosmetic.
 
 ### From v0.5.x to v0.6.x
 
