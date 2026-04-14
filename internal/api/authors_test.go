@@ -77,7 +77,7 @@ func TestDeleteAuthor_WithDeleteFiles(t *testing.T) {
 		}
 	}
 
-	h := NewAuthorHandler(authorRepo, bookRepo, nil, nil, profileRepo)
+	h := NewAuthorHandler(authorRepo, bookRepo, nil, nil, nil, profileRepo)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/author/"+strconv.FormatInt(author.ID, 10)+"?deleteFiles=true", nil)
 	rctx := chi.NewRouteContext()
@@ -140,7 +140,7 @@ func TestDeleteAuthor_WithoutDeleteFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := NewAuthorHandler(authorRepo, bookRepo, nil, nil, profileRepo)
+	h := NewAuthorHandler(authorRepo, bookRepo, nil, nil, nil, profileRepo)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/author/"+strconv.FormatInt(author.ID, 10), nil)
 	rctx := chi.NewRouteContext()

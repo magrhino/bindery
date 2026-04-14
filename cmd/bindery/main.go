@@ -118,6 +118,15 @@ func main() {
 		return
 	}
 
+	// Optional CLI subcommand: `bindery reconcile-series`.
+	// Re-fetches OpenLibrary series data for every already-ingested book and
+	// populates the series / series_books tables. Run once when upgrading from
+	// a version that did not populate series during ingestion.
+	if len(os.Args) > 1 && os.Args[1] == "reconcile-series" {
+		runReconcileSeries(authorRepo, bookRepo, seriesRepo, metaAgg)
+		return
+	}
+
 	// Indexer searcher
 	idxSearcher := indexer.NewSearcher()
 
@@ -142,7 +151,7 @@ func main() {
 	// API handlers
 	authHandler := api.NewAuthHandler(userRepo, settingsRepo, loginLimiter)
 	searchHandler := api.NewSearchHandler(metaAgg)
-	authorHandler := api.NewAuthorHandler(authorRepo, bookRepo, metaAgg, settingsRepo, metadataProfileRepo)
+	authorHandler := api.NewAuthorHandler(authorRepo, bookRepo, seriesRepo, metaAgg, settingsRepo, metadataProfileRepo)
 	bookHandler := api.NewBookHandler(bookRepo, metaAgg, historyRepo)
 	indexerHandler := api.NewIndexerHandler(indexerRepo, bookRepo, authorRepo, idxSearcher, settingsRepo, blocklistRepo)
 	dlClientHandler := api.NewDownloadClientHandler(dlClientRepo)

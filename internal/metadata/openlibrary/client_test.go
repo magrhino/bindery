@@ -118,3 +118,89 @@ func TestExtractText(t *testing.T) {
 		}
 	}
 }
+
+func TestParseSeriesRef(t *testing.T) {
+	tests := []struct {
+		raw       string
+		wantTitle string
+		wantPos   string
+		wantFID   string
+	}{
+		{
+			raw:       "Dune Chronicles",
+			wantTitle: "Dune Chronicles",
+			wantPos:   "",
+			wantFID:   "ol-series:dune-chronicles",
+		},
+		{
+			raw:       "Dune Chronicles #1",
+			wantTitle: "Dune Chronicles",
+			wantPos:   "1",
+			wantFID:   "ol-series:dune-chronicles",
+		},
+		{
+			raw:       "Mistborn #3",
+			wantTitle: "Mistborn",
+			wantPos:   "3",
+			wantFID:   "ol-series:mistborn",
+		},
+		{
+			raw:       "Wheel of Time, Book 1",
+			wantTitle: "Wheel of Time",
+			wantPos:   "1",
+			wantFID:   "ol-series:wheel-of-time",
+		},
+		{
+			raw:       "Harry Potter -- Book 3",
+			wantTitle: "Harry Potter",
+			wantPos:   "3",
+			wantFID:   "ol-series:harry-potter",
+		},
+		{
+			raw:       "A Series #1.5",
+			wantTitle: "A Series",
+			wantPos:   "1.5",
+			wantFID:   "ol-series:a-series",
+		},
+		{
+			// Extra whitespace should be trimmed.
+			raw:       "  The Dark Tower  #7  ",
+			wantTitle: "The Dark Tower",
+			wantPos:   "7",
+			wantFID:   "ol-series:the-dark-tower",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.raw, func(t *testing.T) {
+			got := parseSeriesRef(tt.raw)
+			if got.Title != tt.wantTitle {
+				t.Errorf("Title: want %q, got %q", tt.wantTitle, got.Title)
+			}
+			if got.Position != tt.wantPos {
+				t.Errorf("Position: want %q, got %q", tt.wantPos, got.Position)
+			}
+			if got.ForeignID != tt.wantFID {
+				t.Errorf("ForeignID: want %q, got %q", tt.wantFID, got.ForeignID)
+			}
+		})
+	}
+}
+
+func TestSeriesSlug(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"Dune Chronicles", "dune-chronicles"},
+		{"Harry Potter & the Philosopher's Stone", "harry-potter-the-philosopher-s-stone"},
+		{"  spaces  ", "spaces"},
+		{"A", "a"},
+	}
+	for _, tt := range tests {
+		got := seriesSlug(tt.input)
+		if got != tt.want {
+			t.Errorf("seriesSlug(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}

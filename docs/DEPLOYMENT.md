@@ -230,6 +230,24 @@ On first launch Bindery bootstraps itself — **no environment variables are req
 
 ## Upgrading
 
+### From v0.6.x to v0.7.0 (Series view fix)
+
+**Schema:** no changes — the `series` and `series_books` tables have existed since v0.1 but were never populated. Drop-in binary or image replacement is safe.
+
+**Backfill existing libraries:** Authors added before this release have no series rows. After upgrading, run the one-shot reconcile command to backfill series data from OpenLibrary:
+
+```bash
+# Docker
+docker exec bindery /bindery reconcile-series
+
+# Binary / bare-metal
+./bindery reconcile-series
+```
+
+The command prints a JSON summary `{"linked":<n>,"skipped":<n>}` and exits. It is idempotent — safe to run more than once. Rate-limiting on OpenLibrary's side means large libraries (hundreds of authors) may take a few minutes; run it in a `screen` or `tmux` session if needed.
+
+After the backfill, the **Series** page in the UI will show all series that OpenLibrary associates with your authors' books.
+
 ### From v0.6.x to v0.6.4
 
 No migration steps required. Drop-in replacement.

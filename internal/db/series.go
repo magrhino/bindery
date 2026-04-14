@@ -99,6 +99,49 @@ func (r *SeriesRepo) Create(ctx context.Context, s *models.Series) error {
 	return nil
 }
 
+// CreateOrGet inserts the series if its foreign_id does not yet exist, then
+// populates s.ID with the persisted row's ID. Safe to call concurrently; the
+// INSERT OR IGNORE prevents duplicate-key errors.
+func (r *SeriesRepo) CreateOrGet(ctx context.Context, s *models.Series) error {
+	now := time.Now().UTC()
+	result, err := r.db.ExecContext(ctx,
+		"INSERT OR IGNORE INTO series (foreign_id, title, description, created_at) VALUES (?, ?, ?, ?)",
+		s.ForeignID, s.Title, s.Description, now)
+	if err != nil {
+		return fmt.Errorf("upsert series: %w", err)
+	}
+	if affected, _ := result.RowsAffected(); affected > 0 {
+		id, _ := result.LastInsertId()
+		s.ID = id
+		s.CreatedAt = now
+		return nil
+	}
+	// Row already existed — fetch its ID.
+	row := r.db.QueryRowContext(ctx, "SELECT id FROM series WHERE foreign_id = ?", s.ForeignID)
+	if err := row.Scan(&s.ID); err != nil {
+		return fmt.Errorf("get existing series id: %w", err)
+	}
+	return nil
+}
+
+// LinkBook inserts a series_books row joining seriesID → bookID.
+// INSERT OR IGNORE makes the call idempotent: a second call with the same
+// pair is a no-op, which is safe for re-runs (e.g. reconcile-series).
+func (r *SeriesRepo) LinkBook(ctx context.Context, seriesID, bookID int64, position string, primary bool) error {
+	primaryInt := 0
+	if primary {
+		primaryInt = 1
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO series_books (series_id, book_id, position_in_series, primary_series)
+		 VALUES (?, ?, ?, ?)`,
+		seriesID, bookID, position, primaryInt)
+	if err != nil {
+		return fmt.Errorf("link book %d to series %d: %w", bookID, seriesID, err)
+	}
+	return nil
+}
+
 func (r *SeriesRepo) Delete(ctx context.Context, id int64) error {
 	_, err := r.db.ExecContext(ctx, "DELETE FROM series WHERE id=?", id)
 	if err != nil {

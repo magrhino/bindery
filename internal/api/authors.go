@@ -18,13 +18,14 @@ import (
 type AuthorHandler struct {
 	authors  *db.AuthorRepo
 	books    *db.BookRepo
+	series   *db.SeriesRepo
 	meta     *metadata.Aggregator
 	settings *db.SettingsRepo
 	profiles *db.MetadataProfileRepo
 }
 
-func NewAuthorHandler(authors *db.AuthorRepo, books *db.BookRepo, meta *metadata.Aggregator, settings *db.SettingsRepo, profiles *db.MetadataProfileRepo) *AuthorHandler {
-	return &AuthorHandler{authors: authors, books: books, meta: meta, settings: settings, profiles: profiles}
+func NewAuthorHandler(authors *db.AuthorRepo, books *db.BookRepo, series *db.SeriesRepo, meta *metadata.Aggregator, settings *db.SettingsRepo, profiles *db.MetadataProfileRepo) *AuthorHandler {
+	return &AuthorHandler{authors: authors, books: books, series: series, meta: meta, settings: settings, profiles: profiles}
 }
 
 func (h *AuthorHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -296,6 +297,18 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author) {
 			continue
 		}
 		added++
+
+		// Populate series membership for this book.
+		for _, ref := range b.SeriesRefs {
+			s := &models.Series{ForeignID: ref.ForeignID, Title: ref.Title}
+			if err := h.series.CreateOrGet(ctx, s); err != nil {
+				slog.Warn("failed to upsert series", "series", ref.Title, "error", err)
+				continue
+			}
+			if err := h.series.LinkBook(ctx, s.ID, b.ID, ref.Position, ref.Primary); err != nil {
+				slog.Warn("failed to link book to series", "book", b.Title, "series", ref.Title, "error", err)
+			}
+		}
 	}
 	slog.Info("author books synced", "author", author.Name, "added", added, "skipped_language", skippedLang, "skipped_junk", skippedJunk, "total", len(books))
 }
