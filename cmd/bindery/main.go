@@ -147,6 +147,7 @@ func main() {
 	indexerHandler := api.NewIndexerHandler(indexerRepo, bookRepo, authorRepo, idxSearcher, settingsRepo, blocklistRepo)
 	dlClientHandler := api.NewDownloadClientHandler(dlClientRepo)
 	queueHandler := api.NewQueueHandler(downloadRepo, dlClientRepo, bookRepo, historyRepo)
+	libraryHandler := api.NewLibraryHandler(importScanner)
 	fileHandler := api.NewFileHandler(bookRepo)
 	historyHandler := api.NewHistoryHandler(historyRepo, blocklistRepo)
 	blocklistHandler := api.NewBlocklistHandler(blocklistRepo)
@@ -325,6 +326,9 @@ func main() {
 		r.Post("/backup", backupHandler.Create)
 		r.Post("/backup/{filename}/restore", backupHandler.Restore)
 		r.Delete("/backup/{filename}", backupHandler.Delete)
+
+		// Library
+		r.Post("/library/scan", libraryHandler.Scan)
 
 		// Migration imports (CSV of author names, or Readarr SQLite DB).
 		r.Post("/migrate/csv", migrateHandler.ImportCSV)

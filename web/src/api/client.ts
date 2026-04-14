@@ -118,6 +118,9 @@ export const api = {
   deleteDownloadClient: (id: number) => request<void>(`/downloadclient/${id}`, { method: 'DELETE' }),
   testDownloadClient: (id: number) => request<{ message: string }>(`/downloadclient/${id}/test`, { method: 'POST' }),
 
+  // Library
+  triggerLibraryScan: () => request<{ message: string }>('/library/scan', { method: 'POST' }),
+
   // Queue
   listQueue: () => request<QueueItem[]>('/queue'),
   grab: (data: GrabRequest) => request<Download>('/queue/grab', { method: 'POST', body: JSON.stringify(data) }),

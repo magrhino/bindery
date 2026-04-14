@@ -689,6 +689,7 @@ function GeneralTab() {
   const [saving, setSaving] = useState<string | null>(null)
   const [backups, setBackups] = useState<string[]>([])
   const [creatingBackup, setCreatingBackup] = useState(false)
+  const [scanningLibrary, setScanningLibrary] = useState(false)
 
   useEffect(() => {
     api.listSettings()
@@ -723,6 +724,17 @@ function GeneralTab() {
       alert('Backup failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
     } finally {
       setCreatingBackup(false)
+    }
+  }
+
+  const handleScan = async () => {
+    setScanningLibrary(true)
+    try {
+      await api.triggerLibraryScan()
+    } catch (err) {
+      alert('Scan failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
+    } finally {
+      setScanningLibrary(false)
     }
   }
 
@@ -841,6 +853,26 @@ function GeneralTab() {
                 {saving === 'googlebooks.apiKey' ? 'Saving...' : 'Save'}
               </button>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Library */}
+      <section>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">Library</h3>
+        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-slate-700 dark:text-zinc-300">Scan library</p>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">Walk the books directory and reconcile files with the database</p>
+            </div>
+            <button
+              onClick={handleScan}
+              disabled={scanningLibrary}
+              className="px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded text-sm font-medium disabled:opacity-50 flex-shrink-0"
+            >
+              {scanningLibrary ? 'Scanning…' : 'Scan Library'}
+            </button>
           </div>
         </div>
       </section>
