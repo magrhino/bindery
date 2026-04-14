@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/vavallee/bindery/actions/workflows/ci.yml"><img src="https://github.com/vavallee/bindery/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://codecov.io/gh/vavallee/bindery"><img src="https://codecov.io/gh/vavallee/bindery/branch/main/graph/badge.svg" alt="codecov" /></a>
+  <a href="https://codecov.io/gh/vavallee/bindery"><img src="https://img.shields.io/codecov/c/github/vavallee/bindery?logo=codecov&logoColor=white" alt="codecov" /></a>
   <a href="https://github.com/vavallee/bindery/releases"><img src="https://img.shields.io/github/v/release/vavallee/bindery" alt="Release" /></a>
   <a href="https://github.com/vavallee/bindery/pkgs/container/bindery"><img src="https://img.shields.io/badge/ghcr.io-vavallee%2Fbindery-blue" alt="Docker" /></a>
   <a href="https://goreportcard.com/report/github.com/vavallee/bindery"><img src="https://goreportcard.com/badge/github.com/vavallee/bindery" alt="Go Report Card" /></a>
