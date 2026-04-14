@@ -230,6 +230,18 @@ On first launch Bindery bootstraps itself — **no environment variables are req
 
 ## Upgrading
 
+### From v0.7.x to v0.8.0
+
+**Schema:** two additive migrations (`008_calibre.sql`, `009_author_aliases.sql`). Drop-in binary or image replacement is safe — existing data is untouched.
+
+**Calibre (optional, off by default).** If you want the new `calibredb` post-import hook, you need the `calibredb` binary reachable from the Bindery process:
+
+- The distroless official image does **not** ship `calibredb`. Either bind-mount a calibre install into the container or run Bindery outside the distroless image until a `bindery-calibre` variant lands.
+- Enable via Settings → General → Calibre → set library path + binary path → Test connection.
+- Existing imports continue to work unchanged while the toggle is off.
+
+**Author aliases — no auto-merge.** Duplicate author rows that existed before the upgrade are not merged automatically. Use the new **Merge authors** modal on the Authors page (or per-author Merge button) to reunite them — the decision needs a human eye.
+
 ### From v0.6.x to v0.7.0
 
 **Schema:** no changes. Drop-in binary or image replacement is safe.

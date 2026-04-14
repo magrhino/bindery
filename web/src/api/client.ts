@@ -83,6 +83,12 @@ export const api = {
   deleteAuthor: (id: number, deleteFiles = false) =>
     request<void>(`/author/${id}${deleteFiles ? '?deleteFiles=true' : ''}`, { method: 'DELETE' }),
   refreshAuthor: (id: number) => request<void>(`/author/${id}/refresh`, { method: 'POST' }),
+  listAuthorAliases: (id: number) => request<AuthorAlias[]>(`/author/${id}/aliases`),
+  mergeAuthors: (targetId: number, sourceId: number, overwriteDefaults = true) =>
+    request<MergeAuthorsResult>(`/author/${targetId}/merge`, {
+      method: 'POST',
+      body: JSON.stringify({ sourceId, overwriteDefaults }),
+    }),
 
   // Books
   listBooks: (params?: { authorId?: number; status?: string }) => {
@@ -178,6 +184,9 @@ export const api = {
   listBackups: () => request<string[]>('/backup'),
   createBackup: () => request<{ filename: string }>('/backup', { method: 'POST' }),
 
+  // Calibre
+  testCalibre: () => request<CalibreTestResult>('/calibre/test', { method: 'POST' }),
+
   // Metadata Profiles
   listMetadataProfiles: () => request<MetadataProfile[]>('/metadataprofile'),
   addMetadataProfile: (data: Partial<MetadataProfile>) => request<MetadataProfile>('/metadataprofile', { method: 'POST', body: JSON.stringify(data) }),
@@ -212,6 +221,22 @@ export interface Author {
   rootFolderId?: number | null
   books?: Book[]
   statistics?: { bookCount: number; availableBookCount: number; wantedBookCount: number }
+  aliases?: AuthorAlias[]
+}
+
+export interface AuthorAlias {
+  id: number
+  authorId: number
+  name: string
+  sourceOlId?: string
+  createdAt: string
+}
+
+export interface MergeAuthorsResult {
+  BooksReparented: number
+  AliasesMigrated: number
+  AliasesCreated: number
+  TargetUpdated: boolean
 }
 
 export type MediaType = 'ebook' | 'audiobook'
@@ -233,7 +258,23 @@ export interface Book {
   durationSeconds?: number
   asin?: string
   language?: string
+  calibre_id?: number
   author?: Author
+}
+
+// CalibreSettings mirrors the three `calibre.*` keys stored in the settings
+// table. The shape is deliberately flat so SettingsPage can render the
+// fields alongside the other string-keyed settings it already manages.
+export interface CalibreSettings {
+  calibre_enabled: boolean
+  calibre_library_path: string
+  calibre_binary_path: string
+}
+
+export interface CalibreTestResult {
+  ok: string
+  version: string
+  message: string
 }
 
 export interface Indexer {
