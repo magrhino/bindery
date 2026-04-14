@@ -626,3 +626,334 @@ func TestDeleteAuthorWithDownload(t *testing.T) {
 		t.Errorf("download.book_id should be NULL after cascade, got %d", *linkedBookID)
 	}
 }
+
+func TestDownloadRepoCRUD(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	repo := NewDownloadRepo(database)
+
+	dl := &models.Download{
+		GUID:    "test-guid-abc",
+		Title:   "Some.Book.epub",
+		NZBURL:  "https://example.com/dl.nzb",
+		Size:    1024,
+		Status:  models.DownloadStatusQueued,
+		Protocol: "usenet",
+	}
+	if err := repo.Create(ctx, dl); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if dl.ID == 0 {
+		t.Fatal("expected non-zero ID")
+	}
+
+	// GetByGUID
+	got, err := repo.GetByGUID(ctx, "test-guid-abc")
+	if err != nil {
+		t.Fatalf("get by guid: %v", err)
+	}
+	if got == nil || got.Title != "Some.Book.epub" {
+		t.Errorf("unexpected result: %v", got)
+	}
+
+	// GetByGUID — not found
+	missing, _ := repo.GetByGUID(ctx, "nonexistent")
+	if missing != nil {
+		t.Error("expected nil for nonexistent GUID")
+	}
+
+	// List
+	list, err := repo.List(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 1 {
+		t.Errorf("expected 1 download, got %d", len(list))
+	}
+
+	// ListByStatus
+	queued, _ := repo.ListByStatus(ctx, models.DownloadStatusQueued)
+	if len(queued) != 1 {
+		t.Errorf("expected 1 queued, got %d", len(queued))
+	}
+
+	// UpdateStatus — each branch
+	for _, status := range []string{
+		models.DownloadStatusDownloading,
+		models.DownloadStatusCompleted,
+		models.DownloadStatusImported,
+		models.DownloadStatusFailed,
+	} {
+		if err := repo.UpdateStatus(ctx, dl.ID, status); err != nil {
+			t.Errorf("UpdateStatus(%q): %v", status, err)
+		}
+	}
+
+	// SetNzoID
+	if err := repo.SetNzoID(ctx, dl.ID, "nzo_123"); err != nil {
+		t.Errorf("SetNzoID: %v", err)
+	}
+	got, _ = repo.GetByGUID(ctx, "test-guid-abc")
+	if got.SABnzbdNzoID == nil || *got.SABnzbdNzoID != "nzo_123" {
+		t.Errorf("expected nzo_123, got %v", got.SABnzbdNzoID)
+	}
+
+	// GetByNzoID
+	byNzo, err := repo.GetByNzoID(ctx, "nzo_123")
+	if err != nil {
+		t.Fatalf("GetByNzoID: %v", err)
+	}
+	if byNzo == nil || byNzo.GUID != "test-guid-abc" {
+		t.Errorf("GetByNzoID: unexpected %v", byNzo)
+	}
+
+	// SetError
+	if err := repo.SetError(ctx, dl.ID, "something went wrong"); err != nil {
+		t.Errorf("SetError: %v", err)
+	}
+
+	// Delete
+	if err := repo.Delete(ctx, dl.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	list, _ = repo.List(ctx)
+	if len(list) != 0 {
+		t.Errorf("expected 0 downloads after delete, got %d", len(list))
+	}
+}
+
+func TestBlocklistRepoCRUD(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	repo := NewBlocklistRepo(database)
+
+	entry := &models.BlocklistEntry{
+		GUID:   "bl-guid-1",
+		Title:  "Bad.Release.epub",
+		Reason: "wrong edition",
+	}
+	if err := repo.Create(ctx, entry); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if entry.ID == 0 {
+		t.Fatal("expected non-zero ID")
+	}
+
+	// IsBlocked — present
+	blocked, err := repo.IsBlocked(ctx, "bl-guid-1")
+	if err != nil {
+		t.Fatalf("IsBlocked: %v", err)
+	}
+	if !blocked {
+		t.Error("expected guid to be blocked")
+	}
+
+	// IsBlocked — absent
+	blocked, _ = repo.IsBlocked(ctx, "not-blocked")
+	if blocked {
+		t.Error("expected non-blocked guid to return false")
+	}
+
+	// List
+	list, err := repo.List(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 1 {
+		t.Errorf("expected 1 entry, got %d", len(list))
+	}
+
+	// DeleteByID
+	if err := repo.DeleteByID(ctx, entry.ID); err != nil {
+		t.Fatalf("delete by id: %v", err)
+	}
+	blocked, _ = repo.IsBlocked(ctx, "bl-guid-1")
+	if blocked {
+		t.Error("expected unblocked after delete")
+	}
+
+	// DeleteByBookID
+	bookID := int64(42)
+	entry2 := &models.BlocklistEntry{GUID: "bl-guid-2", Title: "t", BookID: &bookID}
+	repo.Create(ctx, entry2)
+	if err := repo.DeleteByBookID(ctx, bookID); err != nil {
+		t.Fatalf("delete by book id: %v", err)
+	}
+	list, _ = repo.List(ctx)
+	if len(list) != 0 {
+		t.Errorf("expected empty after DeleteByBookID, got %d", len(list))
+	}
+}
+
+func TestHistoryRepoCRUD(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	repo := NewHistoryRepo(database)
+
+	evt := &models.HistoryEvent{
+		EventType:   "grabbed",
+		SourceTitle: "Dune.epub",
+		Data:        `{"guid":"abc"}`,
+	}
+	if err := repo.Create(ctx, evt); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if evt.ID == 0 {
+		t.Fatal("expected non-zero ID")
+	}
+
+	// GetByID
+	got, err := repo.GetByID(ctx, evt.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got == nil || got.EventType != "grabbed" {
+		t.Errorf("unexpected result: %v", got)
+	}
+
+	// GetByID — not found
+	missing, _ := repo.GetByID(ctx, 9999)
+	if missing != nil {
+		t.Error("expected nil for nonexistent ID")
+	}
+
+	// List
+	list, err := repo.List(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 1 {
+		t.Errorf("expected 1 event, got %d", len(list))
+	}
+
+	// ListByType
+	grabbed, _ := repo.ListByType(ctx, "grabbed")
+	if len(grabbed) != 1 {
+		t.Errorf("expected 1 grabbed event, got %d", len(grabbed))
+	}
+	imported, _ := repo.ListByType(ctx, "imported")
+	if len(imported) != 0 {
+		t.Errorf("expected 0 imported events, got %d", len(imported))
+	}
+
+	// Add a second event linked to a real book for ListByBook
+	authorRepo := NewAuthorRepo(database)
+	bookRepo := NewBookRepo(database)
+	author := &models.Author{ForeignID: "OL-H1", Name: "Author", SortName: "Author", MetadataProvider: "openlibrary", Monitored: true}
+	authorRepo.Create(ctx, author)
+	book := &models.Book{ForeignID: "OL-B1", AuthorID: author.ID, Title: "Dune", SortTitle: "Dune", Status: "wanted", Genres: []string{}, MetadataProvider: "openlibrary", Monitored: true}
+	bookRepo.Create(ctx, book)
+
+	evt2 := &models.HistoryEvent{BookID: &book.ID, EventType: "imported", SourceTitle: "Dune.epub"}
+	if err := repo.Create(ctx, evt2); err != nil {
+		t.Fatalf("create evt2: %v", err)
+	}
+
+	byBook, _ := repo.ListByBook(ctx, book.ID)
+	if len(byBook) != 1 {
+		t.Errorf("expected 1 event for book, got %d", len(byBook))
+	}
+
+	// Delete evt (evt2 still remains)
+	if err := repo.Delete(ctx, evt.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	list, _ = repo.List(ctx)
+	if len(list) != 1 {
+		t.Errorf("expected 1 event after delete, got %d", len(list))
+	}
+}
+
+func TestUserRepoCRUD(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	repo := NewUserRepo(database)
+
+	// Count — zero before setup
+	n, err := repo.Count(ctx)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("expected 0 users, got %d", n)
+	}
+
+	// Create
+	u, err := repo.Create(ctx, "admin", "hashed-password")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if u.ID == 0 || u.Username != "admin" {
+		t.Errorf("unexpected user: %+v", u)
+	}
+
+	// Count — one after create
+	n, _ = repo.Count(ctx)
+	if n != 1 {
+		t.Errorf("expected 1 user, got %d", n)
+	}
+
+	// GetByUsername
+	got, err := repo.GetByUsername(ctx, "admin")
+	if err != nil {
+		t.Fatalf("GetByUsername: %v", err)
+	}
+	if got == nil || got.PasswordHash != "hashed-password" {
+		t.Errorf("unexpected result: %v", got)
+	}
+
+	// GetByUsername — not found
+	missing, _ := repo.GetByUsername(ctx, "nobody")
+	if missing != nil {
+		t.Error("expected nil for nonexistent user")
+	}
+
+	// GetByID
+	byID, err := repo.GetByID(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if byID == nil || byID.Username != "admin" {
+		t.Errorf("GetByID: unexpected %v", byID)
+	}
+
+	// GetByID — not found
+	missing2, _ := repo.GetByID(ctx, 9999)
+	if missing2 != nil {
+		t.Error("expected nil for nonexistent ID")
+	}
+
+	// UpdatePassword
+	if err := repo.UpdatePassword(ctx, u.ID, "new-hash"); err != nil {
+		t.Fatalf("UpdatePassword: %v", err)
+	}
+	got, _ = repo.GetByID(ctx, u.ID)
+	if got.PasswordHash != "new-hash" {
+		t.Errorf("expected new-hash, got %q", got.PasswordHash)
+	}
+
+	// UpdateUsername
+	if err := repo.UpdateUsername(ctx, u.ID, "superadmin"); err != nil {
+		t.Fatalf("UpdateUsername: %v", err)
+	}
+	got, _ = repo.GetByID(ctx, u.ID)
+	if got.Username != "superadmin" {
+		t.Errorf("expected superadmin, got %q", got.Username)
+	}
+}
