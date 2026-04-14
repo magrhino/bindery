@@ -7,6 +7,11 @@ before:
     - go mod download
     - npm ci --prefix web
     - npm run build --prefix web
+    # vite writes to web/dist/, but the go:embed directive in
+    # internal/webui/embed.go reads internal/webui/dist/. The Makefile and
+    # Dockerfile both do this copy explicitly — goreleaser needs it too or
+    # every cross-built binary embeds only the checked-in .gitkeep stub.
+    - sh -c 'rm -rf internal/webui/dist && cp -r web/dist internal/webui/dist'
 
 builds:
   - id: bindery
