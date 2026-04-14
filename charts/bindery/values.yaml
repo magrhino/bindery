@@ -42,7 +42,7 @@ env:
   # Comma-separated from:to pairs rewriting paths reported by the download
   # client into paths bindery can see. Needed when SAB and bindery run in
   # separate pods with different mount points for the same storage.
-  # BINDERY_DOWNLOAD_PATH_REMAP: /downloads/complete:/media/complete
+  BINDERY_DOWNLOAD_PATH_REMAP: /downloads:/media
 
 resources:
   requests:
