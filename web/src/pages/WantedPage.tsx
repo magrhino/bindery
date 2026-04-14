@@ -10,6 +10,8 @@ export default function WantedPage() {
   const [results, setResults] = useState<SearchResult[]>([])
   const [showResults, setShowResults] = useState<number | null>(null)
   const [search, setSearch] = useState('')
+  const [grabbingGuid, setGrabbingGuid] = useState<string | null>(null)
+  const [grabbedGuid, setGrabbedGuid] = useState<string | null>(null)
 
   useEffect(() => {
     api.listWanted().then(setBooks).catch(console.error).finally(() => setLoading(false))
@@ -47,6 +49,7 @@ export default function WantedPage() {
   }
 
   const grab = async (result: SearchResult, bookId: number) => {
+    setGrabbingGuid(result.guid)
     try {
       await api.grab({
         guid: result.guid,
@@ -55,12 +58,16 @@ export default function WantedPage() {
         size: result.size,
         bookId,
       })
-      setShowResults(null)
-      // Refresh wanted list
-      const updated = await api.listWanted()
-      setBooks(updated)
+      setGrabbedGuid(result.guid)
+      setTimeout(() => {
+        setShowResults(null)
+        setGrabbedGuid(null)
+        api.listWanted().then(setBooks).catch(console.error)
+      }, 1200)
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Grab failed')
+    } finally {
+      setGrabbingGuid(null)
     }
   }
 
@@ -151,9 +158,16 @@ export default function WantedPage() {
                       </div>
                       <button
                         onClick={() => grab(r, book.id)}
-                        className="px-2 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-[10px] font-medium flex-shrink-0 touch-manipulation"
+                        disabled={grabbingGuid === r.guid || grabbedGuid === r.guid}
+                        className={`px-2 py-2 rounded text-[10px] font-medium flex-shrink-0 touch-manipulation transition-colors disabled:cursor-default ${
+                          grabbedGuid === r.guid
+                            ? 'bg-emerald-700 text-emerald-200'
+                            : grabbingGuid === r.guid
+                            ? 'bg-emerald-600/60 text-white/70'
+                            : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                        }`}
                       >
-                        Grab
+                        {grabbedGuid === r.guid ? '✓ Grabbed' : grabbingGuid === r.guid ? 'Grabbing…' : 'Grab'}
                       </button>
                     </div>
                   ))}
