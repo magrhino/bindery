@@ -690,6 +690,7 @@ function GeneralTab() {
   const [backups, setBackups] = useState<string[]>([])
   const [creatingBackup, setCreatingBackup] = useState(false)
   const [scanningLibrary, setScanningLibrary] = useState(false)
+  const [scanMessage, setScanMessage] = useState<string | null>(null)
 
   useEffect(() => {
     api.listSettings()
@@ -729,10 +730,13 @@ function GeneralTab() {
 
   const handleScan = async () => {
     setScanningLibrary(true)
+    setScanMessage(null)
     try {
       await api.triggerLibraryScan()
+      setScanMessage('Scan started — check back in a moment.')
+      setTimeout(() => setScanMessage(null), 5000)
     } catch (err) {
-      alert('Scan failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
+      setScanMessage('Scan failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
     } finally {
       setScanningLibrary(false)
     }
@@ -865,6 +869,9 @@ function GeneralTab() {
             <div>
               <p className="text-sm text-slate-700 dark:text-zinc-300">Scan library</p>
               <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">Walk the books directory and reconcile files with the database</p>
+              {scanMessage && (
+                <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-1">{scanMessage}</p>
+              )}
             </div>
             <button
               onClick={handleScan}
