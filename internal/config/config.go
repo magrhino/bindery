@@ -2,7 +2,11 @@
 // variables with sensible defaults.
 package config
 
-import "os"
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+)
 
 // Config holds the application configuration loaded from environment variables.
 type Config struct {
@@ -30,8 +34,8 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		Port:              envOr("BINDERY_PORT", "8787"),
-		DBPath:            envOr("BINDERY_DB_PATH", "/config/bindery.db"),
-		DataDir:           envOr("BINDERY_DATA_DIR", "/config"),
+		DBPath:            envOr("BINDERY_DB_PATH", defaultDBPath(runtime.GOOS, os.UserConfigDir)),
+		DataDir:           envOr("BINDERY_DATA_DIR", defaultDataDir(runtime.GOOS, os.UserConfigDir)),
 		LogLevel:          envOr("BINDERY_LOG_LEVEL", "info"),
 		APIKey:            envOr("BINDERY_API_KEY", ""),
 		DownloadDir:       envOr("BINDERY_DOWNLOAD_DIR", "/downloads"),
@@ -39,6 +43,34 @@ func Load() *Config {
 		AudiobookDir:      envOr("BINDERY_AUDIOBOOK_DIR", ""),
 		DownloadPathRemap: envOr("BINDERY_DOWNLOAD_PATH_REMAP", ""),
 	}
+}
+
+// defaultDBPath resolves the platform-appropriate SQLite path. Linux keeps the
+// historical `/config/bindery.db` so existing Docker / Helm / bare-metal
+// deployments that bind-mount `/config` are unchanged. Windows and macOS
+// resolve under os.UserConfigDir so double-clicking the published binary
+// works without setting env vars. Falls back to `/config/bindery.db` if
+// UserConfigDir errors (vanishingly rare; cmd/bindery's db.Open preflight
+// catches the resulting write failure with a clear message).
+func defaultDBPath(goos string, userConfigDir func() (string, error)) string {
+	if goos != "linux" {
+		if d, err := userConfigDir(); err == nil {
+			return filepath.Join(d, "Bindery", "bindery.db")
+		}
+	}
+	return "/config/bindery.db"
+}
+
+// defaultDataDir mirrors defaultDBPath for BINDERY_DATA_DIR (where backups
+// land). Same linux-preserving logic so the two stay in the same directory
+// on every platform.
+func defaultDataDir(goos string, userConfigDir func() (string, error)) string {
+	if goos != "linux" {
+		if d, err := userConfigDir(); err == nil {
+			return filepath.Join(d, "Bindery")
+		}
+	}
+	return "/config"
 }
 
 func envOr(key, fallback string) string {

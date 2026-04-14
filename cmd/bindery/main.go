@@ -51,6 +51,8 @@ func main() {
 		"version", version,
 		"commit", commit,
 		"port", cfg.Port,
+		"dbPath", cfg.DBPath,
+		"dataDir", cfg.DataDir,
 	)
 
 	// Fail fast if BINDERY_PUID/PGID is set but the container isn't running

@@ -116,7 +116,33 @@ docker run -d \
 
 Open <http://localhost:8787>, follow the first-run setup to create the admin account, and you're in.
 
-For Docker Compose, Kubernetes (Helm), binary downloads, running as a specific UID/GID, and upgrade notes, see **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
+### Binary (Linux / macOS / Windows)
+
+Download the archive for your platform from the [latest release](https://github.com/vavallee/bindery/releases/latest), extract, and run:
+
+```bash
+# Linux / macOS
+tar -xzf bindery_<version>_<os>_<arch>.tar.gz
+./bindery
+```
+
+```cmd
+:: Windows
+:: Unzip bindery_<version>_windows_amd64.zip, then:
+bindery.exe
+```
+
+On first run the database lands in the platform's standard location:
+
+| Platform | Default `BINDERY_DB_PATH` | Default `BINDERY_DATA_DIR` |
+|----------|---------------------------|----------------------------|
+| Linux / Docker / Helm | `/config/bindery.db` | `/config` |
+| Windows | `%APPDATA%\Bindery\bindery.db` | `%APPDATA%\Bindery` |
+| macOS | `~/Library/Application Support/Bindery/bindery.db` | `~/Library/Application Support/Bindery` |
+
+Set `BINDERY_DB_PATH` / `BINDERY_DATA_DIR` if you want them elsewhere. The resolved paths are logged at startup (`"starting bindery"` log line).
+
+For Docker Compose, Kubernetes (Helm), running as a specific UID/GID, and upgrade notes, see **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 
 ## Configuration
 
@@ -125,8 +151,8 @@ Bindery is configured through the web UI under **Settings**. Core env vars:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `BINDERY_PORT` | `8787` | HTTP server port |
-| `BINDERY_DB_PATH` | `/config/bindery.db` | SQLite database path |
-| `BINDERY_DATA_DIR` | `/config` | Config directory (backups live here) |
+| `BINDERY_DB_PATH` | platform-dependent (see [Binary install](#binary-linux--macos--windows)) | SQLite database path |
+| `BINDERY_DATA_DIR` | platform-dependent (see [Binary install](#binary-linux--macos--windows)) | Config directory (backups live here) |
 | `BINDERY_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `BINDERY_DOWNLOAD_DIR` | `/downloads` | Where the download client places completed downloads |
 | `BINDERY_LIBRARY_DIR` | `/books` | Destination for imported ebook files |

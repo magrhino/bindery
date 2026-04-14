@@ -63,12 +63,44 @@ Pre-built archives are attached to every [Release](https://github.com/vavallee/b
 | macOS | amd64, arm64 | Intel Macs, Apple Silicon |
 | Windows | amd64, arm64 | x86_64 desktops, Windows on ARM |
 
-Pick the archive matching your platform, verify against `bindery_vX.Y.Z_checksums.txt`, extract, and run:
+Pick the archive matching your platform, verify against `bindery_<version>_checksums.txt`, extract, and run.
+
+### Linux
 
 ```bash
-tar -xzf bindery_0.6.1_linux_amd64.tar.gz
+tar -xzf bindery_<version>_linux_amd64.tar.gz
 ./bindery
 ```
+
+Database and backups land in `/config/` by default so the same binary slots into existing Docker / Helm deployments. Override with `BINDERY_DB_PATH` / `BINDERY_DATA_DIR` if you don't want `/config` (bare-metal users running as non-root will need to).
+
+### macOS
+
+```bash
+tar -xzf bindery_<version>_darwin_arm64.tar.gz   # or _amd64 for Intel Macs
+./bindery
+```
+
+On first run the database resolves to `~/Library/Application Support/Bindery/bindery.db`. The app respects `BINDERY_DB_PATH` / `BINDERY_DATA_DIR` if you want them elsewhere.
+
+Gatekeeper may flag the unsigned binary; allow it in **System Settings → Privacy & Security** (the "bindery" entry shows up under "Security" after the first blocked launch).
+
+### Windows
+
+Unzip `bindery_<version>_windows_amd64.zip` (or `_arm64.zip` for Windows on ARM) and double-click `bindery.exe`. On first run the database resolves to `%APPDATA%\Bindery\bindery.db`.
+
+If the console window closes instantly, open `cmd` and run the binary from there so the error message stays readable:
+
+```cmd
+cd %USERPROFILE%\Downloads\bindery_<version>_windows_amd64
+bindery.exe
+```
+
+SmartScreen will warn about the unsigned binary on first launch — choose **More info → Run anyway**. Signed Windows builds are on the roadmap.
+
+### Resolved paths logged at startup
+
+Every launch emits a `"starting bindery"` JSON log line containing the resolved `dbPath` and `dataDir`. If the binary can't write to them, `db.Open`'s preflight will name the directory and the required UID so you can fix the permission without guesswork.
 
 The frontend is embedded in the binary via `go:embed` — no separate static-file hosting needed.
 
@@ -125,8 +157,8 @@ spec:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `BINDERY_PORT` | `8787` | HTTP server port |
-| `BINDERY_DB_PATH` | `/config/bindery.db` | SQLite database path |
-| `BINDERY_DATA_DIR` | `/config` | Config directory (backups live here) |
+| `BINDERY_DB_PATH` | `/config/bindery.db` on Linux; `%APPDATA%\Bindery\bindery.db` on Windows; `~/Library/Application Support/Bindery/bindery.db` on macOS | SQLite database path |
+| `BINDERY_DATA_DIR` | `/config` on Linux; `%APPDATA%\Bindery` on Windows; `~/Library/Application Support/Bindery` on macOS | Config directory (backups live here) |
 | `BINDERY_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `BINDERY_API_KEY` | _(empty)_ | **Seed only.** Bootstraps the initial API key on first launch if set; after that the key lives in the database and can be regenerated from the UI. |
 | `BINDERY_DOWNLOAD_DIR` | `/downloads` | Where SABnzbd places completed downloads |
