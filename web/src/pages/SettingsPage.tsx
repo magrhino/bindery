@@ -689,6 +689,7 @@ function GeneralTab() {
   const [saving, setSaving] = useState<string | null>(null)
   const [backups, setBackups] = useState<string[]>([])
   const [creatingBackup, setCreatingBackup] = useState(false)
+  const [scanningLibrary, setScanningLibrary] = useState(false)
 
   useEffect(() => {
     api.listSettings()
@@ -723,6 +724,17 @@ function GeneralTab() {
       alert('Backup failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
     } finally {
       setCreatingBackup(false)
+    }
+  }
+
+  const handleScan = async () => {
+    setScanningLibrary(true)
+    try {
+      await api.triggerLibraryScan()
+    } catch (err) {
+      alert('Scan failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
+    } finally {
+      setScanningLibrary(false)
     }
   }
 
@@ -845,6 +857,26 @@ function GeneralTab() {
         </div>
       </section>
 
+      {/* Library */}
+      <section>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">Library</h3>
+        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-slate-700 dark:text-zinc-300">Scan library</p>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">Walk the books directory and reconcile files with the database</p>
+            </div>
+            <button
+              onClick={handleScan}
+              disabled={scanningLibrary}
+              className="px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded text-sm font-medium disabled:opacity-50 flex-shrink-0"
+            >
+              {scanningLibrary ? 'Scanning…' : 'Scan Library'}
+            </button>
+          </div>
+        </div>
+      </section>
+
       {/* Backup */}
       <section>
         <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">Backup & Restore</h3>
@@ -913,11 +945,21 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
   const [type, setType] = useState(client.type || 'sabnzbd')
   const [host, setHost] = useState(client.host)
   const [port, setPort] = useState(String(client.port))
-  const [apiKey, setApiKey] = useState(client.apiKey)
+  const [credential, setCredential] = useState(client.type === 'qbittorrent' ? (client.password || '') : (client.apiKey || ''))
+  const [username, setUsername] = useState(client.username || '')
   const [category, setCategory] = useState(client.category)
 
+  const handleTypeChange = (newType: string) => {
+    setType(newType)
+    setCredential('')
+    setUsername('')
+  }
+
   const submit = async () => {
-    const updated = await api.updateDownloadClient(client.id, { ...client, name, type, host, port: parseInt(port), apiKey, category })
+    const data = type === 'qbittorrent'
+      ? { ...client, name, type, host, port: parseInt(port), username, password: credential, apiKey: '', category }
+      : { ...client, name, type, host, port: parseInt(port), apiKey: credential, username: '', password: '', category }
+    const updated = await api.updateDownloadClient(client.id, data)
     onSaved(updated)
   }
 
@@ -925,7 +967,7 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
     <div className="mt-1 p-4 border border-slate-300 dark:border-zinc-700 rounded-lg bg-slate-200/50 dark:bg-zinc-800/50 space-y-3">
       <div className="flex gap-2">
         <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
-        <select value={type} onChange={e => setType(e.target.value)} className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
+        <select value={type} onChange={e => handleTypeChange(e.target.value)} className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
           <option value="sabnzbd">SABnzbd</option>
           <option value="qbittorrent">qBittorrent</option>
         </select>
@@ -934,7 +976,10 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
         <input value={host} onChange={e => setHost(e.target.value)} placeholder="Host" className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
         <input value={port} onChange={e => setPort(e.target.value)} placeholder="Port" className="w-24 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
       </div>
-      <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={type === 'qbittorrent' ? 'Password' : 'API Key'} type="password" className={inputCls} />
+      {type === 'qbittorrent' && (
+        <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" className={inputCls} />
+      )}
+      <input value={credential} onChange={e => setCredential(e.target.value)} placeholder={type === 'qbittorrent' ? 'Password' : 'API Key'} type="password" className={inputCls} />
       <input value={category} onChange={e => setCategory(e.target.value)} placeholder="Category" className={inputCls} />
       <div className="flex gap-2 justify-end">
         <button onClick={onClose} className="px-3 py-1.5 text-sm text-slate-600 dark:text-zinc-400">Cancel</button>
@@ -1031,13 +1076,22 @@ function AddClientForm({ onClose, onAdded }: { onClose: () => void; onAdded: (c:
   const [type, setType] = useState<'sabnzbd' | 'qbittorrent'>('sabnzbd')
   const [host, setHost] = useState('')
   const [port, setPort] = useState('8080')
-  const [apiKey, setApiKey] = useState('')
+  const [credential, setCredential] = useState('')
+  const [username, setUsername] = useState('')
   const [category, setCategory] = useState('books')
 
+  const handleTypeChange = (newType: 'sabnzbd' | 'qbittorrent') => {
+    setType(newType)
+    setCredential('')
+    setUsername('')
+    setName(newType === 'qbittorrent' ? 'qBittorrent' : 'SABnzbd')
+  }
+
   const submit = async () => {
-    const c = await api.addDownloadClient({
-      name, host, port: parseInt(port), apiKey, category, type, enabled: true,
-    })
+    const data = type === 'qbittorrent'
+      ? { name, host, port: parseInt(port), username, password: credential, apiKey: '', category, type, enabled: true }
+      : { name, host, port: parseInt(port), apiKey: credential, username: '', password: '', category, type, enabled: true }
+    const c = await api.addDownloadClient(data)
     onAdded(c)
   }
 
@@ -1045,7 +1099,7 @@ function AddClientForm({ onClose, onAdded }: { onClose: () => void; onAdded: (c:
     <div className="mt-4 p-4 border border-slate-300 dark:border-zinc-700 rounded-lg bg-slate-200/50 dark:bg-zinc-800/50 space-y-3">
       <div className="flex gap-2">
         <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
-        <select value={type} onChange={e => { setType(e.target.value as 'sabnzbd' | 'qbittorrent'); setPort(e.target.value === 'qbittorrent' ? '8080' : '8080') }} className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
+        <select value={type} onChange={e => handleTypeChange(e.target.value as 'sabnzbd' | 'qbittorrent')} className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
           <option value="sabnzbd">SABnzbd</option>
           <option value="qbittorrent">qBittorrent</option>
         </select>
@@ -1054,7 +1108,10 @@ function AddClientForm({ onClose, onAdded }: { onClose: () => void; onAdded: (c:
         <input value={host} onChange={e => setHost(e.target.value)} placeholder="Host" className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
         <input value={port} onChange={e => setPort(e.target.value)} placeholder="Port" className="w-24 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
       </div>
-      <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={type === 'qbittorrent' ? 'Password' : 'API Key'} type="password" className={inputCls} />
+      {type === 'qbittorrent' && (
+        <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" className={inputCls} />
+      )}
+      <input value={credential} onChange={e => setCredential(e.target.value)} placeholder={type === 'qbittorrent' ? 'Password' : 'API Key'} type="password" className={inputCls} />
       <input value={category} onChange={e => setCategory(e.target.value)} placeholder="Category" className={inputCls} />
       <div className="flex gap-2 justify-end">
         <button onClick={onClose} className="px-3 py-1.5 text-sm text-slate-600 dark:text-zinc-400">Cancel</button>

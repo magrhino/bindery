@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/downloader/qbittorrent"
 	"github.com/vavallee/bindery/internal/downloader/sabnzbd"
 	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/models"
@@ -47,8 +48,8 @@ func (h *QueueHandler) List(w http.ResponseWriter, r *http.Request) {
 		items[i] = QueueItem{Download: d}
 	}
 
-	client, err := h.clients.GetFirstEnabled(r.Context())
-	if err == nil && client != nil {
+	client, err := h.clients.GetFirstEnabledByProtocol(r.Context(), "usenet")
+	if err == nil && client != nil && client.Type == "sabnzbd" {
 		sab := sabnzbd.New(client.Host, client.Port, client.APIKey, client.UseSSL)
 		queue, err := sab.GetQueue(r.Context())
 		if err == nil {
@@ -78,6 +79,8 @@ func (h *QueueHandler) Grab(w http.ResponseWriter, r *http.Request) {
 		Size      int64  `json:"size"`
 		BookID    *int64 `json:"bookId"`
 		IndexerID *int64 `json:"indexerId"`
+		Protocol  string `json:"protocol"`
+		MediaType string `json:"mediaType"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -87,6 +90,9 @@ func (h *QueueHandler) Grab(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "guid and nzbUrl required"})
 		return
 	}
+	if req.Protocol == "" {
+		req.Protocol = "usenet"
+	}
 
 	// Check for duplicate
 	existing, _ := h.downloads.GetByGUID(r.Context(), req.GUID)
@@ -95,8 +101,8 @@ func (h *QueueHandler) Grab(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get first enabled download client
-	client, err := h.clients.GetFirstEnabled(r.Context())
+	// Select download client by protocol, preferring one that matches the media type
+	client, err := h.selectClient(r.Context(), req.Protocol, req.MediaType)
 	if err != nil || client == nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no enabled download client configured"})
 		return
@@ -112,7 +118,7 @@ func (h *QueueHandler) Grab(w http.ResponseWriter, r *http.Request) {
 		NZBURL:           req.NZBURL,
 		Size:             req.Size,
 		Status:           models.DownloadStatusQueued,
-		Protocol:         "usenet",
+		Protocol:         req.Protocol,
 		Quality:          indexer.ParseRelease(req.Title).Format,
 	}
 	if err := h.downloads.Create(r.Context(), dl); err != nil {
@@ -120,25 +126,38 @@ func (h *QueueHandler) Grab(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send to SABnzbd
-	sab := sabnzbd.New(client.Host, client.Port, client.APIKey, client.UseSSL)
-	resp, err := sab.AddURL(r.Context(), req.NZBURL, req.Title, client.Category, 0)
-	if err != nil {
-		slog.Error("failed to send to sabnzbd", "error", err, "title", req.Title)
-		h.downloads.SetError(r.Context(), dl.ID, err.Error())
-		h.recordHistory(r.Context(), models.HistoryEventDownloadFailed, req.Title, req.BookID, map[string]interface{}{"guid": req.GUID, "message": err.Error()})
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to send to SABnzbd: " + err.Error()})
-		return
+	// Dispatch to the appropriate download client
+	if req.Protocol == "torrent" {
+		qbt := qbittorrent.New(client.Host, client.Port, client.URLBase, client.APIKey, client.UseSSL)
+		if err := qbt.AddTorrent(r.Context(), req.NZBURL, client.Category, ""); err != nil {
+			slog.Error("failed to send to qBittorrent", "error", err, "title", req.Title)
+			h.downloads.SetError(r.Context(), dl.ID, err.Error())
+			h.recordHistory(r.Context(), models.HistoryEventDownloadFailed, req.Title, req.BookID, map[string]interface{}{"guid": req.GUID, "message": err.Error()})
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to send to qBittorrent: " + err.Error()})
+			return
+		}
+		h.downloads.UpdateStatus(r.Context(), dl.ID, models.DownloadStatusDownloading)
+		dl.Status = models.DownloadStatusDownloading
+		slog.Info("download sent to qBittorrent", "title", req.Title)
+	} else {
+		sab := sabnzbd.New(client.Host, client.Port, client.APIKey, client.UseSSL)
+		resp, err := sab.AddURL(r.Context(), req.NZBURL, req.Title, client.Category, 0)
+		if err != nil {
+			slog.Error("failed to send to sabnzbd", "error", err, "title", req.Title)
+			h.downloads.SetError(r.Context(), dl.ID, err.Error())
+			h.recordHistory(r.Context(), models.HistoryEventDownloadFailed, req.Title, req.BookID, map[string]interface{}{"guid": req.GUID, "message": err.Error()})
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to send to SABnzbd: " + err.Error()})
+			return
+		}
+		if len(resp.NzoIDs) > 0 {
+			nzoID := resp.NzoIDs[0]
+			h.downloads.SetNzoID(r.Context(), dl.ID, nzoID)
+			dl.SABnzbdNzoID = &nzoID
+		}
+		h.downloads.UpdateStatus(r.Context(), dl.ID, models.DownloadStatusDownloading)
+		dl.Status = models.DownloadStatusDownloading
+		slog.Info("download grabbed", "title", req.Title, "nzoId", dl.SABnzbdNzoID)
 	}
-
-	// Update with NZO ID
-	if len(resp.NzoIDs) > 0 {
-		nzoID := resp.NzoIDs[0]
-		h.downloads.SetNzoID(r.Context(), dl.ID, nzoID)
-		dl.SABnzbdNzoID = &nzoID
-	}
-	h.downloads.UpdateStatus(r.Context(), dl.ID, models.DownloadStatusDownloading)
-	dl.Status = models.DownloadStatusDownloading
 
 	h.recordHistory(r.Context(), models.HistoryEventGrabbed, req.Title, req.BookID, map[string]interface{}{
 		"guid":      req.GUID,
@@ -146,8 +165,21 @@ func (h *QueueHandler) Grab(w http.ResponseWriter, r *http.Request) {
 		"indexerId": req.IndexerID,
 	})
 
-	slog.Info("download grabbed", "title", req.Title, "nzoId", dl.SABnzbdNzoID)
 	writeJSON(w, http.StatusAccepted, dl)
+}
+
+// selectClient picks the best enabled client for the given protocol and media type.
+// It prefers a client whose category hints match the media type when multiple
+// clients of the same protocol type are configured.
+func (h *QueueHandler) selectClient(ctx context.Context, protocol, mediaType string) (*models.DownloadClient, error) {
+	candidates, err := h.clients.GetEnabledByProtocol(ctx, protocol)
+	if err != nil {
+		return nil, err
+	}
+	if len(candidates) == 0 {
+		return h.clients.GetFirstEnabled(ctx)
+	}
+	return db.PickClientForMediaType(candidates, mediaType), nil
 }
 
 // recordHistory is a helper to write a history event, swallowing errors.
@@ -183,9 +215,12 @@ func (h *QueueHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Remove from SABnzbd if it has an NZO ID
-	if target.SABnzbdNzoID != nil {
-		client, err := h.clients.GetFirstEnabled(r.Context())
+	// Remove from the appropriate download client
+	if target.Protocol == "torrent" {
+		// qBittorrent: we don't store a per-download torrent hash yet, so just
+		// remove the local record. Future work: store hash in Download and call qbt.DeleteTorrent.
+	} else if target.SABnzbdNzoID != nil {
+		client, err := h.clients.GetFirstEnabledByProtocol(r.Context(), "usenet")
 		if err == nil && client != nil {
 			sab := sabnzbd.New(client.Host, client.Port, client.APIKey, client.UseSSL)
 			_ = sab.Delete(r.Context(), *target.SABnzbdNzoID, true)

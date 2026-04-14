@@ -118,6 +118,9 @@ export const api = {
   deleteDownloadClient: (id: number) => request<void>(`/downloadclient/${id}`, { method: 'DELETE' }),
   testDownloadClient: (id: number) => request<{ message: string }>(`/downloadclient/${id}/test`, { method: 'POST' }),
 
+  // Library
+  triggerLibraryScan: () => request<{ message: string }>('/library/scan', { method: 'POST' }),
+
   // Queue
   listQueue: () => request<QueueItem[]>('/queue'),
   grab: (data: GrabRequest) => request<Download>('/queue/grab', { method: 'POST', body: JSON.stringify(data) }),
@@ -241,6 +244,8 @@ export interface DownloadClient {
   host: string
   port: number
   apiKey: string
+  username: string
+  password: string
   useSsl: boolean
   category: string
   enabled: boolean
@@ -269,6 +274,7 @@ export interface SearchResult {
   nzbUrl: string
   grabs: number
   pubDate: string
+  protocol: string  // "usenet" or "torrent"
 }
 
 export interface AddAuthorRequest {
@@ -288,6 +294,8 @@ export interface GrabRequest {
   size: number
   bookId?: number
   indexerId?: number
+  protocol?: string
+  mediaType?: string
 }
 
 export interface HistoryEvent {

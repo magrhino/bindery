@@ -10,6 +10,7 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/downloader/qbittorrent"
 	"github.com/vavallee/bindery/internal/downloader/sabnzbd"
 	"github.com/vavallee/bindery/internal/importer"
 	"github.com/vavallee/bindery/internal/indexer"
@@ -120,12 +121,6 @@ func (s *Scheduler) searchWanted() {
 		return
 	}
 
-	client, err := s.clients.GetFirstEnabled(ctx)
-	if err != nil || client == nil {
-		slog.Debug("no download client available, skipping wanted search")
-		return
-	}
-
 	// Read preferred language once for all books in this run
 	lang := "en"
 	if langSetting, _ := s.settings.Get(ctx, "search.preferredLanguage"); langSetting != nil {
@@ -158,13 +153,35 @@ func (s *Scheduler) searchWanted() {
 
 		// Auto-grab the top result
 		best := results[0]
+
+		// Select the download client that matches the result's protocol, preferring
+		// one whose category hints match the book's media type.
+		candidates, _ := s.clients.GetEnabledByProtocol(ctx, best.Protocol)
+		client := db.PickClientForMediaType(candidates, book.MediaType)
+		if client == nil {
+			// Fall back to any enabled client
+			client, _ = s.clients.GetFirstEnabled(ctx)
+		}
+		if client == nil {
+			slog.Debug("no download client available, skipping", "book", book.Title)
+			continue
+		}
+
 		slog.Info("auto-grabbing wanted book",
 			"book", book.Title,
 			"author", authorName,
 			"result", best.Title,
 			"indexer", best.IndexerName,
+			"protocol", best.Protocol,
+			"client", client.Name,
 			"size", best.Size,
 		)
+
+		// Check for duplicate
+		existing, _ := s.downloads.GetByGUID(ctx, best.GUID)
+		if existing != nil {
+			continue
+		}
 
 		dl := &models.Download{
 			GUID:             best.GUID,
@@ -175,14 +192,8 @@ func (s *Scheduler) searchWanted() {
 			NZBURL:           best.NZBURL,
 			Size:             best.Size,
 			Status:           models.DownloadStatusQueued,
-			Protocol:         "usenet",
+			Protocol:         best.Protocol,
 			Quality:          indexer.ParseRelease(best.Title).Format,
-		}
-
-		// Check for duplicate
-		existing, _ := s.downloads.GetByGUID(ctx, best.GUID)
-		if existing != nil {
-			continue
 		}
 
 		if err := s.downloads.Create(ctx, dl); err != nil {
@@ -190,20 +201,30 @@ func (s *Scheduler) searchWanted() {
 			continue
 		}
 
-		sab := sabnzbd.New(client.Host, client.Port, client.APIKey, client.UseSSL)
-		resp, err := sab.AddURL(ctx, best.NZBURL, best.Title, client.Category, 0)
-		if err != nil {
-			slog.Error("failed to send to SABnzbd", "title", best.Title, "error", err)
-			s.downloads.SetError(ctx, dl.ID, err.Error())
-			continue
+		if best.Protocol == "torrent" {
+			qbt := qbittorrent.New(client.Host, client.Port, client.URLBase, client.APIKey, client.UseSSL)
+			if err := qbt.AddTorrent(ctx, best.NZBURL, client.Category, ""); err != nil {
+				slog.Error("failed to send to qBittorrent", "title", best.Title, "error", err)
+				s.downloads.SetError(ctx, dl.ID, err.Error())
+				continue
+			}
+			s.downloads.UpdateStatus(ctx, dl.ID, models.DownloadStatusDownloading)
+			slog.Info("sent to qBittorrent", "title", best.Title)
+		} else {
+			sab := sabnzbd.New(client.Host, client.Port, client.APIKey, client.UseSSL)
+			resp, err := sab.AddURL(ctx, best.NZBURL, best.Title, client.Category, 0)
+			if err != nil {
+				slog.Error("failed to send to SABnzbd", "title", best.Title, "error", err)
+				s.downloads.SetError(ctx, dl.ID, err.Error())
+				continue
+			}
+			if len(resp.NzoIDs) > 0 {
+				nzoID := resp.NzoIDs[0]
+				s.downloads.SetNzoID(ctx, dl.ID, nzoID)
+			}
+			s.downloads.UpdateStatus(ctx, dl.ID, models.DownloadStatusDownloading)
+			slog.Info("sent to SABnzbd", "title", best.Title)
 		}
-
-		if len(resp.NzoIDs) > 0 {
-			nzoID := resp.NzoIDs[0]
-			s.downloads.SetNzoID(ctx, dl.ID, nzoID)
-		}
-		s.downloads.UpdateStatus(ctx, dl.ID, models.DownloadStatusDownloading)
-		slog.Info("sent to SABnzbd", "title", best.Title)
 	}
 }
 
