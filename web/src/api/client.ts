@@ -244,6 +244,8 @@ export interface DownloadClient {
   host: string
   port: number
   apiKey: string
+  username: string
+  password: string
   useSsl: boolean
   category: string
   enabled: boolean
