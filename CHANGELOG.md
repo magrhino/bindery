@@ -8,6 +8,11 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v0.6.1] — 2026-04-14
+
+### Fixed
+- GoReleaser was cross-compiling `internal/db/db.go` for `GOOS=windows` and hitting `undefined: syscall.Stat_t`, which aborted the Windows targets and failed the entire v0.6.0 tag release before any binaries or the `ghcr.io/vavallee/bindery:0.6.0` tag were published. `describeDir` (the Linux ownership hint in the SQLite "can't open" error path) is now split into `describe_unix.go` (POSIX uid/gid) and `describe_windows.go` (path + mode only). v0.6.1 ships the same feature set as v0.6.0; no runtime behaviour changes on Linux. The v0.6.0 GitHub release has been marked as draft since no assets were published under that tag.
+
 ## [v0.6.0] — 2026-04-14
 
 ### Authentication overhaul
