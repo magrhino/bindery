@@ -230,6 +230,12 @@ On first launch Bindery bootstraps itself — **no environment variables are req
 
 ## Upgrading
 
+### From v0.6.x to v0.6.4
+
+No migration steps required. Drop-in replacement.
+
+After upgrading, open **Settings → Indexers**, edit each indexer, and verify the categories field shows the correct IDs for that indexer. All existing indexers retain their previous category list (default `7020`). For indexers with non-standard category IDs add them now — for example SceneNZBs: `7020, 7120, 3030, 3130`.
+
 ### From v0.6.x to v0.6.3
 
 No migration steps required. This is a bug-fix release.
