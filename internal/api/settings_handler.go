@@ -17,20 +17,38 @@ func NewSettingsHandler(settings *db.SettingsRepo) *SettingsHandler {
 	return &SettingsHandler{settings: settings}
 }
 
+// isSecretSetting reports whether a settings key holds sensitive material
+// that must not leak through the generic settings endpoints. The auth.*
+// values are surfaced through the dedicated /auth/* endpoints instead.
+func isSecretSetting(key string) bool {
+	switch key {
+	case "auth.api_key", "auth.session_secret", "auth.mode":
+		return true
+	}
+	return false
+}
+
 func (h *SettingsHandler) List(w http.ResponseWriter, r *http.Request) {
 	settings, err := h.settings.List(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if settings == nil {
-		settings = []models.Setting{}
+	filtered := make([]models.Setting, 0, len(settings))
+	for _, s := range settings {
+		if !isSecretSetting(s.Key) {
+			filtered = append(filtered, s)
+		}
 	}
-	writeJSON(w, http.StatusOK, settings)
+	writeJSON(w, http.StatusOK, filtered)
 }
 
 func (h *SettingsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
+	if isSecretSetting(key) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "setting not found"})
+		return
+	}
 	s, err := h.settings.Get(r.Context(), key)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -45,6 +63,10 @@ func (h *SettingsHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 func (h *SettingsHandler) Set(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
+	if isSecretSetting(key) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "use /auth/* endpoints for auth settings"})
+		return
+	}
 	var req struct {
 		Value string `json:"value"`
 	}
@@ -66,6 +88,10 @@ func (h *SettingsHandler) Set(w http.ResponseWriter, r *http.Request) {
 
 func (h *SettingsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
+	if isSecretSetting(key) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "use /auth/* endpoints for auth settings"})
+		return
+	}
 	if err := h.settings.Delete(r.Context(), key); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

@@ -80,7 +80,7 @@
 - **Import lists** — Auto-add authors/books from external sources; exclusion list to skip unwanted entries
 - **Tag system** — Scope indexers/profiles/notifications to specific authors
 - **Backup/restore** — Snapshot the SQLite database on demand
-- **API key auth** — Optional `X-Api-Key` header enforcement for external integrations
+- **Authentication** — First-run setup creates an admin account (argon2id password hashing, signed session cookies). Three modes: **Enabled** (always require login), **Local only** (bypass auth for private IPs — home network convenience), **Disabled** (no auth, for trusted reverse-proxy deployments). Per-account API key for external integrations. Per-IP rate limiting on the login endpoint.
 
 ### UI
 - **Light and dark themes** — iOS-style slider toggle in Settings → General → Appearance. First-load default respects the browser's `prefers-color-scheme`; preference persists to localStorage.
@@ -101,7 +101,7 @@
 
 ## Quick Start
 
-### Docker (recommended)
+### Docker
 
 ```bash
 docker run -d \
@@ -113,72 +113,13 @@ docker run -d \
   ghcr.io/vavallee/bindery:latest
 ```
 
-**Tracks:** `:latest` = most recent tagged release, `:vX.Y.Z` = specific release, `:development` = bleeding edge from the `development` branch. `:sha-<hash>` / `:dev-<hash>` tags also published per commit for pinning.
+Open <http://localhost:8787>, follow the first-run setup to create the admin account, and you're in.
 
-### Docker Compose
-
-```yaml
-services:
-  bindery:
-    image: ghcr.io/vavallee/bindery:latest
-    container_name: bindery
-    ports:
-      - 8787:8787
-    volumes:
-      - ./config:/config
-      - /media/books:/books
-      - /media/downloads:/downloads
-    environment:
-      - BINDERY_LOG_LEVEL=info
-    restart: unless-stopped
-```
-
-### Kubernetes (Helm)
-
-```bash
-helm install bindery charts/bindery \
-  --set image.tag=latest \
-  --set persistence.config.storageClass=longhorn \
-  --set ingress.host=bindery.example.com
-```
-
-See [`charts/bindery/values.yaml`](charts/bindery/values.yaml) for all configuration options.
-
-### Binary
-
-Pre-built archives are attached to every [Release](https://github.com/vavallee/bindery/releases) for:
-
-| OS | Architectures | Runs on |
-|----|---------------|---------|
-| Linux | amd64, arm64, armv7, armv6 | x86_64 servers, Raspberry Pi 4 / 5 (64-bit), Pi 2 / 3 (32-bit), Pi Zero / 1 |
-| macOS | amd64, arm64 | Intel Macs, Apple Silicon |
-| Windows | amd64, arm64 | x86_64 desktops, Windows on ARM |
-
-Pick the archive matching your platform, verify against `bindery_vX.Y.Z_checksums.txt`, extract, and run:
-
-```bash
-tar -xzf bindery_v0.5.0_linux_amd64.tar.gz
-./bindery
-```
-
-Open <http://localhost:8787> to access the web UI.
-
-The frontend is embedded in the binary via `go:embed` — no separate static-file hosting needed.
+For Docker Compose, Kubernetes (Helm), binary downloads, running as a specific UID/GID, and upgrade notes, see **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 
 ## Configuration
 
-Bindery is configured through the web UI. Key screens under **Settings**:
-
-| Tab | Description |
-|-----|-------------|
-| **Indexers** | Add your Newznab / Torznab URLs and API keys |
-| **Download Clients** | Configure SABnzbd and/or qBittorrent |
-| **Notifications** | Webhooks for grab/import/failure events |
-| **Quality** | View quality profiles (EPUB / MOBI / AZW3 / PDF ordering) |
-| **Metadata** | Optional Google Books API key and metadata profile filters |
-| **General** | Preferred language filter, naming template, API key, backup/restore |
-
-### Environment variables
+Bindery is configured through the web UI under **Settings**. Core env vars:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -186,11 +127,11 @@ Bindery is configured through the web UI. Key screens under **Settings**:
 | `BINDERY_DB_PATH` | `/config/bindery.db` | SQLite database path |
 | `BINDERY_DATA_DIR` | `/config` | Config directory (backups live here) |
 | `BINDERY_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
-| `BINDERY_API_KEY` | _(empty)_ | Enforces `X-Api-Key` header on all `/api/v1/*` routes |
-| `BINDERY_DOWNLOAD_DIR` | `/downloads` | Where SABnzbd places completed downloads |
+| `BINDERY_DOWNLOAD_DIR` | `/downloads` | Where the download client places completed downloads |
 | `BINDERY_LIBRARY_DIR` | `/books` | Destination for imported ebook files |
 | `BINDERY_AUDIOBOOK_DIR` | falls back to `BINDERY_LIBRARY_DIR` | Destination for imported audiobook folders |
-| `BINDERY_DOWNLOAD_PATH_REMAP` | _(empty)_ | Comma-separated `from:to` pairs rewriting paths reported by the download client into paths bindery can see. Needed when SAB and bindery run in separate containers with the shared storage mounted at different paths (e.g. `/downloads:/media`). Longest-prefix match wins. |
+
+The full variable reference (path remapping, API key seeding, `BINDERY_PUID` / `BINDERY_PGID` sanity checks) is in **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#environment-variables)**.
 
 ## Metadata Sources
 
@@ -261,83 +202,33 @@ POST   /api/v1/notification/{id}/test    - fire a test webhook
 POST   /api/v1/backup                    - snapshot the database
 ```
 
-Set `BINDERY_API_KEY` and pass it via `X-Api-Key` header for external access.
+### Authentication
 
-## Development
+Every request to `/api/v1/*` (except `/health`, `/auth/status`, `/auth/login`, `/auth/logout`, `/auth/setup`) is authenticated. A request is allowed if **any** of:
 
-### Prerequisites
+- Auth mode is **Disabled**.
+- Auth mode is **Local only** and the request originates from a private-range IP (`10/8`, `172.16/12`, `192.168/16`, `127/8`, IPv6 ULA, link-local, loopback).
+- A valid `X-Api-Key` header (or `?apikey=` query param) matches the stored key.
+- A valid `bindery_session` cookie is present.
 
-- Go 1.25+
-- Node.js 22+
+Otherwise the server responds with `401`. The API key lives in **Settings → General → Security** — copy it from there for scripts and integrations. Regenerating the key invalidates any existing consumers.
 
-### Build
+## Documentation
 
-```bash
-# Backend only
-go build ./cmd/bindery
-
-# Frontend
-cd web && npm ci && npm run build
-
-# Go tests
-go test ./...
-
-# Frontend typecheck + lint
-cd web && npm run typecheck && npm run lint
-
-# Docker image
-docker build -t bindery:dev .
-
-# Release-style cross-compile (all platforms, no publish)
-goreleaser release --snapshot --clean
-```
-
-### Project structure
-
-```
-bindery/
-├── cmd/bindery/           # Application entry point
-├── internal/
-│   ├── api/               # HTTP handlers (chi router)
-│   ├── db/                # SQLite repository layer + migrations
-│   ├── models/            # Domain types
-│   ├── metadata/          # OpenLibrary, Google Books, Hardcover
-│   ├── indexer/           # Newznab/Torznab client + multi-indexer searcher
-│   ├── downloader/        # SABnzbd + qBittorrent clients
-│   ├── importer/          # Filename parser, renamer, scanner
-│   ├── notifier/          # Webhook dispatcher
-│   ├── scheduler/         # Background job runner (cron)
-│   ├── webui/             # go:embed for React dist
-│   └── config/            # Environment-based configuration
-├── web/                   # React frontend (Vite)
-├── charts/bindery/        # Helm chart
-└── .github/workflows/     # CI/CD
-```
+| Topic | Where |
+|-------|-------|
+| **Deployment** — Docker, Compose, k8s/Helm, binary, UID/GID, upgrades | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
+| **Roadmap** — planned work, scope notes, and explicitly-out-of-scope items (Z-Library, OpenBooks, etc.) | [docs/ROADMAP.md](docs/ROADMAP.md) |
+| **Contributing & CI checks** — dev setup, full quality/security matrix, local check suite | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| **Changelog** — release notes | [CHANGELOG.md](CHANGELOG.md) |
+| **Reverse-proxy & SSO setups** — Traefik / Caddy / Nginx / Authelia / Authentik recipes | [Wiki](https://github.com/vavallee/bindery/wiki/Reverse-proxy-and-SSO) |
+| **Troubleshooting** — permission-denied, path-remap, import failures | [Wiki](https://github.com/vavallee/bindery/wiki/Troubleshooting) |
+| **Indexer & download-client recipes** — NZBGeek / DrunkenSlug / Prowlarr / Jackett / SAB / qBit tips | [Wiki](https://github.com/vavallee/bindery/wiki/Indexer-and-downloader-recipes) |
+| **Migrating from Readarr** — step-by-step with known failure modes | [Wiki](https://github.com/vavallee/bindery/wiki/Migrating-from-Readarr) |
 
 ## Contributing
 
-Contributions welcome. Please:
-
-1. Fork the repo
-2. Create a feature branch (`git checkout -b feature/x`)
-3. Ensure `go test ./...` passes and `cd web && npm run build` succeeds
-4. Open a Pull Request
-
-## Roadmap
-
-Tracked feature requests for future releases. Not a commitment — priorities shift based on user feedback and available time. Open an issue to propose additions.
-
-- **Multi-user support** — Per-user libraries, per-user monitored authors, per-user quality profiles. Today Bindery assumes a single user; the database schema and UI would need user scoping.
-- **OAuth / SSO** — Swap the current `X-Api-Key` model for OIDC (Authelia, Authentik, Keycloak, Google, GitHub). Support header-based auth for reverse-proxy setups that handle SSO upstream.
-- **External database support (MySQL / Postgres)** — Optional settings for DB host, credentials, and connection path so bindery can run against a shared MySQL/Postgres instance instead of the bundled SQLite file. Useful for multi-replica HA deployments.
-- **Calibre library integration** — Treat a Calibre library as a first-class storage target, for users who already live in Calibre or want e-reader sync:
-  - _Library import & sync_ — On startup, read an existing Calibre library (`metadata.opf` + `Author/Title (id)/…` folder layout) and ingest it as Bindery's catalogue. Detect out-of-band Calibre edits and re-sync.
-  - _Write-through to `metadata.db`_ — On every import, insert/update the row in Calibre's SQLite `metadata.db` so new books appear in Calibre immediately (no "Add books" scan). Preserve Calibre's exact folder naming (`Author Name/Book Title (id)/book.ext`) and sidecar files (`metadata.opf`, `cover.jpg`).
-  - _OPDS feed_ — Expose a Calibre-content-server-style OPDS endpoint so KOReader / Moon+ Reader / etc. can browse and download without running Calibre itself.
-
-## Changelog
-
-See [CHANGELOG.md](CHANGELOG.md) for release notes.
+PRs, issues, and feedback welcome. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the dev setup, the full local check suite, and the PR flow. Tracked feature work lives in **[docs/ROADMAP.md](docs/ROADMAP.md)** — open an issue before starting anything substantial.
 
 ## License
 

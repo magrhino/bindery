@@ -16,6 +16,16 @@ spec:
     helm:
       valueFiles:
         - values.yaml
+      # Cluster-specific overlay. values.yaml is neutral (ingress off,
+      # example host) so the chart is reusable; this block pins the
+      # live homelab deployment.
+      values: |
+        ingress:
+          enabled: true
+          host: bindery.autonomy.ninja
+          entryPoints:
+            - internal-https
+          certResolver: internal
   destination:
     server: https://kubernetes.default.svc
     namespace: default

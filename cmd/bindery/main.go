@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/vavallee/bindery/internal/api"
+	"github.com/vavallee/bindery/internal/auth"
 	"github.com/vavallee/bindery/internal/config"
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/importer"
@@ -52,6 +53,10 @@ func main() {
 		"port", cfg.Port,
 	)
 
+	// Fail fast if BINDERY_PUID/PGID is set but the container isn't running
+	// as that UID/GID. See cmd/bindery/uidcheck.go for the full rationale.
+	checkPUIDPGID()
+
 	// Database
 	database, err := db.Open(cfg.DBPath)
 	if err != nil {
@@ -77,6 +82,20 @@ func main() {
 	metadataProfileRepo := db.NewMetadataProfileRepo(database)
 	delayProfileRepo := db.NewDelayProfileRepo(database)
 	customFormatRepo := db.NewCustomFormatRepo(database)
+	userRepo := db.NewUserRepo(database)
+
+	// Auth bootstrap: seed the API key and session secret on first boot if
+	// they're missing, so Bindery is never "open by default". If the user has
+	// explicitly set BINDERY_API_KEY in the env (legacy path), we honour it as
+	// the seed value so existing integrations keep working after upgrade.
+	ctxBoot := context.Background()
+	if err := bootstrapAuth(ctxBoot, settingsRepo, cfg.APIKey); err != nil {
+		slog.Error("auth bootstrap failed", "error", err)
+		os.Exit(1)
+	}
+
+	// Login rate limiter: 5 failures / 15 min per IP, matches Sonarr's posture.
+	loginLimiter := auth.NewLoginLimiter(5, 15*time.Minute)
 
 	// Metadata providers
 	olClient := openlibrary.New()
@@ -119,8 +138,9 @@ func main() {
 	notif := notifier.New(notificationRepo)
 
 	// API handlers
+	authHandler := api.NewAuthHandler(userRepo, settingsRepo, loginLimiter)
 	searchHandler := api.NewSearchHandler(metaAgg)
-	authorHandler := api.NewAuthorHandler(authorRepo, bookRepo, metaAgg, settingsRepo)
+	authorHandler := api.NewAuthorHandler(authorRepo, bookRepo, metaAgg, settingsRepo, metadataProfileRepo)
 	bookHandler := api.NewBookHandler(bookRepo, metaAgg, historyRepo)
 	indexerHandler := api.NewIndexerHandler(indexerRepo, bookRepo, authorRepo, idxSearcher, settingsRepo, blocklistRepo)
 	dlClientHandler := api.NewDownloadClientHandler(dlClientRepo)
@@ -150,12 +170,13 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5))
 
-	if cfg.APIKey == "" {
-		slog.Warn("authentication disabled — set BINDERY_API_KEY to require X-Api-Key on /api/v1/*")
-	}
+	// Composite auth: session cookie (UI) OR API key (external apps) OR
+	// local-IP bypass when mode=local-only. Mode, key, and secret are sourced
+	// live from the DB so they can be rotated without a process restart.
+	authProvider := &dbAuthProvider{settings: settingsRepo, users: userRepo}
 
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Use(apiKeyMiddleware(cfg.APIKey))
+		r.Use(auth.Middleware(authProvider))
 
 		// System
 		r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -166,6 +187,18 @@ func main() {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"version":"` + version + `","commit":"` + commit + `","buildDate":"` + date + `"}`))
 		})
+
+		// Auth — status/login/logout/setup are always allowed through the
+		// middleware (see auth.AllowUnauthPath). The config + mutation
+		// endpoints below sit behind it.
+		r.Get("/auth/status", authHandler.Status)
+		r.Post("/auth/login", authHandler.Login)
+		r.Post("/auth/logout", authHandler.Logout)
+		r.Post("/auth/setup", authHandler.Setup)
+		r.Get("/auth/config", authHandler.GetConfig)
+		r.Post("/auth/password", authHandler.ChangePassword)
+		r.Post("/auth/apikey/regenerate", authHandler.RegenerateAPIKey)
+		r.Put("/auth/mode", authHandler.SetMode)
 
 		// Metadata search
 		r.Get("/search/author", searchHandler.SearchAuthors)
@@ -346,28 +379,90 @@ func audiobookNamingTemplate(settings *db.SettingsRepo) string {
 	return ""
 }
 
-func apiKeyMiddleware(apiKey string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if apiKey == "" {
-				next.ServeHTTP(w, r)
-				return
-			}
-			if r.URL.Path == "/api/v1/health" {
-				next.ServeHTTP(w, r)
-				return
-			}
-			key := r.Header.Get("X-Api-Key")
-			if key == "" {
-				key = r.URL.Query().Get("apikey")
-			}
-			if key != apiKey {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusUnauthorized)
-				_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
+// bootstrapAuth seeds the three auth settings on first boot:
+//   - auth.api_key        (32 random bytes, hex-encoded)
+//   - auth.session_secret (32 random bytes, base64)
+//   - auth.mode           ('enabled' — safe default, forces first-run setup)
+//
+// If envSeed is non-empty (legacy BINDERY_API_KEY) and no api_key is stored
+// yet, that value seeds the DB so existing integrations keep working after
+// upgrade. Rotating the key in-UI then overrides the env.
+func bootstrapAuth(ctx context.Context, settings *db.SettingsRepo, envSeed string) error {
+	// API key
+	existing, err := settings.Get(ctx, api.SettingAuthAPIKey)
+	if err != nil {
+		return err
 	}
+	if existing == nil || existing.Value == "" {
+		key := envSeed
+		if key == "" {
+			if k, err := auth.RandomHex(32); err != nil {
+				return err
+			} else {
+				key = k
+			}
+			slog.Info("generated new API key (visible in Settings → Security)")
+		} else {
+			slog.Info("seeded API key from BINDERY_API_KEY env var")
+		}
+		if err := settings.Set(ctx, api.SettingAuthAPIKey, key); err != nil {
+			return err
+		}
+	}
+
+	// Session signing secret
+	if s, _ := settings.Get(ctx, api.SettingAuthSessionSecret); s == nil || s.Value == "" {
+		secret, err := auth.RandomBase64(32)
+		if err != nil {
+			return err
+		}
+		if err := settings.Set(ctx, api.SettingAuthSessionSecret, secret); err != nil {
+			return err
+		}
+	}
+
+	// Auth mode default: 'enabled' so a fresh install forces first-run setup
+	// before anything becomes reachable.
+	if s, _ := settings.Get(ctx, api.SettingAuthMode); s == nil || s.Value == "" {
+		if err := settings.Set(ctx, api.SettingAuthMode, string(auth.ModeEnabled)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// dbAuthProvider adapts the DB-backed settings + user repo to the minimal
+// auth.Provider interface consumed by auth.Middleware.
+type dbAuthProvider struct {
+	settings *db.SettingsRepo
+	users    *db.UserRepo
+}
+
+func (p *dbAuthProvider) Mode() auth.Mode {
+	s, _ := p.settings.Get(context.Background(), api.SettingAuthMode)
+	if s == nil {
+		return auth.ModeEnabled
+	}
+	return auth.ParseMode(s.Value)
+}
+
+func (p *dbAuthProvider) APIKey() string {
+	s, _ := p.settings.Get(context.Background(), api.SettingAuthAPIKey)
+	if s == nil {
+		return ""
+	}
+	return s.Value
+}
+
+func (p *dbAuthProvider) SessionSecret() []byte {
+	s, _ := p.settings.Get(context.Background(), api.SettingAuthSessionSecret)
+	if s == nil {
+		return nil
+	}
+	return []byte(s.Value)
+}
+
+func (p *dbAuthProvider) SetupRequired() bool {
+	n, err := p.users.Count(context.Background())
+	return err == nil && n == 0
 }
