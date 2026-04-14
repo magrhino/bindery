@@ -63,7 +63,7 @@ export default function AuthorsPage() {
     return list
   }, [authors, search, sort])
 
-  const { pageItems, paginationProps, reset } = usePagination(filtered, 50)
+  const { pageItems, paginationProps, reset } = usePagination(filtered, 50, 'authors')
 
   useEffect(() => { reset() }, [search, sort, reset])
 
