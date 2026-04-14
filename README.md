@@ -181,6 +181,7 @@ No Goodreads scraping. All sources use documented, stable public APIs.
 ### Indexers
 - **Newznab** (Usenet) — NZBGeek, NZBFinder, NZBPlanet, DrunkenSlug, etc.
 - **Torznab** (Torrents) — Prowlarr, Jackett, or direct Torznab endpoints
+- **Configurable categories per indexer** — set custom Newznab category IDs in Settings → Indexers (e.g. `7120` for German books, `3130` for German audio on SceneNZBs). Bindery routes 7xxx IDs to ebook searches and 3xxx IDs to audiobook searches automatically.
 
 ### Notifications
 - **Generic webhooks** — Any HTTP endpoint. Pipe to Apprise, ntfy, Home Assistant, Slack, Discord via proxies.

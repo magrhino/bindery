@@ -230,6 +230,20 @@ On first launch Bindery bootstraps itself — **no environment variables are req
 
 ## Upgrading
 
+### From v0.6.x to v0.6.4
+
+No migration steps required. Drop-in replacement.
+
+After upgrading, open **Settings → Indexers**, edit each indexer, and verify the categories field shows the correct IDs for that indexer. All existing indexers retain their previous category list (default `7020`). For indexers with non-standard category IDs add them now — for example SceneNZBs: `7020, 7120, 3030, 3130`.
+
+### From v0.6.x to v0.6.3
+
+No migration steps required. This is a bug-fix release.
+
+- **Standalone binary UI fix** — if you were running v0.6.0–v0.6.2 from a downloaded archive and saw only `.gitkeep` at `http://localhost:8787`, this is fixed. Re-download the v0.6.3 archive for your platform.
+- **Protocol routing** — torznab (torrent) indexers now route grabs to qBittorrent; newznab (Usenet) indexers route to SABnzbd. If you previously had torrent grabs fail silently, remove any failed queue entries and re-grab.
+- **qBittorrent credential fields** — the Settings form now shows Username/Password fields. Existing qBittorrent clients already have the correct values stored; the UI change is cosmetic.
+
 ### From v0.5.x to v0.6.x
 
 The auth overhaul (first installable in v0.6.1; `v0.6.0` tag's release binaries never built) is fully backwards-compatible on existing installs:
