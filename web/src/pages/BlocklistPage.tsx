@@ -63,7 +63,7 @@ export default function BlocklistPage() {
 
   const allSelected = entries.length > 0 && selected.size === entries.length
 
-  const { pageItems, paginationProps } = usePagination(entries, 50)
+  const { pageItems, paginationProps } = usePagination(entries, 50, 'blocklist')
 
   return (
     <div>

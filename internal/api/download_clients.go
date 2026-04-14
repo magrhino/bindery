@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/downloader/qbittorrent"
 	"github.com/vavallee/bindery/internal/downloader/sabnzbd"
 	"github.com/vavallee/bindery/internal/models"
 )
@@ -107,10 +108,18 @@ func (h *DownloadClientHandler) Test(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sab := sabnzbd.New(client.Host, client.Port, client.APIKey, client.UseSSL)
-	if err := sab.Test(r.Context()); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
+	if client.Type == "qbittorrent" {
+		qbt := qbittorrent.New(client.Host, client.Port, client.Username, client.Password, client.UseSSL)
+		if err := qbt.Test(r.Context()); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	} else {
+		sab := sabnzbd.New(client.Host, client.Port, client.APIKey, client.UseSSL)
+		if err := sab.Test(r.Context()); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "ok"})
 }

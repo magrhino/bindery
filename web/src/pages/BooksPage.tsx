@@ -63,7 +63,7 @@ export default function BooksPage() {
     return list
   }, [books, statusFilter, mediaFilter, search, sort])
 
-  const { pageItems, paginationProps, reset } = usePagination(filtered, 50)
+  const { pageItems, paginationProps, reset } = usePagination(filtered, 50, 'books')
 
   useEffect(() => { reset() }, [statusFilter, mediaFilter, search, sort, reset])
 

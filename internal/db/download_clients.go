@@ -19,6 +19,24 @@ func NewDownloadClientRepo(db *sql.DB) *DownloadClientRepo {
 	return &DownloadClientRepo{db: db}
 }
 
+// populateVirtualCredentials maps the storage columns to the virtual Username/Password
+// fields for qBittorrent clients (which store credentials in url_base and api_key).
+func populateVirtualCredentials(c *models.DownloadClient) {
+	if c.Type == "qbittorrent" {
+		c.Username = c.URLBase
+		c.Password = c.APIKey
+	}
+}
+
+// applyVirtualCredentials maps the virtual Username/Password fields back to the
+// storage columns for qBittorrent clients before writing to the database.
+func applyVirtualCredentials(c *models.DownloadClient) {
+	if c.Type == "qbittorrent" {
+		c.URLBase = c.Username
+		c.APIKey = c.Password
+	}
+}
+
 func (r *DownloadClientRepo) List(ctx context.Context) ([]models.DownloadClient, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, name, type, host, port, api_key, use_ssl, url_base, category, priority, enabled, created_at, updated_at
@@ -38,6 +56,7 @@ func (r *DownloadClientRepo) List(ctx context.Context) ([]models.DownloadClient,
 		}
 		c.Enabled = enabled == 1
 		c.UseSSL = useSSL == 1
+		populateVirtualCredentials(&c)
 		clients = append(clients, c)
 	}
 	return clients, rows.Err()
@@ -59,6 +78,7 @@ func (r *DownloadClientRepo) GetByID(ctx context.Context, id int64) (*models.Dow
 	}
 	c.Enabled = enabled == 1
 	c.UseSSL = useSSL == 1
+	populateVirtualCredentials(&c)
 	return &c, nil
 }
 
@@ -78,38 +98,8 @@ func (r *DownloadClientRepo) GetFirstEnabled(ctx context.Context) (*models.Downl
 	}
 	c.Enabled = enabled == 1
 	c.UseSSL = useSSL == 1
+	populateVirtualCredentials(&c)
 	return &c, nil
-}
-
-func (r *DownloadClientRepo) Create(ctx context.Context, c *models.DownloadClient) error {
-	now := time.Now().UTC()
-	result, err := r.db.ExecContext(ctx, `
-		INSERT INTO download_clients (name, type, host, port, api_key, use_ssl, url_base, category, priority, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.Name, c.Type, c.Host, c.Port, c.APIKey, c.UseSSL, c.URLBase, c.Category, c.Priority, c.Enabled, now, now)
-	if err != nil {
-		return fmt.Errorf("create download client: %w", err)
-	}
-	id, _ := result.LastInsertId()
-	c.ID = id
-	c.CreatedAt = now
-	c.UpdatedAt = now
-	return nil
-}
-
-func (r *DownloadClientRepo) Update(ctx context.Context, c *models.DownloadClient) error {
-	now := time.Now().UTC()
-	_, err := r.db.ExecContext(ctx, `
-		UPDATE download_clients SET name=?, type=?, host=?, port=?, api_key=?, use_ssl=?,
-		                            url_base=?, category=?, priority=?, enabled=?, updated_at=?
-		WHERE id=?`,
-		c.Name, c.Type, c.Host, c.Port, c.APIKey, c.UseSSL, c.URLBase, c.Category, c.Priority, c.Enabled, now, c.ID)
-	return err
-}
-
-func (r *DownloadClientRepo) Delete(ctx context.Context, id int64) error {
-	_, err := r.db.ExecContext(ctx, "DELETE FROM download_clients WHERE id=?", id)
-	return err
 }
 
 // GetFirstEnabledByProtocol returns the highest-priority enabled client that
@@ -132,10 +122,12 @@ func (r *DownloadClientRepo) GetFirstEnabledByProtocol(ctx context.Context, prot
 		return nil, err
 	}
 	if errors.Is(err, sql.ErrNoRows) {
+		// No client of matching type — fall back to any enabled client
 		return r.GetFirstEnabled(ctx)
 	}
 	c.Enabled = enabled == 1
 	c.UseSSL = useSSL == 1
+	populateVirtualCredentials(&c)
 	return &c, nil
 }
 
@@ -165,15 +157,48 @@ func (r *DownloadClientRepo) GetEnabledByProtocol(ctx context.Context, protocol 
 		}
 		c.Enabled = enabled == 1
 		c.UseSSL = useSSL == 1
+		populateVirtualCredentials(&c)
 		clients = append(clients, c)
 	}
 	return clients, rows.Err()
 }
 
-// PickClientForMediaType selects the best client from a list by preferring one
-// whose category hints match the media type. For audiobooks, prefer a client
-// with "audio" in the category name; for ebooks, prefer one without "audio".
-// Falls back to the first (highest-priority) client if no preference matches.
+func (r *DownloadClientRepo) Create(ctx context.Context, c *models.DownloadClient) error {
+	applyVirtualCredentials(c)
+	now := time.Now().UTC()
+	result, err := r.db.ExecContext(ctx, `
+		INSERT INTO download_clients (name, type, host, port, api_key, use_ssl, url_base, category, priority, enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.Name, c.Type, c.Host, c.Port, c.APIKey, c.UseSSL, c.URLBase, c.Category, c.Priority, c.Enabled, now, now)
+	if err != nil {
+		return fmt.Errorf("create download client: %w", err)
+	}
+	id, _ := result.LastInsertId()
+	c.ID = id
+	c.CreatedAt = now
+	c.UpdatedAt = now
+	return nil
+}
+
+func (r *DownloadClientRepo) Update(ctx context.Context, c *models.DownloadClient) error {
+	applyVirtualCredentials(c)
+	now := time.Now().UTC()
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE download_clients SET name=?, type=?, host=?, port=?, api_key=?, use_ssl=?,
+		                            url_base=?, category=?, priority=?, enabled=?, updated_at=?
+		WHERE id=?`,
+		c.Name, c.Type, c.Host, c.Port, c.APIKey, c.UseSSL, c.URLBase, c.Category, c.Priority, c.Enabled, now, c.ID)
+	return err
+}
+
+func (r *DownloadClientRepo) Delete(ctx context.Context, id int64) error {
+	_, err := r.db.ExecContext(ctx, "DELETE FROM download_clients WHERE id=?", id)
+	return err
+}
+
+// PickClientForMediaType selects the best client from a list for the given
+// media type. Audiobooks prefer a client whose category contains "audio";
+// other types prefer one without. Falls back to the first client.
 func PickClientForMediaType(clients []models.DownloadClient, mediaType string) *models.DownloadClient {
 	if len(clients) == 0 {
 		return nil
