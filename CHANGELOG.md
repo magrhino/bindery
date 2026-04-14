@@ -8,8 +8,16 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v0.6.2] — 2026-04-14
+
+Bug-fix release on top of v0.6.1.
+
 ### Fixed
 - **Windows binary exits immediately** ([#7](https://github.com/vavallee/bindery/issues/7)): the default `BINDERY_DB_PATH` was hardcoded to the Linux-container path `/config/bindery.db`. On Windows, `os.MkdirAll("/config", …)` failed, the preflight write probe returned an error, and because the process was spawned from an Explorer double-click the cmd window closed before the user could read the log line. Defaults are now platform-aware via `os.UserConfigDir`: `%APPDATA%\Bindery\bindery.db` on Windows, `~/Library/Application Support/Bindery/bindery.db` on macOS, unchanged `/config/bindery.db` on Linux (existing Docker / Helm / bare-metal deployments are untouched). The resolved paths are emitted in the `"starting bindery"` startup log line so `bindery.exe` runs from `cmd` will surface them even if db.Open later fails.
+- **Header nav overflowed into a horizontal scrollbar** at mid viewport widths (≈768–1024px). Desktop nav + version label + sign-out now collapse into the hamburger menu at `lg` (1024px) instead of `md` (768px), and the right-hand cluster is `flex-shrink-0` so it stops being squeezed by the nav tabs.
+
+### Changed
+- CI now uploads Go coverage to Codecov (`codecov/codecov-action@v5`) on both the build and validate jobs, with a `.codecov.yml` that marks project/patch checks as informational so coverage dips don't block PRs.
 
 ## [v0.6.1] — 2026-04-14
 
@@ -304,6 +312,7 @@ Initial public release.
 - Single-binary distribution with embedded React frontend.
 - Distroless Docker image and Helm chart.
 
+[v0.6.2]: https://github.com/vavallee/bindery/releases/tag/v0.6.2
 [v0.6.1]: https://github.com/vavallee/bindery/releases/tag/v0.6.1
 [v0.6.0]: https://github.com/vavallee/bindery/releases/tag/v0.6.0
 [v0.5.2]: https://github.com/vavallee/bindery/releases/tag/v0.5.2
