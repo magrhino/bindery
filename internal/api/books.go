@@ -149,11 +149,13 @@ func (h *BookHandler) Update(w http.ResponseWriter, r *http.Request) {
 		book.Status = *req.Status
 	}
 	if req.MediaType != nil {
-		if *req.MediaType != models.MediaTypeEbook && *req.MediaType != models.MediaTypeAudiobook {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mediaType must be 'ebook' or 'audiobook'"})
+		switch *req.MediaType {
+		case models.MediaTypeEbook, models.MediaTypeAudiobook, models.MediaTypeBoth:
+			book.MediaType = *req.MediaType
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mediaType must be 'ebook', 'audiobook', or 'both'"})
 			return
 		}
-		book.MediaType = *req.MediaType
 	}
 	if req.ASIN != nil {
 		book.ASIN = *req.ASIN
@@ -201,9 +203,19 @@ func (h *BookHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	// before dropping the record, so the user doesn't have to delete the
 	// file separately after removing the book.
 	if r.URL.Query().Get("deleteFiles") == "true" {
-		if book, _ := h.books.GetByID(r.Context(), id); book != nil && book.FilePath != "" {
-			if err := removeBookPath(book.FilePath); err != nil {
-				slog.Warn("book delete: failed to remove files", "id", id, "path", book.FilePath, "error", err)
+		if book, _ := h.books.GetByID(r.Context(), id); book != nil {
+			for _, p := range []string{book.EbookFilePath, book.AudiobookFilePath} {
+				if p != "" {
+					if err := removeBookPath(p); err != nil {
+						slog.Warn("book delete: failed to remove files", "id", id, "path", p, "error", err)
+					}
+				}
+			}
+			// Fallback for books with only the legacy file_path set.
+			if book.EbookFilePath == "" && book.AudiobookFilePath == "" && book.FilePath != "" {
+				if err := removeBookPath(book.FilePath); err != nil {
+					slog.Warn("book delete: failed to remove files", "id", id, "path", book.FilePath, "error", err)
+				}
 			}
 		}
 	}
@@ -214,11 +226,13 @@ func (h *BookHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// DeleteFile removes the on-disk file or folder backing an imported book,
-// clears the stored file_path, and flips the status back to `wanted` so the
-// book re-appears on the Wanted page. The book record itself is kept. Used
-// to clean up bad grabs (wrong edition, corrupt files, mis-tagged metadata)
-// without losing the author/book association or its history.
+// DeleteFile removes the on-disk file or folder backing an imported book and
+// flips the book's status back to `wanted` so it re-appears on the Wanted page.
+//
+// For single-format books the file is always the one stored in file_path.
+// For dual-format books (media_type='both') an optional `?format=ebook` or
+// `?format=audiobook` query param scopes the deletion to one format; omitting
+// it (or passing any other value) deletes both.
 func (h *BookHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(w, r)
 	if !ok {
@@ -229,27 +243,64 @@ func (h *BookHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
 		return
 	}
-	if book.FilePath == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "book has no file to delete"})
-		return
+
+	format := r.URL.Query().Get("format") // optional: "ebook" | "audiobook"
+	deleteEbook := (format == "" || format == models.MediaTypeEbook) && book.EbookFilePath != ""
+	deleteAudiobook := (format == "" || format == models.MediaTypeAudiobook) && book.AudiobookFilePath != ""
+
+	if !deleteEbook && !deleteAudiobook {
+		// Legacy fallback: check the old file_path for books migrated before
+		// the dual-format columns were added.
+		if book.FilePath == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "book has no file to delete"})
+			return
+		}
+		deleteEbook = true // treat legacy file_path as ebook
 	}
 
-	oldPath := book.FilePath
-	if err := removeBookPath(oldPath); err != nil {
-		slog.Error("failed to remove book path", "id", id, "path", oldPath, "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+	var deletedPaths []string
+
+	if deleteEbook && book.EbookFilePath != "" {
+		if err := removeBookPath(book.EbookFilePath); err != nil {
+			slog.Error("failed to remove ebook path", "id", id, "path", book.EbookFilePath, "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		deletedPaths = append(deletedPaths, book.EbookFilePath)
+		book.EbookFilePath = ""
 	}
 
-	book.FilePath = ""
-	book.Status = models.BookStatusWanted
+	if deleteAudiobook && book.AudiobookFilePath != "" {
+		if err := removeBookPath(book.AudiobookFilePath); err != nil {
+			slog.Error("failed to remove audiobook path", "id", id, "path", book.AudiobookFilePath, "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		deletedPaths = append(deletedPaths, book.AudiobookFilePath)
+		book.AudiobookFilePath = ""
+	}
+
+	// Legacy file_path: clear when the corresponding per-format column is gone.
+	if book.EbookFilePath == "" && book.AudiobookFilePath == "" {
+		book.FilePath = ""
+	} else if book.EbookFilePath != "" {
+		book.FilePath = book.EbookFilePath
+	} else {
+		book.FilePath = book.AudiobookFilePath
+	}
+
+	// Status: back to wanted if any wanted format is now missing.
+	if book.NeedsEbook() || book.NeedsAudiobook() {
+		book.Status = models.BookStatusWanted
+	}
+
 	if err := h.books.Update(r.Context(), book); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
 	if h.history != nil {
-		data, _ := json.Marshal(map[string]string{"path": oldPath})
+		data, _ := json.Marshal(map[string]any{"paths": deletedPaths})
 		_ = h.history.Create(r.Context(), &models.HistoryEvent{
 			BookID:      &book.ID,
 			EventType:   models.HistoryEventBookFileDeleted,

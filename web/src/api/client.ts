@@ -102,7 +102,7 @@ export const api = {
   updateBook: (id: number, data: Partial<Book>) => request<Book>(`/book/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteBook: (id: number, deleteFiles = false) =>
     request<void>(`/book/${id}${deleteFiles ? '?deleteFiles=true' : ''}`, { method: 'DELETE' }),
-  deleteBookFile: (id: number) => request<Book>(`/book/${id}/file`, { method: 'DELETE' }),
+  deleteBookFile: (id: number, queryParams = '') => request<Book>(`/book/${id}/file${queryParams}`, { method: 'DELETE' }),
   searchBook: (id: number) => request<SearchResult[]>(`/book/${id}/search`, { method: 'POST' }),
   enrichAudiobook: (id: number) => request<Book>(`/book/${id}/enrich-audiobook`, { method: 'POST' }),
 
@@ -112,7 +112,7 @@ export const api = {
   // Bulk actions
   bulkActionAuthors: (ids: number[], action: AuthorBulkAction) =>
     request<BulkResult>('/author/bulk', { method: 'POST', body: JSON.stringify({ ids, action }) }),
-  bulkActionBooks: (ids: number[], action: BookBulkAction, mediaType?: 'ebook' | 'audiobook') =>
+  bulkActionBooks: (ids: number[], action: BookBulkAction, mediaType?: MediaType) =>
     request<BulkResult>('/book/bulk', { method: 'POST', body: JSON.stringify({ ids, action, ...(mediaType ? { mediaType } : {}) }) }),
   bulkActionWanted: (ids: number[], action: WantedBulkAction) =>
     request<BulkResult>('/wanted/bulk', { method: 'POST', body: JSON.stringify({ ids, action }) }),
@@ -242,7 +242,7 @@ export interface MergeAuthorsResult {
   TargetUpdated: boolean
 }
 
-export type MediaType = 'ebook' | 'audiobook'
+export type MediaType = 'ebook' | 'audiobook' | 'both'
 
 export interface Book {
   id: number
@@ -257,6 +257,9 @@ export interface Book {
   status: string
   filePath: string
   mediaType: MediaType
+  // Per-format file paths for dual-format books (mediaType='both').
+  ebookFilePath: string
+  audiobookFilePath: string
   narrator?: string
   durationSeconds?: number
   asin?: string

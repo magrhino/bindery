@@ -41,6 +41,11 @@ type Book struct {
 	CreatedAt             time.Time  `json:"createdAt"`
 	UpdatedAt             time.Time  `json:"updatedAt"`
 
+	// Per-format file paths for dual-format support (media_type = 'both').
+	// Single-format books populate only the relevant column; the other stays "".
+	EbookFilePath     string `json:"ebookFilePath"`
+	AudiobookFilePath string `json:"audiobookFilePath"`
+
 	// Joined data
 	Author   *Author   `json:"author,omitempty"`
 	Editions []Edition `json:"editions,omitempty"`
@@ -48,6 +53,26 @@ type Book struct {
 	// Transport-only: series data from the metadata provider, used during
 	// ingestion to populate series/series_books. Never stored in books table.
 	SeriesRefs []SeriesRef `json:"-"`
+}
+
+// WantsEbook reports whether the ebook format is monitored for this book.
+func (b *Book) WantsEbook() bool {
+	return b.MediaType == MediaTypeEbook || b.MediaType == MediaTypeBoth
+}
+
+// WantsAudiobook reports whether the audiobook format is monitored for this book.
+func (b *Book) WantsAudiobook() bool {
+	return b.MediaType == MediaTypeAudiobook || b.MediaType == MediaTypeBoth
+}
+
+// NeedsEbook reports whether the ebook format is monitored but not yet on disk.
+func (b *Book) NeedsEbook() bool {
+	return b.WantsEbook() && b.EbookFilePath == ""
+}
+
+// NeedsAudiobook reports whether the audiobook format is monitored but not yet on disk.
+func (b *Book) NeedsAudiobook() bool {
+	return b.WantsAudiobook() && b.AudiobookFilePath == ""
 }
 
 const (
@@ -64,4 +89,8 @@ const (
 const (
 	MediaTypeEbook     = "ebook"
 	MediaTypeAudiobook = "audiobook"
+	// MediaTypeBoth requests both an ebook and an audiobook for the same
+	// work. The search and import pipelines handle each format independently;
+	// the book's aggregate status flips to "imported" only when both are on disk.
+	MediaTypeBoth = "both"
 )

@@ -26,11 +26,18 @@ type CalibreSyncer interface {
 	RunSync(ctx context.Context)
 }
 
+// bookSearcher is the narrow interface the scheduler uses for indexer
+// searches. *indexer.Searcher satisfies it; the interface keeps the scheduler
+// testable without real network calls.
+type bookSearcher interface {
+	SearchBook(ctx context.Context, indexers []models.Indexer, c indexer.MatchCriteria) []newznab.SearchResult
+}
+
 // Scheduler runs background jobs on configurable intervals.
 type Scheduler struct {
 	cron     *cron.Cron
 	scanner  *importer.Scanner
-	searcher *indexer.Searcher
+	searcher bookSearcher
 	meta     *metadata.Aggregator
 
 	authors       *db.AuthorRepo
@@ -125,30 +132,50 @@ func (s *Scheduler) Stop() {
 	slog.Info("scheduler stopped")
 }
 
-// SearchAndGrabBook performs an immediate indexer search for a single wanted
-// book and auto-grabs the top result. It is the same logic the 12-hour
-// wanted-scan uses, promoted so on-add and status-transition hooks can trigger
-// a search without waiting for the next scheduled run.
+// SearchAndGrabBook performs an immediate indexer search for a wanted book and
+// auto-grabs the top result. For dual-format books (media_type='both') it fires
+// independent searches for whichever formats still lack a file on disk.
+// It is the same logic the 12-hour wanted-scan uses, promoted so on-add and
+// status-transition hooks can trigger a search without waiting for the next run.
 func (s *Scheduler) SearchAndGrabBook(ctx context.Context, book models.Book) {
-	idxs, err := s.indexers.List(ctx)
-	if err != nil {
-		slog.Error("SearchAndGrabBook: failed to list indexers", "error", err)
-		return
+	if book.NeedsEbook() {
+		s.searchAndGrabFormat(ctx, book, models.MediaTypeEbook)
+	}
+	if book.NeedsAudiobook() {
+		s.searchAndGrabFormat(ctx, book, models.MediaTypeAudiobook)
+	}
+}
+
+// searchAndGrabFormat searches for and grabs a specific format of a book.
+// mediaType must be MediaTypeEbook or MediaTypeAudiobook.
+func (s *Scheduler) searchAndGrabFormat(ctx context.Context, book models.Book, mediaType string) {
+	var idxs []models.Indexer
+	if s.indexers != nil {
+		var err error
+		idxs, err = s.indexers.List(ctx)
+		if err != nil {
+			slog.Error("SearchAndGrabBook: failed to list indexers", "error", err)
+			return
+		}
 	}
 
 	lang := "en"
-	if langSetting, _ := s.settings.Get(ctx, "search.preferredLanguage"); langSetting != nil {
-		lang = langSetting.Value
+	if s.settings != nil {
+		if langSetting, _ := s.settings.Get(ctx, "search.preferredLanguage"); langSetting != nil {
+			lang = langSetting.Value
+		}
 	}
 
 	authorName := ""
-	if a, _ := s.authors.GetByID(ctx, book.AuthorID); a != nil {
-		authorName = a.Name
+	if s.authors != nil {
+		if a, _ := s.authors.GetByID(ctx, book.AuthorID); a != nil {
+			authorName = a.Name
+		}
 	}
 	crit := indexer.MatchCriteria{
 		Title:     book.Title,
 		Author:    authorName,
-		MediaType: book.MediaType,
+		MediaType: mediaType,
 		ASIN:      book.ASIN,
 	}
 	if book.ReleaseDate != nil {
@@ -165,7 +192,7 @@ func (s *Scheduler) SearchAndGrabBook(ctx context.Context, book models.Book) {
 	best := results[0]
 
 	candidates, _ := s.clients.GetEnabledByProtocol(ctx, best.Protocol)
-	client := db.PickClientForMediaType(candidates, book.MediaType)
+	client := db.PickClientForMediaType(candidates, mediaType)
 	if client == nil {
 		client, _ = s.clients.GetFirstEnabled(ctx)
 	}
@@ -177,6 +204,7 @@ func (s *Scheduler) SearchAndGrabBook(ctx context.Context, book models.Book) {
 	slog.Info("auto-grabbing book",
 		"book", book.Title,
 		"author", authorName,
+		"format", mediaType,
 		"result", best.Title,
 		"indexer", best.IndexerName,
 		"protocol", best.Protocol,
