@@ -46,7 +46,7 @@
 ### Search & downloads
 - **Newznab + Torznab** — Query multiple Usenet and torrent indexers in parallel, deduplicated and ranked
 - **SABnzbd + qBittorrent** — Full support for both Usenet and torrent download clients
-- **Auto-grab** — Scheduler searches for wanted books every 12h and automatically grabs the best result. Adding a new author or flipping a book to `wanted` fires an immediate search — no waiting for the next scheduled pass.
+- **Auto-grab** — Scheduler searches for wanted books every 12h and automatically grabs the best result. Adding a new author or flipping a book to `wanted` fires an immediate search — no waiting for the next scheduled pass. Toggle the global kill-switch at **Settings → General → Auto-grab** to pause all automatic grabbing without losing your monitored list.
 - **Interactive search** — Manual per-book search from the Wanted page with full result details; Grab button shows a spinner while in-flight and a ✓ on success
 - **Smart matching** — Four-tier query fallback (`t=book` → `surname+title` → `author+title` → title); word-boundary keyword matching; contiguous-phrase requirement for multi-word titles; dual-author-anchor for ambiguous short titles; subtitle-aware (`Title: Subtitle`)
 - **Composite ranking** — Results scored by format quality, edition tags (RETAIL / UNABRIDGED / ABRIDGED), year match to the book's release year, grab count, size, and ISBN exact-match bonus
@@ -62,7 +62,11 @@
 - **Naming tokens** — `{Author}`, `{SortAuthor}`, `{Title}`, `{Year}`, `{ext}` with sanitized path components
 - **Cross-filesystem moves** — Atomic rename when possible, copy+verify+delete for NFS/separate volumes
 - **History** — Every grab, import, and failure recorded with full detail (shown inline on History page)
-- **Calibre library integration** — Optional post-import hook calls `calibredb add` so finished books land in your Calibre library automatically. Stores the returned Calibre book id for future sync; opt-in under Settings → General → Calibre
+- **Calibre library integration** — Three modes, all configurable under **Settings → General → Calibre**:
+  - **Off** — no Calibre interaction (default).
+  - **calibredb CLI** — every successful import calls `calibredb add --with-library <path>`; the returned Calibre book id is persisted on the Bindery book row.
+  - **Drop folder** — Bindery copies finished files into a configured watch directory; Calibre auto-adds them (compatible with [Calibre-Web-Automated](https://github.com/crocodilestick/Calibre-Web-Automated)).
+  - **Library import** — read an existing Calibre library's `metadata.db` directly and ingest it as Bindery's catalogue (idempotent; trigger from the Settings page or set `calibre.sync_on_startup`). Toggling the mode takes effect without a restart.
 
 ### Metadata
 - **OpenLibrary** (primary) — Authors, books, editions, covers, ISBN lookup
@@ -95,7 +99,7 @@
 - **Search, filter, sort** — On Authors, Books, Wanted, and History pages. Authors can be filtered by `Monitored / Unmonitored`. Author detail page sorts books by publication date and filters by type, status, or released/upcoming. Books filter chips include `Type: Ebook / Audiobook`; Books view shows the author inline.
 - **Calendar view** — Upcoming book releases from monitored authors, with compact dot-indicator grid on mobile
 - **Full REST API** — Every feature accessible via HTTP for scripting and integration
-- **OPDS 1.2 catalogue at `/opds/`** — browse and download your library from KOReader, Moon+ Reader, or any OPDS-capable reading app without Calibre
+- **OPDS 1.2 catalogue at `/opds/v1.2/`** — browse and download your library from KOReader, Moon+ Reader, or any OPDS-capable reading app without Calibre. Authenticated with HTTP Basic Auth (any username, API key as password). Feeds: catalog root, recent, by author, search.
 
 ### Packaging
 - **Single binary** — Frontend embedded via `go:embed`. No nginx, no sidecars, no complexity
