@@ -156,6 +156,7 @@ func (c *Client) GetEditions(_ context.Context, _ string) ([]models.Edition, err
 func (c *Client) GetBookByISBN(ctx context.Context, isbn string) (*models.Book, error) {
 	gql := `query GetBookByISBN($isbn: String!) {
 		editions(where: {_or: [{isbn_10: {_eq: $isbn}}, {isbn_13: {_eq: $isbn}}]}, limit: 1) {
+			language { iso_639_1 }
 			book {
 				id
 				title
@@ -174,7 +175,8 @@ func (c *Client) GetBookByISBN(ctx context.Context, isbn string) (*models.Book, 
 	var resp struct {
 		Data struct {
 			Editions []struct {
-				Book hcBook `json:"book"`
+				Language *hcLanguage `json:"language"`
+				Book     hcBook      `json:"book"`
 			} `json:"editions"`
 		} `json:"data"`
 	}
@@ -184,7 +186,11 @@ func (c *Client) GetBookByISBN(ctx context.Context, isbn string) (*models.Book, 
 	if len(resp.Data.Editions) == 0 {
 		return nil, nil
 	}
-	b := c.toBook(resp.Data.Editions[0].Book)
+	ed := resp.Data.Editions[0]
+	b := c.toBook(ed.Book)
+	if ed.Language != nil && ed.Language.ISO6391 != "" {
+		b.Language = ed.Language.ISO6391
+	}
 	return &b, nil
 }
 
@@ -226,6 +232,10 @@ func (c *Client) query(ctx context.Context, q string, vars map[string]any, out i
 
 type hcImage struct {
 	URL string `json:"url"`
+}
+
+type hcLanguage struct {
+	ISO6391 string `json:"iso_639_1"`
 }
 
 type hcAuthor struct {

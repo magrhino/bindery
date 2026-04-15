@@ -324,6 +324,64 @@ func TestGetBookByISBN_Found(t *testing.T) {
 	}
 }
 
+func TestGetBookByISBN_WithLanguage(t *testing.T) {
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		data := map[string]interface{}{
+			"editions": []map[string]interface{}{
+				{
+					"language": map[string]interface{}{"iso_639_1": "de"},
+					"book": map[string]interface{}{
+						"id":    88,
+						"title": "Der Herr der Ringe",
+						"slug":  "der-herr-der-ringe",
+					},
+				},
+			},
+		}
+		return gqlResponse(t, http.StatusOK, data), nil
+	})
+
+	book, err := c.GetBookByISBN(context.Background(), "9783608938548")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if book == nil {
+		t.Fatal("expected non-nil book")
+	}
+	if book.Language != "de" {
+		t.Errorf("Language: want 'de', got %q", book.Language)
+	}
+}
+
+func TestGetBookByISBN_NoLanguage(t *testing.T) {
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		data := map[string]interface{}{
+			"editions": []map[string]interface{}{
+				{
+					// no language field — should not panic
+					"book": map[string]interface{}{
+						"id":    89,
+						"title": "Unknown Language Book",
+						"slug":  "unknown-lang",
+					},
+				},
+			},
+		}
+		return gqlResponse(t, http.StatusOK, data), nil
+	})
+
+	book, err := c.GetBookByISBN(context.Background(), "0000000000001")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if book == nil {
+		t.Fatal("expected non-nil book")
+	}
+	if book.Language != "" {
+		t.Errorf("Language: want empty, got %q", book.Language)
+	}
+}
+
 func TestGetBookByISBN_NotFound(t *testing.T) {
 	c := newMockClient(func(r *http.Request) (*http.Response, error) {
 		return gqlResponse(t, http.StatusOK, map[string]interface{}{"editions": []interface{}{}}), nil

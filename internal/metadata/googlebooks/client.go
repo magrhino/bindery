@@ -118,6 +118,7 @@ func (c *Client) volumeToBook(item volumeItem) models.Book {
 		Genres:           vi.Categories,
 		AverageRating:    vi.AverageRating,
 		RatingsCount:     vi.RatingsCount,
+		Language:         vi.Language,
 		MetadataProvider: "googlebooks",
 		Monitored:        true,
 		Status:           models.BookStatusWanted,

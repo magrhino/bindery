@@ -323,6 +323,22 @@ func TestVolumeToBook_HTTPSUpgrade(t *testing.T) {
 	}
 }
 
+func TestVolumeToBook_Language(t *testing.T) {
+	c := New("")
+	item := volumeItem{
+		ID: "vol-lang",
+		VolumeInfo: volumeInfo{
+			Title:    "Le Petit Prince",
+			Authors:  []string{"Antoine de Saint-Exupéry"},
+			Language: "fr",
+		},
+	}
+	b := c.volumeToBook(item)
+	if b.Language != "fr" {
+		t.Errorf("Language: want 'fr', got %q", b.Language)
+	}
+}
+
 func TestSortName(t *testing.T) {
 	tests := []struct {
 		input string
