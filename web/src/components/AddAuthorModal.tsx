@@ -10,6 +10,7 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<Author[]>([])
   const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
   const [adding, setAdding] = useState<string | null>(null)
   const [profiles, setProfiles] = useState<MetadataProfile[]>([])
   const [profileId, setProfileId] = useState<number | null>(null)
@@ -28,11 +29,13 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
   const search = async () => {
     if (!query.trim()) return
     setSearching(true)
+    setSearchError(null)
     try {
       const authors = await api.searchAuthors(query)
       setResults(authors)
     } catch (err) {
-      console.error(err)
+      setSearchError(err instanceof Error ? err.message : 'Search failed — try again')
+      setResults([])
     } finally {
       setSearching(false)
     }
@@ -112,6 +115,11 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
           </div>
 
           <div className="mt-4 max-h-80 overflow-y-auto space-y-2">
+            {searchError && (
+              <p className="text-sm text-red-400 text-center py-4">
+                Could not reach the metadata provider — {searchError}
+              </p>
+            )}
             {results.map(author => (
               <div
                 key={author.foreignAuthorId}
@@ -134,7 +142,7 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
                 </button>
               </div>
             ))}
-            {results.length === 0 && !searching && query && (
+            {results.length === 0 && !searching && !searchError && query && (
               <p className="text-sm text-slate-600 dark:text-zinc-500 text-center py-4">No results found</p>
             )}
           </div>

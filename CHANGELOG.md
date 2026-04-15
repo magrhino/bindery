@@ -8,6 +8,14 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v0.9.1] — 2026-04-15
+
+Patch release fixing a silent failure in the Add Author modal when OpenLibrary is temporarily unavailable.
+
+### Fixed
+
+- **Author search shows error when metadata provider is down** — when OpenLibrary returns an HTTP error (e.g. 503 during an outage), the Add Author modal now displays a visible error message instead of silently showing an empty results list. The error is cleared automatically when the next search succeeds.
+
 ## [v0.9.0] — 2026-04-15
 
 Major feature release completing the Calibre integration story and fixing critical onboarding issues that caused new installs to immediately fire download storms and fail to detect existing libraries.
