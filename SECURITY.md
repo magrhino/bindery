@@ -69,8 +69,8 @@ CSP, cookie Secure auto-detect, container hardening, CI scans).
 
 ## Security controls currently in place
 
-- **Authentication**: API key + signed session cookie + bcrypt passwords +
-  per-IP login rate limit.
+- **Authentication**: API key + signed session cookie + argon2id passwords
+  (OWASP 2024 parameters) + per-IP login rate limit.
 - **SSRF**: outbound URLs for webhooks, indexers, and download clients pass
   through `internal/httpsec.ValidateOutboundURL` with policy-based blocking
   of loopback, link-local, cloud-metadata endpoints, and (for webhooks)
@@ -95,6 +95,6 @@ CSP, cookie Secure auto-detect, container hardening, CI scans).
 
 ## Secrets
 
-Never file a public issue containing a session cookie, API key, or bcrypt
+Never file a public issue containing a session cookie, API key, or password
 hash from a real deployment. If you need to share one to reproduce a bug,
 use the private advisory channel.

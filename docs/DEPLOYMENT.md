@@ -214,6 +214,8 @@ Multiple remaps are separated by commas: `BINDERY_DOWNLOAD_PATH_REMAP=/sab/compl
 | `BINDERY_DOWNLOAD_PATH_REMAP` | _(empty)_ | Comma-separated `from:to` pairs rewriting paths reported by the download client into paths Bindery can access. Required when SABnzbd and Bindery mount the same storage at different paths. Longest-prefix match wins. See [Path remapping](#path-remapping-multi-container--multi-pod-setups). |
 | `BINDERY_PUID` | _(unset)_ | Sanity check — see [Running as a specific UID/GID](#running-as-a-specific-uidgid) |
 | `BINDERY_PGID` | _(unset)_ | Sanity check — same as `BINDERY_PUID` for the primary GID |
+| `BINDERY_COOKIE_SECURE` | `auto` | Session cookie `Secure` flag policy. `auto` (default) flips the flag on when TLS is detected directly or via `X-Forwarded-Proto: https`; `always` forces it on (use when your reverse proxy doesn't forward the header); `never` forces it off (legacy plain-HTTP installs). |
+| `BINDERY_NOTIFICATIONS_ALLOW_PRIVATE` | _(unset)_ | Set to `1` to flip outbound webhook SSRF policy from Strict to LAN, allowing RFC1918 targets. Use when ntfy / Home Assistant / Gotify live on your private network. Loopback, link-local, and cloud-metadata endpoints stay blocked. |
 
 ## First-run setup
 
@@ -229,6 +231,55 @@ On first launch Bindery bootstraps itself — **no environment variables are req
 - `disabled` — no auth at all. Only safe behind a trusted reverse proxy that handles authentication upstream.
 
 ## Upgrading
+
+### From v0.11.x to v0.12.0 (security posture)
+
+**Schema:** no changes. Drop-in binary or image replacement is safe.
+
+**Auth hashing note.** If a very old install predates argon2id (unlikely — argon2id has been the only code path since v0.6.0), log in and change your password to trigger a rehash. All current installs are already on argon2id.
+
+**New env vars (both optional, documented above):**
+
+- `BINDERY_COOKIE_SECURE` — defaults to `auto`. Existing deployments behind Traefik / Caddy / nginx that forward `X-Forwarded-Proto: https` need no action; the cookie now correctly sets `Secure`. Plain-HTTP homelab users on a LAN may need `BINDERY_COOKIE_SECURE=never` if browsers start rejecting the cookie.
+- `BINDERY_NOTIFICATIONS_ALLOW_PRIVATE=1` — required if you notify an on-LAN ntfy / Home Assistant / Gotify. Without it, webhook URLs resolving to RFC1918 are rejected at submit time.
+
+**Helm chart (optional but recommended).** New `auth.existingSecret` / `auth.apiKey` value keys render the API key via a Kubernetes Secret instead of a plain env value. Existing releases keep working with the old `env.BINDERY_API_KEY` pattern, but migrating is a one-line upgrade:
+
+```yaml
+auth:
+  existingSecret: my-bindery-secret  # kubectl create secret generic my-bindery-secret --from-literal=apiKey=...
+```
+
+**Response headers.** Every response now sets CSP, `X-Frame-Options: DENY`, `Referrer-Policy`, and — when TLS is in play — HSTS. If you previously embedded the Bindery UI in an `<iframe>`, `X-Frame-Options: DENY` will block it. No such usage is supported, but it's the most likely breakage vector.
+
+### From v0.10.x to v0.11.0
+
+**Schema:** no changes. Drop-in binary or image replacement is safe.
+
+**New features, no action required:**
+
+- **In-process log viewer** at Settings → Logs (last 1 000 entries, colour-coded, DEBUG toggle without restart).
+- **UI localization** — English / French / German / Dutch. Auto-detects from `Accept-Language`; override in Settings → General → Language.
+- **Root folders** — configure multiple library roots under Settings → Root Folders. Existing single-root installs keep using `BINDERY_LIBRARY_DIR` as the default.
+- **Language propagation** — per-author metadata-profile language filters now ride into indexer queries.
+
+### From v0.9.x to v0.10.0 (dual-format)
+
+**Schema:** migration `012_dual_format.sql` adds `ebook_file_path`, `audiobook_file_path`, and `media_type` columns to `books` and copies existing `file_path` data into `ebook_file_path`. Non-destructive; `file_path` is kept for one release as a fallback.
+
+**Existing single-format downloads** show up in the correct format slot after the migration runs on startup — no manual action needed. A book with an imported ebook will not re-queue the ebook on the next sweep but will still search for a missing audiobook.
+
+### From v0.8.x to v0.9.0 (Calibre modes, OPDS, auto-grab kill-switch)
+
+**Schema:** three additive migrations (`010_calibre_sync.sql`, `011_calibre_mode.sql`, new `editions` table). Drop-in safe.
+
+**Calibre mode defaults to Off.** Existing installs that used the v0.8.0 `calibre.enabled=true` boolean are automatically shown as **calibredb CLI** mode in the UI via a back-compat fallback — no re-configuration needed.
+
+**Auto-grab defaults to On** (existing behaviour). Toggle it off in Settings → General → Auto-grab if you prefer manual grabs, or when bulk-adding large author lists that would otherwise fire thousands of simultaneous indexer queries.
+
+**OPDS** is available at `/opds/` — browse and download your library from KOReader / Moon+ Reader / Aldiko. Authenticates via Bindery username + password over HTTP Basic, or via `X-Api-Key` / `?apikey=` query parameter for scripts. See the [OPDS wiki page](https://github.com/vavallee/bindery/wiki/OPDS).
+
+**Behaviour change — catalogue fetch decoupled from auto-grab.** Unchecking "Auto-grab books on add" no longer silently prevents the book catalogue from loading. The full book list is always fetched; the checkbox only controls whether Bindery immediately sends results to the download client.
 
 ### From v0.7.x to v0.8.0
 

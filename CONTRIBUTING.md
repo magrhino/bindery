@@ -156,4 +156,4 @@ The `[skip ci]` trailer is reserved for bot deploy-commits — human commits sho
 
 ## Reporting security issues
 
-Do **not** open a public issue for security vulnerabilities. Email the maintainer privately via the address on the [GitHub profile](https://github.com/vavallee). Expect an acknowledgement within a few days and a coordinated disclosure window.
+Do **not** open a public issue for security vulnerabilities. The preferred channel is a [GitHub Security Advisory](https://github.com/vavallee/bindery/security/advisories/new) — it creates a private thread with the maintainers. Full disclosure policy, scope, and timelines live in [SECURITY.md](SECURITY.md).
