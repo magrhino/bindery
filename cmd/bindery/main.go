@@ -198,7 +198,7 @@ func main() {
 	// API handlers
 	authHandler := api.NewAuthHandler(userRepo, settingsRepo, loginLimiter)
 	searchHandler := api.NewSearchHandler(metaAgg)
-	authorHandler := api.NewAuthorHandler(authorRepo, authorAliasRepo, bookRepo, seriesRepo, metaAgg, settingsRepo, metadataProfileRepo, sched)
+	authorHandler := api.NewAuthorHandler(authorRepo, authorAliasRepo, bookRepo, seriesRepo, metaAgg, settingsRepo, metadataProfileRepo, sched).WithFinder(importScanner)
 	authorAliasHandler := api.NewAuthorAliasHandler(authorRepo, authorAliasRepo)
 	bookHandler := api.NewBookHandler(bookRepo, metaAgg, historyRepo, sched).WithSettings(settingsRepo)
 	indexerHandler := api.NewIndexerHandler(indexerRepo, bookRepo, authorRepo, idxSearcher, settingsRepo, blocklistRepo)

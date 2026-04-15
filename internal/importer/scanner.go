@@ -362,6 +362,31 @@ func (s *Scanner) clearSABHistory(ctx context.Context, sab *sabnzbd.Client, nzoI
 	}
 }
 
+// FindExisting searches the library directory for a book file that matches
+// the given title and author. Returns the first matching file path, or ""
+// if none is found. Intended to be called before auto-searching so books
+// the user already owns are not re-downloaded.
+func (s *Scanner) FindExisting(ctx context.Context, title, authorName string) string {
+	if s.libraryDir == "" || title == "" {
+		return ""
+	}
+	var found string
+	filepath.Walk(s.libraryDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || found != "" {
+			return nil
+		}
+		if !IsBookFile(path) {
+			return nil
+		}
+		parsed := ParseFilename(path)
+		if titleMatch(parsed.Title, title) && authorMatch(authorName, parsed.Author) {
+			found = path
+		}
+		return nil
+	})
+	return found
+}
+
 // titleMatch returns true when bookTitle and parsedTitle refer to the same work.
 // It handles numeric titles (1984, 2001), article normalization ("Title, The"),
 // and uses dynamic overlap thresholds so short titles still match correctly.

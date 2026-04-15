@@ -17,6 +17,12 @@ type BookSearcher interface {
 	SearchAndGrabBook(ctx context.Context, book models.Book)
 }
 
+// LibraryFinder checks whether a book already exists in the local library.
+// Implemented by *importer.Scanner; a nil implementation is a no-op.
+type LibraryFinder interface {
+	FindExisting(ctx context.Context, title, authorName string) string
+}
+
 func contextBackground() context.Context {
 	return context.Background()
 }

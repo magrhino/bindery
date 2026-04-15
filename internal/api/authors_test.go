@@ -254,6 +254,89 @@ func TestFetchAuthorBooks_FiresSearchForMonitoredAuthor(t *testing.T) {
 	}
 }
 
+// stubLibraryFinder is a mock LibraryFinder that returns a fixed path for
+// a specific title and "" for everything else.
+type stubLibraryFinder struct {
+	ownedTitle string
+	ownedPath  string
+}
+
+func (f *stubLibraryFinder) FindExisting(_ context.Context, title, _ string) string {
+	if title == f.ownedTitle {
+		return f.ownedPath
+	}
+	return ""
+}
+
+// TestFetchAuthorBooks_SkipsSearchForOwnedBooks verifies that when the
+// LibraryFinder reports a book is already on disk, FetchAuthorBooks sets the
+// file path on the book row and does NOT call SearchAndGrabBook for it. Books
+// NOT found on disk should still be searched normally.
+func TestFetchAuthorBooks_SkipsSearchForOwnedBooks(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+
+	ctx := context.Background()
+	author := &models.Author{
+		ForeignID: "OL700A", Name: "Owned Author", SortName: "Author, Owned",
+		MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+
+	stub := &stubMetaProvider{
+		works: []models.Book{
+			{ForeignID: "OL701W", Title: "Already Owned", SortTitle: "already owned", Status: models.BookStatusWanted, Genres: []string{}, MetadataProvider: "openlibrary"},
+			{ForeignID: "OL702W", Title: "Not Yet Owned", SortTitle: "not yet owned", Status: models.BookStatusWanted, Genres: []string{}, MetadataProvider: "openlibrary"},
+		},
+	}
+	agg := metadata.NewAggregator(stub)
+	spy := &searcherSpy{}
+	finder := &stubLibraryFinder{
+		ownedTitle: "Already Owned",
+		ownedPath:  "/library/Owned Author/Already Owned.epub",
+	}
+
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, agg, nil, profileRepo, spy).WithFinder(finder)
+	h.FetchAuthorBooks(author, true)
+
+	titles := spy.titles()
+	// Only "Not Yet Owned" should have triggered a search.
+	if len(titles) != 1 {
+		t.Fatalf("expected 1 searcher call, got %d: %v", len(titles), titles)
+	}
+	if titles[0] != "Not Yet Owned" {
+		t.Errorf("expected search for 'Not Yet Owned', got %q", titles[0])
+	}
+
+	// The owned book's file path should have been persisted in the DB.
+	books, err := bookRepo.ListByAuthor(ctx, author.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ownedBook *models.Book
+	for i := range books {
+		if books[i].Title == "Already Owned" {
+			ownedBook = &books[i]
+			break
+		}
+	}
+	if ownedBook == nil {
+		t.Fatal("expected 'Already Owned' book to be created in DB")
+	}
+	if ownedBook.FilePath != finder.ownedPath {
+		t.Errorf("expected file path %q, got %q", finder.ownedPath, ownedBook.FilePath)
+	}
+}
+
 // TestFetchAuthorBooks_SkipsSearchWhenNotMonitored confirms that books added
 // for an unmonitored author do NOT trigger an indexer search — the user has
 // opted out of automatic activity for this author.

@@ -24,10 +24,19 @@ type AuthorHandler struct {
 	settings *db.SettingsRepo
 	profiles *db.MetadataProfileRepo
 	searcher BookSearcher
+	finder   LibraryFinder
 }
 
 func NewAuthorHandler(authors *db.AuthorRepo, aliases *db.AuthorAliasRepo, books *db.BookRepo, series *db.SeriesRepo, meta *metadata.Aggregator, settings *db.SettingsRepo, profiles *db.MetadataProfileRepo, searcher BookSearcher) *AuthorHandler {
 	return &AuthorHandler{authors: authors, aliases: aliases, books: books, series: series, meta: meta, settings: settings, profiles: profiles, searcher: searcher}
+}
+
+// WithFinder attaches a LibraryFinder to the handler. When set, FetchAuthorBooks
+// will check whether each newly-created book already exists on disk before
+// queuing an auto-search, preventing re-downloads of books the user owns.
+func (h *AuthorHandler) WithFinder(f LibraryFinder) *AuthorHandler {
+	h.finder = f
+	return h
 }
 
 func (h *AuthorHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -347,6 +356,15 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool)
 			}
 			if err := h.series.LinkBook(ctx, s.ID, b.ID, ref.Position, ref.Primary); err != nil {
 				slog.Warn("failed to link book to series", "book", b.Title, "series", ref.Title, "error", err)
+			}
+		}
+
+		// Check if the user already owns this book before queuing a download.
+		if h.finder != nil {
+			if existingPath := h.finder.FindExisting(ctx, b.Title, author.Name); existingPath != "" {
+				slog.Info("library: found existing file, skipping auto-search", "title", b.Title, "path", existingPath)
+				_ = h.books.SetFilePath(ctx, b.ID, existingPath)
+				continue // don't auto-search for a book we already have
 			}
 		}
 
