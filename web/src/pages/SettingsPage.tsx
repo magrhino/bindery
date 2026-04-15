@@ -691,6 +691,7 @@ function GeneralTab() {
   const [creatingBackup, setCreatingBackup] = useState(false)
   const [scanningLibrary, setScanningLibrary] = useState(false)
   const [scanMessage, setScanMessage] = useState<string | null>(null)
+  const [lastScan, setLastScan] = useState<{ ran_at: string; files_found: number; reconciled: number; unmatched: number } | null>(null)
 
   useEffect(() => {
     api.listSettings()
@@ -702,6 +703,7 @@ function GeneralTab() {
       .catch(console.error)
       .finally(() => setLoading(false))
     api.listBackups().then(setBackups).catch(console.error)
+    api.libraryScanStatus().then(setLastScan).catch(() => {/* no prior scan — ignore 404 */})
   }, [])
 
   const saveSetting = async (key: string) => {
@@ -730,14 +732,38 @@ function GeneralTab() {
 
   const handleScan = async () => {
     setScanningLibrary(true)
-    setScanMessage(null)
+    setScanMessage('Scanning...')
+    setLastScan(null)
     try {
       await api.triggerLibraryScan()
-      setScanMessage('Scan started — check back in a moment.')
-      setTimeout(() => setScanMessage(null), 5000)
+      // Poll for the result — the scan is async, so wait up to ~8s in 1s intervals.
+      let attempts = 0
+      const poll = async () => {
+        attempts++
+        try {
+          const status = await api.libraryScanStatus()
+          // Only accept a result that was produced after we triggered the scan.
+          const ranAt = new Date(status.ran_at).getTime()
+          const triggerTime = Date.now() - (attempts * 1000)
+          if (ranAt >= triggerTime) {
+            setLastScan(status)
+            setScanMessage(null)
+            setScanningLibrary(false)
+            return
+          }
+        } catch {
+          // result not ready yet
+        }
+        if (attempts < 8) {
+          setTimeout(poll, 1000)
+        } else {
+          setScanMessage('Scan started — results will appear after it completes.')
+          setScanningLibrary(false)
+        }
+      }
+      setTimeout(poll, 1000)
     } catch (err) {
       setScanMessage('Scan failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
-    } finally {
       setScanningLibrary(false)
     }
   }
@@ -895,7 +921,7 @@ function GeneralTab() {
               <p className="text-sm text-slate-700 dark:text-zinc-300">Scan library</p>
               <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">Walk the books directory and reconcile files with the database</p>
               {scanMessage && (
-                <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-1">{scanMessage}</p>
+                <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">{scanMessage}</p>
               )}
             </div>
             <button
@@ -906,6 +932,19 @@ function GeneralTab() {
               {scanningLibrary ? 'Scanning…' : 'Scan Library'}
             </button>
           </div>
+          {lastScan && (
+            <div className="mt-3 border-t border-slate-200 dark:border-zinc-800 pt-3 text-xs text-slate-600 dark:text-zinc-400">
+              <p className="font-medium text-slate-700 dark:text-zinc-300 mb-1">Last scan result</p>
+              <div className="flex gap-4">
+                <span>Files found: <span className="font-mono text-slate-800 dark:text-zinc-200">{lastScan.files_found}</span></span>
+                <span>Reconciled: <span className="font-mono text-emerald-700 dark:text-emerald-400">{lastScan.reconciled}</span></span>
+                <span>Unmatched: <span className="font-mono text-slate-800 dark:text-zinc-200">{lastScan.unmatched}</span></span>
+              </div>
+              <p className="mt-1 text-slate-500 dark:text-zinc-500">
+                {new Date(lastScan.ran_at).toLocaleString()}
+              </p>
+            </div>
+          )}
         </div>
       </section>
 

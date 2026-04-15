@@ -134,6 +134,7 @@ export const api = {
 
   // Library
   triggerLibraryScan: () => request<{ message: string }>('/library/scan', { method: 'POST' }),
+  libraryScanStatus: () => request<{ ran_at: string; files_found: number; reconciled: number; unmatched: number }>('/library/scan/status'),
 
   // Queue
   listQueue: () => request<QueueItem[]>('/queue'),

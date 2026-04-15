@@ -7,10 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/vavallee/bindery/internal/calibre"
 	"github.com/vavallee/bindery/internal/db"
@@ -36,6 +38,7 @@ type Scanner struct {
 	renamer      *Renamer
 	remapper     *Remapper
 	calibre      calibreClient
+	settings     *db.SettingsRepo
 	libraryDir   string
 	audiobookDir string
 }
@@ -69,6 +72,13 @@ func NewScanner(downloads *db.DownloadRepo, clients *db.DownloadClientRepo,
 // disabled (or nil-interface) client is a no-op.
 func (s *Scanner) WithCalibre(c calibreClient) *Scanner {
 	s.calibre = c
+	return s
+}
+
+// WithSettings attaches a SettingsRepo to the scanner so scan results can be
+// persisted under the "library.lastScan" key and surfaced via the API.
+func (s *Scanner) WithSettings(sr *db.SettingsRepo) *Scanner {
+	s.settings = sr
 	return s
 }
 
@@ -275,57 +285,112 @@ func (s *Scanner) clearSABHistory(ctx context.Context, sab *sabnzbd.Client, nzoI
 	}
 }
 
-// titleMatch returns true when bookTitle and parsedTitle share enough significant words
-// to be considered the same work. It requires at least 2 overlapping words of 3+ chars,
-// or all words if the parsed title has fewer than 2 such words. Both titles must
-// contribute at least one word to avoid single-character false positives.
+// titleMatch returns true when bookTitle and parsedTitle refer to the same work.
+// It handles numeric titles (1984, 2001), article normalization ("Title, The"),
+// and uses dynamic overlap thresholds so short titles still match correctly.
 func titleMatch(bookTitle, parsedTitle string) bool {
-	if parsedTitle == "" {
+	if parsedTitle == "" || bookTitle == "" {
 		return false
 	}
-	sigWords := func(s string) []string {
-		var out []string
-		for _, w := range strings.Fields(strings.ToLower(s)) {
-			// Strip non-alpha chars (punctuation, hyphens)
-			w = strings.Map(func(r rune) rune {
-				if r >= 'a' && r <= 'z' {
-					return r
-				}
-				return -1
-			}, w)
-			if len(w) >= 3 {
-				out = append(out, w)
+
+	// norm lowercases, handles "Title, The" inversion, and strips leading articles.
+	norm := func(s string) string {
+		s = strings.ToLower(strings.TrimSpace(s))
+		// Normalize "Title, The" → "the title" (comma-article inversion)
+		if idx := strings.LastIndex(s, ", the"); idx != -1 && idx == len(s)-5 {
+			s = "the " + s[:idx]
+		}
+		// Strip leading article for comparison
+		for _, art := range []string{"the ", "a ", "an "} {
+			if strings.HasPrefix(s, art) {
+				s = s[len(art):]
+				break
 			}
 		}
+		return s
+	}
+
+	// Fast path: exact match after normalization
+	if norm(bookTitle) == norm(parsedTitle) {
+		return true
+	}
+
+	// sigTokens splits on non-alphanumeric runs, preserving digits, and removes stopwords.
+	sigTokens := func(s string) []string {
+		stopwords := map[string]bool{
+			"the": true, "a": true, "an": true, "of": true,
+			"and": true, "in": true, "to": true, "for": true,
+		}
+		var out []string
+		var cur []rune
+		flush := func() {
+			if len(cur) >= 2 {
+				w := string(cur)
+				if !stopwords[w] {
+					out = append(out, w)
+				}
+			}
+			cur = cur[:0]
+		}
+		for _, r := range strings.ToLower(s) {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+				cur = append(cur, r)
+			} else {
+				flush()
+			}
+		}
+		flush()
 		return out
 	}
 
-	btWords := sigWords(bookTitle)
-	ptWords := sigWords(parsedTitle)
-
-	if len(btWords) == 0 || len(ptWords) == 0 {
+	btTok := sigTokens(bookTitle)
+	ptTok := sigTokens(parsedTitle)
+	if len(btTok) == 0 || len(ptTok) == 0 {
 		return false
 	}
 
-	// Build lookup set for book title words
-	btSet := make(map[string]bool, len(btWords))
-	for _, w := range btWords {
+	btSet := make(map[string]bool, len(btTok))
+	for _, w := range btTok {
 		btSet[w] = true
 	}
 
 	overlap := 0
-	for _, w := range ptWords {
+	for _, w := range ptTok {
 		if btSet[w] {
 			overlap++
 		}
 	}
 
-	// Require at least 2 matching words, or all words if parsed title has < 2
-	minOverlap := 2
-	if len(ptWords) < 2 {
-		minOverlap = len(ptWords)
+	// Dynamic threshold: require overlap >= min(len(ptTok), len(btTok), 2).
+	// For single-token titles (e.g. "1984") require at least 1 match.
+	minLen := len(ptTok)
+	if len(btTok) < minLen {
+		minLen = len(btTok)
 	}
-	return overlap >= minOverlap
+	required := 2
+	if minLen < 2 {
+		required = minLen
+	}
+	if required == 0 {
+		required = 1
+	}
+
+	return overlap >= required
+}
+
+// authorMatch returns true when parsedAuthor is consistent with bookAuthor.
+// If parsedAuthor is empty the function returns true (can't disprove).
+// Otherwise it checks that the last name of parsedAuthor appears in bookAuthor.
+func authorMatch(bookAuthor, parsedAuthor string) bool {
+	if parsedAuthor == "" {
+		return true // no author info in filename — don't filter
+	}
+	parts := strings.Fields(strings.ToLower(parsedAuthor))
+	if len(parts) == 0 {
+		return true
+	}
+	lastName := parts[len(parts)-1]
+	return len(lastName) >= 3 && strings.Contains(strings.ToLower(bookAuthor), lastName)
 }
 
 // ScanLibrary walks the library directory for book files not yet tracked in the database
@@ -350,6 +415,7 @@ func (s *Scanner) ScanLibrary(ctx context.Context) {
 	slog.Info("library scan found files", "path", s.libraryDir, "count", len(foundFiles))
 
 	if len(foundFiles) == 0 {
+		s.writeScanResult(ctx, len(foundFiles), 0, 0)
 		return
 	}
 
@@ -368,6 +434,14 @@ func (s *Scanner) ScanLibrary(ctx context.Context) {
 		}
 	}
 
+	// Build an author name cache (authorID → name) for the author-anchor check.
+	authorNames := make(map[int64]string)
+	if allAuthors, err := s.authors.List(ctx); err == nil {
+		for _, a := range allAuthors {
+			authorNames[a.ID] = a.Name
+		}
+	}
+
 	var reconciled, unmatched int
 	for _, path := range foundFiles {
 		// Skip files already tracked
@@ -378,11 +452,13 @@ func (s *Scanner) ScanLibrary(ctx context.Context) {
 		// Parse the filename to extract title/author hints
 		parsed := ParseFilename(path)
 
-		// Search existing books for a title match using word overlap
+		// Search existing books for a title + author match
 		matched := false
 		if parsed.Title != "" {
 			for _, b := range allBooks {
-				if b.Status == models.BookStatusWanted && titleMatch(b.Title, parsed.Title) {
+				if b.Status == models.BookStatusWanted &&
+					titleMatch(b.Title, parsed.Title) &&
+					authorMatch(authorNames[b.AuthorID], parsed.Author) {
 					// Match found — update file path and status
 					if err := s.books.SetFilePath(ctx, b.ID, path); err != nil {
 						slog.Error("library scan: failed to update book", "id", b.ID, "error", err)
@@ -405,4 +481,22 @@ func (s *Scanner) ScanLibrary(ctx context.Context) {
 
 	slog.Info("library scan complete", "path", s.libraryDir, "bookFiles", len(foundFiles),
 		"reconciled", reconciled, "unmatched", unmatched)
+
+	s.writeScanResult(ctx, len(foundFiles), reconciled, unmatched)
+}
+
+// writeScanResult persists the scan summary to the settings table under
+// "library.lastScan" so the UI can surface the result without polling logs.
+func (s *Scanner) writeScanResult(ctx context.Context, filesFound, reconciled, unmatched int) {
+	if s.settings == nil {
+		return
+	}
+	payload := fmt.Sprintf(
+		`{"ran_at":%q,"files_found":%d,"reconciled":%d,"unmatched":%d}`,
+		time.Now().UTC().Format(time.RFC3339),
+		filesFound, reconciled, unmatched,
+	)
+	if err := s.settings.Set(ctx, "library.lastScan", payload); err != nil {
+		slog.Warn("library scan: failed to persist scan result", "error", err)
+	}
 }

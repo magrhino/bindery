@@ -16,28 +16,33 @@ func TestTitleMatch(t *testing.T) {
 		parsedTitle string
 		want        bool
 	}{
-		// Standard matches — parsed titles use spaces, not dots
+		// Standard matches
 		{"The Name of the Wind", "The Name of the Wind", true},
 		{"Project Hail Mary", "Project Hail Mary", true},
 		{"The Way of Kings", "Brandon Sanderson The Way of Kings", true},
 
-		// Partial overlap — at least 2 significant words required
+		// Partial overlap — at least 2 significant (non-stopword) words required
 		{"Dune Messiah", "Frank Herbert Dune Messiah", true},
 		{"The Road", "Cormac McCarthy The Road 2006", true},
 
-		// Single significant book-title word: minOverlap follows ptWords length
-		// "Dune" → btWords=["dune"]; ptWords=["frank","herbert","dune"] len=3 → minOverlap=2
-		// overlap=1 → false (single-word titles need a 1-word parsed title to match)
-		{"Dune", "Frank Herbert Dune", false},
-		// When parsed title is also short, minOverlap=1 and overlap=1 → true
+		// Single-token book title: minLen=1 → required=1; one matching token is enough
+		{"Dune", "Frank Herbert Dune", true},
 		{"Dune", "Dune 2021", true},
 		{"The Sparrow", "The Sparrow Russell", true},
+
+		// Numeric titles preserved (digits are kept as tokens)
+		{"1984", "1984", true},
+		{"1984", "George Orwell 1984", true},
+
+		// Article inversion: "Lord of the Rings, The" normalises to same as "The Lord of the Rings"
+		{"The Lord of the Rings", "Lord of the Rings, The", true},
+
+		// Dots in parsed title are split on non-alnum — "Project.Hail.Mary" yields 3 tokens
+		{"Project Hail Mary", "Project.Hail.Mary", true},
 
 		// Empty / degenerate cases
 		{"", "The Name of the Wind", false},
 		{"The Name of the Wind", "", false},
-		// Dots in parsed title are not split — "project.hail.mary" becomes one big token
-		{"Project Hail Mary", "Project.Hail.Mary", false},
 
 		// Noise titles with no overlap
 		{"Project Hail Mary", "The Lord of the Rings", false},
