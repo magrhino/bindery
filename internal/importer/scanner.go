@@ -116,6 +116,25 @@ func (s *Scanner) WithSettings(sr *db.SettingsRepo) *Scanner {
 	return s
 }
 
+// importMode reads the "import.mode" setting and returns one of "move",
+// "copy", or "hardlink". Defaults to "move" when the setting is absent or
+// unrecognised so upgrades are transparent for existing installs.
+func (s *Scanner) importMode(ctx context.Context) string {
+	if s.settings == nil {
+		return "move"
+	}
+	setting, err := s.settings.Get(ctx, "import.mode")
+	if err != nil || setting == nil {
+		return "move"
+	}
+	switch setting.Value {
+	case "copy", "hardlink":
+		return setting.Value
+	default:
+		return "move"
+	}
+}
+
 // pushToCalibre dispatches the just-imported book to the Calibre integration
 // selected by the current mode setting. Failures are logged and swallowed —
 // Calibre sync is a best-effort mirror, so a missing binary, unreachable
@@ -302,7 +321,7 @@ func (s *Scanner) tryImport(ctx context.Context, sab *sabnzbd.Client, dl *models
 	// wrong library directory.
 	detectedFormat := detectDownloadFormat(bookFiles)
 
-	// Audiobook path: move the entire download directory as a unit so
+	// Audiobook path: place the entire download directory as a unit so
 	// multi-part m4b/mp3 files, cover art, and cue sheets stay together.
 	if detectedFormat == models.MediaTypeAudiobook {
 		audiobookRoot := s.audiobookDir
@@ -310,9 +329,19 @@ func (s *Scanner) tryImport(ctx context.Context, sab *sabnzbd.Client, dl *models
 			audiobookRoot = effLib
 		}
 		destDir := UniqueDir(s.renamer.AudiobookDestDir(audiobookRoot, author, book))
-		slog.Info("importing audiobook folder", "src", downloadPath, "dst", destDir)
-		if err := MoveDir(downloadPath, destDir); err != nil {
-			slog.Error("failed to import audiobook folder", "src", downloadPath, "error", err)
+		mode := s.importMode(ctx)
+		slog.Info("importing audiobook folder", "src", downloadPath, "dst", destDir, "mode", mode)
+		var dirErr error
+		switch mode {
+		case "hardlink":
+			dirErr = HardlinkDir(downloadPath, destDir)
+		case "copy":
+			dirErr = CopyDir(downloadPath, destDir)
+		default:
+			dirErr = MoveDir(downloadPath, destDir)
+		}
+		if dirErr != nil {
+			slog.Error("failed to import audiobook folder", "src", downloadPath, "mode", mode, "error", dirErr)
 			return
 		}
 		if book != nil {
@@ -351,10 +380,20 @@ func (s *Scanner) tryImport(ctx context.Context, sab *sabnzbd.Client, dl *models
 		}
 
 		destPath := s.renamer.DestPath(s.effectiveLibraryDir(ctx, author), author, book, srcFile)
-		slog.Info("importing book", "src", srcFile, "dst", destPath)
+		mode := s.importMode(ctx)
+		slog.Info("importing book", "src", srcFile, "dst", destPath, "mode", mode)
 
-		if err := MoveFile(srcFile, destPath); err != nil {
-			slog.Error("failed to import", "src", srcFile, "error", err)
+		var fileErr error
+		switch mode {
+		case "hardlink":
+			fileErr = HardlinkFile(srcFile, destPath)
+		case "copy":
+			fileErr = CopyFile(srcFile, destPath)
+		default:
+			fileErr = MoveFile(srcFile, destPath)
+		}
+		if fileErr != nil {
+			slog.Error("failed to import", "src", srcFile, "mode", mode, "error", fileErr)
 			failed++
 			continue
 		}
@@ -378,13 +417,15 @@ func (s *Scanner) tryImport(ctx context.Context, sab *sabnzbd.Client, dl *models
 		})
 	}
 
-	// A clean run leaves the SABnzbd job folder holding only non-book
-	// byproducts (par2, nfo, sfv, sample) — bindery has no further use
-	// for them, so drop the folder and the matching history entry so
-	// the completed-downloads view doesn't accumulate stale rows.
+	// A clean run leaves the download folder holding only non-book byproducts
+	// (par2, nfo, sfv, sample). For "move" mode bindery has no further use for
+	// them so the folder is removed. For "copy"/"hardlink" modes the source must
+	// be preserved so the torrent client can continue seeding.
 	if imported > 0 && failed == 0 {
-		if err := os.RemoveAll(downloadPath); err != nil {
-			slog.Warn("failed to remove download folder after import", "path", downloadPath, "error", err)
+		if s.importMode(ctx) == "move" {
+			if err := os.RemoveAll(downloadPath); err != nil {
+				slog.Warn("failed to remove download folder after import", "path", downloadPath, "error", err)
+			}
 		}
 		s.clearSABHistory(ctx, sab, nzoID)
 	}

@@ -1063,6 +1063,32 @@ function GeneralTab() {
         <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.fileNaming')}</h3>
         <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-3">
           <div>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Import Mode</label>
+            <p className="text-xs text-slate-600 dark:text-zinc-500 mb-2">
+              How Bindery places completed downloads into the library.
+              Use <strong>Hardlink</strong> or <strong>Copy</strong> to keep the source file intact for torrent seeding.
+              Hardlink requires the download folder and library to be on the same filesystem/volume.
+            </p>
+            <div className="flex gap-2">
+              {(['move', 'copy', 'hardlink'] as const).map(m => (
+                <button
+                  key={m}
+                  onClick={async () => {
+                    setSettings(s => ({ ...s, 'import.mode': m }))
+                    await api.setSetting('import.mode', m).catch(console.error)
+                  }}
+                  className={`px-3 py-1.5 rounded text-xs font-medium border transition-colors ${
+                    (settings['import.mode'] ?? 'move') === m
+                      ? 'bg-emerald-600 border-emerald-600 text-white'
+                      : 'border-slate-300 dark:border-zinc-700 text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  {m.charAt(0).toUpperCase() + m.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
             <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">{t('settings.general.bookTemplate')}</label>
             <div className="flex gap-2">
               <input
