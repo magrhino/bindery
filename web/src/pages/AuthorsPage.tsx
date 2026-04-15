@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { api, Author } from '../api/client'
 import AddAuthorModal from '../components/AddAuthorModal'
 import MergeAuthorsModal from '../components/MergeAuthorsModal'
@@ -13,6 +14,7 @@ type SortMode = 'az' | 'za' | 'recent'
 type MonitoredFilter = '' | 'monitored' | 'unmonitored'
 
 export default function AuthorsPage() {
+  const { t } = useTranslation()
   const [authors, setAuthors] = useState<Author[]>([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
@@ -51,8 +53,8 @@ export default function AuthorsPage() {
       withFiles = books.filter(b => b.filePath).length
     } catch { /* fall through to no-file-sweep default */ }
     const msg = withFiles > 0
-      ? `Delete this author, ${total} book(s), AND ${withFiles} file(s)/folder(s) on disk?\n\nThis cannot be undone.`
-      : `Delete this author and all their books?`
+      ? t('authors.deleteWithFilesConfirm', { total, withFiles })
+      : t('authors.deleteConfirm')
     if (!confirm(msg)) return
     await api.deleteAuthor(id, withFiles > 0)
     load()
@@ -104,7 +106,7 @@ export default function AuthorsPage() {
 
   const runBulk = async (action: Parameters<typeof api.bulkActionAuthors>[1]) => {
     if (selectedIds.size === 0) return
-    if (action === 'delete' && !confirm(`Delete ${selectedIds.size} author(s) and all their books?`)) return
+    if (action === 'delete' && !confirm(t('authors.bulkDeleteConfirm', { count: selectedIds.size }))) return
     setBulkBusy(true)
     try {
       await api.bulkActionAuthors([...selectedIds], action)
@@ -123,22 +125,22 @@ export default function AuthorsPage() {
   return (
     <div className={selectedIds.size > 0 ? 'pb-16' : ''}>
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-2xl font-bold">Authors</h2>
+        <h2 className="text-2xl font-bold">{t('authors.title')}</h2>
         <div className="flex items-center gap-3">
           <ViewToggle view={view} onChange={setView} />
           <button
             onClick={() => setShowMerge(true)}
             disabled={authors.length < 2}
             className="px-3 py-2 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md text-sm font-medium transition-colors"
-            title="Merge two authors — collapse duplicates into one canonical row"
+            title={t('authors.mergeTip')}
           >
-            Merge
+            {t('authors.merge')}
           </button>
           <button
             onClick={() => setShowAdd(true)}
             className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-md text-sm font-medium transition-colors"
           >
-            + Add Author
+            {t('authors.addAuthor')}
           </button>
         </div>
       </div>
@@ -149,34 +151,34 @@ export default function AuthorsPage() {
           type="search"
           value={search}
           onChange={e => setSearch(e.target.value)}
-          placeholder="Search authors..."
+          placeholder={t('authors.searchPlaceholder')}
           className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600 placeholder-slate-400 dark:placeholder-zinc-600"
         />
         <div className="flex gap-1">
-          <button onClick={() => setSort('az')} className={sortBtnCls(sort === 'az')}>A–Z</button>
-          <button onClick={() => setSort('za')} className={sortBtnCls(sort === 'za')}>Z–A</button>
-          <button onClick={() => setSort('recent')} className={sortBtnCls(sort === 'recent')}>Recent</button>
+          <button onClick={() => setSort('az')} className={sortBtnCls(sort === 'az')}>{t('authors.sortAZ')}</button>
+          <button onClick={() => setSort('za')} className={sortBtnCls(sort === 'za')}>{t('authors.sortZA')}</button>
+          <button onClick={() => setSort('recent')} className={sortBtnCls(sort === 'recent')}>{t('authors.sortRecent')}</button>
         </div>
       </div>
 
       {/* Monitored filter chips */}
       <div className="flex gap-1 mb-6 flex-wrap">
-        <span className="text-xs text-slate-600 dark:text-zinc-500 mr-1 self-center">Monitored:</span>
-        <button onClick={() => setMonitoredFilter('')} className={sortBtnCls(monitoredFilter === '')}>All</button>
-        <button onClick={() => setMonitoredFilter('monitored')} className={sortBtnCls(monitoredFilter === 'monitored')}>Monitored</button>
-        <button onClick={() => setMonitoredFilter('unmonitored')} className={sortBtnCls(monitoredFilter === 'unmonitored')}>Unmonitored</button>
+        <span className="text-xs text-slate-600 dark:text-zinc-500 mr-1 self-center">{t('authors.filterMonitored')}</span>
+        <button onClick={() => setMonitoredFilter('')} className={sortBtnCls(monitoredFilter === '')}>{t('authors.filterAll')}</button>
+        <button onClick={() => setMonitoredFilter('monitored')} className={sortBtnCls(monitoredFilter === 'monitored')}>{t('authors.filterMonitoredOnly')}</button>
+        <button onClick={() => setMonitoredFilter('unmonitored')} className={sortBtnCls(monitoredFilter === 'unmonitored')}>{t('authors.filterUnmonitored')}</button>
       </div>
 
       {loading ? (
-        <div className="text-slate-600 dark:text-zinc-500">Loading...</div>
+        <div className="text-slate-600 dark:text-zinc-500">{t('common.loading')}</div>
       ) : filtered.length === 0 && authors.length === 0 ? (
         <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
-          <p className="text-lg mb-2">No authors yet</p>
-          <p className="text-sm">Click "Add Author" to start tracking your favorite authors</p>
+          <p className="text-lg mb-2">{t('authors.empty')}</p>
+          <p className="text-sm">{t('authors.emptyHint')}</p>
         </div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
-          <p>No authors match "{search}"</p>
+          <p>{t('authors.noMatch', { query: search })}</p>
         </div>
       ) : view === 'table' ? (
         <div className="border border-slate-200 dark:border-zinc-800 rounded-lg overflow-hidden">
@@ -194,10 +196,10 @@ export default function AuthorsPage() {
                       title="Select all on this page"
                     />
                   </th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">Name</th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">Books</th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">Rating</th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">Monitored</th>
+                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">{t('authors.colName')}</th>
+                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">{t('authors.colBooks')}</th>
+                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">{t('authors.colRating')}</th>
+                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">{t('authors.colMonitored')}</th>
                   <th className="px-3 py-2" />
                 </tr>
               </thead>
@@ -237,7 +239,7 @@ export default function AuthorsPage() {
                         onClick={() => handleToggleMonitored(author)}
                         className={`text-xs px-2 py-0.5 rounded ${author.monitored ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-300 dark:bg-zinc-700 text-slate-600 dark:text-zinc-400'}`}
                       >
-                        {author.monitored ? 'Yes' : 'No'}
+                        {author.monitored ? t('common.yes') : t('common.no')}
                       </button>
                     </td>
                     <td className="px-3 py-2 text-right whitespace-nowrap">
@@ -245,13 +247,13 @@ export default function AuthorsPage() {
                         onClick={() => api.refreshAuthor(author.id).then(load)}
                         className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white mr-3"
                       >
-                        Refresh
+                        {t('common.refresh')}
                       </button>
                       <button
                         onClick={() => handleDelete(author.id)}
                         className="text-xs text-red-400 hover:text-red-300"
                       >
-                        Delete
+                        {t('common.delete')}
                       </button>
                     </td>
                   </tr>
@@ -286,7 +288,7 @@ export default function AuthorsPage() {
                   <div className="min-w-0">
                     <h3 className="font-semibold truncate">{author.authorName}</h3>
                     <p className="text-xs text-slate-600 dark:text-zinc-500 mt-1 line-clamp-2">
-                      {author.description || 'No description available'}
+                      {author.description || t('authors.noDescription')}
                     </p>
                   </div>
                 </Link>
@@ -296,7 +298,7 @@ export default function AuthorsPage() {
                   onClick={() => handleToggleMonitored(author)}
                   className={`text-xs px-2 py-1 rounded ${author.monitored ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-300 dark:bg-zinc-700 text-slate-600 dark:text-zinc-400'}`}
                 >
-                  {author.monitored ? 'Monitored' : 'Unmonitored'}
+                  {author.monitored ? t('authors.monitored') : t('authors.unmonitored')}
                 </button>
                 <div className="flex gap-2">
                   <button
@@ -304,13 +306,13 @@ export default function AuthorsPage() {
                     className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white"
                     title="Refresh metadata"
                   >
-                    Refresh
+                    {t('common.refresh')}
                   </button>
                   <button
                     onClick={() => handleDelete(author.id)}
                     className="text-xs text-red-400 hover:text-red-300"
                   >
-                    Delete
+                    {t('common.delete')}
                   </button>
                 </div>
               </div>
@@ -325,10 +327,10 @@ export default function AuthorsPage() {
         onClear={clearSelection}
         busy={bulkBusy}
         actions={[
-          { label: 'Monitor', onClick: () => runBulk('monitor') },
-          { label: 'Unmonitor', onClick: () => runBulk('unmonitor') },
-          { label: 'Search', onClick: () => runBulk('search') },
-          { label: 'Delete', onClick: () => runBulk('delete'), variant: 'danger' },
+          { label: t('common.monitor'), onClick: () => runBulk('monitor') },
+          { label: t('common.unmonitor'), onClick: () => runBulk('unmonitor') },
+          { label: t('common.search'), onClick: () => runBulk('search') },
+          { label: t('common.delete'), onClick: () => runBulk('delete'), variant: 'danger' },
         ]}
       />
 

@@ -1,10 +1,12 @@
 import { FormEvent, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { CardShell } from './LoginPage'
 
 export default function SetupPage() {
+  const { t } = useTranslation()
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const { refresh } = useAuth()
@@ -20,15 +22,15 @@ export default function SetupPage() {
     const confirm = String(data.get('confirm') || '')
     setError('')
     if (!username) {
-      setError('Username is required')
+      setError(t('setup.errorUsernameRequired'))
       return
     }
     if (password !== confirm) {
-      setError('Passwords do not match')
+      setError(t('setup.errorPasswordMatch'))
       return
     }
     if (password.length < 8) {
-      setError('Password must be at least 8 characters')
+      setError(t('setup.errorPasswordLength'))
       return
     }
     setSubmitting(true)
@@ -37,7 +39,7 @@ export default function SetupPage() {
       await refresh()
       navigate('/', { replace: true })
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Setup failed'
+      const msg = e instanceof Error ? e.message : t('setup.errorFailed')
       setError(msg)
     } finally {
       setSubmitting(false)
@@ -45,14 +47,13 @@ export default function SetupPage() {
   }
 
   return (
-    <CardShell title="First-run setup" subtitle="Create the catalogue administrator">
+    <CardShell title={t('setup.title')} subtitle={t('setup.subtitle')}>
       <p className="text-xs text-slate-500 dark:text-zinc-500 mb-4 leading-relaxed">
-        Choose a username and password for the single administrator account.
-        You can change either later in Settings.
+        {t('setup.description')}
       </p>
       <form onSubmit={submit} className="space-y-4">
         <label className="block">
-          <span className="block text-xs font-medium text-slate-600 dark:text-zinc-400 mb-1">Username</span>
+          <span className="block text-xs font-medium text-slate-600 dark:text-zinc-400 mb-1">{t('setup.username')}</span>
           <input
             type="text"
             name="username"
@@ -64,7 +65,7 @@ export default function SetupPage() {
           />
         </label>
         <label className="block">
-          <span className="block text-xs font-medium text-slate-600 dark:text-zinc-400 mb-1">Password</span>
+          <span className="block text-xs font-medium text-slate-600 dark:text-zinc-400 mb-1">{t('setup.password')}</span>
           <input
             type="password"
             name="password"
@@ -75,7 +76,7 @@ export default function SetupPage() {
           />
         </label>
         <label className="block">
-          <span className="block text-xs font-medium text-slate-600 dark:text-zinc-400 mb-1">Confirm password</span>
+          <span className="block text-xs font-medium text-slate-600 dark:text-zinc-400 mb-1">{t('setup.confirmPassword')}</span>
           <input
             type="password"
             name="confirm"
@@ -93,7 +94,7 @@ export default function SetupPage() {
           disabled={submitting}
           className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-md py-2 text-sm transition-colors"
         >
-          {submitting ? 'Creating…' : 'Create account'}
+          {submitting ? t('setup.submitting') : t('setup.submit')}
         </button>
       </form>
     </CardShell>

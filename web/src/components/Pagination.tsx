@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next'
+
 interface Props {
   page: number
   totalPages: number
@@ -13,6 +15,7 @@ export default function Pagination({
   onPageChange, onPageSizeChange,
   pageSizeOptions = [25, 50, 100, 250],
 }: Props) {
+  const { t } = useTranslation()
   if (totalItems === 0) return null
 
   const start = (page - 1) * pageSize + 1
@@ -42,8 +45,8 @@ export default function Pagination({
         {start}–{end} of {totalItems}
       </div>
       <div className="flex flex-wrap justify-center items-center gap-1">
-        <button onClick={() => onPageChange(1)} disabled={page === 1} className={btn}>« First</button>
-        <button onClick={() => onPageChange(page - 1)} disabled={page === 1} className={btn}>‹ Prev</button>
+        <button onClick={() => onPageChange(1)} disabled={page === 1} className={btn}>«</button>
+        <button onClick={() => onPageChange(page - 1)} disabled={page === 1} className={btn}>‹ {t('pagination.previous')}</button>
         {pages.map((p, i) =>
           p === 'ellipsis' ? (
             <span key={`e${i}`} className="px-1 text-xs text-slate-500 dark:text-zinc-600">…</span>
@@ -53,8 +56,8 @@ export default function Pagination({
             </button>
           )
         )}
-        <button onClick={() => onPageChange(page + 1)} disabled={page === totalPages} className={btn}>Next ›</button>
-        <button onClick={() => onPageChange(totalPages)} disabled={page === totalPages} className={btn}>Last »</button>
+        <button onClick={() => onPageChange(page + 1)} disabled={page === totalPages} className={btn}>{t('pagination.next')} ›</button>
+        <button onClick={() => onPageChange(totalPages)} disabled={page === totalPages} className={btn}>»</button>
       </div>
       <div className="flex items-center gap-2">
         <span className="text-xs text-slate-600 dark:text-zinc-500">Per page:</span>

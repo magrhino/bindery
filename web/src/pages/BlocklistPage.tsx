@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { api, BlocklistEntry } from '../api/client'
 import Pagination from '../components/Pagination'
 import { usePagination } from '../components/usePagination'
@@ -11,6 +12,7 @@ function formatDate(s: string) {
 }
 
 export default function BlocklistPage() {
+  const { t } = useTranslation()
   const [entries, setEntries] = useState<BlocklistEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<Set<number>>(new Set())
@@ -31,7 +33,7 @@ export default function BlocklistPage() {
 
   const handleBulkDelete = async () => {
     if (selected.size === 0) return
-    if (!confirm(`Delete ${selected.size} blocklist entries?`)) return
+    if (!confirm(t('blocklist.deleteConfirm', { count: selected.size }))) return
     setDeleting(true)
     try {
       await api.bulkDeleteBlocklist(Array.from(selected))
@@ -68,7 +70,7 @@ export default function BlocklistPage() {
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
-        <h2 className="text-2xl font-bold">Blocklist</h2>
+        <h2 className="text-2xl font-bold">{t('blocklist.title')}</h2>
         <div className="flex items-center gap-3">
           {selected.size > 0 && (
             <button
@@ -76,19 +78,19 @@ export default function BlocklistPage() {
               disabled={deleting}
               className="px-3 py-1.5 bg-red-600 hover:bg-red-500 rounded text-xs font-medium transition-colors disabled:opacity-50"
             >
-              {deleting ? 'Deleting...' : `Delete selected (${selected.size})`}
+              {deleting ? t('blocklist.deleting') : t('blocklist.deleteSelected', { count: selected.size })}
             </button>
           )}
-          <span className="text-sm text-slate-600 dark:text-zinc-500">{entries.length} entries</span>
+          <span className="text-sm text-slate-600 dark:text-zinc-500">{t('blocklist.entries', { count: entries.length })}</span>
         </div>
       </div>
 
       {loading ? (
-        <div className="text-slate-600 dark:text-zinc-500">Loading...</div>
+        <div className="text-slate-600 dark:text-zinc-500">{t('common.loading')}</div>
       ) : entries.length === 0 ? (
         <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
-          <p className="text-lg mb-2">Blocklist is empty</p>
-          <p className="text-sm">Failed downloads are automatically added here to prevent re-grabbing</p>
+          <p className="text-lg mb-2">{t('blocklist.empty')}</p>
+          <p className="text-sm">{t('blocklist.emptyHint')}</p>
         </div>
       ) : (
         <>
@@ -106,9 +108,9 @@ export default function BlocklistPage() {
                         className="accent-emerald-500"
                       />
                     </th>
-                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">Title</th>
-                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">Reason</th>
-                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">Date</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">{t('blocklist.colTitle')}</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">{t('blocklist.colReason')}</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">{t('blocklist.colDate')}</th>
                     <th className="px-4 py-3" />
                   </tr>
                 </thead>
@@ -142,7 +144,7 @@ export default function BlocklistPage() {
                           onClick={() => handleDelete(entry.id)}
                           className="text-xs text-red-400 hover:text-red-300 transition-colors"
                         >
-                          Delete
+                          {t('common.delete')}
                         </button>
                       </td>
                     </tr>
@@ -161,7 +163,7 @@ export default function BlocklistPage() {
                 onChange={toggleAll}
                 className="accent-emerald-500"
               />
-              <span className="text-xs text-slate-600 dark:text-zinc-500">Select all</span>
+              <span className="text-xs text-slate-600 dark:text-zinc-500">{t('blocklist.selectAll')}</span>
             </div>
             {pageItems.map(entry => (
               <div
@@ -191,7 +193,7 @@ export default function BlocklistPage() {
                     onClick={() => handleDelete(entry.id)}
                     className="text-xs text-red-400 hover:text-red-300 transition-colors flex-shrink-0 py-1 px-2"
                   >
-                    Delete
+                    {t('common.delete')}
                   </button>
                 </div>
               </div>

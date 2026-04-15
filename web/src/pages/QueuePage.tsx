@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { api, QueueItem } from '../api/client'
 
 export default function QueuePage() {
+  const { t } = useTranslation()
   const [queue, setQueue] = useState<QueueItem[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -36,13 +38,13 @@ export default function QueuePage() {
 
   return (
     <div>
-      <h2 className="text-2xl font-bold mb-6">Queue</h2>
+      <h2 className="text-2xl font-bold mb-6">{t('queue.title')}</h2>
 
       {loading ? (
-        <div className="text-slate-600 dark:text-zinc-500">Loading...</div>
+        <div className="text-slate-600 dark:text-zinc-500">{t('common.loading')}</div>
       ) : queue.length === 0 ? (
         <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
-          <p>Queue is empty</p>
+          <p>{t('queue.empty')}</p>
         </div>
       ) : (
         <div className="space-y-2">
@@ -59,7 +61,7 @@ export default function QueuePage() {
                     <span className="text-blue-400">{item.percentage}%</span>
                   )}
                   {item.timeLeft && (
-                    <span className="text-slate-600 dark:text-zinc-500">{item.timeLeft} remaining</span>
+                    <span className="text-slate-600 dark:text-zinc-500">{t('queue.remaining', { time: item.timeLeft })}</span>
                   )}
                   {item.protocol && (
                     <span className="text-slate-500 dark:text-zinc-600">{item.protocol}</span>
@@ -83,7 +85,7 @@ export default function QueuePage() {
                 onClick={() => handleDelete(item.id)}
                 className="ml-4 px-3 py-2 text-xs text-red-400 hover:text-red-300 flex-shrink-0 touch-manipulation"
               >
-                Remove
+                {t('queue.remove')}
               </button>
             </div>
           ))}

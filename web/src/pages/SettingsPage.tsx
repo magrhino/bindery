@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { api, AuthConfig, AuthStatus, Indexer, DownloadClient, NotificationConfig, QualityProfile, MetadataProfile, CalibreImportProgress, RootFolder, LogEntry } from '../api/client'
 import ThemeToggle from '../components/ThemeToggle'
+import LanguageSwitcher from '../components/LanguageSwitcher'
 import { useAuth } from '../auth/AuthContext'
 
 type Tab = 'indexers' | 'clients' | 'notifications' | 'quality' | 'metadata' | 'general' | 'import' | 'rootfolders' | 'logs'
@@ -10,6 +12,7 @@ const tabCls = (active: boolean) =>
   `px-4 py-2 rounded-md text-sm font-medium transition-colors ${active ? 'bg-slate-200 dark:bg-zinc-800 text-slate-900 dark:text-white' : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/50 dark:hover:bg-zinc-800/50'}`
 
 export default function SettingsPage() {
+  const { t } = useTranslation()
   const [tab, setTab] = useState<Tab>('indexers')
   const [indexers, setIndexers] = useState<Indexer[]>([])
   const [clients, setClients] = useState<DownloadClient[]>([])
@@ -69,20 +72,12 @@ export default function SettingsPage() {
 
   return (
     <div>
-      <h2 className="text-2xl font-bold mb-6">Settings</h2>
+      <h2 className="text-2xl font-bold mb-6">{t('settings.title')}</h2>
 
       <div className="flex flex-wrap gap-2 mb-6">
-        {(['indexers', 'clients', 'notifications', 'quality', 'metadata', 'import', 'rootfolders', 'logs', 'general'] as Tab[]).map(t => (
-          <button key={t} onClick={() => setTab(t)} className={tabCls(tab === t)}>
-            {t === 'indexers' ? 'Indexers'
-              : t === 'clients' ? 'Download Clients'
-              : t === 'notifications' ? 'Notifications'
-              : t === 'quality' ? 'Quality Profiles'
-              : t === 'metadata' ? 'Metadata Profiles'
-              : t === 'import' ? 'Import'
-              : t === 'rootfolders' ? 'Root Folders'
-              : t === 'logs' ? 'Logs'
-              : 'General'}
+        {(['indexers', 'clients', 'notifications', 'quality', 'metadata', 'import', 'rootfolders', 'logs', 'general'] as Tab[]).map(tabKey => (
+          <button key={tabKey} onClick={() => setTab(tabKey)} className={tabCls(tab === tabKey)}>
+            {t(`settings.tabs.${tabKey}`)}
           </button>
         ))}
       </div>
@@ -91,13 +86,13 @@ export default function SettingsPage() {
       {tab === 'indexers' && (
         <div>
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold">Indexers</h3>
+            <h3 className="text-lg font-semibold">{t('settings.indexers.heading')}</h3>
             <button onClick={() => setShowAddIndexer(true)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium">
-              + Add Indexer
+              {t('settings.indexers.addButton')}
             </button>
           </div>
           {indexers.length === 0 ? (
-            <p className="text-slate-600 dark:text-zinc-500 text-sm">No indexers configured. Add a Newznab indexer to search for books.</p>
+            <p className="text-slate-600 dark:text-zinc-500 text-sm">{t('settings.indexers.empty')}</p>
           ) : (
             <div className="space-y-2">
               {indexers.map(idx => (
@@ -110,7 +105,7 @@ export default function SettingsPage() {
                           setIndexers(indexers.map(i => i.id === idx.id ? updated : i))
                         }}
                         className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${idx.enabled ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
-                        title={idx.enabled ? 'Disable' : 'Enable'}
+                        title={idx.enabled ? t('common.disable') : t('common.enable')}
                       >
                         <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${idx.enabled ? 'translate-x-4' : ''}`} />
                       </button>
@@ -120,19 +115,19 @@ export default function SettingsPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-3 flex-shrink-0">
-                      <button onClick={() => setEditingIndexer(editingIndexer === idx.id ? null : idx.id)} className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white">Edit</button>
+                      <button onClick={() => setEditingIndexer(editingIndexer === idx.id ? null : idx.id)} className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white">{t('common.edit')}</button>
                       <button
                         onClick={async () => {
                           try {
                             await api.testIndexer(idx.id)
-                            alert('Connection successful!')
+                            alert(t('common.connOk'))
                           } catch (err: unknown) {
-                            alert('Test failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
+                            alert(t('common.connFail', { error: err instanceof Error ? err.message : 'Unknown error' }))
                           }
                         }}
                         className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white"
                       >
-                        Test
+                        {t('common.test')}
                       </button>
                       <button
                         onClick={async () => {
@@ -141,7 +136,7 @@ export default function SettingsPage() {
                         }}
                         className="text-xs text-red-400 hover:text-red-300"
                       >
-                        Delete
+                        {t('common.delete')}
                       </button>
                     </div>
                   </div>
@@ -169,13 +164,13 @@ export default function SettingsPage() {
       {tab === 'clients' && (
         <div>
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold">Download Clients</h3>
+            <h3 className="text-lg font-semibold">{t('settings.clients.heading')}</h3>
             <button onClick={() => setShowAddClient(true)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium">
-              + Add Client
+              {t('settings.clients.addButton')}
             </button>
           </div>
           {clients.length === 0 ? (
-            <p className="text-slate-600 dark:text-zinc-500 text-sm">No download clients configured. Add SABnzbd to enable downloads.</p>
+            <p className="text-slate-600 dark:text-zinc-500 text-sm">{t('settings.clients.empty')}</p>
           ) : (
             <div className="space-y-2">
               {clients.map(c => (
@@ -188,7 +183,7 @@ export default function SettingsPage() {
                           setClients(clients.map(x => x.id === c.id ? updated : x))
                         }}
                         className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${c.enabled ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
-                        title={c.enabled ? 'Disable' : 'Enable'}
+                        title={c.enabled ? t('common.disable') : t('common.enable')}
                       >
                         <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${c.enabled ? 'translate-x-4' : ''}`} />
                       </button>
@@ -198,19 +193,19 @@ export default function SettingsPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-3 flex-shrink-0">
-                      <button onClick={() => setEditingClient(editingClient === c.id ? null : c.id)} className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white">Edit</button>
+                      <button onClick={() => setEditingClient(editingClient === c.id ? null : c.id)} className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white">{t('common.edit')}</button>
                       <button
                         onClick={async () => {
                           try {
                             await api.testDownloadClient(c.id)
-                            alert('Connection successful!')
+                            alert(t('common.connOk'))
                           } catch (err: unknown) {
-                            alert('Test failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
+                            alert(t('common.connFail', { error: err instanceof Error ? err.message : 'Unknown error' }))
                           }
                         }}
                         className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white"
                       >
-                        Test
+                        {t('common.test')}
                       </button>
                       <button
                         onClick={async () => {
@@ -219,7 +214,7 @@ export default function SettingsPage() {
                         }}
                         className="text-xs text-red-400 hover:text-red-300"
                       >
-                        Delete
+                        {t('common.delete')}
                       </button>
                     </div>
                   </div>
@@ -247,13 +242,13 @@ export default function SettingsPage() {
       {tab === 'notifications' && (
         <div>
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold">Webhook Notifications</h3>
+            <h3 className="text-lg font-semibold">{t('settings.notifications.heading')}</h3>
             <button onClick={() => setShowAddNotification(true)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium">
-              + Add Notification
+              {t('settings.notifications.addButton')}
             </button>
           </div>
           {notifications.length === 0 ? (
-            <p className="text-slate-600 dark:text-zinc-500 text-sm">No notifications configured. Add a webhook to receive event alerts.</p>
+            <p className="text-slate-600 dark:text-zinc-500 text-sm">{t('settings.notifications.empty')}</p>
           ) : (
             <div className="space-y-2">
               {notifications.map(n => (
@@ -267,7 +262,7 @@ export default function SettingsPage() {
                             setNotifications(notifications.map(x => x.id === n.id ? updated : x))
                           }}
                           className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 mt-0.5 ${n.enabled ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
-                          title={n.enabled ? 'Disable' : 'Enable'}
+                          title={n.enabled ? t('common.disable') : t('common.enable')}
                         >
                           <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${n.enabled ? 'translate-x-4' : ''}`} />
                         </button>
@@ -275,28 +270,28 @@ export default function SettingsPage() {
                           <h4 className={`font-medium text-sm ${!n.enabled ? 'text-slate-600 dark:text-zinc-500' : ''}`}>{n.name}</h4>
                           <p className="text-xs text-slate-600 dark:text-zinc-500 truncate mt-0.5">{n.url}</p>
                           <div className="flex flex-wrap gap-1 mt-2">
-                            {n.onGrab && <span className="text-[10px] px-1.5 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">On Grab</span>}
-                            {n.onImport && <span className="text-[10px] px-1.5 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">On Import</span>}
-                            {n.onUpgrade && <span className="text-[10px] px-1.5 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">On Upgrade</span>}
-                            {n.onFailure && <span className="text-[10px] px-1.5 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">On Failure</span>}
-                            {n.onHealth && <span className="text-[10px] px-1.5 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">On Health</span>}
+                            {n.onGrab && <span className="text-[10px] px-1.5 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">{t('settings.notifications.onGrab')}</span>}
+                            {n.onImport && <span className="text-[10px] px-1.5 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">{t('settings.notifications.onImport')}</span>}
+                            {n.onUpgrade && <span className="text-[10px] px-1.5 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">{t('settings.notifications.onUpgrade')}</span>}
+                            {n.onFailure && <span className="text-[10px] px-1.5 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">{t('settings.notifications.onFailure')}</span>}
+                            {n.onHealth && <span className="text-[10px] px-1.5 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">{t('settings.notifications.onHealth')}</span>}
                           </div>
                         </div>
                       </div>
                       <div className="flex items-center gap-3 flex-shrink-0">
-                        <button onClick={() => setEditingNotification(editingNotification === n.id ? null : n.id)} className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white">Edit</button>
+                        <button onClick={() => setEditingNotification(editingNotification === n.id ? null : n.id)} className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white">{t('common.edit')}</button>
                         <button
                           onClick={async () => {
                             try {
                               await api.testNotification(n.id)
-                              alert('Test notification sent!')
+                              alert(t('settings.notifications.testSent'))
                             } catch (err: unknown) {
-                              alert('Test failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
+                              alert(t('common.connFail', { error: err instanceof Error ? err.message : 'Unknown error' }))
                             }
                           }}
                           className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white"
                         >
-                          Test
+                          {t('common.test')}
                         </button>
                         <button
                           onClick={async () => {
@@ -305,7 +300,7 @@ export default function SettingsPage() {
                           }}
                           className="text-xs text-red-400 hover:text-red-300"
                         >
-                          Delete
+                          {t('common.delete')}
                         </button>
                       </div>
                     </div>
@@ -333,9 +328,9 @@ export default function SettingsPage() {
       {/* Quality Profiles */}
       {tab === 'quality' && (
         <div>
-          <h3 className="text-lg font-semibold mb-4">Quality Profiles</h3>
+          <h3 className="text-lg font-semibold mb-4">{t('settings.quality.heading')}</h3>
           {qualityProfiles.length === 0 ? (
-            <p className="text-slate-600 dark:text-zinc-500 text-sm">No quality profiles configured.</p>
+            <p className="text-slate-600 dark:text-zinc-500 text-sm">{t('settings.quality.empty')}</p>
           ) : (
             <div className="space-y-3">
               {qualityProfiles.map(p => (
@@ -343,8 +338,8 @@ export default function SettingsPage() {
                   <div className="flex items-center justify-between mb-2">
                     <h4 className="font-medium text-sm">{p.name}</h4>
                     <div className="flex items-center gap-3 text-xs text-slate-600 dark:text-zinc-500">
-                      <span>Cutoff: <span className="text-slate-700 dark:text-zinc-300">{p.cutoff}</span></span>
-                      {p.upgradeAllowed && <span className="text-emerald-400">Upgrades allowed</span>}
+                      <span>{t('settings.quality.cutoff')} <span className="text-slate-700 dark:text-zinc-300">{p.cutoff}</span></span>
+                      {p.upgradeAllowed && <span className="text-emerald-400">{t('settings.quality.upgradesAllowed')}</span>}
                     </div>
                   </div>
                   {p.items && p.items.length > 0 && (
@@ -379,12 +374,10 @@ export default function SettingsPage() {
       {tab === 'rootfolders' && (
         <div>
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold">Root Folders</h3>
+            <h3 className="text-lg font-semibold">{t('settings.rootfolders.heading')}</h3>
           </div>
           <p className="text-sm text-slate-600 dark:text-zinc-400 mb-4">
-            Root folders are the top-level library directories where Bindery moves finished downloads.
-            Each author can be assigned to a specific root folder; authors without one use the default
-            path configured at startup (<code className="font-mono bg-slate-200 dark:bg-zinc-800 px-1 rounded text-xs">BINDERY_LIBRARY_DIR</code>).
+            {t('settings.rootfolders.description')} (<code className="font-mono bg-slate-200 dark:bg-zinc-800 px-1 rounded text-xs">BINDERY_LIBRARY_DIR</code>).
           </p>
 
           {rootFolders.length > 0 && (
@@ -393,7 +386,7 @@ export default function SettingsPage() {
                 <div key={rf.id} className="flex items-center justify-between p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
                   <div className="min-w-0">
                     <p className="font-mono text-sm truncate">{rf.path}</p>
-                    <p className="text-xs text-slate-500 dark:text-zinc-500 mt-0.5">{formatBytes(rf.freeSpace)} free</p>
+                    <p className="text-xs text-slate-500 dark:text-zinc-500 mt-0.5">{t('settings.rootfolders.free', { size: formatBytes(rf.freeSpace) })}</p>
                   </div>
                   <button
                     onClick={async () => {
@@ -402,7 +395,7 @@ export default function SettingsPage() {
                     }}
                     className="ml-4 px-3 py-1 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded border border-red-200 dark:border-red-800 flex-shrink-0"
                   >
-                    Remove
+                    {t('common.remove')}
                   </button>
                 </div>
               ))}
@@ -427,7 +420,7 @@ export default function SettingsPage() {
               <input
                 value={newFolderPath}
                 onChange={e => { setNewFolderPath(e.target.value); setFolderError('') }}
-                placeholder="/data/books"
+                placeholder={t('settings.rootfolders.addPlaceholder')}
                 className={inputCls}
               />
               {folderError && <p className="text-xs text-red-500 mt-1">{folderError}</p>}
@@ -437,7 +430,7 @@ export default function SettingsPage() {
               disabled={!newFolderPath.trim()}
               className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium disabled:opacity-50 flex-shrink-0"
             >
-              Add Folder
+              {t('settings.rootfolders.addButton')}
             </button>
           </form>
         </div>
@@ -447,7 +440,7 @@ export default function SettingsPage() {
         <div>
           {/* Toolbar */}
           <div className="flex flex-wrap items-center gap-3 mb-4">
-            <h3 className="text-lg font-semibold mr-auto">Logs</h3>
+            <h3 className="text-lg font-semibold mr-auto">{t('settings.logs.heading')}</h3>
 
             {/* Level filter (display) */}
             <div className="flex items-center gap-1.5 text-xs">
@@ -468,7 +461,7 @@ export default function SettingsPage() {
 
             {/* Runtime log level */}
             <div className="flex items-center gap-2 text-xs">
-              <span className="text-slate-500 dark:text-zinc-500">Level:</span>
+              <span className="text-slate-500 dark:text-zinc-500">{t('settings.logs.level')}</span>
               <select
                 value={logLevel}
                 onChange={async e => {
@@ -491,14 +484,14 @@ export default function SettingsPage() {
                 ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400'
                 : 'border-slate-300 dark:border-zinc-700 text-slate-500 dark:text-zinc-500'}`}
             >
-              {logAutoRefresh ? '⏸ Auto' : '▶ Auto'}
+              {logAutoRefresh ? `⏸ ${t('settings.logs.autoRefresh')}` : `▶ ${t('settings.logs.autoRefresh')}`}
             </button>
 
             <button
               onClick={() => api.getLogs(undefined, 200).then(setLogEntries).catch(console.error)}
               className="text-xs px-2.5 py-1 rounded border border-slate-300 dark:border-zinc-700 text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white"
             >
-              Refresh
+              {t('common.refresh')}
             </button>
           </div>
 
@@ -510,7 +503,7 @@ export default function SettingsPage() {
               if (logFilter === 'warn') return e.level === 'WARN' || e.level === 'ERROR'
               return true // 'info' shows everything already filtered by API
             }).length === 0 ? (
-              <p className="text-zinc-600 p-4 text-center">No log entries</p>
+              <p className="text-zinc-600 p-4 text-center">{t('settings.logs.noEntries')}</p>
             ) : (
               <table className="w-full border-collapse">
                 <tbody>
@@ -544,8 +537,7 @@ export default function SettingsPage() {
             <div ref={logBottomRef} />
           </div>
           <p className="text-xs text-slate-500 dark:text-zinc-600 mt-2">
-            Shows the most recent 200 entries from the in-process ring buffer (last 1 000 entries).
-            Logs reset on restart. Change <strong>Level</strong> above to capture DEBUG output without restarting.
+            {t('settings.logs.bufferNote')}
           </p>
         </div>
       )}
@@ -591,20 +583,20 @@ const KNOWN_LANGUAGES: Array<{ code: string; label: string }> = [
 ]
 
 function MetadataProfilesTab({ profiles, onReload }: { profiles: MetadataProfile[]; onReload: () => void }) {
+  const { t } = useTranslation()
   const [editing, setEditing] = useState<MetadataProfile | null>(null)
   const [creating, setCreating] = useState(false)
 
   return (
     <div>
       <div className="flex justify-between items-center mb-4">
-        <h3 className="text-lg font-semibold">Metadata Profiles</h3>
+        <h3 className="text-lg font-semibold">{t('settings.metadata.heading')}</h3>
         <button onClick={() => setCreating(true)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium">
-          + New Profile
+          {t('settings.metadata.newProfile')}
         </button>
       </div>
       <p className="text-xs text-slate-600 dark:text-zinc-500 mb-4">
-        Books in languages outside the profile's allowed list are filtered out when an author is added or refreshed.
-        Leave the list empty to accept any language.
+        {t('settings.metadata.description')}
       </p>
       {creating && (
         <MetadataProfileForm
@@ -613,7 +605,7 @@ function MetadataProfilesTab({ profiles, onReload }: { profiles: MetadataProfile
         />
       )}
       {profiles.length === 0 && !creating ? (
-        <p className="text-slate-600 dark:text-zinc-500 text-sm">No metadata profiles configured.</p>
+        <p className="text-slate-600 dark:text-zinc-500 text-sm">{t('settings.metadata.empty')}</p>
       ) : (
         <div className="space-y-3">
           {profiles.map(p => (
@@ -630,27 +622,27 @@ function MetadataProfilesTab({ profiles, onReload }: { profiles: MetadataProfile
                   <div className="min-w-0">
                     <h4 className="font-medium text-sm">{p.name}</h4>
                     <div className="flex flex-wrap gap-3 mt-2 text-xs text-slate-600 dark:text-zinc-400">
-                      <span>Min popularity: <span className="text-slate-800 dark:text-zinc-200">{p.minPopularity}</span></span>
-                      <span>Min pages: <span className="text-slate-800 dark:text-zinc-200">{p.minPages}</span></span>
-                      <span>Languages: <span className="text-slate-800 dark:text-zinc-200">{formatLanguageList(p.allowedLanguages)}</span></span>
+                      <span>{t('settings.metadata.minPopularity')} <span className="text-slate-800 dark:text-zinc-200">{p.minPopularity}</span></span>
+                      <span>{t('settings.metadata.minPages')} <span className="text-slate-800 dark:text-zinc-200">{p.minPages}</span></span>
+                      <span>{t('settings.metadata.languages')} <span className="text-slate-800 dark:text-zinc-200">{formatLanguageList(p.allowedLanguages)}</span></span>
                     </div>
                     <div className="flex flex-wrap gap-1.5 mt-2">
-                      {p.skipMissingDate && <span className="text-[10px] px-2 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">Skip missing date</span>}
-                      {p.skipMissingIsbn && <span className="text-[10px] px-2 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">Skip missing ISBN</span>}
-                      {p.skipPartBooks && <span className="text-[10px] px-2 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">Skip part books</span>}
+                      {p.skipMissingDate && <span className="text-[10px] px-2 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">{t('settings.metadata.skipMissingDate')}</span>}
+                      {p.skipMissingIsbn && <span className="text-[10px] px-2 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">{t('settings.metadata.skipMissingIsbn')}</span>}
+                      {p.skipPartBooks && <span className="text-[10px] px-2 py-0.5 bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 rounded">{t('settings.metadata.skipPartBooks')}</span>}
                     </div>
                   </div>
                   <div className="flex items-center gap-3 flex-shrink-0">
-                    <button onClick={() => setEditing(p)} className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white">Edit</button>
+                    <button onClick={() => setEditing(p)} className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white">{t('common.edit')}</button>
                     <button
                       onClick={async () => {
-                        if (!confirm('Delete this metadata profile?')) return
+                        if (!confirm(t('settings.metadata.deleteConfirm'))) return
                         await api.deleteMetadataProfile(p.id)
                         onReload()
                       }}
                       className="text-xs text-red-400 hover:text-red-300"
                     >
-                      Delete
+                      {t('common.delete')}
                     </button>
                   </div>
                 </div>
@@ -673,6 +665,7 @@ function formatLanguageList(csv: string): string {
 }
 
 function MetadataProfileForm({ profile, onClose, onSaved }: { profile?: MetadataProfile; onClose: () => void; onSaved: () => void }) {
+  const { t } = useTranslation()
   const [name, setName] = useState(profile?.name ?? '')
   const [minPopularity, setMinPopularity] = useState(profile?.minPopularity ?? 0)
   const [minPages, setMinPages] = useState(profile?.minPages ?? 0)
@@ -711,7 +704,7 @@ function MetadataProfileForm({ profile, onClose, onSaved }: { profile?: Metadata
       }
       onSaved()
     } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : 'Failed to save profile')
+      setErr(e instanceof Error ? e.message : t('settings.metadata.saveFail'))
     } finally {
       setSaving(false)
     }
@@ -720,11 +713,11 @@ function MetadataProfileForm({ profile, onClose, onSaved }: { profile?: Metadata
   return (
     <form onSubmit={submit} className="p-4 border border-slate-300 dark:border-zinc-700 rounded-lg bg-slate-50 dark:bg-zinc-900/50 space-y-4">
       <div>
-        <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Name</label>
-        <input value={name} onChange={e => setName(e.target.value)} required className={inputCls} placeholder="e.g. English Only" />
+        <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">{t('settings.metadata.formName')}</label>
+        <input value={name} onChange={e => setName(e.target.value)} required className={inputCls} placeholder={t('settings.metadata.formNamePlaceholder')} />
       </div>
       <div>
-        <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-2">Allowed languages</label>
+        <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-2">{t('settings.metadata.formLanguages')}</label>
         <div className="flex flex-wrap gap-2">
           {KNOWN_LANGUAGES.map(l => {
             const on = languages.includes(l.code)
@@ -743,40 +736,40 @@ function MetadataProfileForm({ profile, onClose, onSaved }: { profile?: Metadata
           })}
         </div>
         <p className="text-[11px] text-slate-500 dark:text-zinc-500 mt-2">
-          Select none to accept any language. Books whose language is unknown are always kept.
+          {t('settings.metadata.formLanguagesHint')}
         </p>
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Min popularity</label>
+          <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">{t('settings.metadata.formMinPopularity')}</label>
           <input type="number" min={0} value={minPopularity} onChange={e => setMinPopularity(Number(e.target.value))} className={inputCls} />
         </div>
         <div>
-          <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Min pages</label>
+          <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">{t('settings.metadata.formMinPages')}</label>
           <input type="number" min={0} value={minPages} onChange={e => setMinPages(Number(e.target.value))} className={inputCls} />
         </div>
       </div>
       <div className="flex flex-wrap gap-4 text-xs">
         <label className="flex items-center gap-2 cursor-pointer">
           <input type="checkbox" checked={skipMissingDate} onChange={e => setSkipMissingDate(e.target.checked)} />
-          Skip missing release date
+          {t('settings.metadata.formSkipMissingDate')}
         </label>
         <label className="flex items-center gap-2 cursor-pointer">
           <input type="checkbox" checked={skipMissingIsbn} onChange={e => setSkipMissingIsbn(e.target.checked)} />
-          Skip missing ISBN
+          {t('settings.metadata.formSkipMissingIsbn')}
         </label>
         <label className="flex items-center gap-2 cursor-pointer">
           <input type="checkbox" checked={skipPartBooks} onChange={e => setSkipPartBooks(e.target.checked)} />
-          Skip part books
+          {t('settings.metadata.formSkipPartBooks')}
         </label>
       </div>
       {err && <div className="text-xs text-red-400">{err}</div>}
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onClose} className="px-3 py-1.5 text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white">
-          Cancel
+          {t('common.cancel')}
         </button>
         <button type="submit" disabled={saving} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded text-xs font-medium">
-          {saving ? 'Saving...' : profile ? 'Save changes' : 'Create profile'}
+          {saving ? t('common.saving') : profile ? t('settings.metadata.saveChanges') : t('settings.metadata.createProfile')}
         </button>
       </div>
     </form>
@@ -784,6 +777,7 @@ function MetadataProfileForm({ profile, onClose, onSaved }: { profile?: Metadata
 }
 
 function ImportTab() {
+  const { t } = useTranslation()
   const [csvResult, setCsvResult] = useState<MigrateResult | null>(null)
   const [readarrResult, setReadarrResult] = useState<ReadarrResult | null>(null)
   const [uploading, setUploading] = useState<'csv' | 'readarr' | null>(null)
@@ -837,13 +831,12 @@ function ImportTab() {
   return (
     <div className="space-y-8 max-w-2xl">
       <section>
-        <h3 className="text-base font-semibold mb-2 text-slate-800 dark:text-zinc-200">CSV of author names</h3>
+        <h3 className="text-base font-semibold mb-2 text-slate-800 dark:text-zinc-200">{t('settings.import.csvHeading')}</h3>
         <p className="text-xs text-slate-600 dark:text-zinc-500 mb-3">
-          One name per line, or CSV columns <code className="text-[11px] bg-slate-200 dark:bg-zinc-800 px-1 rounded">name,monitored,searchOnAdd</code>.
-          Each name is resolved against OpenLibrary — the top match is added.
+          {t('settings.import.csvDescription')}
         </p>
         <label className="inline-flex items-center gap-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium cursor-pointer">
-          {uploading === 'csv' ? 'Importing…' : 'Upload CSV'}
+          {uploading === 'csv' ? t('settings.import.importingCsv') : t('settings.import.uploadCsv')}
           <input
             type="file"
             accept=".csv,.txt,text/csv,text/plain"
@@ -856,15 +849,12 @@ function ImportTab() {
       </section>
 
       <section>
-        <h3 className="text-base font-semibold mb-2 text-slate-800 dark:text-zinc-200">Readarr database</h3>
+        <h3 className="text-base font-semibold mb-2 text-slate-800 dark:text-zinc-200">{t('settings.import.readarrHeading')}</h3>
         <p className="text-xs text-slate-600 dark:text-zinc-500 mb-3">
-          Upload <code className="text-[11px] bg-slate-200 dark:bg-zinc-800 px-1 rounded">readarr.db</code> (typically under
-          <code className="text-[11px] bg-slate-200 dark:bg-zinc-800 px-1 rounded mx-1">/config/readarr.db</code>).
-          Authors are re-resolved via OpenLibrary. Indexers, download clients, and blocklist entries port directly.
-          Run a library scan afterward to match existing book files.
+          {t('settings.import.readarrDescription')}
         </p>
         <label className="inline-flex items-center gap-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium cursor-pointer">
-          {uploading === 'readarr' ? 'Importing (may take minutes)…' : 'Upload readarr.db'}
+          {uploading === 'readarr' ? t('settings.import.importingReadarr') : t('settings.import.uploadReadarr')}
           <input
             type="file"
             accept=".db,.sqlite,application/x-sqlite3,application/octet-stream"
@@ -893,6 +883,7 @@ function ImportTab() {
 }
 
 function GeneralTab() {
+  const { t } = useTranslation()
   const [settings, setSettings] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState<string | null>(null)
@@ -977,46 +968,53 @@ function GeneralTab() {
     }
   }
 
-  if (loading) return <div className="text-slate-600 dark:text-zinc-500">Loading...</div>
+  if (loading) return <div className="text-slate-600 dark:text-zinc-500">{t('common.loading')}</div>
 
   return (
     <div className="space-y-8">
       {/* Appearance */}
       <section>
-        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">Appearance</h3>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.appearance')}</h3>
         <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
           <div className="flex items-center justify-between">
             <div>
-              <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">Theme</label>
-              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-1">Light or dark interface. Defaults to your OS preference on first visit.</p>
+              <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">{t('settings.general.theme')}</label>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-1">{t('settings.general.themeHint')}</p>
             </div>
             <ThemeToggle />
+          </div>
+          <div className="flex items-center justify-between border-t border-slate-200 dark:border-zinc-800 pt-3 mt-3">
+            <div>
+              <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">{t('settings.general.language')}</label>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-1">{t('settings.general.languageHint')}</p>
+            </div>
+            <LanguageSwitcher />
           </div>
         </div>
       </section>
 
       {/* Downloads */}
       <section>
-        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">Downloads</h3>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.downloads')}</h3>
         <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-3">
           <div>
-            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Preferred Language</label>
-            <p className="text-xs text-slate-600 dark:text-zinc-500 mb-2">Filter search results to the selected language. Releases with detected foreign-language tags in the title will be excluded.</p>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">{t('settings.general.preferredLanguage')}</label>
+            <p className="text-xs text-slate-600 dark:text-zinc-500 mb-2">{t('settings.general.preferredLanguageHint')}</p>
             <div className="flex gap-2">
               <select
                 value={settings['search.preferredLanguage'] ?? 'en'}
                 onChange={e => setSettings(s => ({ ...s, 'search.preferredLanguage': e.target.value }))}
                 className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
               >
-                <option value="any">Any (no filter)</option>
-                <option value="en">English</option>
+                <option value="any">{t('settings.general.preferredLanguageAny')}</option>
+                <option value="en">{t('settings.general.preferredLanguageEn')}</option>
               </select>
               <button
                 onClick={() => saveSetting('search.preferredLanguage')}
                 disabled={saving === 'search.preferredLanguage'}
                 className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
               >
-                {saving === 'search.preferredLanguage' ? 'Saving...' : 'Save'}
+                {saving === 'search.preferredLanguage' ? t('common.saving') : t('common.save')}
               </button>
             </div>
           </div>
@@ -1025,12 +1023,12 @@ function GeneralTab() {
 
       {/* Auto-grab */}
       <section>
-        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">Auto-grab</h3>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.autoGrab')}</h3>
         <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
           <div className="flex items-center justify-between">
             <div>
-              <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">Enable automatic grabbing</label>
-              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">When enabled, Bindery automatically sends found books to the download client. When disabled, all searches run but you manually initiate grabs from the Wanted page.</p>
+              <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">{t('settings.general.autoGrabLabel')}</label>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">{t('settings.general.autoGrabHint')}</p>
             </div>
             <button
               onClick={async () => {
@@ -1040,7 +1038,7 @@ function GeneralTab() {
                 await api.setSetting('autoGrab.enabled', next).catch(console.error)
               }}
               className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${(settings['autoGrab.enabled'] ?? 'true') !== 'false' ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
-              title={(settings['autoGrab.enabled'] ?? 'true') !== 'false' ? 'Disable' : 'Enable'}
+              title={(settings['autoGrab.enabled'] ?? 'true') !== 'false' ? t('common.disable') : t('common.enable')}
             >
               <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${(settings['autoGrab.enabled'] ?? 'true') !== 'false' ? 'translate-x-4' : ''}`} />
             </button>
@@ -1050,10 +1048,10 @@ function GeneralTab() {
 
       {/* Naming */}
       <section>
-        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">File Naming</h3>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.fileNaming')}</h3>
         <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-3">
           <div>
-            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Book Naming Template</label>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">{t('settings.general.bookTemplate')}</label>
             <div className="flex gap-2">
               <input
                 value={settings['naming.bookTemplate'] ?? ''}
@@ -1066,13 +1064,13 @@ function GeneralTab() {
                 disabled={saving === 'naming.bookTemplate'}
                 className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
               >
-                {saving === 'naming.bookTemplate' ? 'Saving...' : 'Save'}
+                {saving === 'naming.bookTemplate' ? t('common.saving') : t('common.save')}
               </button>
             </div>
           </div>
           <div>
-            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Audiobook Folder Template</label>
-            <p className="text-xs text-slate-600 dark:text-zinc-500 mb-2">Audiobooks are imported as whole directories (multi-part m4b/mp3 + cover stay together). Template produces the destination folder; original filenames inside are preserved.</p>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">{t('settings.general.audiobookTemplate')}</label>
+            <p className="text-xs text-slate-600 dark:text-zinc-500 mb-2">{t('settings.general.audiobookTemplateHint')}</p>
             <div className="flex gap-2">
               <input
                 value={settings['naming_template_audiobook'] ?? ''}
@@ -1085,7 +1083,7 @@ function GeneralTab() {
                 disabled={saving === 'naming_template_audiobook'}
                 className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
               >
-                {saving === 'naming_template_audiobook' ? 'Saving...' : 'Save'}
+                {saving === 'naming_template_audiobook' ? t('common.saving') : t('common.save')}
               </button>
             </div>
           </div>
@@ -1097,10 +1095,10 @@ function GeneralTab() {
 
       {/* API Keys */}
       <section>
-        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">External API Keys</h3>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.apiKeys')}</h3>
         <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-4">
           <div>
-            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Google Books API Key</label>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">{t('settings.general.googleBooksKey')}</label>
             <div className="flex gap-2">
               <input
                 value={settings['googlebooks.apiKey'] ?? ''}
@@ -1114,7 +1112,7 @@ function GeneralTab() {
                 disabled={saving === 'googlebooks.apiKey'}
                 className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
               >
-                {saving === 'googlebooks.apiKey' ? 'Saving...' : 'Save'}
+                {saving === 'googlebooks.apiKey' ? t('common.saving') : t('common.save')}
               </button>
             </div>
           </div>
@@ -1123,12 +1121,12 @@ function GeneralTab() {
 
       {/* Library */}
       <section>
-        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">Library</h3>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.library')}</h3>
         <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-slate-700 dark:text-zinc-300">Scan library</p>
-              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">Walk the books directory and reconcile files with the database</p>
+              <p className="text-sm text-slate-700 dark:text-zinc-300">{t('settings.general.scanLibrary')}</p>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">{t('settings.general.scanLibraryHint')}</p>
               {scanMessage && (
                 <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">{scanMessage}</p>
               )}
@@ -1138,16 +1136,16 @@ function GeneralTab() {
               disabled={scanningLibrary}
               className="px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded text-sm font-medium disabled:opacity-50 flex-shrink-0"
             >
-              {scanningLibrary ? 'Scanning…' : 'Scan Library'}
+              {scanningLibrary ? t('settings.general.scanning') : t('settings.general.scanLibraryButton')}
             </button>
           </div>
           {lastScan && (
             <div className="mt-3 border-t border-slate-200 dark:border-zinc-800 pt-3 text-xs text-slate-600 dark:text-zinc-400">
-              <p className="font-medium text-slate-700 dark:text-zinc-300 mb-1">Last scan result</p>
+              <p className="font-medium text-slate-700 dark:text-zinc-300 mb-1">{t('settings.general.lastScan')}</p>
               <div className="flex gap-4">
-                <span>Files found: <span className="font-mono text-slate-800 dark:text-zinc-200">{lastScan.files_found}</span></span>
-                <span>Reconciled: <span className="font-mono text-emerald-700 dark:text-emerald-400">{lastScan.reconciled}</span></span>
-                <span>Unmatched: <span className="font-mono text-slate-800 dark:text-zinc-200">{lastScan.unmatched}</span></span>
+                <span>{t('settings.general.filesFound')} <span className="font-mono text-slate-800 dark:text-zinc-200">{lastScan.files_found}</span></span>
+                <span>{t('settings.general.reconciled')} <span className="font-mono text-emerald-700 dark:text-emerald-400">{lastScan.reconciled}</span></span>
+                <span>{t('settings.general.unmatched')} <span className="font-mono text-slate-800 dark:text-zinc-200">{lastScan.unmatched}</span></span>
               </div>
               <p className="mt-1 text-slate-500 dark:text-zinc-500">
                 {new Date(lastScan.ran_at).toLocaleString()}
@@ -1159,10 +1157,10 @@ function GeneralTab() {
 
       {/* OPDS */}
       <section>
-        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">OPDS Feed</h3>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.opds')}</h3>
         <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
           <div>
-            <span className="block text-xs font-medium text-slate-600 dark:text-zinc-400 mb-1">OPDS Feed URL</span>
+            <span className="block text-xs font-medium text-slate-600 dark:text-zinc-400 mb-1">{t('settings.general.opdsFeedUrl')}</span>
             <div className="flex items-center gap-2">
               <code className="flex-1 text-xs bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 px-2 py-1.5 rounded font-mono break-all">
                 {window.location.origin}/opds
@@ -1171,10 +1169,10 @@ function GeneralTab() {
                 onClick={() => navigator.clipboard.writeText(window.location.origin + '/opds')}
                 className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 rounded text-xs font-medium flex-shrink-0"
               >
-                Copy
+                {t('settings.general.copy')}
               </button>
             </div>
-            <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1.5">Use this URL in KOReader, Moon+ Reader, or any OPDS client. Authenticate with your API key as the password (leave the username blank or use any value).</p>
+            <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1.5">{t('settings.general.opdsHint')}</p>
           </div>
         </div>
       </section>
@@ -1189,24 +1187,24 @@ function GeneralTab() {
 
       {/* Backup */}
       <section>
-        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">Backup & Restore</h3>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.backup')}</h3>
         <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-3">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-slate-700 dark:text-zinc-300">Create a backup of all Bindery configuration</p>
-              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">Includes authors, books, indexers, and settings</p>
+              <p className="text-sm text-slate-700 dark:text-zinc-300">{t('settings.general.backupCreate')}</p>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">{t('settings.general.backupHint')}</p>
             </div>
             <button
               onClick={handleBackup}
               disabled={creatingBackup}
               className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium disabled:opacity-50 flex-shrink-0"
             >
-              {creatingBackup ? 'Creating...' : 'Create Backup'}
+              {creatingBackup ? t('settings.general.backupCreating') : t('settings.general.backupButton')}
             </button>
           </div>
           {backups.length > 0 && (
             <div className="mt-3 border-t border-slate-200 dark:border-zinc-800 pt-3">
-              <p className="text-xs text-slate-600 dark:text-zinc-500 mb-2">Existing backups:</p>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mb-2">{t('settings.general.existingBackups')}</p>
               <ul className="space-y-1">
                 {backups.map(b => (
                   <li key={b} className="text-xs text-slate-600 dark:text-zinc-400 font-mono">{b}</li>

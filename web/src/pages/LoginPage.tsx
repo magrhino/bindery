@@ -1,10 +1,12 @@
 import { FormEvent, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import Logo from '../components/Logo'
 
 export default function LoginPage() {
+  const { t } = useTranslation()
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const { refresh } = useAuth()
@@ -20,7 +22,7 @@ export default function LoginPage() {
     const password = String(data.get('password') || '')
     const rememberMe = data.get('rememberMe') === 'on'
     if (!username || !password) {
-      setError('Username and password are required')
+      setError(t('login.errorRequired'))
       return
     }
     setError('')
@@ -30,7 +32,7 @@ export default function LoginPage() {
       await refresh()
       navigate('/', { replace: true })
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Login failed'
+      const msg = e instanceof Error ? e.message : t('login.errorFailed')
       setError(msg)
     } finally {
       setSubmitting(false)
@@ -38,9 +40,9 @@ export default function LoginPage() {
   }
 
   return (
-    <CardShell title="Sign in" subtitle="">
+    <CardShell title={t('login.title')} subtitle="">
       <form onSubmit={submit} className="space-y-4">
-        <Field label="Username">
+        <Field label={t('login.username')}>
           <input
             type="text"
             name="username"
@@ -51,7 +53,7 @@ export default function LoginPage() {
             className="w-full bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </Field>
-        <Field label="Password">
+        <Field label={t('login.password')}>
           <input
             type="password"
             name="password"
@@ -68,7 +70,7 @@ export default function LoginPage() {
             defaultChecked
             className="rounded"
           />
-          Remember me on this device for 30 days
+          {t('login.rememberMe')}
         </label>
         {error && (
           <div className="text-sm text-red-600 dark:text-red-400 py-1">{error}</div>
@@ -78,7 +80,7 @@ export default function LoginPage() {
           disabled={submitting}
           className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-md py-2 text-sm transition-colors"
         >
-          {submitting ? 'Signing in…' : 'Sign in'}
+          {submitting ? t('login.submitting') : t('login.submit')}
         </button>
       </form>
     </CardShell>

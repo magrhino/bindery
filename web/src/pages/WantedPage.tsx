@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { api, Book, SearchResult } from '../api/client'
 import BulkActionBar from '../components/BulkActionBar'
 import Pagination from '../components/Pagination'
 import { usePagination } from '../components/usePagination'
 
 export default function WantedPage() {
+  const { t } = useTranslation()
+
   const [books, setBooks] = useState<Book[]>([])
   const [loading, setLoading] = useState(true)
   const [searchingId, setSearchingId] = useState<number | null>(null)
@@ -141,27 +144,27 @@ export default function WantedPage() {
   return (
     <div className={selectedIds.size > 0 ? 'pb-16' : ''}>
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-2xl font-bold">Wanted</h2>
-        <span className="text-sm text-slate-600 dark:text-zinc-500">{filtered.length} of {books.length}</span>
+        <h2 className="text-2xl font-bold">{t('wanted.title')}</h2>
+        <span className="text-sm text-slate-600 dark:text-zinc-500">{t('wanted.countLabel', { filtered: filtered.length, total: books.length })}</span>
       </div>
 
       <input
         type="search"
         value={search}
         onChange={e => setSearch(e.target.value)}
-        placeholder="Search by title or author..."
+        placeholder={t('wanted.searchPlaceholder')}
         className="w-full mb-4 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600 placeholder-slate-400 dark:placeholder-zinc-600"
       />
 
       {loading ? (
-        <div className="text-slate-600 dark:text-zinc-500">Loading...</div>
+        <div className="text-slate-600 dark:text-zinc-500">{t('common.loading')}</div>
       ) : books.length === 0 ? (
         <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
-          <p>No wanted books. Add an author to start tracking.</p>
+          <p>{t('wanted.empty')}</p>
         </div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
-          <p>No books match your search.</p>
+          <p>{t('wanted.noMatch')}</p>
         </div>
       ) : (
         <>
@@ -175,7 +178,7 @@ export default function WantedPage() {
               className="rounded-full border-slate-400 dark:border-zinc-600 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0"
               title="Select all on this page"
             />
-            <span className="text-xs text-slate-500 dark:text-zinc-500">Select all on this page</span>
+            <span className="text-xs text-slate-500 dark:text-zinc-500">{t('common.selectAllPage')}</span>
           </div>
 
           <div className="space-y-2">
@@ -188,7 +191,7 @@ export default function WantedPage() {
                       checked={selectedIds.has(book.id)}
                       onChange={() => toggleSelect(book.id)}
                       className="rounded-full border-slate-400 dark:border-zinc-600 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0 flex-shrink-0"
-                      title={`Select ${book.title}`}
+                      title={t('wanted.selectBook', { title: book.title })}
                     />
                     {book.imageUrl && (
                       <img src={book.imageUrl} alt="" className="w-10 h-14 object-cover rounded flex-shrink-0" />
@@ -212,15 +215,15 @@ export default function WantedPage() {
                           className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded text-[11px] px-1.5 py-0.5 focus:outline-none"
                           title="Change media type"
                         >
-                          <option value="ebook">📖 Ebook</option>
-                          <option value="audiobook">🎧 Audiobook</option>
-                          <option value="both">📖🎧 Both</option>
+                          <option value="ebook">{t('books.mediaEbook')}</option>
+                          <option value="audiobook">{t('books.mediaAudiobook')}</option>
+                          <option value="both">{t('books.mediaBoth')}</option>
                         </select>
                         {book.mediaType === 'both' && (
                           <span className="text-[10px] text-slate-500 dark:text-zinc-500">
-                            {book.ebookFilePath ? '📖 ✓' : '📖 needed'}
+                            {book.ebookFilePath ? t('wanted.ebookDone') : t('wanted.ebookNeeded')}
                             {' · '}
-                            {book.audiobookFilePath ? '🎧 ✓' : '🎧 needed'}
+                            {book.audiobookFilePath ? t('wanted.audiobookDone') : t('wanted.audiobookNeeded')}
                           </span>
                         )}
                       </div>
@@ -234,23 +237,23 @@ export default function WantedPage() {
                       onClick={() => unmonitor(book)}
                       disabled={unmonitoringId === book.id}
                       className="px-2 py-1.5 bg-slate-200 dark:bg-zinc-800 hover:bg-amber-100 dark:hover:bg-amber-900/30 hover:text-amber-700 dark:hover:text-amber-400 rounded text-xs font-medium disabled:opacity-50 transition-colors"
-                      title="Stop monitoring this book"
+                      title={t('wanted.unmonitorHint')}
                     >
-                      {unmonitoringId === book.id ? '…' : 'Unmonitor'}
+                      {unmonitoringId === book.id ? '…' : t('common.unmonitor')}
                     </button>
                     <button
                       onClick={() => searchBook(book)}
                       disabled={searchingId === book.id}
                       className="px-3 py-1.5 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 rounded text-xs font-medium disabled:opacity-50"
                     >
-                      {searchingId === book.id ? 'Searching...' : 'Search'}
+                      {searchingId === book.id ? t('wanted.searching') : t('common.search')}
                     </button>
                   </div>
                 </div>
 
                 {showResults === book.id && results.length === 0 && (
                   <div className="mt-1 mb-3 px-3 py-2 bg-slate-200/50 dark:bg-zinc-800/50 rounded text-xs text-slate-600 dark:text-zinc-500">
-                    No results found on any indexer.
+                    {t('wanted.noIndexerResults')}
                   </div>
                 )}
 
@@ -278,7 +281,7 @@ export default function WantedPage() {
                               : 'bg-emerald-600 hover:bg-emerald-500 text-white'
                           }`}
                         >
-                          {grabbedGuid === r.guid ? '✓ Grabbed' : grabbingGuid === r.guid ? 'Grabbing…' : 'Grab'}
+                          {grabbedGuid === r.guid ? t('wanted.grabbed') : grabbingGuid === r.guid ? t('wanted.grabbing') : t('wanted.grab')}
                         </button>
                       </div>
                     ))}
@@ -296,9 +299,9 @@ export default function WantedPage() {
         onClear={clearSelection}
         busy={bulkBusy}
         actions={[
-          { label: 'Search', onClick: () => runBulk('search') },
-          { label: 'Unmonitor', onClick: () => runBulk('unmonitor') },
-          { label: 'Blocklist', onClick: () => runBulk('blocklist'), variant: 'danger' },
+          { label: t('common.search'), onClick: () => runBulk('search') },
+          { label: t('common.unmonitor'), onClick: () => runBulk('unmonitor') },
+          { label: t('common.blocklist'), onClick: () => runBulk('blocklist'), variant: 'danger' },
         ]}
       />
     </div>

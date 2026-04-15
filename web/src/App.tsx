@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, NavLink, Link } from 'react-router-dom'
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { api } from './api/client'
 import { AuthProvider, useAuth } from './auth/AuthContext'
 import AuthGuard from './auth/AuthGuard'
@@ -18,19 +19,20 @@ import CalendarPage from './pages/CalendarPage'
 import BlocklistPage from './pages/BlocklistPage'
 import Logo from './components/Logo'
 
-const NAV_ITEMS = [
-  { to: '/', label: 'Authors', end: true },
-  { to: '/books', label: 'Books' },
-  { to: '/wanted', label: 'Wanted' },
-  { to: '/queue', label: 'Queue' },
-  { to: '/history', label: 'History' },
-  { to: '/series', label: 'Series' },
-  { to: '/calendar', label: 'Calendar' },
-  { to: '/blocklist', label: 'Blocklist' },
-  { to: '/settings', label: 'Settings' },
+const NAV_KEYS = [
+  { to: '/', key: 'authors', end: true },
+  { to: '/books', key: 'books' },
+  { to: '/wanted', key: 'wanted' },
+  { to: '/queue', key: 'queue' },
+  { to: '/history', key: 'history' },
+  { to: '/series', key: 'series' },
+  { to: '/calendar', key: 'calendar' },
+  { to: '/blocklist', key: 'blocklist' },
+  { to: '/settings', key: 'settings' },
 ]
 
 function Shell() {
+  const { t } = useTranslation()
   const [version, setVersion] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
   const { status, logout } = useAuth()
@@ -60,9 +62,9 @@ function Shell() {
             </Link>
 
             <nav className="hidden lg:flex gap-1">
-              {NAV_ITEMS.map(item => (
+              {NAV_KEYS.map(item => (
                 <NavLink key={item.to} to={item.to} end={item.end} className={linkClass}>
-                  {item.label}
+                  {t(`nav.${item.key}`)}
                 </NavLink>
               ))}
             </nav>
@@ -77,9 +79,9 @@ function Shell() {
                 <button
                   onClick={logout}
                   className="hidden lg:block text-xs text-slate-500 dark:text-zinc-500 hover:text-slate-900 dark:hover:text-white transition-colors"
-                  title={status.username ? `Signed in as ${status.username}` : 'Sign out'}
+                  title={status.username ? `${t('login.signedInAs')} ${status.username}` : t('login.signOut')}
                 >
-                  Sign out
+                  {t('login.signOut')}
                 </button>
               )}
               <button
@@ -104,7 +106,7 @@ function Shell() {
         {menuOpen && (
           <div className="lg:hidden border-t border-slate-200 dark:border-zinc-800">
             <nav>
-              {NAV_ITEMS.map(item => (
+              {NAV_KEYS.map(item => (
                 <NavLink
                   key={item.to}
                   to={item.to}
@@ -112,7 +114,7 @@ function Shell() {
                   className={mobileLinkClass}
                   onClick={() => setMenuOpen(false)}
                 >
-                  {item.label}
+                  {t(`nav.${item.key}`)}
                 </NavLink>
               ))}
             </nav>
@@ -127,7 +129,7 @@ function Shell() {
                   onClick={logout}
                   className="text-xs text-slate-500 dark:text-zinc-500 hover:text-slate-900 dark:hover:text-white transition-colors"
                 >
-                  Sign out
+                  {t('login.signOut')}
                 </button>
               )}
             </div>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { api, Book } from '../api/client'
 
 function getDaysInMonth(year: number, month: number) {
@@ -18,6 +19,7 @@ const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const DAY_NAMES_SHORT = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
 
 export default function CalendarPage() {
+  const { t } = useTranslation()
   const [books, setBooks] = useState<Book[]>([])
   const [loading, setLoading] = useState(true)
   const today = new Date()
@@ -69,14 +71,14 @@ export default function CalendarPage() {
 
   const CalendarHeader = () => (
     <div className="flex items-center justify-between mb-6">
-      <h2 className="text-2xl font-bold">Calendar</h2>
+      <h2 className="text-2xl font-bold">{t('calendar.title')}</h2>
       <div className="flex items-center gap-2">
         {!isCurrentMonth && (
           <button
             onClick={goToToday}
             className="px-3 py-1.5 text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white border border-slate-300 dark:border-zinc-700 rounded transition-colors"
           >
-            Today
+            {t('calendar.today')}
           </button>
         )}
         <button
@@ -103,7 +105,7 @@ export default function CalendarPage() {
       <CalendarHeader />
 
       {loading ? (
-        <div className="text-slate-600 dark:text-zinc-500">Loading...</div>
+        <div className="text-slate-600 dark:text-zinc-500">{t('common.loading')}</div>
       ) : (
         <>
           {/* Grid calendar — hidden on mobile, shown sm+ */}
@@ -198,7 +200,7 @@ export default function CalendarPage() {
             <div className="mt-4 border border-slate-200 dark:border-zinc-800 rounded-lg overflow-hidden">
               <div className="px-4 py-2 bg-slate-100 dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800">
                 <p className="text-xs text-slate-600 dark:text-zinc-400 font-medium">
-                  Releasing in {MONTH_NAMES[viewMonth]} {viewYear}
+                  {t('calendar.releasingIn', { month: MONTH_NAMES[viewMonth], year: viewYear })}
                 </p>
               </div>
               <div className="divide-y divide-slate-200 dark:divide-zinc-800">
@@ -226,7 +228,7 @@ export default function CalendarPage() {
             </div>
           ) : (
             <p className="mt-4 text-center text-sm text-slate-500 dark:text-zinc-600">
-              No monitored books releasing this month
+              {t('calendar.noReleases')}
             </p>
           )}
         </>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import ViewToggle from '../components/ViewToggle'
 import { useView } from '../components/useView'
 import { api, Book } from '../api/client'
@@ -17,15 +18,17 @@ const statusColors: Record<string, string> = {
   skipped: 'bg-slate-300 dark:bg-zinc-700 text-slate-600 dark:text-zinc-400',
 }
 
-const statusLabel: Record<string, string> = {
-  wanted: 'Wanted',
-  downloading: 'Downloading',
-  downloaded: 'Downloaded',
-  imported: 'In Library',
-  skipped: 'Skipped',
+// statusLabel is populated at render time from t() — see BooksPage
+const statusLabelKeys: Record<string, string> = {
+  wanted: 'books.statusWanted',
+  downloading: 'books.statusDownloading',
+  downloaded: 'books.statusDownloaded',
+  imported: 'books.statusImported',
+  skipped: 'books.statusSkipped',
 }
 
 export default function BooksPage() {
+  const { t } = useTranslation()
   const [books, setBooks] = useState<Book[]>([])
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState('')
@@ -96,7 +99,7 @@ export default function BooksPage() {
 
   const runBulk = async (action: Parameters<typeof api.bulkActionBooks>[1], mediaType?: 'ebook' | 'audiobook') => {
     if (selectedIds.size === 0) return
-    if (action === 'delete' && !confirm(`Delete ${selectedIds.size} book(s)?`)) return
+    if (action === 'delete' && !confirm(t('books.deleteConfirm', { count: selectedIds.size }))) return
     setBulkBusy(true)
     try {
       await api.bulkActionBooks([...selectedIds], action, mediaType)
@@ -118,7 +121,7 @@ export default function BooksPage() {
   return (
     <div className={selectedIds.size > 0 ? 'pb-16' : ''}>
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-2xl font-bold">Books</h2>
+        <h2 className="text-2xl font-bold">{t('books.title')}</h2>
         <div className="flex items-center gap-3">
           <span className="text-sm text-slate-600 dark:text-zinc-500">{filtered.length} of {books.length}</span>
           <ViewToggle view={view} onChange={setView} />
@@ -131,7 +134,7 @@ export default function BooksPage() {
           type="search"
           value={search}
           onChange={e => setSearch(e.target.value)}
-          placeholder="Search books or authors..."
+          placeholder={t('books.searchPlaceholder')}
           className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600 placeholder-slate-400 dark:placeholder-zinc-600"
         />
         <div className="flex gap-1 flex-wrap">
@@ -141,30 +144,30 @@ export default function BooksPage() {
               onClick={() => setStatusFilter(s)}
               className={statusBtnCls(statusFilter === s)}
             >
-              {s ? (statusLabel[s] ?? s) : 'All'}
+              {s ? (t(statusLabelKeys[s]) ?? s) : t('common.all')}
             </button>
           ))}
         </div>
       </div>
 
       <div className="flex gap-1 mb-4 flex-wrap">
-        <span className="text-xs text-slate-600 dark:text-zinc-500 mr-1 self-center">Sort:</span>
-        <button onClick={() => setSort('title-az')} className={sortBtnCls(sort === 'title-az')}>A–Z</button>
-        <button onClick={() => setSort('title-za')} className={sortBtnCls(sort === 'title-za')}>Z–A</button>
-        <button onClick={() => setSort('date-new')} className={sortBtnCls(sort === 'date-new')}>Newest</button>
-        <button onClick={() => setSort('date-old')} className={sortBtnCls(sort === 'date-old')}>Oldest</button>
+        <span className="text-xs text-slate-600 dark:text-zinc-500 mr-1 self-center">{t('books.sortLabel')}</span>
+        <button onClick={() => setSort('title-az')} className={sortBtnCls(sort === 'title-az')}>{t('books.sortTitleAZ')}</button>
+        <button onClick={() => setSort('title-za')} className={sortBtnCls(sort === 'title-za')}>{t('books.sortTitleZA')}</button>
+        <button onClick={() => setSort('date-new')} className={sortBtnCls(sort === 'date-new')}>{t('books.sortNewest')}</button>
+        <button onClick={() => setSort('date-old')} className={sortBtnCls(sort === 'date-old')}>{t('books.sortOldest')}</button>
 
-        <span className="text-xs text-slate-600 dark:text-zinc-500 mx-2 self-center">Type:</span>
-        <button onClick={() => setMediaFilter('')} className={sortBtnCls(mediaFilter === '')}>All</button>
-        <button onClick={() => setMediaFilter('ebook')} className={sortBtnCls(mediaFilter === 'ebook')}>📖 Ebook</button>
-        <button onClick={() => setMediaFilter('audiobook')} className={sortBtnCls(mediaFilter === 'audiobook')}>🎧 Audiobook</button>
+        <span className="text-xs text-slate-600 dark:text-zinc-500 mx-2 self-center">{t('books.typeLabel')}</span>
+        <button onClick={() => setMediaFilter('')} className={sortBtnCls(mediaFilter === '')}>{t('common.all')}</button>
+        <button onClick={() => setMediaFilter('ebook')} className={sortBtnCls(mediaFilter === 'ebook')}>📖 {t('common.ebook')}</button>
+        <button onClick={() => setMediaFilter('audiobook')} className={sortBtnCls(mediaFilter === 'audiobook')}>🎧 {t('common.audiobook')}</button>
       </div>
 
       {loading ? (
-        <div className="text-slate-600 dark:text-zinc-500">Loading...</div>
+        <div className="text-slate-600 dark:text-zinc-500">{t('common.loading')}</div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
-          <p>{books.length === 0 ? 'No books found' : 'No books match your filters'}</p>
+          <p>{books.length === 0 ? t('books.empty') : t('books.noMatch')}</p>
         </div>
       ) : (
         view === 'table' ? (
@@ -183,11 +186,11 @@ export default function BooksPage() {
                       title="Select all on this page"
                     />
                   </th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">Title</th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase hidden md:table-cell">Author</th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase hidden sm:table-cell">Year</th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">Type</th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">Status</th>
+                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">{t('books.colTitle')}</th>
+                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase hidden md:table-cell">{t('books.colAuthor')}</th>
+                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase hidden sm:table-cell">{t('books.colYear')}</th>
+                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">{t('books.colType')}</th>
+                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">{t('books.colStatus')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-zinc-800">
@@ -228,11 +231,11 @@ export default function BooksPage() {
                     </td>
                     <td className="px-3 py-2 text-slate-600 dark:text-zinc-400 whitespace-nowrap hidden sm:table-cell">{book.releaseDate ? new Date(book.releaseDate).getFullYear() : '—'}</td>
                     <td className="px-3 py-2 text-xs whitespace-nowrap">
-                      {book.mediaType === 'audiobook' ? '🎧 Audiobook' : '📖 Ebook'}
+                      {book.mediaType === 'audiobook' ? `🎧 ${t('common.audiobook')}` : `📖 ${t('common.ebook')}`}
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-medium ${statusColors[book.status] || 'bg-slate-300 dark:bg-zinc-700 text-slate-600 dark:text-zinc-400'}`}>
-                        {statusLabel[book.status] ?? book.status}
+                        {statusLabelKeys[book.status] ? t(statusLabelKeys[book.status]) : book.status}
                       </span>
                     </td>
                   </tr>
@@ -274,10 +277,10 @@ export default function BooksPage() {
                 )}
                 <div className="flex items-center gap-1 mt-1 flex-wrap">
                   <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${statusColors[book.status] || 'bg-slate-300 dark:bg-zinc-700 text-slate-600 dark:text-zinc-400'}`}>
-                    {statusLabel[book.status] ?? book.status}
+                    {statusLabelKeys[book.status] ? t(statusLabelKeys[book.status]) : book.status}
                   </span>
                   {book.mediaType === 'audiobook' && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300">🎧 Audio</span>
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300">{t('books.audioLabel')}</span>
                   )}
                 </div>
                 <div className="flex items-center justify-between mt-0.5">
@@ -289,9 +292,9 @@ export default function BooksPage() {
                       href={`/api/v1/book/${book.id}/file`}
                       onClick={e => e.stopPropagation()}
                       className="text-[10px] text-emerald-400 hover:text-emerald-300"
-                      title="Download file"
+                      title={t('books.downloadFile')}
                     >
-                      Download
+                      {t('books.download')}
                     </a>
                   )}
                 </div>
@@ -308,12 +311,12 @@ export default function BooksPage() {
         onClear={clearSelection}
         busy={bulkBusy}
         actions={[
-          { label: 'Monitor', onClick: () => runBulk('monitor') },
-          { label: 'Unmonitor', onClick: () => runBulk('unmonitor') },
-          { label: 'Search', onClick: () => runBulk('search') },
-          { label: '📖 Set Ebook', onClick: () => runBulk('set_media_type', 'ebook') },
-          { label: '🎧 Set Audiobook', onClick: () => runBulk('set_media_type', 'audiobook') },
-          { label: 'Delete', onClick: () => runBulk('delete'), variant: 'danger' },
+          { label: t('common.monitor'), onClick: () => runBulk('monitor') },
+          { label: t('common.unmonitor'), onClick: () => runBulk('unmonitor') },
+          { label: t('common.search'), onClick: () => runBulk('search') },
+          { label: t('books.setEbook'), onClick: () => runBulk('set_media_type', 'ebook') },
+          { label: t('books.setAudiobook'), onClick: () => runBulk('set_media_type', 'audiobook') },
+          { label: t('common.delete'), onClick: () => runBulk('delete'), variant: 'danger' },
         ]}
       />
     </div>

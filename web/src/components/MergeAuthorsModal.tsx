@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { api, Author } from '../api/client'
 
 interface Props {
@@ -16,6 +17,7 @@ interface Props {
 // target's book count so the user sees the "post-merge" total before
 // committing.
 export default function MergeAuthorsModal({ authors, initialTargetId, onClose, onMerged }: Props) {
+  const { t } = useTranslation()
   const [targetId, setTargetId] = useState<number | ''>(initialTargetId ?? '')
   const [sourceId, setSourceId] = useState<number | ''>('')
   const [sourceBookCount, setSourceBookCount] = useState<number | null>(null)
@@ -71,22 +73,21 @@ export default function MergeAuthorsModal({ authors, initialTargetId, onClose, o
         onClick={e => e.stopPropagation()}
       >
         <div className="p-4 border-b border-slate-200 dark:border-zinc-800">
-          <h3 className="text-lg font-semibold">Merge authors</h3>
+          <h3 className="text-lg font-semibold">{t('mergeAuthorsModal.title')}</h3>
           <p className="text-xs text-slate-600 dark:text-zinc-500 mt-1">
-            Collapse a duplicate author into a canonical one. The source row is deleted; its
-            books, name, and OpenLibrary id are preserved as aliases on the target.
+            {t('mergeAuthorsModal.description')}
           </p>
         </div>
 
         <div className="p-4 space-y-3">
           <div>
-            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Source (will be removed)</label>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">{t('mergeAuthorsModal.removeLabel')}</label>
             <select
               value={sourceId}
               onChange={e => setSourceId(e.target.value ? Number(e.target.value) : '')}
               className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
             >
-              <option value="">— Select source author —</option>
+              <option value="">—</option>
               {sorted.filter(a => a.id !== targetId).map(a => (
                 <option key={a.id} value={a.id}>{a.authorName}</option>
               ))}
@@ -94,13 +95,13 @@ export default function MergeAuthorsModal({ authors, initialTargetId, onClose, o
           </div>
 
           <div>
-            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Target (canonical, kept)</label>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">{t('mergeAuthorsModal.keepLabel')}</label>
             <select
               value={targetId}
               onChange={e => setTargetId(e.target.value ? Number(e.target.value) : '')}
               className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
             >
-              <option value="">— Select target author —</option>
+              <option value="">—</option>
               {sorted.filter(a => a.id !== sourceId).map(a => (
                 <option key={a.id} value={a.id}>{a.authorName}</option>
               ))}
@@ -132,14 +133,14 @@ export default function MergeAuthorsModal({ authors, initialTargetId, onClose, o
             onClick={onClose}
             className="px-4 py-2 text-sm text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white"
           >
-            Cancel
+            {t('mergeAuthorsModal.cancel')}
           </button>
           <button
             onClick={submit}
             disabled={!canSubmit}
             className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium text-white"
           >
-            {busy ? 'Merging…' : 'Merge'}
+            {busy ? t('mergeAuthorsModal.merging') : t('mergeAuthorsModal.mergeButton')}
           </button>
         </div>
       </div>

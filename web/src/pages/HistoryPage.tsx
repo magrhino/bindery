@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { api, HistoryEvent } from '../api/client'
 import Pagination from '../components/Pagination'
 import { usePagination } from '../components/usePagination'
@@ -48,6 +49,7 @@ function detectMediaType(title: string): '' | 'ebook' | 'audiobook' {
 const BLOCKLISTABLE = new Set(['grabbed', 'downloadFailed', 'importFailed'])
 
 export default function HistoryPage() {
+  const { t } = useTranslation()
   const [events, setEvents] = useState<HistoryEvent[]>([])
   const [loading, setLoading] = useState(true)
   const [typeFilter, setTypeFilter] = useState('')
@@ -86,13 +88,13 @@ export default function HistoryPage() {
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
-        <h2 className="text-2xl font-bold">History</h2>
+        <h2 className="text-2xl font-bold">{t('history.title')}</h2>
         <select
           value={typeFilter}
           onChange={e => handleFilterChange(e.target.value)}
           className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-1.5 text-sm text-slate-800 dark:text-zinc-200 focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
         >
-          <option value="">All event types</option>
+          <option value="">{t('history.allEventTypes')}</option>
           {eventTypes.map(t => (
             <option key={t} value={t}>{t}</option>
           ))}
@@ -100,10 +102,10 @@ export default function HistoryPage() {
       </div>
 
       {loading ? (
-        <div className="text-slate-600 dark:text-zinc-500">Loading...</div>
+        <div className="text-slate-600 dark:text-zinc-500">{t('common.loading')}</div>
       ) : events.length === 0 ? (
         <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
-          <p>No history events found</p>
+          <p>{t('history.empty')}</p>
         </div>
       ) : (
         <>
@@ -113,11 +115,11 @@ export default function HistoryPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-slate-100 dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800">
-                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">Event</th>
-                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">Source Title</th>
-                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">Type</th>
-                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">Size</th>
-                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">Date</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">{t('history.colEvent')}</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">{t('history.colSourceTitle')}</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">{t('history.colType')}</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">{t('history.colSize')}</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">{t('history.colDate')}</th>
                     <th className="px-4 py-3" />
                   </tr>
                 </thead>
@@ -167,14 +169,14 @@ export default function HistoryPage() {
                               className="text-xs text-amber-400 hover:text-amber-300 transition-colors mr-3"
                               title="Add to blocklist — prevents this release from being grabbed again"
                             >
-                              Blocklist
+                              {t('history.blocklist')}
                             </button>
                           )}
                           <button
                             onClick={() => handleDelete(event.id)}
                             className="text-xs text-red-400 hover:text-red-300 transition-colors"
                           >
-                            Delete
+                            {t('history.delete')}
                           </button>
                         </td>
                       </tr>
@@ -226,14 +228,14 @@ export default function HistoryPage() {
                         onClick={() => handleBlocklist(event.id)}
                         className="text-xs text-amber-400 hover:text-amber-300 transition-colors py-1"
                       >
-                        Blocklist
+                        {t('history.blocklist')}
                       </button>
                     )}
                     <button
                       onClick={() => handleDelete(event.id)}
                       className="text-xs text-red-400 hover:text-red-300 transition-colors py-1"
                     >
-                      Delete
+                      {t('history.delete')}
                     </button>
                   </div>
                 </div>
