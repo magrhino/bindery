@@ -528,11 +528,16 @@ func (s *Scanner) ScanLibrary(ctx context.Context) {
 		return
 	}
 
-	// Build a set of file paths already tracked in the DB
-	trackedPaths := make(map[string]bool, len(allBooks))
+	// Build a set of tracked file paths AND their parent directories.
+	// The parent-directory entry is needed for audiobooks: their file_path
+	// is stored as a directory (the whole folder is the "file"), but the
+	// walk yields individual tracks. Without it every audio track inside an
+	// already-imported audiobook folder would look untracked.
+	trackedPaths := make(map[string]bool, len(allBooks)*2)
 	for _, b := range allBooks {
 		if b.FilePath != "" {
-			trackedPaths[b.FilePath] = true
+			trackedPaths[filepath.Clean(b.FilePath)] = true
+			trackedPaths[filepath.Clean(filepath.Dir(b.FilePath))] = true
 		}
 	}
 
@@ -544,20 +549,43 @@ func (s *Scanner) ScanLibrary(ctx context.Context) {
 		}
 	}
 
+	// reconciledBooks prevents a single DB book from being matched to more
+	// than one file in the same scan pass. allBooks is loaded once and is
+	// never mutated in-memory, so without this guard a loose titleMatch could
+	// assign the same book to multiple files — last write wins, overwriting
+	// the correct earlier assignment.
+	reconciledBooks := make(map[int64]bool)
+
 	var reconciled, unmatched int
 	for _, path := range foundFiles {
-		// Skip files already tracked
-		if trackedPaths[path] {
+		// Skip files already tracked, or files inside a tracked directory
+		// (individual tracks inside an already-imported audiobook folder).
+		cleanPath := filepath.Clean(path)
+		if trackedPaths[cleanPath] || trackedPaths[filepath.Clean(filepath.Dir(cleanPath))] {
 			continue
 		}
 
-		// Parse the filename to extract title/author hints
+		// Parse the filename for title/author hints. If the filename alone
+		// doesn't yield an author (e.g. the file is named just "book.epub"),
+		// fall back to the first directory component relative to libraryDir —
+		// most library layouts are {Author}/{Title}/filename.ext.
 		parsed := ParseFilename(path)
+		if parsed.Author == "" {
+			if rel, err := filepath.Rel(s.libraryDir, path); err == nil {
+				parts := strings.SplitN(rel, string(filepath.Separator), 2)
+				if len(parts) >= 2 {
+					parsed.Author = parts[0]
+				}
+			}
+		}
 
 		// Search existing books for a title + author match
 		matched := false
 		if parsed.Title != "" {
 			for _, b := range allBooks {
+				if reconciledBooks[b.ID] {
+					continue
+				}
 				if b.Status == models.BookStatusWanted &&
 					titleMatch(b.Title, parsed.Title) &&
 					authorMatch(authorNames[b.AuthorID], parsed.Author) {
@@ -567,7 +595,8 @@ func (s *Scanner) ScanLibrary(ctx context.Context) {
 						continue
 					}
 					slog.Info("library scan: reconciled book", "title", b.Title, "path", path)
-					trackedPaths[path] = true
+					trackedPaths[cleanPath] = true
+					reconciledBooks[b.ID] = true
 					reconciled++
 					matched = true
 					break

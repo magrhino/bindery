@@ -128,3 +128,169 @@ func TestCheckDownloads_NoEnabledClient(t *testing.T) {
 	s, _, _, ctx := scannerFixture(t, t.TempDir())
 	s.CheckDownloads(ctx) // no panic, no DB writes
 }
+
+// TestScanLibrary_NoDuplicateBookAssignment — regression test for issue #81.
+// When two files in the library loosely match the same book's title, the book
+// must only be reconciled to the FIRST file encountered; the second file must
+// be left as "unmatched" rather than overwriting the first assignment.
+// Without the reconciledBooks guard, allBooks is never mutated in memory so
+// the book's in-memory status stays "wanted" and both files claim it — with
+// the last write winning and destroying the correct earlier match.
+func TestScanLibrary_NoDuplicateBookAssignment(t *testing.T) {
+	libDir := t.TempDir()
+
+	// Two files whose titles overlap with the same book title.
+	file1 := filepath.Join(libDir, "Dune.epub")
+	file2 := filepath.Join(libDir, "Dune (Alt Edition).epub")
+	for _, f := range []string{file1, file2} {
+		if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s, books, authors, ctx := scannerFixture(t, libDir)
+	author := &models.Author{ForeignID: "OLA", Name: "Frank Herbert", SortName: "Herbert, Frank"}
+	if err := authors.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	book := &models.Book{
+		ForeignID: "OLB", AuthorID: author.ID,
+		Title: "Dune", Status: models.BookStatusWanted,
+	}
+	if err := books.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	s.ScanLibrary(ctx)
+
+	got, err := books.GetByID(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The book must have been reconciled to exactly one file.
+	if got.FilePath == "" {
+		t.Fatal("expected book to be reconciled to a file, got empty FilePath")
+	}
+	// The path that was set must be one of the two candidates — not
+	// some other file — and the book must not have been overwritten with
+	// a different file in a second pass.
+	if got.FilePath != file1 && got.FilePath != file2 {
+		t.Errorf("FilePath %q is not one of the expected candidates", got.FilePath)
+	}
+}
+
+// TestScanLibrary_AudiobookDirectorySkipped — files inside an already-tracked
+// audiobook directory must not trigger re-reconciliation. Before this fix the
+// trackedPaths set only contained file paths; individual audio tracks inside
+// a directory-level file_path were never found in the set and each track
+// looked untracked, causing the scanner to try (and fail) to re-assign them
+// to "wanted" books.
+func TestScanLibrary_AudiobookDirectorySkipped(t *testing.T) {
+	libDir := t.TempDir()
+
+	// Simulate an audiobook folder: /libDir/Author/Title/01.mp3
+	abDir := filepath.Join(libDir, "Author", "Title")
+	if err := os.MkdirAll(abDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	track := filepath.Join(abDir, "01 - Chapter One.mp3")
+	if err := os.WriteFile(track, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, books, authors, ctx := scannerFixture(t, libDir)
+	author := &models.Author{ForeignID: "OLA2", Name: "Author", SortName: "Author"}
+	if err := authors.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	// The audiobook book already has its file_path set to the directory
+	// (matching how tryImport records audiobook imports).
+	book := &models.Book{
+		ForeignID: "OLB2", AuthorID: author.ID, Title: "Title",
+		Status: models.BookStatusImported, FilePath: abDir,
+	}
+	if err := books.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	// A second "wanted" book whose title would match the track file if the
+	// directory guard weren't in place.
+	wanted := &models.Book{
+		ForeignID: "OLB3", AuthorID: author.ID, Title: "Chapter One",
+		Status: models.BookStatusWanted,
+	}
+	if err := books.Create(ctx, wanted); err != nil {
+		t.Fatal(err)
+	}
+
+	s.ScanLibrary(ctx)
+
+	// The track inside the already-tracked directory must not have been
+	// assigned to the wanted book.
+	got, err := books.GetByID(ctx, wanted.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FilePath != "" {
+		t.Errorf("wanted book must not have been reconciled to a track inside a tracked dir, got %q", got.FilePath)
+	}
+}
+
+// TestScanLibrary_DirectoryAuthorInference — when a file's name provides no
+// author hint, the scanner should infer the author from the first directory
+// component relative to libraryDir (the standard Author/Title/file.ext layout).
+// This prevents uninformative filenames like "book.epub" from matching books
+// by wrong authors simply because parsedAuthor is empty and authorMatch
+// returns true for everything.
+func TestScanLibrary_DirectoryAuthorInference(t *testing.T) {
+	libDir := t.TempDir()
+
+	// File nested two levels deep: /libDir/Isaac Asimov/Foundation/foundation.epub
+	// The filename alone gives no author clue; the directory does.
+	bookDir := filepath.Join(libDir, "Isaac Asimov", "Foundation")
+	if err := os.MkdirAll(bookDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	epub := filepath.Join(bookDir, "foundation.epub")
+	if err := os.WriteFile(epub, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, books, authors, ctx := scannerFixture(t, libDir)
+
+	asimov := &models.Author{ForeignID: "OLA3", Name: "Isaac Asimov", SortName: "Asimov, Isaac"}
+	if err := authors.Create(ctx, asimov); err != nil {
+		t.Fatal(err)
+	}
+	// A different author with a book also titled "Foundation" — should NOT match.
+	other := &models.Author{ForeignID: "OLA4", Name: "Someone Else", SortName: "Else, Someone"}
+	if err := authors.Create(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	bookAsimov := &models.Book{
+		ForeignID: "OLB4", AuthorID: asimov.ID, Title: "Foundation",
+		Status: models.BookStatusWanted,
+	}
+	if err := books.Create(ctx, bookAsimov); err != nil {
+		t.Fatal(err)
+	}
+	bookOther := &models.Book{
+		ForeignID: "OLB5", AuthorID: other.ID, Title: "Foundation",
+		Status: models.BookStatusWanted,
+	}
+	if err := books.Create(ctx, bookOther); err != nil {
+		t.Fatal(err)
+	}
+
+	s.ScanLibrary(ctx)
+
+	// Asimov's book should be reconciled (directory says "Isaac Asimov").
+	gotAsimov, _ := books.GetByID(ctx, bookAsimov.ID)
+	if gotAsimov.FilePath != epub {
+		t.Errorf("Asimov Foundation: want FilePath=%q, got %q", epub, gotAsimov.FilePath)
+	}
+	// The other author's book must not have been touched.
+	gotOther, _ := books.GetByID(ctx, bookOther.ID)
+	if gotOther.FilePath != "" {
+		t.Errorf("Other Foundation must stay unreconciled, got FilePath=%q", gotOther.FilePath)
+	}
+}
