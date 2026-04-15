@@ -21,7 +21,8 @@ func NewBookRepo(db *sql.DB) *BookRepo {
 const bookColumns = `id, foreign_id, author_id, title, sort_title, original_title, description,
 	image_url, release_date, genres, average_rating, ratings_count, monitored, status,
 	any_edition_ok, selected_edition_id, file_path, language, media_type, narrator, duration_seconds, asin,
-	calibre_id, metadata_provider, last_metadata_refresh_at, created_at, updated_at`
+	calibre_id, metadata_provider, last_metadata_refresh_at, created_at, updated_at,
+	ebook_file_path, audiobook_file_path`
 
 func (r *BookRepo) List(ctx context.Context) ([]models.Book, error) {
 	return r.query(ctx, "SELECT "+bookColumns+" FROM books ORDER BY sort_title", nil)
@@ -106,13 +107,15 @@ func (r *BookRepo) Update(ctx context.Context, b *models.Book) error {
 		                 release_date=?, genres=?, average_rating=?, ratings_count=?,
 		                 monitored=?, status=?, any_edition_ok=?, selected_edition_id=?,
 		                 file_path=?, language=?, media_type=?, narrator=?, duration_seconds=?, asin=?,
-		                 metadata_provider=?, last_metadata_refresh_at=?, updated_at=?
+		                 metadata_provider=?, last_metadata_refresh_at=?, updated_at=?,
+		                 ebook_file_path=?, audiobook_file_path=?
 		WHERE id=?`,
 		b.Title, b.SortTitle, b.OriginalTitle, b.Description, b.ImageURL,
 		b.ReleaseDate, string(genresJSON), b.AverageRating, b.RatingsCount,
 		b.Monitored, b.Status, b.AnyEditionOK, b.SelectedEditionID,
 		b.FilePath, b.Language, mediaType, b.Narrator, b.DurationSeconds, b.ASIN,
-		b.MetadataProvider, b.LastMetadataRefreshAt, now, b.ID)
+		b.MetadataProvider, b.LastMetadataRefreshAt, now,
+		b.EbookFilePath, b.AudiobookFilePath, b.ID)
 	if err != nil {
 		return fmt.Errorf("update book %d: %w", b.ID, err)
 	}
@@ -120,10 +123,54 @@ func (r *BookRepo) Update(ctx context.Context, b *models.Book) error {
 	return nil
 }
 
+// SetFormatFilePath records the on-disk path for a specific format ('ebook'
+// or 'audiobook') and recomputes the book's aggregate status:
+//   - status = 'imported' when all formats the book wants are now on disk.
+//   - status unchanged otherwise (typically 'wanted' or 'downloading').
+//
+// The legacy file_path column is kept in sync with the most-recently-set
+// format path for Calibre integration compatibility.
+func (r *BookRepo) SetFormatFilePath(ctx context.Context, id int64, mediaType, filePath string) error {
+	b, err := r.GetByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("SetFormatFilePath: load book %d: %w", id, err)
+	}
+	if b == nil {
+		return fmt.Errorf("SetFormatFilePath: book %d not found", id)
+	}
+
+	switch mediaType {
+	case models.MediaTypeAudiobook:
+		b.AudiobookFilePath = filePath
+	default: // 'ebook' or any legacy value
+		b.EbookFilePath = filePath
+	}
+	b.FilePath = filePath // keep legacy column in sync
+
+	if !b.NeedsEbook() && !b.NeedsAudiobook() {
+		b.Status = models.BookStatusImported
+	}
+
+	return r.Update(ctx, b)
+}
+
+// SetFilePath is a backward-compatible wrapper around SetFormatFilePath that
+// infers the format from the book's current media_type. Callers that know the
+// explicit format should use SetFormatFilePath directly.
 func (r *BookRepo) SetFilePath(ctx context.Context, id int64, filePath string) error {
-	_, err := r.db.ExecContext(ctx, "UPDATE books SET file_path=?, status=? WHERE id=?",
-		filePath, models.BookStatusImported, id)
-	return err
+	b, err := r.GetByID(ctx, id)
+	if err != nil || b == nil {
+		// Fall back to the legacy single-column update so existing code paths
+		// never break even if the book can't be loaded.
+		_, err2 := r.db.ExecContext(ctx, "UPDATE books SET file_path=?, status=? WHERE id=?",
+			filePath, models.BookStatusImported, id)
+		return err2
+	}
+	mediaType := b.MediaType
+	if mediaType == models.MediaTypeBoth {
+		mediaType = models.MediaTypeEbook // shouldn't happen; default to ebook
+	}
+	return r.SetFormatFilePath(ctx, id, mediaType, filePath)
 }
 
 // SetCalibreID stores the Calibre-assigned book id for the given Bindery
@@ -199,6 +246,7 @@ func (r *BookRepo) query(ctx context.Context, q string, args []any) ([]models.Bo
 			&b.Narrator, &b.DurationSeconds, &b.ASIN,
 			&b.CalibreID, &b.MetadataProvider, &b.LastMetadataRefreshAt,
 			&b.CreatedAt, &b.UpdatedAt,
+			&b.EbookFilePath, &b.AudiobookFilePath,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan book: %w", err)
