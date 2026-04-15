@@ -11,7 +11,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/vavallee/bindery
-    targetRevision: development
+    targetRevision: v0.12.0
     path: charts/bindery
     helm:
       valueFiles:
