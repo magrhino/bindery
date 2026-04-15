@@ -8,6 +8,22 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v0.10.0] — 2026-04-15
+
+Minor release adding dual-format support — a single book entry can now track an ebook and an audiobook independently.
+
+### Added
+
+- **Dual-format books (closes [#23](https://github.com/vavallee/bindery/issues/23))** — each book can now hold an ebook *and* an audiobook simultaneously. The book detail page shows two collapsible format panels (Ebook / Audiobook), each with its own status badge, file path, and grab button. Grabbing one format does not affect the other. The Wanted page lists each missing format as a separate row so you can grab them individually. The WantedAll action queues both formats for books that are missing both.
+- **Per-format file paths** — `ebook_file_path` and `audiobook_file_path` are stored separately in the database, so a file imported as an epub is never accidentally associated with the audiobook slot and vice versa.
+- **Format-aware scanner** — the library scanner now detects the format of each file (by extension: `.epub`/`.mobi`/`.azw3` → ebook; `.m4b`/`.mp3` → audiobook) and writes it into the correct slot rather than the legacy `file_path` column.
+- **Format-aware scheduler** — the 12 h background grab sweep and per-book auto-grab both handle formats independently. A book with an existing ebook will not re-queue the ebook but will still search for a missing audiobook, and vice versa.
+
+### Upgrade notes
+
+- **Schema:** migration `012_dual_format.sql` adds `ebook_file_path`, `audiobook_file_path`, and `media_type` columns to the `books` table and copies existing `file_path` data into `ebook_file_path`. The migration is non-destructive; `file_path` is left in place for one release as a fallback.
+- Existing single-format downloads are automatically visible in the correct format slot after the migration runs on startup — no manual action needed.
+
 ## [v0.9.2] — 2026-04-15
 
 Patch release with three bug fixes and improved book cover coverage.

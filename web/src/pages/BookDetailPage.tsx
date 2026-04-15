@@ -111,14 +111,29 @@ export default function BookDetailPage() {
     }
   }
 
-  const deleteFile = async () => {
-    if (!book || !book.filePath) return
-    const label = book.mediaType === 'audiobook' ? 'the audiobook folder' : 'this file'
-    if (!window.confirm(`Permanently delete ${label} from disk?\n\n${book.filePath}\n\nThe book record stays; it will flip back to "wanted".`)) return
+  const deleteFile = async (format?: 'ebook' | 'audiobook') => {
+    if (!book) return
+    const hasEbook = !!book.ebookFilePath
+    const hasAudiobook = !!book.audiobookFilePath
+    const hasLegacy = !!book.filePath && !hasEbook && !hasAudiobook
+    if (!hasEbook && !hasAudiobook && !hasLegacy) return
+
+    let label: string
+    let path: string
+    if (format === 'ebook' && hasEbook) {
+      label = 'the ebook file'; path = book.ebookFilePath
+    } else if (format === 'audiobook' && hasAudiobook) {
+      label = 'the audiobook folder'; path = book.audiobookFilePath
+    } else {
+      label = book.mediaType === 'audiobook' ? 'the audiobook folder' : 'this file'
+      path = book.filePath
+    }
+    if (!window.confirm(`Permanently delete ${label} from disk?\n\n${path}\n\nThe book record stays; it will flip back to "wanted".`)) return
     setDeletingFile(true)
     setError(null)
     try {
-      const updated = await api.deleteBookFile(book.id)
+      const params = format ? `?format=${format}` : ''
+      const updated = await api.deleteBookFile(book.id, params)
       setBook(updated)
       const h = await api.listHistory({ bookId: book.id }).catch(() => events)
       setEvents(h)
@@ -131,9 +146,10 @@ export default function BookDetailPage() {
 
   const deleteBook = async () => {
     if (!book) return
-    const hasFiles = !!book.filePath
+    const hasFiles = !!(book.filePath || book.ebookFilePath || book.audiobookFilePath)
+    const fileSummary = [book.ebookFilePath, book.audiobookFilePath].filter(Boolean).join('\n') || book.filePath
     const msg = hasFiles
-      ? `Delete "${book.title}" AND its files on disk?\n\n${book.filePath}\n\nThis cannot be undone.`
+      ? `Delete "${book.title}" AND its files on disk?\n\n${fileSummary}\n\nThis cannot be undone.`
       : `Delete "${book.title}"?\n\nThis cannot be undone.`
     if (!window.confirm(msg)) return
     setDeletingBook(true)
@@ -165,7 +181,7 @@ export default function BookDetailPage() {
   if (!book) return <div className="text-slate-600 dark:text-zinc-500">Book not found</div>
 
   const mt = book.mediaType || 'ebook'
-  const typeBtn = (type: 'ebook' | 'audiobook') =>
+  const typeBtn = (type: 'ebook' | 'audiobook' | 'both') =>
     `px-3 py-1.5 rounded text-sm font-medium transition-colors ${
       mt === type
         ? 'bg-emerald-600 text-white'
@@ -217,34 +233,46 @@ export default function BookDetailPage() {
           {book.description && (
             <p className="mt-4 text-sm text-slate-700 dark:text-zinc-300 leading-relaxed">{book.description}</p>
           )}
-          {book.filePath && (
+          {mt === 'both' ? (
+            <div className="mt-3 space-y-1.5 text-sm">
+              {book.ebookFilePath && (
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-slate-500 dark:text-zinc-500 break-all flex-1">📖 {book.ebookFilePath}</span>
+                  <button onClick={() => deleteFile('ebook')} disabled={deletingFile || deletingBook}
+                    className="text-red-500 hover:text-red-400 disabled:opacity-40 text-xs flex-shrink-0">Delete ebook</button>
+                </div>
+              )}
+              {book.audiobookFilePath && (
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-slate-500 dark:text-zinc-500 break-all flex-1">🎧 {book.audiobookFilePath}</span>
+                  <button onClick={() => deleteFile('audiobook')} disabled={deletingFile || deletingBook}
+                    className="text-red-500 hover:text-red-400 disabled:opacity-40 text-xs flex-shrink-0">Delete audiobook</button>
+                </div>
+              )}
+            </div>
+          ) : book.filePath ? (
             <div className="mt-3 flex items-center gap-4 text-sm">
-              <a
-                href={`/api/v1/book/${book.id}/file`}
-                className="text-emerald-500 hover:text-emerald-400"
-              >
+              <a href={`/api/v1/book/${book.id}/file`} className="text-emerald-500 hover:text-emerald-400">
                 Download file
               </a>
               <button
-                onClick={deleteFile}
+                onClick={() => deleteFile()}
                 disabled={deletingFile || deletingBook}
                 className="text-red-500 hover:text-red-400 disabled:opacity-40"
                 title={`Remove ${book.mediaType === 'audiobook' ? 'folder' : 'file'} from disk; keep the book record`}
               >
                 {deletingFile ? 'Deleting…' : 'Delete file'}
               </button>
+              <span className="text-xs text-slate-500 dark:text-zinc-500 break-all">{book.filePath}</span>
             </div>
-          )}
-          <div className="mt-3 text-xs text-slate-500 dark:text-zinc-500 break-all">
-            {book.filePath}
-          </div>
+          ) : null}
           <div className="mt-3">
             <button
               onClick={deleteBook}
               disabled={deletingBook || deletingFile}
               className="text-xs text-red-600 dark:text-red-500 hover:text-red-500 dark:hover:text-red-400 disabled:opacity-40"
             >
-              {deletingBook ? 'Deleting book…' : book.filePath ? 'Delete book + files' : 'Delete book'}
+              {deletingBook ? 'Deleting book…' : (book.filePath || book.ebookFilePath || book.audiobookFilePath) ? 'Delete book + files' : 'Delete book'}
             </button>
           </div>
         </div>
@@ -261,9 +289,23 @@ export default function BookDetailPage() {
         <div className="flex gap-2 mb-4">
           <button onClick={() => saveField({ mediaType: 'ebook' })} disabled={saving} className={typeBtn('ebook')}>📖 Ebook</button>
           <button onClick={() => saveField({ mediaType: 'audiobook' })} disabled={saving} className={typeBtn('audiobook')}>🎧 Audiobook</button>
+          <button onClick={() => saveField({ mediaType: 'both' })} disabled={saving} className={typeBtn('both')}>📖🎧 Both</button>
         </div>
 
-        {mt === 'audiobook' && (
+        {mt === 'both' && (
+          <div className="mb-4 grid grid-cols-2 gap-2 text-xs">
+            <div className={`px-3 py-2 rounded border ${book.ebookFilePath ? 'border-emerald-500/50 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400' : 'border-slate-200 dark:border-zinc-700 text-slate-500 dark:text-zinc-500'}`}>
+              <span className="font-medium">📖 Ebook</span>
+              <span className="ml-2">{book.ebookFilePath ? '✓ on disk' : 'needed'}</span>
+            </div>
+            <div className={`px-3 py-2 rounded border ${book.audiobookFilePath ? 'border-emerald-500/50 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400' : 'border-slate-200 dark:border-zinc-700 text-slate-500 dark:text-zinc-500'}`}>
+              <span className="font-medium">🎧 Audiobook</span>
+              <span className="ml-2">{book.audiobookFilePath ? '✓ on disk' : 'needed'}</span>
+            </div>
+          </div>
+        )}
+
+        {(mt === 'audiobook' || mt === 'both') && (
           <div className="flex items-end gap-2 mb-4">
             <div className="flex-1">
               <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">ASIN (Audible identifier)</label>
@@ -297,7 +339,13 @@ export default function BookDetailPage() {
           disabled={searching}
           className="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded text-sm font-medium"
         >
-          {searching ? 'Searching all indexers…' : `Search ${mt === 'audiobook' ? 'audiobook' : 'ebook'} indexers`}
+          {searching
+            ? 'Searching all indexers…'
+            : mt === 'audiobook'
+              ? 'Search audiobook indexers'
+              : mt === 'both'
+                ? 'Search ebook + audiobook indexers'
+                : 'Search ebook indexers'}
         </button>
       </section>
 

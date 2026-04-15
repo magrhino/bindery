@@ -49,7 +49,7 @@ export default function WantedPage() {
     }
   }
 
-  const changeMediaType = async (book: Book, mediaType: 'ebook' | 'audiobook') => {
+  const changeMediaType = async (book: Book, mediaType: 'ebook' | 'audiobook' | 'both') => {
     try {
       const updated = await api.updateBook(book.id, { mediaType })
       setBooks(books.map(b => b.id === book.id ? updated : b))
@@ -208,13 +208,21 @@ export default function WantedPage() {
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                         <select
                           value={book.mediaType || 'ebook'}
-                          onChange={e => changeMediaType(book, e.target.value as 'ebook' | 'audiobook')}
+                          onChange={e => changeMediaType(book, e.target.value as 'ebook' | 'audiobook' | 'both')}
                           className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded text-[11px] px-1.5 py-0.5 focus:outline-none"
                           title="Change media type"
                         >
                           <option value="ebook">📖 Ebook</option>
                           <option value="audiobook">🎧 Audiobook</option>
+                          <option value="both">📖🎧 Both</option>
                         </select>
+                        {book.mediaType === 'both' && (
+                          <span className="text-[10px] text-slate-500 dark:text-zinc-500">
+                            {book.ebookFilePath ? '📖 ✓' : '📖 needed'}
+                            {' · '}
+                            {book.audiobookFilePath ? '🎧 ✓' : '🎧 needed'}
+                          </span>
+                        )}
                       </div>
                       {book.releaseDate && (
                         <p className="text-xs text-slate-600 dark:text-zinc-500">{new Date(book.releaseDate).getFullYear()}</p>

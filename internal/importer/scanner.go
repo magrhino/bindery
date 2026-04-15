@@ -276,18 +276,31 @@ func (s *Scanner) tryImport(ctx context.Context, sab *sabnzbd.Client, dl *models
 		}
 	}
 
+	// Detect the format of the downloaded files from their extensions.
+	// This is authoritative for dual-format books (media_type='both') and
+	// also fixes edge-cases where a mislabelled book would be routed to the
+	// wrong library directory.
+	detectedFormat := detectDownloadFormat(bookFiles)
+
 	// Audiobook path: move the entire download directory as a unit so
 	// multi-part m4b/mp3 files, cover art, and cue sheets stay together.
-	if book != nil && book.MediaType == models.MediaTypeAudiobook {
+	if detectedFormat == models.MediaTypeAudiobook {
 		destDir := UniqueDir(s.renamer.AudiobookDestDir(s.audiobookDir, author, book))
 		slog.Info("importing audiobook folder", "src", downloadPath, "dst", destDir)
 		if err := MoveDir(downloadPath, destDir); err != nil {
 			slog.Error("failed to import audiobook folder", "src", downloadPath, "error", err)
 			return
 		}
-		s.books.SetFilePath(ctx, book.ID, destDir)
+		if book != nil {
+			s.books.SetFormatFilePath(ctx, book.ID, models.MediaTypeAudiobook, destDir)
+		}
 		s.downloads.UpdateStatus(ctx, dl.ID, models.DownloadStatusImported)
-		slog.Info("audiobook imported", "title", book.Title, "path", destDir)
+		slog.Info("audiobook imported", "title", func() string {
+			if book != nil {
+				return book.Title
+			}
+			return dl.Title
+		}(), "path", destDir)
 
 		s.pushToCalibre(ctx, book, author, destDir)
 
@@ -322,7 +335,7 @@ func (s *Scanner) tryImport(ctx context.Context, sab *sabnzbd.Client, dl *models
 		imported++
 
 		// Update book status and file path
-		s.books.SetFilePath(ctx, book.ID, destPath)
+		s.books.SetFormatFilePath(ctx, book.ID, models.MediaTypeEbook, destPath)
 		s.downloads.UpdateStatus(ctx, dl.ID, models.DownloadStatusImported)
 		slog.Info("book imported", "title", book.Title, "path", destPath)
 
@@ -360,6 +373,20 @@ func (s *Scanner) clearSABHistory(ctx context.Context, sab *sabnzbd.Client, nzoI
 	if err := sab.DeleteHistory(ctx, nzoID, false); err != nil {
 		slog.Warn("failed to delete SABnzbd history entry", "nzoID", nzoID, "error", err)
 	}
+}
+
+// detectDownloadFormat inspects a list of file paths and returns the media
+// type inferred from their extensions. Any audio extension tips the result to
+// audiobook; a list of only ebook files returns ebook. An empty list returns
+// ebook as a safe default.
+func detectDownloadFormat(files []string) string {
+	for _, f := range files {
+		switch strings.ToLower(filepath.Ext(f)) {
+		case ".mp3", ".m4b", ".m4a", ".aac", ".flac", ".ogg", ".opus":
+			return models.MediaTypeAudiobook
+		}
+	}
+	return models.MediaTypeEbook
 }
 
 // FindExisting searches the library directory for a book file that matches
@@ -582,6 +609,7 @@ func (s *Scanner) ScanLibrary(ctx context.Context) {
 		// Search existing books for a title + author match
 		matched := false
 		if parsed.Title != "" {
+			detectedFmt := detectDownloadFormat([]string{path})
 			for _, b := range allBooks {
 				if reconciledBooks[b.ID] {
 					continue
@@ -589,8 +617,8 @@ func (s *Scanner) ScanLibrary(ctx context.Context) {
 				if b.Status == models.BookStatusWanted &&
 					titleMatch(b.Title, parsed.Title) &&
 					authorMatch(authorNames[b.AuthorID], parsed.Author) {
-					// Match found — update file path and status
-					if err := s.books.SetFilePath(ctx, b.ID, path); err != nil {
+					// Match found — update the per-format file path and aggregate status.
+					if err := s.books.SetFormatFilePath(ctx, b.ID, detectedFmt, path); err != nil {
 						slog.Error("library scan: failed to update book", "id", b.ID, "error", err)
 						continue
 					}
