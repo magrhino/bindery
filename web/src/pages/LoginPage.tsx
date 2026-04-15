@@ -2,6 +2,7 @@ import { FormEvent, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
+import Logo from '../components/Logo'
 
 export default function LoginPage() {
   const [error, setError] = useState('')
@@ -90,7 +91,7 @@ export function CardShell({ title, subtitle, children }: { title: string; subtit
       <div className="w-full max-w-sm">
         <div className="mb-6 text-center">
           <div className="flex items-center justify-center gap-2">
-            <img src="/favicon.png" alt="Bindery" className="w-12 h-12 rounded-full" />
+            <Logo className="w-12 h-12 rounded-full" />
             <h1 className="text-2xl font-bold tracking-tight">Bindery</h1>
           </div>
           {subtitle && <div className="text-xs text-slate-500 dark:text-zinc-500 mt-2">{subtitle}</div>}
