@@ -948,6 +948,28 @@ function GeneralTab() {
         </div>
       </section>
 
+      {/* OPDS */}
+      <section>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">OPDS Feed</h3>
+        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
+          <div>
+            <span className="block text-xs font-medium text-slate-600 dark:text-zinc-400 mb-1">OPDS Feed URL</span>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 text-xs bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 px-2 py-1.5 rounded font-mono break-all">
+                {window.location.origin}/opds
+              </code>
+              <button
+                onClick={() => navigator.clipboard.writeText(window.location.origin + '/opds')}
+                className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 rounded text-xs font-medium flex-shrink-0"
+              >
+                Copy
+              </button>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1.5">Use this URL in KOReader, Moon+ Reader, or any OPDS client. Authenticate with your API key as the password (leave the username blank or use any value).</p>
+          </div>
+        </div>
+      </section>
+
       {/* Calibre */}
       <CalibreSection
         settings={settings}
