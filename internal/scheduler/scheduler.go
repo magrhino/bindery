@@ -33,6 +33,12 @@ type bookSearcher interface {
 	SearchBook(ctx context.Context, indexers []models.Indexer, c indexer.MatchCriteria) []newznab.SearchResult
 }
 
+// RecommendationEngine is the narrow interface the scheduler calls to
+// regenerate recommendations. *recommender.Engine satisfies it.
+type RecommendationEngine interface {
+	Run(ctx context.Context, userID int64) error
+}
+
 // Scheduler runs background jobs on configurable intervals.
 type Scheduler struct {
 	cron     *cron.Cron
@@ -47,7 +53,8 @@ type Scheduler struct {
 	clients       *db.DownloadClientRepo
 	settings      *db.SettingsRepo
 	blocklist     *db.BlocklistRepo
-	calibreSyncer CalibreSyncer // optional; nil if Calibre is not configured
+	calibreSyncer CalibreSyncer        // optional; nil if Calibre is not configured
+	recommender   RecommendationEngine // optional; generates recommendations
 }
 
 // New creates a new scheduler.
@@ -84,6 +91,12 @@ func (s *Scheduler) WithCalibreSyncer(syncer CalibreSyncer) {
 	s.calibreSyncer = syncer
 }
 
+// WithRecommender registers a recommendation engine that runs every 24 hours.
+// Must be called before Start.
+func (s *Scheduler) WithRecommender(engine RecommendationEngine) {
+	s.recommender = engine
+}
+
 // Start registers and runs all background jobs.
 func (s *Scheduler) Start() {
 	// Check downloads every 15 seconds so completed imports land quickly
@@ -118,6 +131,21 @@ func (s *Scheduler) Start() {
 		s.cron.AddFunc("@every 24h", func() {
 			slog.Info("job: calibre library sync")
 			s.calibreSyncer.RunSync(context.Background())
+		})
+	}
+
+	// Generate recommendations every 24 hours when the engine is registered.
+	if s.recommender != nil {
+		s.cron.AddFunc("@every 24h", func() {
+			slog.Info("job: generate recommendations")
+			if s.settings != nil {
+				if setting, _ := s.settings.Get(context.Background(), "recommendations.enabled"); setting == nil || setting.Value != "true" {
+					return
+				}
+			}
+			if err := s.recommender.Run(context.Background(), 1); err != nil {
+				slog.Error("recommendation engine failed", "error", err)
+			}
 		})
 	}
 

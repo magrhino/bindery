@@ -17,6 +17,7 @@ import HistoryPage from './pages/HistoryPage'
 import SeriesPage from './pages/SeriesPage'
 import CalendarPage from './pages/CalendarPage'
 import BlocklistPage from './pages/BlocklistPage'
+import DiscoverPage from './pages/DiscoverPage'
 import Logo from './components/Logo'
 import { useTheme } from './theme'
 
@@ -28,6 +29,7 @@ const NAV_KEYS = [
   { to: '/history', key: 'history' },
   { to: '/series', key: 'series' },
   { to: '/calendar', key: 'calendar' },
+  { to: '/discover', key: 'discover' },
   { to: '/blocklist', key: 'blocklist' },
   { to: '/settings', key: 'settings' },
 ]
@@ -150,6 +152,7 @@ function Shell() {
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/series" element={<SeriesPage />} />
           <Route path="/calendar" element={<CalendarPage />} />
+          <Route path="/discover" element={<DiscoverPage />} />
           <Route path="/blocklist" element={<BlocklistPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
