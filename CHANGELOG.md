@@ -6,6 +6,13 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased] — development branch
 
+## [v0.15.2] — 2026-04-16
+
+### Documentation
+
+- **README screenshots** — added themed light/dark mode screenshots to the README covering the Authors, Books, Wanted, and Discover pages. Closes #172.
+
+
 ## [v0.15.1] — 2026-04-16
 
 ### Fixed
