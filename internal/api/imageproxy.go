@@ -84,7 +84,7 @@ func (h *ImageProxyHandler) Serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream fetch failed", http.StatusBadGateway)
 		return
 	}
-	resp, err := h.client.Do(upReq)
+	resp, err := h.client.Do(upReq) //nolint:gosec // URL validated above via validateURL
 	if err != nil {
 		http.Error(w, "upstream fetch failed", http.StatusBadGateway)
 		return
