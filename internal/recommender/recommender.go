@@ -17,6 +17,8 @@ type Engine struct {
 	series   *db.SeriesRepo
 	recs     *db.RecommendationRepo
 	settings *db.SettingsRepo
+	olClient SubjectBooksFetcher // optional; enables genre-popular candidates
+	hcClient WishlistFetcher     // optional; enables list-cross candidates
 }
 
 // New creates a new recommendation engine.
@@ -34,6 +36,20 @@ func New(
 		recs:     recs,
 		settings: settings,
 	}
+}
+
+// WithOLClient wires in an OpenLibrary client for genre-popular candidates.
+// Must be called before the first Run.
+func (e *Engine) WithOLClient(c SubjectBooksFetcher) *Engine {
+	e.olClient = c
+	return e
+}
+
+// WithHCClient wires in a Hardcover client for list-cross candidates.
+// The client must already have a Bearer token set. Must be called before the first Run.
+func (e *Engine) WithHCClient(c WishlistFetcher) *Engine {
+	e.hcClient = c
+	return e
 }
 
 // Run generates recommendations for the given user. It builds a taste profile,
@@ -71,8 +87,22 @@ func (e *Engine) Run(ctx context.Context, userID int64) error {
 		genreSimilar := GenerateGenreSimilar(ctx, e.books, e.series, profile)
 		candidates = append(candidates, genreSimilar...)
 		slog.Info("recommender: genre-similar candidates", "count", len(genreSimilar))
+
+		// Genre-popular: top 5 genres × OpenLibrary subjects API (5 calls).
+		if e.olClient != nil {
+			genrePopular := GenerateGenrePopular(ctx, e.olClient, profile, 5, 20)
+			candidates = append(candidates, genrePopular...)
+			slog.Info("recommender: genre-popular candidates", "count", len(genrePopular))
+		}
 	} else {
 		slog.Info("recommender: cold start (< 20 books), skipping genre scoring")
+	}
+
+	// List cross-reference: books on user's external wishlist not in library.
+	if e.hcClient != nil {
+		listCross := GenerateListCross(ctx, e.hcClient, profile, 100)
+		candidates = append(candidates, listCross...)
+		slog.Info("recommender: list-cross candidates", "count", len(listCross))
 	}
 
 	// Score all candidates.

@@ -237,7 +237,7 @@ func (c *Client) doRequest(req *http.Request) ([]byte, error) {
 		return nil, err
 	}
 
-	resp, err := c.http.Do(req) // #nosec G107 -- URL validated by validateRequestTarget; redirect policy enforced on client
+	resp, err := c.http.Do(req) // #nosec G107 G704 -- URL validated by validateRequestTarget; redirect policy enforced on client
 	if err != nil {
 		return nil, fmt.Errorf("request: %w", err)
 	}
@@ -261,7 +261,7 @@ func (c *Client) doRequest(req *http.Request) ([]byte, error) {
 			if err := c.validateRequestTarget(req2.URL); err != nil {
 				return nil, err
 			}
-			resp2, err := c.http.Do(req2) // #nosec G107 -- retry with same validated RPC target; only session header updated
+			resp2, err := c.http.Do(req2) // #nosec G107 G704 -- retry with same validated RPC target; only session header updated
 			if err != nil {
 				return nil, fmt.Errorf("retry request: %w", err)
 			}
