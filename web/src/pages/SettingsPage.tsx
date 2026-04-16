@@ -1058,6 +1058,31 @@ function GeneralTab() {
         </div>
       </section>
 
+      {/* Recommendations */}
+      <section>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.recommendations')}</h3>
+        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
+          <div className="flex items-center justify-between">
+            <div>
+              <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">{t('settings.general.recommendationsLabel')}</label>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">{t('settings.general.recommendationsHint')}</p>
+            </div>
+            <button
+              onClick={async () => {
+                const current = (settings['recommendations.enabled'] ?? 'false').toLowerCase()
+                const next = current === 'true' ? 'false' : 'true'
+                setSettings(s => ({ ...s, 'recommendations.enabled': next }))
+                await api.setSetting('recommendations.enabled', next).catch(console.error)
+              }}
+              className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${(settings['recommendations.enabled'] ?? 'false') === 'true' ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
+              title={(settings['recommendations.enabled'] ?? 'false') === 'true' ? t('common.disable') : t('common.enable')}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${(settings['recommendations.enabled'] ?? 'false') === 'true' ? 'translate-x-4' : ''}`} />
+            </button>
+          </div>
+        </div>
+      </section>
+
       {/* Naming */}
       <section>
         <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.fileNaming')}</h3>
