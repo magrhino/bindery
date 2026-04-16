@@ -99,10 +99,11 @@ export const api = {
     }),
 
   // Books
-  listBooks: (params?: { authorId?: number; status?: string }) => {
+  listBooks: (params?: { authorId?: number; status?: string; includeExcluded?: boolean }) => {
     const q = new URLSearchParams()
     if (params?.authorId) q.set('authorId', String(params.authorId))
     if (params?.status) q.set('status', params.status)
+    if (params?.includeExcluded) q.set('includeExcluded', 'true')
     const qs = q.toString()
     return request<Book[]>(`/book${qs ? '?' + qs : ''}`)
   },
@@ -113,9 +114,13 @@ export const api = {
   deleteBookFile: (id: number, queryParams = '') => request<Book>(`/book/${id}/file${queryParams}`, { method: 'DELETE' }),
   searchBook: (id: number) => request<SearchResult[]>(`/book/${id}/search`, { method: 'POST' }),
   enrichAudiobook: (id: number) => request<Book>(`/book/${id}/enrich-audiobook`, { method: 'POST' }),
+  toggleExcluded: (id: number) => request<Book>(`/book/${id}/exclude`, { method: 'PUT' }),
 
   // Wanted
-  listWanted: () => request<Book[]>('/wanted/missing'),
+  listWanted: (opts?: { includeExcluded?: boolean }) => {
+    const qs = opts?.includeExcluded ? '?includeExcluded=true' : ''
+    return request<Book[]>(`/wanted/missing${qs}`)
+  },
 
   // Bulk actions
   bulkActionAuthors: (ids: number[], action: AuthorBulkAction) =>
@@ -290,6 +295,7 @@ export interface Book {
   // Per-format file paths for dual-format books (mediaType='both').
   ebookFilePath: string
   audiobookFilePath: string
+  excluded: boolean
   narrator?: string
   durationSeconds?: number
   asin?: string

@@ -41,6 +41,8 @@ type Book struct {
 	CreatedAt             time.Time  `json:"createdAt"`
 	UpdatedAt             time.Time  `json:"updatedAt"`
 
+	Excluded bool `json:"excluded"`
+
 	// Per-format file paths for dual-format support (media_type = 'both').
 	// Single-format books populate only the relevant column; the other stays "".
 	EbookFilePath     string `json:"ebookFilePath"`

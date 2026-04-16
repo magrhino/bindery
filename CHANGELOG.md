@@ -6,6 +6,16 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased] — development branch
 
+## [v0.15.0] — 2026-04-16
+
+### Added
+
+- **Book exclude flag (closes [#103](https://github.com/vavallee/bindery/issues/103))** — books can now be excluded without deleting or unmonitoring them. An excluded book is hidden from the Wanted page, skipped by the 12-hour auto-search job, and not counted toward author statistics, but stays in the database and is recoverable. Toggle via the book detail page ("Exclude" / "Un-exclude"). Author detail and Wanted pages gain a **Show excluded** toggle that reveals excluded books with an amber badge. Stored in the database via a new migration (016) so it survives metadata refreshes.
+
+### Fixed
+
+- **Page size shared across tabs** — changing the "per page" selector on one tab (Authors, Books, Wanted, History, Queue) now persists to all other tabs via `localStorage`, so the user's preferred page size is not reset when navigating between sections.
+
 ## [v0.14.0] — 2026-04-16
 
 ### Added

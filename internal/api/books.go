@@ -73,15 +73,28 @@ func (h *BookHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	authorID := r.URL.Query().Get("authorId")
 	status := r.URL.Query().Get("status")
+	includeExcluded := r.URL.Query().Get("includeExcluded") == "true"
 
 	switch {
 	case authorID != "":
 		id, _ := strconv.ParseInt(authorID, 10, 64)
-		books, err = h.books.ListByAuthor(r.Context(), id)
+		if includeExcluded {
+			books, err = h.books.ListByAuthorIncludingExcluded(r.Context(), id)
+		} else {
+			books, err = h.books.ListByAuthor(r.Context(), id)
+		}
 	case status != "":
-		books, err = h.books.ListByStatus(r.Context(), status)
+		if includeExcluded {
+			books, err = h.books.ListByStatusIncludingExcluded(r.Context(), status)
+		} else {
+			books, err = h.books.ListByStatus(r.Context(), status)
+		}
 	default:
-		books, err = h.books.List(r.Context())
+		if includeExcluded {
+			books, err = h.books.ListIncludingExcluded(r.Context())
+		} else {
+			books, err = h.books.List(r.Context())
+		}
 	}
 
 	if err != nil {
@@ -338,7 +351,13 @@ func removeBookPath(p string) error {
 }
 
 func (h *BookHandler) ListWanted(w http.ResponseWriter, r *http.Request) {
-	books, err := h.books.ListByStatus(r.Context(), models.BookStatusWanted)
+	var books []models.Book
+	var err error
+	if r.URL.Query().Get("includeExcluded") == "true" {
+		books, err = h.books.ListByStatusIncludingExcluded(r.Context(), models.BookStatusWanted)
+	} else {
+		books, err = h.books.ListByStatus(r.Context(), models.BookStatusWanted)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -347,4 +366,26 @@ func (h *BookHandler) ListWanted(w http.ResponseWriter, r *http.Request) {
 		books = []models.Book{}
 	}
 	writeJSON(w, http.StatusOK, books)
+}
+
+// ToggleExcluded flips the excluded flag on a book. The response body is the
+// updated book so the UI can refresh in place without a second round-trip.
+func (h *BookHandler) ToggleExcluded(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	book, err := h.books.GetByID(r.Context(), id)
+	if err != nil || book == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
+		return
+	}
+
+	newVal := !book.Excluded
+	if err := h.books.SetExcluded(r.Context(), id, newVal); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	book.Excluded = newVal
+	writeJSON(w, http.StatusOK, book)
 }

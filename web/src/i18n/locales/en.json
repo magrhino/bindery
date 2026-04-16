@@ -124,7 +124,11 @@
     "statusDownloaded": "Downloaded",
     "statusImported": "In Library",
     "statusSkipped": "Skipped",
-    "audioLabel": "🎧 Audio"
+    "audioLabel": "🎧 Audio",
+    "exclude": "Exclude",
+    "unexclude": "Un-exclude",
+    "excluded": "Excluded",
+    "showExcluded": "Show excluded"
   },
   "wanted": {
     "title": "Wanted",
@@ -146,7 +150,9 @@
     "ebookDone": "📖 ✓",
     "audiobookDone": "🎧 ✓",
     "selectBook": "Select {{title}}",
-    "unmonitorHint": "Stop monitoring this book"
+    "unmonitorHint": "Stop monitoring this book",
+    "showExcluded": "Show excluded",
+    "excluded": "Excluded"
   },
   "history": {
     "title": "History",

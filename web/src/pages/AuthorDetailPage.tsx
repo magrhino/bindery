@@ -44,6 +44,7 @@ export default function AuthorDetailPage() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [showMerge, setShowMerge] = useState(false)
+  const [showExcluded, setShowExcluded] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const [view, setView] = useView('author-detail', 'grid')
@@ -102,20 +103,20 @@ export default function AuthorDetailPage() {
     setLoading(true)
     Promise.all([
       api.getAuthor(authorId),
-      api.listBooks({ authorId }),
+      api.listBooks({ authorId, includeExcluded: showExcluded }),
     ])
       .then(([a, bs]) => { if (!cancelled) { setAuthor(a); setBooks(bs) } })
       .catch(err => setError(err instanceof Error ? err.message : 'Failed to load'))
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [authorId])
+  }, [authorId, showExcluded])
 
   const handleRefresh = async () => {
     if (!author) return
     setRefreshing(true)
     try {
       await api.refreshAuthor(author.id)
-      const [a, bs] = await Promise.all([api.getAuthor(authorId), api.listBooks({ authorId })])
+      const [a, bs] = await Promise.all([api.getAuthor(authorId), api.listBooks({ authorId, includeExcluded: showExcluded })])
       setAuthor(a)
       setBooks(bs)
     } catch (e) {
@@ -298,7 +299,18 @@ export default function AuthorDetailPage() {
               </span>
             )}
           </h3>
-          <ViewToggle view={view} onChange={setView} />
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-zinc-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={showExcluded}
+                onChange={e => setShowExcluded(e.target.checked)}
+                className="rounded border-slate-400 dark:border-zinc-600 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0"
+              />
+              Show excluded
+            </label>
+            <ViewToggle view={view} onChange={setView} />
+          </div>
         </div>
 
         {/* Filter chips */}
@@ -369,6 +381,11 @@ export default function AuthorDetailPage() {
                         <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-medium ${statusColors[book.status] || 'bg-slate-300 dark:bg-zinc-700 text-slate-600 dark:text-zinc-400'}`}>
                           {statusLabel[book.status] ?? book.status}
                         </span>
+                        {book.excluded && (
+                          <span className="inline-block ml-1 px-2 py-0.5 rounded text-[10px] font-medium bg-amber-500/20 text-amber-700 dark:text-amber-400">
+                            Excluded
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -401,6 +418,9 @@ export default function AuthorDetailPage() {
                     </span>
                     {book.mediaType === 'audiobook' && (
                       <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300">🎧 Audio</span>
+                    )}
+                    {book.excluded && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/20 text-amber-700 dark:text-amber-400">Excluded</span>
                     )}
                   </div>
                   {book.releaseDate && (

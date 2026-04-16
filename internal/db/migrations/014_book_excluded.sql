@@ -1,0 +1,2 @@
+-- +migrate Up
+ALTER TABLE books ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0;

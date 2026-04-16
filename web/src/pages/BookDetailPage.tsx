@@ -42,6 +42,7 @@ export default function BookDetailPage() {
   const [enriching, setEnriching] = useState(false)
   const [deletingFile, setDeletingFile] = useState(false)
   const [deletingBook, setDeletingBook] = useState(false)
+  const [togglingExclude, setTogglingExclude] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -179,6 +180,19 @@ export default function BookDetailPage() {
     }
   }
 
+  const toggleExclude = async () => {
+    if (!book) return
+    setTogglingExclude(true)
+    try {
+      const updated = await api.toggleExcluded(book.id)
+      setBook(updated)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to toggle exclude')
+    } finally {
+      setTogglingExclude(false)
+    }
+  }
+
   if (loading) return <div className="text-slate-600 dark:text-zinc-500">Loading…</div>
   if (!book) return <div className="text-slate-600 dark:text-zinc-500">Book not found</div>
 
@@ -217,6 +231,11 @@ export default function BookDetailPage() {
             <span className={`inline-block px-2 py-0.5 rounded font-medium ${statusColors[book.status] || 'bg-slate-300 dark:bg-zinc-700 text-slate-600 dark:text-zinc-400'}`}>
               {book.status}
             </span>
+            {book.excluded && (
+              <span className="inline-block px-2 py-0.5 rounded font-medium bg-amber-500/20 text-amber-700 dark:text-amber-400">
+                Excluded
+              </span>
+            )}
             {book.releaseDate && (
               <span className="text-slate-600 dark:text-zinc-500">
                 {new Date(book.releaseDate).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
@@ -268,7 +287,22 @@ export default function BookDetailPage() {
               <span className="text-xs text-slate-500 dark:text-zinc-500 break-all">{book.filePath}</span>
             </div>
           ) : null}
-          <div className="mt-3">
+          <div className="mt-3 flex items-center gap-3">
+            <button
+              onClick={toggleExclude}
+              disabled={togglingExclude}
+              className={`text-xs font-medium px-3 py-1.5 rounded transition-colors disabled:opacity-40 ${
+                book.excluded
+                  ? 'bg-amber-500/20 text-amber-700 dark:text-amber-400 hover:bg-amber-500/30'
+                  : 'bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-300 dark:hover:bg-zinc-700'
+              }`}
+              title={book.excluded ? 'Un-exclude this book from searches and the Wanted page' : 'Exclude this book from searches and the Wanted page'}
+            >
+              {togglingExclude ? '…' : book.excluded ? 'Un-exclude' : 'Exclude'}
+            </button>
+            {book.excluded && (
+              <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">Excluded from searches</span>
+            )}
             <button
               onClick={deleteBook}
               disabled={deletingBook || deletingFile}

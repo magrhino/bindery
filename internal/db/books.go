@@ -22,17 +22,32 @@ const bookColumns = `id, foreign_id, author_id, title, sort_title, original_titl
 	image_url, release_date, genres, average_rating, ratings_count, monitored, status,
 	any_edition_ok, selected_edition_id, file_path, language, media_type, narrator, duration_seconds, asin,
 	calibre_id, metadata_provider, last_metadata_refresh_at, created_at, updated_at,
-	ebook_file_path, audiobook_file_path`
+	ebook_file_path, audiobook_file_path, excluded`
 
 func (r *BookRepo) List(ctx context.Context) ([]models.Book, error) {
+	return r.query(ctx, "SELECT "+bookColumns+" FROM books WHERE excluded = 0 ORDER BY sort_title", nil)
+}
+
+// ListIncludingExcluded returns all books regardless of their excluded flag.
+func (r *BookRepo) ListIncludingExcluded(ctx context.Context) ([]models.Book, error) {
 	return r.query(ctx, "SELECT "+bookColumns+" FROM books ORDER BY sort_title", nil)
 }
 
 func (r *BookRepo) ListByAuthor(ctx context.Context, authorID int64) ([]models.Book, error) {
+	return r.query(ctx, "SELECT "+bookColumns+" FROM books WHERE author_id = ? AND excluded = 0 ORDER BY release_date", []any{authorID})
+}
+
+// ListByAuthorIncludingExcluded returns all books for an author regardless of excluded flag.
+func (r *BookRepo) ListByAuthorIncludingExcluded(ctx context.Context, authorID int64) ([]models.Book, error) {
 	return r.query(ctx, "SELECT "+bookColumns+" FROM books WHERE author_id = ? ORDER BY release_date", []any{authorID})
 }
 
 func (r *BookRepo) ListByStatus(ctx context.Context, status string) ([]models.Book, error) {
+	return r.query(ctx, "SELECT "+bookColumns+" FROM books WHERE status = ? AND monitored = 1 AND excluded = 0 ORDER BY sort_title", []any{status})
+}
+
+// ListByStatusIncludingExcluded returns books with the given status regardless of excluded flag.
+func (r *BookRepo) ListByStatusIncludingExcluded(ctx context.Context, status string) ([]models.Book, error) {
 	return r.query(ctx, "SELECT "+bookColumns+" FROM books WHERE status = ? AND monitored = 1 ORDER BY sort_title", []any{status})
 }
 
@@ -220,6 +235,16 @@ func (r *BookRepo) FindByAuthorAndTitle(ctx context.Context, authorID int64, tit
 	return &books[0], nil
 }
 
+// SetExcluded toggles the excluded flag on a book.
+func (r *BookRepo) SetExcluded(ctx context.Context, id int64, excluded bool) error {
+	v := 0
+	if excluded {
+		v = 1
+	}
+	_, err := r.db.ExecContext(ctx, "UPDATE books SET excluded=?, updated_at=? WHERE id=?", v, time.Now().UTC(), id)
+	return err
+}
+
 func (r *BookRepo) Delete(ctx context.Context, id int64) error {
 	_, err := r.db.ExecContext(ctx, "DELETE FROM books WHERE id=?", id)
 	return err
@@ -241,7 +266,7 @@ func (r *BookRepo) query(ctx context.Context, q string, args []any) ([]models.Bo
 	var books []models.Book
 	for rows.Next() {
 		var b models.Book
-		var monitored, anyEditionOK int
+		var monitored, anyEditionOK, excluded int
 		var genresStr string
 		err := rows.Scan(
 			&b.ID, &b.ForeignID, &b.AuthorID, &b.Title, &b.SortTitle,
@@ -253,12 +278,14 @@ func (r *BookRepo) query(ctx context.Context, q string, args []any) ([]models.Bo
 			&b.CalibreID, &b.MetadataProvider, &b.LastMetadataRefreshAt,
 			&b.CreatedAt, &b.UpdatedAt,
 			&b.EbookFilePath, &b.AudiobookFilePath,
+			&excluded,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan book: %w", err)
 		}
 		b.Monitored = monitored == 1
 		b.AnyEditionOK = anyEditionOK == 1
+		b.Excluded = excluded == 1
 		_ = json.Unmarshal([]byte(genresStr), &b.Genres)
 		if b.Genres == nil {
 			b.Genres = []string{}
