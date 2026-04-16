@@ -6,7 +6,10 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased] — development branch
 
-Nothing yet — all in-flight work landed in v0.12.0.
+### Added
+
+- **Image proxy cache — cover privacy (closes [#112](https://github.com/vavallee/bindery/issues/112))** — external cover images are no longer fetched directly by the browser. On first request the server fetches the image, validates it (SSRF guard, content-type check, 10 MB cap), writes it to `<dataDir>/image-cache/<sha256hex>` with a 30-day TTL, and returns it under `Cache-Control: public, max-age=2592000`. All subsequent requests within the TTL are served from disk — no outbound traffic, no third-party tracking (Goodreads / OpenLibrary can no longer fingerprint your IP). All author and book API responses have their `imageURL` fields rewritten to `/api/v1/images?url=<encoded>` before leaving the server, so the proxy is transparent to the frontend.
+- **DNB metadata enricher (closes [#67](https://github.com/vavallee/bindery/issues/67))** — adds the Deutsche Nationalbibliothek as an always-on enrichment source alongside Hardcover. Queries the public DNB SRU endpoint (`services.dnb.de/sru/dnb`) with MARC21-XML record schema — no API key required. Supports `SearchBooks`, `SearchAuthors`, `GetBook`, and `GetBookByISBN`. Fills description, language, publication year, and publisher from MARC fields (520 $a, 041 $a, 264 $c / 260 $c, 264 $b). Especially useful for German-language titles where OpenLibrary and Google Books coverage is thin. Author names are un-inverted from MARC "Last, First" form for display while preserving the sortable MARC form.
 
 ## [v0.12.0] — 2026-04-14
 
