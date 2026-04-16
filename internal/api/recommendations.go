@@ -152,7 +152,7 @@ func (h *RecommendationHandler) Add(w http.ResponseWriter, r *http.Request) {
 
 	// Trigger search in background.
 	if h.searcher != nil {
-		go h.searcher.SearchAndGrabBook(context.Background(), *book)
+		go h.searcher.SearchAndGrabBook(context.Background(), *book) // #nosec G118 -- intentional: search must outlive the request
 	}
 
 	writeJSON(w, http.StatusCreated, book)
