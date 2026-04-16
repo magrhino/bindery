@@ -38,6 +38,7 @@
     "calendar": "Calendrier",
     "queue": "File d'attente",
     "series": "Séries",
+    "discover": "Discover",
     "blocklist": "Liste de blocage",
     "settings": "Paramètres"
   },
@@ -360,5 +361,29 @@
   "bulkActionBar": {
     "selected": "{{count}} sélectionné(s)",
     "clear": "Effacer"
+  },
+  "discover": {
+    "title": "Discover",
+    "subtitle": "Based on your library",
+    "refresh": "Refresh",
+    "refreshing": "Refreshing...",
+    "addToWanted": "Add to Wanted",
+    "dismiss": "Dismiss",
+    "dontSuggestAuthor": "Don't suggest {{author}}",
+    "addedToWanted": "Added to Wanted",
+    "rows": {
+      "series": "Next in series",
+      "author_new": "New from your authors",
+      "genre_similar": "Because of your library",
+      "serendipity": "You might not expect",
+      "genre_popular": "Popular in your genres",
+      "list_cross": "From your lists"
+    },
+    "empty": {
+      "noRecs": "Your library doesn't have enough data yet. Add authors and monitor them to get recommendations.",
+      "disabled": "Recommendations are disabled. Enable them in Settings to start discovering new books.",
+      "coldStart": "Add more books to unlock personalized genre recommendations.",
+      "goToSettings": "Go to Settings"
+    }
   }
 }
