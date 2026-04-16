@@ -1494,7 +1494,7 @@ function CalibreSection({
       : legacyEnabled
       ? 'calibredb'
       : 'off'
-  const enabled = mode !== 'off'
+  const libraryImportEnabled = (settings['calibre.library_import_enabled'] ?? 'false').toLowerCase() === 'true'
   const syncOnStartup = (settings['calibre.sync_on_startup'] ?? 'false').toLowerCase() === 'true'
   const lastImportAt = settings['calibre.last_import_at'] ?? ''
 
@@ -1579,14 +1579,12 @@ function CalibreSection({
           </div>
         </div>
 
-        {mode !== 'off' && (
+        {mode === 'drop_folder' && (
           <div>
             <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Library path</label>
             <p className="text-xs text-slate-600 dark:text-zinc-500 mb-2">
               Directory containing <code className="text-[11px] bg-slate-200 dark:bg-zinc-800 px-1 rounded">metadata.db</code>.
-              {mode === 'calibredb'
-                ? ' Passed to calibredb as --with-library.'
-                : ' Read directly to resolve the assigned Calibre book id after drop-folder ingest.'}
+              Read directly to resolve the assigned Calibre book id after drop-folder ingest.
             </p>
             <div className="flex gap-2">
               <input
@@ -1675,77 +1673,127 @@ function CalibreSection({
         <div className="pt-3 border-t border-slate-200 dark:border-zinc-800 space-y-3">
           <div className="flex items-center justify-between">
             <div>
-              <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">Sync on startup</label>
-              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">Run a library import automatically each time Bindery boots. Safe to leave on — re-imports are incremental.</p>
+              <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">Library import</label>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">
+                Read your existing Calibre library and import books, authors, and editions into Bindery.
+                Works independently of the write mode above — you can import from Calibre without Calibre being on the same host.
+                Mount your Calibre library directory into the container (e.g. <code className="text-[11px] bg-slate-200 dark:bg-zinc-800 px-1 rounded">-v /path/to/library:/calibre:ro</code>) and set the path below.
+              </p>
             </div>
             <button
               onClick={async () => {
-                const next = syncOnStartup ? 'false' : 'true'
-                setSettings(s => ({ ...s, 'calibre.sync_on_startup': next }))
-                await api.setSetting('calibre.sync_on_startup', next).catch(console.error)
+                const next = libraryImportEnabled ? 'false' : 'true'
+                setSettings(s => ({ ...s, 'calibre.library_import_enabled': next }))
+                await api.setSetting('calibre.library_import_enabled', next).catch(console.error)
               }}
-              className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${syncOnStartup ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
-              title={syncOnStartup ? 'Disable' : 'Enable'}
+              className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ml-4 ${libraryImportEnabled ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
+              title={libraryImportEnabled ? 'Disable library import' : 'Enable library import'}
             >
-              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${syncOnStartup ? 'translate-x-4' : ''}`} />
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${libraryImportEnabled ? 'translate-x-4' : ''}`} />
             </button>
           </div>
 
-          <div className="flex items-center justify-between">
-            <div className="text-xs text-slate-600 dark:text-zinc-500">
-              {lastImportAt ? (
-                <>Last import: <span className="text-slate-800 dark:text-zinc-200">{new Date(lastImportAt).toLocaleString()}</span></>
-              ) : (
-                <>Never imported.</>
-              )}
-            </div>
-            <button
-              onClick={startImport}
-              disabled={!enabled || importProgress?.running}
-              className="px-4 py-2 bg-sky-600 hover:bg-sky-500 rounded text-sm font-medium disabled:opacity-50 flex-shrink-0"
-            >
-              {importProgress?.running ? 'Importing…' : 'Import library'}
-            </button>
-          </div>
-
-          {importError && (
-            <p className="text-xs text-red-600 dark:text-red-400">{importError}</p>
-          )}
-
-          {importProgress && (importProgress.running || importProgress.stats || importProgress.error) && (
-            <div className="rounded border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 px-3 py-2 space-y-2">
-              {importProgress.running && (
-                <>
-                  <div className="flex justify-between text-xs text-slate-600 dark:text-zinc-400">
-                    <span>{importProgress.message || 'Working…'}</span>
-                    <span>{importProgress.processed} / {importProgress.total || '?'}</span>
-                  </div>
-                  <div className="h-1.5 bg-slate-200 dark:bg-zinc-800 rounded overflow-hidden">
-                    <div
-                      className="h-full bg-sky-600 transition-[width] duration-300"
-                      style={{
-                        width: importProgress.total > 0
-                          ? `${Math.min(100, (importProgress.processed / importProgress.total) * 100)}%`
-                          : '0%',
-                      }}
-                    />
-                  </div>
-                </>
-              )}
-              {!importProgress.running && importProgress.error && (
-                <p className="text-xs text-red-600 dark:text-red-400">Import failed: {importProgress.error}</p>
-              )}
-              {!importProgress.running && importProgress.stats && (
-                <p className="text-xs text-slate-700 dark:text-zinc-300">
-                  Import complete —{' '}
-                  <span className="font-medium">{importProgress.stats.authorsAdded}</span> authors added,{' '}
-                  <span className="font-medium">{importProgress.stats.booksAdded}</span> books added,{' '}
-                  <span className="font-medium">{importProgress.stats.editionsAdded}</span> editions added,{' '}
-                  <span className="font-medium">{importProgress.stats.duplicatesMerged}</span> merged,{' '}
-                  <span className="font-medium">{importProgress.stats.skipped}</span> skipped.
+          {libraryImportEnabled && (
+            <>
+              <div>
+                <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Library path</label>
+                <p className="text-xs text-slate-600 dark:text-zinc-500 mb-2">
+                  Directory containing <code className="text-[11px] bg-slate-200 dark:bg-zinc-800 px-1 rounded">metadata.db</code>.
+                  For Docker: mount your Calibre library and point here (e.g. <code className="text-[11px] bg-slate-200 dark:bg-zinc-800 px-1 rounded">/calibre</code>).
+                  For Kubernetes: use the same NFS share both pods mount (e.g. <code className="text-[11px] bg-slate-200 dark:bg-zinc-800 px-1 rounded">/media/BOOKS</code>).
                 </p>
+                <div className="flex gap-2">
+                  <input
+                    value={settings['calibre.library_path'] ?? ''}
+                    onChange={e => setSettings(s => ({ ...s, 'calibre.library_path': e.target.value }))}
+                    placeholder="/calibre"
+                    className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
+                  />
+                  <button
+                    onClick={() => saveSetting('calibre.library_path')}
+                    disabled={saving === 'calibre.library_path'}
+                    className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
+                  >
+                    {saving === 'calibre.library_path' ? 'Saving...' : 'Save'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">Sync on startup</label>
+                  <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">Re-import each time Bindery starts. Safe to leave on — imports are incremental and idempotent.</p>
+                </div>
+                <button
+                  onClick={async () => {
+                    const next = syncOnStartup ? 'false' : 'true'
+                    setSettings(s => ({ ...s, 'calibre.sync_on_startup': next }))
+                    await api.setSetting('calibre.sync_on_startup', next).catch(console.error)
+                  }}
+                  className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${syncOnStartup ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
+                  title={syncOnStartup ? 'Disable' : 'Enable'}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${syncOnStartup ? 'translate-x-4' : ''}`} />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-slate-600 dark:text-zinc-500">
+                  {lastImportAt ? (
+                    <>Last import: <span className="text-slate-800 dark:text-zinc-200">{new Date(lastImportAt).toLocaleString()}</span></>
+                  ) : (
+                    <>Never imported.</>
+                  )}
+                </div>
+                <button
+                  onClick={startImport}
+                  disabled={importProgress?.running || !settings['calibre.library_path']}
+                  className="px-4 py-2 bg-sky-600 hover:bg-sky-500 rounded text-sm font-medium disabled:opacity-50 flex-shrink-0"
+                >
+                  {importProgress?.running ? 'Importing…' : 'Import library'}
+                </button>
+              </div>
+
+              {importError && (
+                <p className="text-xs text-red-600 dark:text-red-400">{importError}</p>
               )}
-            </div>
+
+              {importProgress && (importProgress.running || importProgress.stats || importProgress.error) && (
+                <div className="rounded border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 px-3 py-2 space-y-2">
+                  {importProgress.running && (
+                    <>
+                      <div className="flex justify-between text-xs text-slate-600 dark:text-zinc-400">
+                        <span>{importProgress.message || 'Working…'}</span>
+                        <span>{importProgress.processed} / {importProgress.total || '?'}</span>
+                      </div>
+                      <div className="h-1.5 bg-slate-200 dark:bg-zinc-800 rounded overflow-hidden">
+                        <div
+                          className="h-full bg-sky-600 transition-[width] duration-300"
+                          style={{
+                            width: importProgress.total > 0
+                              ? `${Math.min(100, (importProgress.processed / importProgress.total) * 100)}%`
+                              : '0%',
+                          }}
+                        />
+                      </div>
+                    </>
+                  )}
+                  {!importProgress.running && importProgress.error && (
+                    <p className="text-xs text-red-600 dark:text-red-400">Import failed: {importProgress.error}</p>
+                  )}
+                  {!importProgress.running && importProgress.stats && (
+                    <p className="text-xs text-slate-700 dark:text-zinc-300">
+                      Import complete —{' '}
+                      <span className="font-medium">{importProgress.stats.authorsAdded}</span> authors added,{' '}
+                      <span className="font-medium">{importProgress.stats.booksAdded}</span> books added,{' '}
+                      <span className="font-medium">{importProgress.stats.editionsAdded}</span> editions added,{' '}
+                      <span className="font-medium">{importProgress.stats.duplicatesMerged}</span> merged,{' '}
+                      <span className="font-medium">{importProgress.stats.skipped}</span> skipped.
+                    </p>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
