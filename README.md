@@ -20,8 +20,51 @@
 
 ---
 
+<!-- Hero: Books library — auto-switches between dark and light to match the viewer's OS theme -->
 <p align="center">
-  <img src="https://raw.githubusercontent.com/vavallee/bindery/main/.github/assets/screenshot.png" alt="Bindery Authors page" width="800" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/books-desktop-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/books-desktop-light.png">
+    <img src="docs/screenshots/books-desktop-dark.png" alt="Bindery — Books library grid view" width="1200">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/authors-desktop-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/authors-desktop-light.png">
+    <img src="docs/screenshots/authors-desktop-dark.png" alt="Bindery — Authors overview with monitoring badges" width="1200">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/author-detail-desktop-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/author-detail-desktop-light.png">
+    <img src="docs/screenshots/author-detail-desktop-dark.png" alt="Bindery — Author detail page with book list" width="1200">
+  </picture>
+</p>
+
+<h4 align="center">Mobile-friendly</h4>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/books-mobile-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/books-mobile-light.png">
+    <img src="docs/screenshots/books-mobile-dark.png" alt="Books — mobile" width="280">
+  </picture>
+  &nbsp;&nbsp;&nbsp;
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/authors-mobile-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/authors-mobile-light.png">
+    <img src="docs/screenshots/authors-mobile-dark.png" alt="Authors — mobile" width="280">
+  </picture>
+  &nbsp;&nbsp;&nbsp;
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/author-detail-mobile-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/author-detail-mobile-light.png">
+    <img src="docs/screenshots/author-detail-mobile-dark.png" alt="Author detail — mobile" width="280">
+  </picture>
 </p>
 
 ---
