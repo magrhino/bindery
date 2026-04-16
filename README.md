@@ -37,7 +37,7 @@
 ### Library management
 - **Author monitoring** — Add authors and Bindery tracks all their works automatically via OpenLibrary's author works endpoint
 - **Book tracking** — Per-book monitor toggle, status workflow (wanted → downloading → downloaded → imported)
-- **Ebooks and audiobooks** — Mark any book as `ebook` or `audiobook`; the search pipeline picks the right Newznab categories (7020 vs 3030), ranker prefers the matching format, and the importer moves whole audiobook folders (multi-part `.m4b` / `.mp3`) as one unit into a separate audiobook library root.
+- **Dual-format books** — Each book can hold an ebook *and* an audiobook simultaneously. The Book Detail page has separate format panels with independent status, file path, and grab buttons. The search pipeline uses Newznab category 7020 for ebooks and 3030 for audiobooks; the importer moves whole audiobook folders (multi-part `.m4b` / `.mp3`) as one unit into a separate audiobook library root; the Wanted page lists each missing format as a separate row.
 - **Series support** — Books grouped by series with position tracking and dedicated Series page
 - **Edition tracking** — Multiple editions per work, with format, ISBN, publisher, page count
 - **Library scan** — Walk `/books/` and reconcile existing files with wanted books in the database; trigger on-demand from **Settings → General → Scan Library**

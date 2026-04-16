@@ -80,7 +80,7 @@ Patch release fixing a silent failure in the Add Author modal when OpenLibrary i
 
 ### Fixed
 
-- **Author search shows error when metadata provider is down** — when OpenLibrary returns an HTTP error (e.g. 503 during an outage), the Add Author modal now displays a visible error message instead of silently showing an empty results list.
+- **Author search shows error when metadata provider is down** — when OpenLibrary returns an HTTP error (e.g. 503 during an outage), the Add Author modal now displays a visible error message instead of silently showing an empty results list. The error is cleared automatically when the next search succeeds.
 
 ## [v0.9.0] — 2026-04-15
 

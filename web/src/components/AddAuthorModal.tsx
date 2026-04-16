@@ -12,13 +12,13 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<Author[]>([])
   const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState('')
   const [adding, setAdding] = useState<string | null>(null)
   const [profiles, setProfiles] = useState<MetadataProfile[]>([])
   const [profileId, setProfileId] = useState<number | null>(null)
   const [rootFolders, setRootFolders] = useState<RootFolder[]>([])
   const [rootFolderId, setRootFolderId] = useState<number | null>(null)
   const [searchOnAdd, setSearchOnAdd] = useState(true)
-  const [searchError, setSearchError] = useState('')
 
   useEffect(() => {
     api.listMetadataProfiles().then(ps => {
@@ -43,6 +43,7 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
       setResults(authors)
     } catch (err) {
       setSearchError(err instanceof Error ? err.message : 'Search failed — try again')
+      setResults([])
     } finally {
       setSearching(false)
     }
