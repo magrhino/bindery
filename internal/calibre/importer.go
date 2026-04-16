@@ -375,11 +375,13 @@ type bookUpsertResult struct {
 // upsertBook ensures a Bindery books row exists for the given Calibre
 // book. Dedupe order:
 //  1. books.calibre_id == cb.CalibreID   (pure re-import; update in place)
-//  2. author_id + title match            (existing Bindery book adopted
+//  2. books.foreign_id == "calibre:book:N" (recover from a crash between
+//     Create and SetCalibreID — foreign_id was written, calibre_id was not)
+//  3. author_id + title match            (existing Bindery book adopted
 //     into Calibre; link + update)
-//  3. Create a fresh row with the Calibre id set.
+//  4. Create a fresh row with the Calibre id set.
 //
-// Returns (result, created). result.mergedByTitle is true only for path 2.
+// Returns (result, created). result.mergedByTitle is true only for path 3.
 func (i *Importer) upsertBook(ctx context.Context, author *models.Author, cb CalibreBook) (*bookUpsertResult, bool, error) {
 	// Path 1 — exact calibre_id match.
 	existing, err := i.books.GetByCalibreID(ctx, cb.CalibreID)
@@ -393,7 +395,26 @@ func (i *Importer) upsertBook(ctx context.Context, author *models.Author, cb Cal
 		return &bookUpsertResult{row: existing}, false, nil
 	}
 
-	// Path 2 — same author + title.
+	// Path 2 — foreign_id match: book was created in a previous run but
+	// calibre_id was never persisted (e.g. crash between Create and SetCalibreID).
+	fid := "calibre:book:" + strconv.FormatInt(cb.CalibreID, 10)
+	if existing, err := i.books.GetByForeignID(ctx, fid); err != nil {
+		return nil, false, err
+	} else if existing != nil {
+		if existing.CalibreID == nil {
+			if err := i.books.SetCalibreID(ctx, existing.ID, cb.CalibreID); err != nil {
+				return nil, false, err
+			}
+			id := cb.CalibreID
+			existing.CalibreID = &id
+		}
+		if err := i.applyBookFields(ctx, existing, cb); err != nil {
+			return nil, false, err
+		}
+		return &bookUpsertResult{row: existing}, false, nil
+	}
+
+	// Path 3 — same author + title.
 	if existing, err := i.books.FindByAuthorAndTitle(ctx, author.ID, cb.Title); err != nil {
 		return nil, false, err
 	} else if existing != nil {
@@ -408,7 +429,7 @@ func (i *Importer) upsertBook(ctx context.Context, author *models.Author, cb Cal
 		return &bookUpsertResult{row: existing, mergedByTitle: true}, false, nil
 	}
 
-	// Path 3 — create fresh.
+	// Path 4 — create fresh.
 	id := cb.CalibreID
 	book := &models.Book{
 		ForeignID:        "calibre:book:" + strconv.FormatInt(cb.CalibreID, 10),
