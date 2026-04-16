@@ -1,0 +1,81 @@
+name: Bug Report
+description: Something isn't working as expected
+labels: ["bug", "needs-triage"]
+body:
+  - type: checkboxes
+    id: existing
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I searched existing issues and this isn't a duplicate
+          required: true
+        - label: I'm running the latest version (check Settings → About)
+          required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behaviour
+      description: What happens now?
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What should happen instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to trigger the bug.
+      placeholder: |
+        1. Go to …
+        2. Click …
+        3. See error …
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Trace logs
+      description: |
+        Set log level to DEBUG in Settings → General, reproduce the bug, then paste the relevant log section.
+        **Issues without logs may be closed without investigation.**
+      render: text
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deploy
+    attributes:
+      label: Deployment method
+      options:
+        - Docker (ghcr.io)
+        - Helm / Kubernetes
+        - Binary (GoReleaser)
+        - Source build
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Bindery version
+      placeholder: "v0.12.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment details
+      description: OS, architecture, download client, indexer, reverse proxy — anything relevant.
+      placeholder: "Ubuntu 24.04, qBittorrent 5.0, Caddy reverse proxy"
+    validations:
+      required: false

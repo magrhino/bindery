@@ -32,7 +32,7 @@ The short version lives in the [README](../README.md#roadmap). ✅ items have la
 
 - ⬜ **External database support (MySQL / Postgres)** ([#86](https://github.com/vavallee/bindery/issues/86)) — optional settings for DB host, credentials, and connection path so Bindery can run against a shared MySQL/Postgres instance instead of the bundled SQLite file.
 
-  Useful for multi-replica HA deployments.
+  Useful for multi-replica HA deployments. Planned to ship alongside multi-user support — a single-user instance has no concurrency pressure that justifies leaving SQLite, and bundling both avoids two separate schema migrations.
 
 - **UI localization (i18n)** — translate the web UI into French, Dutch, and German (starting point; more languages welcome as contributors show up).
   - ✅ Translation-catalogue extraction pass (landed in v0.12.0).
@@ -75,6 +75,8 @@ These items are too large or architectural for a minor release. They define the 
 - **Native OIDC / SSO with multi-provider discovery** — Sign in against Authelia, Authentik, Keycloak, Google, or GitHub natively without an external reverse proxy. Session tokens issued by Bindery after validating the OIDC callback. Overlaps with the multi-user story: each OIDC subject maps to a Bindery user row.
 
 - **External database (MySQL / Postgres)** ([#86](https://github.com/vavallee/bindery/issues/86)) — The current `modernc.org/sqlite` driver is zero-CGO and ships inside the binary, which is excellent for single-instance homelabs. Multi-replica HA requires a shared external store. SQLite WAL is not a substitute for row-level locking under concurrent writers. The schema is already designed with foreign keys and explicit transactions; porting to `database/sql` + a MySQL/Postgres driver is feasible but requires end-to-end testing against both engines, a migration planner that works per-engine, and probably a connection-pool configurator in Settings.
+
+  > **Ships with multi-user.** External DB support only makes sense alongside multi-user (#73 above) — a single-user instance has no concurrency pressure that justifies leaving SQLite. Plan to deliver both in the same release so the migration path is tested once, not twice.
 
 - **Persistent structured log store** — The current ring buffer (1 000 entries, in-process memory) is a good v1 for the log viewer (Settings → Logs, [#93](https://github.com/vavallee/bindery/issues/93)). A v2 log store would persist entries to the database (or a rolling log file), survive restarts, be queryable across date ranges, and support structured search. Useful for incident retrospectives on long-running instances.
 
