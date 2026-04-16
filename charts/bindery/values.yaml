@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/vavallee/bindery
-  tag: "sha-6e286b5"
+  tag: "sha-282572d"
   pullPolicy: IfNotPresent
 
 service:
@@ -43,15 +43,6 @@ env:
   # client into paths bindery can see. Needed when SAB and bindery run in
   # separate pods with different mount points for the same storage.
   BINDERY_DOWNLOAD_PATH_REMAP: /downloads:/media
-  # Cookie Secure attribute: auto (default) | always | never.
-  # "auto" enables Secure only when TLS is detected (direct or via
-  # X-Forwarded-Proto: https). Use "always" behind a TLS-terminating proxy
-  # that doesn't forward the header; "never" only for non-HTTPS homelabs.
-  # BINDERY_COOKIE_SECURE: auto
-  # Allow webhook/notification delivery to RFC1918 private addresses.
-  # Off by default (SSRF protection). Set to "1" for on-network ntfy /
-  # Home Assistant installs where the notification target is on the LAN.
-  # BINDERY_NOTIFICATIONS_ALLOW_PRIVATE: "0"
 
 resources:
   requests:

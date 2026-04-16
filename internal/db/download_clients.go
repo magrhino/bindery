@@ -104,7 +104,7 @@ func (r *DownloadClientRepo) GetFirstEnabled(ctx context.Context) (*models.Downl
 
 // GetFirstEnabledByProtocol returns the highest-priority enabled client that
 // matches the given protocol ("usenet" → sabnzbd, "torrent" → qbittorrent).
-// Falls back to the first enabled client of any type if no match is found.
+// Returns (nil, nil) if no matching client is configured.
 func (r *DownloadClientRepo) GetFirstEnabledByProtocol(ctx context.Context, protocol string) (*models.DownloadClient, error) {
 	clientType := "sabnzbd"
 	if protocol == "torrent" {
@@ -122,8 +122,7 @@ func (r *DownloadClientRepo) GetFirstEnabledByProtocol(ctx context.Context, prot
 		return nil, err
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		// No client of matching type — fall back to any enabled client
-		return r.GetFirstEnabled(ctx)
+		return nil, nil
 	}
 	c.Enabled = enabled == 1
 	c.UseSSL = useSSL == 1

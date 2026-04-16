@@ -73,7 +73,9 @@
 - **OpenLibrary** (primary) — Authors, books, editions, covers, ISBN lookup
 - **Google Books** (enricher) — Richer descriptions and ratings
 - **Hardcover.app** (enricher) — Community ratings and series data via GraphQL
+- **DNB** (enricher) — Deutsche Nationalbibliothek via the public SRU endpoint. No API key. Always on. Fills description, language, year, and publisher from MARC21 records — especially useful for German-language titles where OpenLibrary coverage is thin.
 - **Audnex** — Audiobook narrator, duration, cover, and description by Audible ASIN via the free [api.audnex.us](https://api.audnex.us) wrapper. Trigger with `POST /api/v1/book/{id}/enrich-audiobook`.
+- **Cover image proxy** — Cover images are fetched and cached server-side under `<dataDir>/image-cache/` (30-day TTL). All `imageURL` fields in API responses are rewritten to `/api/v1/images?url=<encoded>` before leaving the server. The browser never contacts Goodreads, OpenLibrary, or Google Books directly — no IP leakage, no third-party tracking.
 - No Goodreads scraping. All sources use documented, stable public APIs.
 
 ### Migration
@@ -179,8 +181,9 @@ Bindery aggregates book metadata from multiple open sources:
 | [OpenLibrary](https://openlibrary.org) | None | Primary: authors, books, editions, covers, ISBN lookup |
 | [Google Books](https://developers.google.com/books) | API key (free) | Enrichment: descriptions, ratings |
 | [Hardcover.app](https://hardcover.app) | None (public GraphQL) | Enrichment: community ratings, series |
+| [DNB](https://www.dnb.de/EN/Professionell/Metadatendienste/Datenbezug/SRU/sru_node.html) | None (public SRU) | Enrichment: descriptions, language, year for German-language titles |
 
-No Goodreads scraping. All sources use documented, stable public APIs.
+No Goodreads scraping. All sources use documented, stable public APIs. Cover images are fetched and cached server-side (`GET /api/v1/images`) — the browser never contacts external image hosts directly.
 
 ## Supported Integrations
 
@@ -212,8 +215,8 @@ Bindery is a single Go binary with the React frontend embedded via `go:embed`:
 └────────────────────────────┘
     ▲                    ▲
     │                    │
-OpenLibrary          Google Books, Hardcover.app
- (primary)                (enrichers)
+OpenLibrary      Google Books, Hardcover.app, DNB
+ (primary)                 (enrichers)
 ```
 
 - **Backend:** Go 1.25 with [chi](https://github.com/go-chi/chi) router
@@ -236,6 +239,7 @@ POST   /api/v1/queue/grab                - submit a search result to download cl
 GET    /api/v1/history                   - grab/import/failure events
 POST   /api/v1/history/{id}/blocklist    - add a history event's release to the blocklist
 GET    /api/v1/blocklist                 - blocked releases
+GET    /api/v1/images?url=<encoded>      - proxied + cached cover image (30-day TTL)
 POST   /api/v1/notification/{id}/test    - fire a test webhook
 POST   /api/v1/backup                    - snapshot the database
 ```

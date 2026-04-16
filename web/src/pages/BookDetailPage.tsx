@@ -95,6 +95,8 @@ export default function BookDetailPage() {
         nzbUrl: r.nzbUrl,
         size: r.size,
         bookId: book.id,
+        protocol: r.protocol,
+        mediaType: book.mediaType,
       })
       // Refresh book + history
       const [b, h] = await Promise.all([

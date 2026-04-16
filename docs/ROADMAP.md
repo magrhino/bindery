@@ -40,15 +40,16 @@ The short version lives in the [README](../README.md#roadmap). ✅ items have la
   - ✅ Locale-aware date/number formatting.
   - ✅ `Accept-Language` auto-detect on first load with manual override.
 
+- **Cover image privacy / local caching** — prevent the browser from contacting third-party image hosts (Goodreads, OpenLibrary, Google Books) directly, which would leak the user's IP and reading habits.
+  - ✅ **Server-side image proxy cache (closes [#112](https://github.com/vavallee/bindery/issues/112), landed in development)** — `GET /api/v1/images?url=<encoded>` fetches and caches cover images under `<dataDir>/image-cache/` with a 30-day TTL. All `imageURL` fields in API responses are rewritten to this proxy path before leaving the server. No browser-to-third-party requests, no fingerprinting.
+
 - **Non-English indexer / metadata support** — let monitored authors and searches pull from language-tagged catalogues and filter results by language.
 
   - ✅ Per-author metadata profiles carry an `allowed_languages` list; OpenLibrary works whose language falls outside it are dropped during author ingestion ([#14](https://github.com/vavallee/bindery/issues/14), landed in v0.6.0).
   - ✅ Propagate the profile's languages into indexer queries (Prowlarr's `Categories` + language filters, Jackett `/api?cat=7000&...`) so Newznab-side filtering applies (landed in v0.12.0).
   - ✅ Surface the language tag in search-result and wanted-books views.
   - ✅ Persist Hardcover/Google Books' `language` field for editions.
-  - ⬜ **DNB (Deutsche Nationalbibliothek) metadata provider** ([#67](https://github.com/vavallee/bindery/issues/67)) — German national library catalogue via SRU/Z39.50 or the public JSON API. Primary use case: German-language ebooks and audiobooks where OpenLibrary coverage is thin. Calibre's DNB plugin ([calibre-dnb](https://github.com/dvdwolfsburg/calibre-dnb)) serves as a reference implementation for field mapping (title, author, ISBN, publisher, language, description).
-
-  Relevant to French/Dutch/German users whose libraries are mixed-language and where indexer results in the "wrong" language are currently indistinguishable.
+  - ✅ **DNB (Deutsche Nationalbibliothek) metadata provider** ([#67](https://github.com/vavallee/bindery/issues/67), landed in development) — public SRU endpoint (`services.dnb.de/sru/dnb`) with MARC21-XML record schema; no API key. Always-on enricher alongside Hardcover. Fills description, language, year, publisher from MARC fields. Especially useful for German-language titles where OpenLibrary / Google Books coverage is thin.
 
 - ~~**LinuxServer.io-style runtime user switching** ([#56](https://github.com/vavallee/bindery/issues/56))~~ — **Won't do.** The distroless image is deliberately minimal (no shell, no `gosu`). Runtime UID/GID switching requires a shell entrypoint, which contradicts the minimal-attack-surface posture. Pass `--user <uid>:<gid>` to `docker run` or set `securityContext.runAsUser` in Helm. Closed as won't-fix.
 

@@ -21,6 +21,7 @@ import (
 	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/logbuf"
 	"github.com/vavallee/bindery/internal/metadata"
+	"github.com/vavallee/bindery/internal/metadata/dnb"
 	"github.com/vavallee/bindery/internal/metadata/googlebooks"
 	"github.com/vavallee/bindery/internal/metadata/hardcover"
 	"github.com/vavallee/bindery/internal/metadata/openlibrary"
@@ -128,6 +129,8 @@ func main() {
 	}
 	enrichers = append(enrichers, hardcover.New())
 	slog.Info("hardcover enrichment enabled")
+	enrichers = append(enrichers, dnb.New())
+	slog.Info("dnb enrichment enabled")
 	metaAgg := metadata.NewAggregator(olClient, enrichers...)
 
 	// Optional CLI subcommand: `bindery migrate {csv,readarr} <path>`.
@@ -242,6 +245,7 @@ func main() {
 	calibreImportHandler := api.NewCalibreImportHandler(calibreImporter, func() calibre.Config {
 		return api.LoadCalibreConfig(settingsRepo)
 	})
+	imageProxyHandler := api.NewImageProxyHandler(cfg.DataDir)
 	migrateHandler := api.NewMigrateHandler(
 		authorRepo, indexerRepo, dlClientRepo, blocklistRepo, bookRepo, metaAgg,
 		// Bulk imports always populate the catalogue but never auto-grab.
@@ -441,6 +445,10 @@ func main() {
 		// Migration imports (CSV of author names, or Readarr SQLite DB).
 		r.Post("/migrate/csv", migrateHandler.ImportCSV)
 		r.Post("/migrate/readarr", migrateHandler.ImportReadarr)
+
+		// Image proxy — caches external cover images locally so the browser
+		// never leaks the user's IP to Goodreads / OpenLibrary / etc.
+		r.Get("/images", imageProxyHandler.Serve)
 	})
 
 	// OPDS 1.2 catalogue — KOReader / Moon+ Reader / Aldiko speak this

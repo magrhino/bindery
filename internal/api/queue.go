@@ -9,6 +9,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"fmt"
+
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/downloader/qbittorrent"
 	"github.com/vavallee/bindery/internal/downloader/sabnzbd"
@@ -177,7 +179,7 @@ func (h *QueueHandler) selectClient(ctx context.Context, protocol, mediaType str
 		return nil, err
 	}
 	if len(candidates) == 0 {
-		return h.clients.GetFirstEnabled(ctx)
+		return nil, fmt.Errorf("no enabled %s download client configured", protocol)
 	}
 	return db.PickClientForMediaType(candidates, mediaType), nil
 }

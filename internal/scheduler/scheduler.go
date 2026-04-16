@@ -194,10 +194,7 @@ func (s *Scheduler) searchAndGrabFormat(ctx context.Context, book models.Book, m
 	candidates, _ := s.clients.GetEnabledByProtocol(ctx, best.Protocol)
 	client := db.PickClientForMediaType(candidates, mediaType)
 	if client == nil {
-		client, _ = s.clients.GetFirstEnabled(ctx)
-	}
-	if client == nil {
-		slog.Debug("SearchAndGrabBook: no download client available", "book", book.Title)
+		slog.Warn("SearchAndGrabBook: no enabled download client for protocol", "book", book.Title, "protocol", best.Protocol)
 		return
 	}
 
