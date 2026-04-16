@@ -11,6 +11,19 @@ import (
 	"github.com/vavallee/bindery/internal/models"
 )
 
+// SubjectBooksFetcher retrieves popular books for a genre/subject from an external API.
+// *openlibrary.Client satisfies this interface once GetSubjectBooks is implemented.
+// The interface lives here to keep the recommender package free of a direct openlibrary import.
+type SubjectBooksFetcher interface {
+	GetSubjectBooks(ctx context.Context, subject string, limit int) ([]models.RecommendationCandidate, error)
+}
+
+// WishlistFetcher retrieves the authenticated user's reading wishlist from an external service.
+// *hardcover.Client (with a Bearer token) satisfies this interface.
+type WishlistFetcher interface {
+	GetUserWishlist(ctx context.Context, limit int) ([]models.RecommendationCandidate, error)
+}
+
 // GenerateSeries produces candidates for the next unowned book in each series
 // the user has started.
 func GenerateSeries(
@@ -215,6 +228,77 @@ func GenerateSerendipity(
 		pool = pool[:count]
 	}
 	return pool
+}
+
+// GenerateGenrePopular fetches popular books from OpenLibrary for the user's
+// top genres. Up to genreCount genres are queried, returning up to booksPerGenre
+// results each. Only runs when an olClient is wired in.
+func GenerateGenrePopular(
+	ctx context.Context,
+	ol SubjectBooksFetcher,
+	profile *UserProfile,
+	genreCount int,
+	booksPerGenre int,
+) []models.RecommendationCandidate {
+	if ol == nil || len(profile.GenreWeights) == 0 {
+		return nil
+	}
+
+	topGenres := topNGenres(profile, genreCount)
+	var candidates []models.RecommendationCandidate
+
+	for genre := range topGenres {
+		slug := genreToSubjectSlug(genre)
+		books, err := ol.GetSubjectBooks(ctx, slug, booksPerGenre)
+		if err != nil {
+			slog.Warn("recommender: OL subject fetch failed", "genre", genre, "error", err)
+			continue
+		}
+		for i := range books {
+			books[i].RecType = models.RecTypeGenrePopular
+			books[i].Reason = fmt.Sprintf("Popular in %s", genre)
+		}
+		candidates = append(candidates, books...)
+	}
+	return candidates
+}
+
+// GenerateListCross surfaces books from the user's external reading wishlist
+// that aren't already in the library. Requires a WishlistFetcher (e.g. a
+// Hardcover client with a token); returns nil if not wired in.
+func GenerateListCross(
+	ctx context.Context,
+	hc WishlistFetcher,
+	profile *UserProfile,
+	limit int,
+) []models.RecommendationCandidate {
+	if hc == nil {
+		return nil
+	}
+
+	books, err := hc.GetUserWishlist(ctx, limit)
+	if err != nil {
+		slog.Warn("recommender: failed to fetch wishlist", "error", err)
+		return nil
+	}
+
+	var candidates []models.RecommendationCandidate
+	for i := range books {
+		if profile.OwnedForeignIDs[books[i].ForeignID] {
+			continue
+		}
+		books[i].RecType = models.RecTypeListCross
+		books[i].Reason = "From your reading list"
+		candidates = append(candidates, books[i])
+	}
+	return candidates
+}
+
+// genreToSubjectSlug converts a genre string (e.g. "Science Fiction") to an
+// OpenLibrary subject slug (e.g. "science_fiction").
+func genreToSubjectSlug(genre string) string {
+	s := strings.ToLower(strings.TrimSpace(genre))
+	return strings.ReplaceAll(s, " ", "_")
 }
 
 // bookToCandidate converts a models.Book into a RecommendationCandidate.

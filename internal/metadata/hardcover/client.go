@@ -21,8 +21,10 @@ const (
 )
 
 // Client implements metadata.Provider for Hardcover.app using its public GraphQL API.
+// Set a Bearer token via WithToken to enable authenticated queries (e.g. GetUserWishlist).
 type Client struct {
-	http *http.Client
+	http  *http.Client
+	token string // optional Bearer token; required for user-specific queries
 }
 
 // New creates a new Hardcover client.
@@ -30,6 +32,12 @@ func New() *Client {
 	return &Client{
 		http: &http.Client{Timeout: 15 * time.Second},
 	}
+}
+
+// WithToken returns a copy of the client configured to use the given Bearer token.
+// Required for authenticated queries such as GetUserWishlist.
+func (c *Client) WithToken(token string) *Client {
+	return &Client{http: c.http, token: token}
 }
 
 func (c *Client) Name() string { return "hardcover" }
@@ -194,6 +202,71 @@ func (c *Client) GetBookByISBN(ctx context.Context, isbn string) (*models.Book, 
 	return &b, nil
 }
 
+// GetUserWishlist fetches the authenticated user's "Want to Read" books.
+// Returns candidates suitable for list-cross recommendations.
+// Requires the client to have a Bearer token set via WithToken; returns nil if not configured.
+func (c *Client) GetUserWishlist(ctx context.Context, limit int) ([]models.RecommendationCandidate, error) {
+	if c.token == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	// status_id 1 = "Want to Read" in Hardcover's reading status enum.
+	gql := `query GetWishlist($limit: Int!) {
+		me {
+			user_books(where: {status_id: {_eq: 1}}, limit: $limit) {
+				book {
+					id
+					title
+					slug
+					description
+					image { url }
+					release_year
+					ratings_count
+					rating
+					contributions {
+						author { id name slug }
+					}
+				}
+			}
+		}
+	}`
+	var resp struct {
+		Data struct {
+			Me struct {
+				UserBooks []struct {
+					Book hcBook `json:"book"`
+				} `json:"user_books"`
+			} `json:"me"`
+		} `json:"data"`
+	}
+	if err := c.query(ctx, gql, map[string]any{"limit": limit}, &resp); err != nil {
+		return nil, fmt.Errorf("hardcover get wishlist: %w", err)
+	}
+
+	candidates := make([]models.RecommendationCandidate, 0, len(resp.Data.Me.UserBooks))
+	for _, ub := range resp.Data.Me.UserBooks {
+		b := c.toBook(ub.Book)
+		cand := models.RecommendationCandidate{
+			ForeignID:    b.ForeignID,
+			Title:        b.Title,
+			ImageURL:     b.ImageURL,
+			Description:  b.Description,
+			Rating:       b.AverageRating,
+			RatingsCount: b.RatingsCount,
+			ReleaseDate:  b.ReleaseDate,
+			MediaType:    models.MediaTypeEbook,
+			Genres:       []string{},
+		}
+		if b.Author != nil {
+			cand.AuthorName = b.Author.Name
+		}
+		candidates = append(candidates, cand)
+	}
+	return candidates, nil
+}
+
 // --- GraphQL transport ---
 
 type gqlRequest struct {
@@ -213,6 +286,9 @@ func (c *Client) query(ctx context.Context, q string, vars map[string]any, out i
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Bindery/0.1 (https://github.com/vavallee/bindery)")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {

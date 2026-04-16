@@ -302,6 +302,43 @@ func (c *Client) GetEditions(ctx context.Context, bookForeignID string) ([]model
 	return editions, nil
 }
 
+// GetSubjectBooks fetches the top books for an OpenLibrary subject.
+// subject should be a lowercase slug using underscores, e.g. "science_fiction" or "fantasy".
+// Returns candidates suitable for use as genre-popular recommendations.
+func (c *Client) GetSubjectBooks(ctx context.Context, subject string, limit int) ([]models.RecommendationCandidate, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	u := fmt.Sprintf("%s/subjects/%s.json?limit=%d", baseURL, url.PathEscape(subject), limit)
+	var resp subjectBooksResponse
+	if err := c.getJSON(ctx, u, &resp); err != nil {
+		return nil, fmt.Errorf("get subject books %q: %w", subject, err)
+	}
+
+	candidates := make([]models.RecommendationCandidate, 0, len(resp.Works))
+	for _, w := range resp.Works {
+		workID := strings.TrimPrefix(w.Key, "/works/")
+		cand := models.RecommendationCandidate{
+			ForeignID: workID,
+			Title:     w.Title,
+			Genres:    truncateSlice(w.Subject, 10),
+			MediaType: models.MediaTypeEbook,
+		}
+		if w.CoverID != nil && *w.CoverID > 0 {
+			cand.ImageURL = fmt.Sprintf("%s/b/id/%d-L.jpg", coverURL, *w.CoverID)
+		}
+		if w.FirstPublishYear > 0 {
+			t := time.Date(w.FirstPublishYear, 1, 1, 0, 0, 0, 0, time.UTC)
+			cand.ReleaseDate = &t
+		}
+		if len(w.Authors) > 0 {
+			cand.AuthorName = w.Authors[0].Name
+		}
+		candidates = append(candidates, cand)
+	}
+	return candidates, nil
+}
+
 func (c *Client) GetBookByISBN(ctx context.Context, isbn string) (*models.Book, error) {
 	u := fmt.Sprintf("%s/isbn/%s.json", baseURL, isbn)
 	var resp isbnResponse
