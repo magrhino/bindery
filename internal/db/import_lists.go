@@ -38,6 +38,36 @@ func (r *ImportListRepo) List(ctx context.Context) ([]models.ImportList, error) 
 	return lists, rows.Err()
 }
 
+func (r *ImportListRepo) ListByType(ctx context.Context, listType string) ([]models.ImportList, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, name, type, url, api_key, root_folder_id, quality_profile_id,
+		       monitor_new, auto_add, enabled, last_sync_at, created_at, updated_at
+		FROM import_lists WHERE type=? AND enabled=1 ORDER BY name`, listType)
+	if err != nil {
+		return nil, fmt.Errorf("list import lists by type: %w", err)
+	}
+	defer rows.Close()
+
+	var lists []models.ImportList
+	for rows.Next() {
+		il, err := scanImportList(rows)
+		if err != nil {
+			return nil, err
+		}
+		lists = append(lists, il)
+	}
+	return lists, rows.Err()
+}
+
+func (r *ImportListRepo) UpdateLastSyncAt(ctx context.Context, id int64) error {
+	now := time.Now().UTC()
+	_, err := r.db.ExecContext(ctx, "UPDATE import_lists SET last_sync_at=?, updated_at=? WHERE id=?", now, now, id)
+	if err != nil {
+		return fmt.Errorf("update last_sync_at for import list %d: %w", id, err)
+	}
+	return nil
+}
+
 func (r *ImportListRepo) GetByID(ctx context.Context, id int64) (*models.ImportList, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, name, type, url, api_key, root_folder_id, quality_profile_id,

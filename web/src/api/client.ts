@@ -203,6 +203,13 @@ export const api = {
   calibreImportStart: () => request<CalibreImportProgress>('/calibre/import', { method: 'POST' }),
   calibreImportStatus: () => request<CalibreImportProgress>('/calibre/import/status'),
 
+  // Import lists
+  listImportLists: () => request<ImportList[]>('/importlist'),
+  addImportList: (data: Partial<ImportList>) => request<ImportList>('/importlist', { method: 'POST', body: JSON.stringify(data) }),
+  updateImportList: (id: number, data: Partial<ImportList>) => request<ImportList>(`/importlist/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteImportList: (id: number) => request<void>(`/importlist/${id}`, { method: 'DELETE' }),
+  hardcoverLists: (token: string) => request<HardcoverList[]>(`/importlist/hardcover/lists?token=${encodeURIComponent(token)}`),
+
   // Metadata Profiles
   listMetadataProfiles: () => request<MetadataProfile[]>('/metadataprofile'),
   addMetadataProfile: (data: Partial<MetadataProfile>) => request<MetadataProfile>('/metadataprofile', { method: 'POST', body: JSON.stringify(data) }),
@@ -521,6 +528,29 @@ export interface RootFolder {
   path: string
   freeSpace: number
   createdAt: string
+}
+
+export interface ImportList {
+  id: number
+  name: string
+  type: string
+  url: string
+  apiKey: string
+  rootFolderId?: number | null
+  qualityProfileId?: number | null
+  monitorNew: boolean
+  autoAdd: boolean
+  enabled: boolean
+  lastSyncAt?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface HardcoverList {
+  id: number
+  name: string
+  slug: string
+  booksCount: number
 }
 
 export interface LogEntry {
