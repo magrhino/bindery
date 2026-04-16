@@ -1,11 +1,13 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, AuthConfig, AuthStatus, Indexer, DownloadClient, NotificationConfig, QualityProfile, MetadataProfile, CalibreImportProgress, RootFolder, LogEntry } from '../api/client'
+import { api, AuthConfig, AuthStatus, BlocklistEntry, Indexer, DownloadClient, NotificationConfig, QualityProfile, MetadataProfile, CalibreImportProgress, RootFolder, LogEntry } from '../api/client'
+import Pagination from '../components/Pagination'
+import { usePagination } from '../components/usePagination'
 import ThemeToggle from '../components/ThemeToggle'
 import LanguageSwitcher from '../components/LanguageSwitcher'
 import { useAuth } from '../auth/AuthContext'
 
-type Tab = 'indexers' | 'clients' | 'notifications' | 'quality' | 'metadata' | 'general' | 'import' | 'rootfolders' | 'logs'
+type Tab = 'indexers' | 'clients' | 'notifications' | 'quality' | 'metadata' | 'general' | 'import' | 'rootfolders' | 'logs' | 'blocklist'
 
 const inputCls = 'w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600'
 const tabCls = (active: boolean) =>
@@ -13,7 +15,7 @@ const tabCls = (active: boolean) =>
 
 export default function SettingsPage() {
   const { t, i18n } = useTranslation()
-  const [tab, setTab] = useState<Tab>('indexers')
+  const [tab, setTab] = useState<Tab>('general')
   const [indexers, setIndexers] = useState<Indexer[]>([])
   const [clients, setClients] = useState<DownloadClient[]>([])
   const [notifications, setNotifications] = useState<NotificationConfig[]>([])
@@ -71,7 +73,7 @@ export default function SettingsPage() {
       <h2 className="text-2xl font-bold mb-6">{t('settings.title')}</h2>
 
       <div className="flex flex-wrap gap-2 mb-6">
-        {(['indexers', 'clients', 'notifications', 'quality', 'metadata', 'import', 'rootfolders', 'logs', 'general'] as Tab[]).map(tabKey => (
+        {(['general', 'indexers', 'clients', 'rootfolders', 'quality', 'metadata', 'notifications', 'import', 'blocklist', 'logs'] as Tab[]).map(tabKey => (
           <button key={tabKey} onClick={() => setTab(tabKey)} className={tabCls(tab === tabKey)}>
             {t(`settings.tabs.${tabKey}`)}
           </button>
@@ -556,6 +558,10 @@ export default function SettingsPage() {
 
       {tab === 'general' && (
         <GeneralTab />
+      )}
+
+      {tab === 'blocklist' && (
+        <BlocklistTab />
       )}
     </div>
   )
@@ -1053,6 +1059,31 @@ function GeneralTab() {
               title={(settings['autoGrab.enabled'] ?? 'true') !== 'false' ? t('common.disable') : t('common.enable')}
             >
               <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${(settings['autoGrab.enabled'] ?? 'true') !== 'false' ? 'translate-x-4' : ''}`} />
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* Recommendations */}
+      <section>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.recommendations')}</h3>
+        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
+          <div className="flex items-center justify-between">
+            <div>
+              <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">{t('settings.general.recommendationsLabel')}</label>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">{t('settings.general.recommendationsHint')}</p>
+            </div>
+            <button
+              onClick={async () => {
+                const current = (settings['recommendations.enabled'] ?? 'false').toLowerCase()
+                const next = current === 'true' ? 'false' : 'true'
+                setSettings(s => ({ ...s, 'recommendations.enabled': next }))
+                await api.setSetting('recommendations.enabled', next).catch(console.error)
+              }}
+              className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${(settings['recommendations.enabled'] ?? 'false') === 'true' ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
+              title={(settings['recommendations.enabled'] ?? 'false') === 'true' ? t('common.disable') : t('common.enable')}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${(settings['recommendations.enabled'] ?? 'false') === 'true' ? 'translate-x-4' : ''}`} />
             </button>
           </div>
         </div>
@@ -1558,6 +1589,7 @@ function EditIndexerForm({ indexer, onClose, onSaved }: { indexer: Indexer; onCl
   const [url, setUrl] = useState(indexer.url)
   const [apiKey, setApiKey] = useState(indexer.apiKey)
   const [categories, setCategories] = useState((indexer.categories ?? [7020]).join(', '))
+  const labelCls = 'block text-xs text-slate-600 dark:text-zinc-400 mb-1'
 
   const submit = async () => {
     const updated = await api.updateIndexer(indexer.id, { ...indexer, name, type, url, apiKey, categories: parseCats(categories) })
@@ -1567,15 +1599,29 @@ function EditIndexerForm({ indexer, onClose, onSaved }: { indexer: Indexer; onCl
   return (
     <div className="mt-1 p-4 border border-slate-300 dark:border-zinc-700 rounded-lg bg-slate-200/50 dark:bg-zinc-800/50 space-y-3">
       <div className="flex gap-2">
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
-        <select value={type} onChange={e => setType(e.target.value)} className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
-          <option value="newznab">Newznab (Usenet)</option>
-          <option value="torznab">Torznab (Torrent)</option>
-        </select>
+        <div className="flex-1">
+          <label className={labelCls}>Name</label>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
+        </div>
+        <div className="w-48">
+          <label className={labelCls}>Indexer Type</label>
+          <select value={type} onChange={e => setType(e.target.value)} className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
+            <option value="newznab">Newznab (Usenet)</option>
+            <option value="torznab">Torznab (Torrent)</option>
+          </select>
+        </div>
       </div>
-      <input value={url} onChange={e => setUrl(e.target.value)} placeholder="URL" className={inputCls} />
-      <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="API Key" type="password" className={inputCls} />
       <div>
+        <label className={labelCls}>URL</label>
+        <input value={url} onChange={e => setUrl(e.target.value)} placeholder="URL" className={inputCls} />
+        <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">Use a base Newznab URL (for example: https://api.nzbgeek.info) or a full Torznab endpoint (for example: http://prowlarr:9696/1/api).</p>
+      </div>
+      <div>
+        <label className={labelCls}>API Key</label>
+        <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="API Key" type="password" className={inputCls} />
+      </div>
+      <div>
+        <label className={labelCls}>Categories</label>
         <input value={categories} onChange={e => setCategories(e.target.value)} placeholder="Categories (e.g. 7020, 7120, 3030)" className={inputCls} />
         <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">Comma-separated Newznab category IDs. 7020 = eBooks, 3030 = Audiobooks. Add custom IDs for indexers with non-standard categories (e.g. 7120 for German books).</p>
       </div>
@@ -1592,9 +1638,10 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
   const [type, setType] = useState(client.type || 'sabnzbd')
   const [host, setHost] = useState(client.host)
   const [port, setPort] = useState(String(client.port))
-  const [credential, setCredential] = useState(client.type === 'qbittorrent' ? (client.password || '') : (client.apiKey || ''))
+  const [credential, setCredential] = useState(client.type === 'qbittorrent' || client.type === 'transmission' ? (client.password || '') : (client.apiKey || ''))
   const [username, setUsername] = useState(client.username || '')
   const [category, setCategory] = useState(client.category)
+  const labelCls = 'block text-xs text-slate-600 dark:text-zinc-400 mb-1'
 
   const handleTypeChange = (newType: string) => {
     setType(newType)
@@ -1603,7 +1650,7 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
   }
 
   const submit = async () => {
-    const data = type === 'qbittorrent'
+    const data = type === 'qbittorrent' || type === 'transmission'
       ? { ...client, name, type, host, port: parseInt(port), username, password: credential, apiKey: '', category }
       : { ...client, name, type, host, port: parseInt(port), apiKey: credential, username: '', password: '', category }
     const updated = await api.updateDownloadClient(client.id, data)
@@ -1613,24 +1660,42 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
   return (
     <div className="mt-1 p-4 border border-slate-300 dark:border-zinc-700 rounded-lg bg-slate-200/50 dark:bg-zinc-800/50 space-y-3">
       <div className="flex gap-2">
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
-        <select value={type} onChange={e => handleTypeChange(e.target.value)} className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
-          <option value="sabnzbd">SABnzbd</option>
-          <option value="qbittorrent">qBittorrent</option>
-        </select>
+        <div className="flex-1">
+          <label className={labelCls}>Name</label>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
+        </div>
+        <div className="w-40">
+          <label className={labelCls}>Client Type</label>
+          <select value={type} onChange={e => handleTypeChange(e.target.value)} className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
+            <option value="sabnzbd">SABnzbd</option>
+            <option value="qbittorrent">qBittorrent</option>
+            <option value="transmission">Transmission</option>
+          </select>
+        </div>
       </div>
       <div>
+        <label className={labelCls}>Connection</label>
         <div className="flex gap-2">
           <input value={host} onChange={e => setHost(e.target.value)} placeholder="Host" className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
           <input value={port} onChange={e => setPort(e.target.value)} placeholder="Port" className="w-24 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
         </div>
         <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">In Docker, use the service/container name (e.g. <code className="font-mono">sabnzbd</code>) — not <code className="font-mono">localhost</code>.</p>
       </div>
-      {type === 'qbittorrent' && (
-        <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" className={inputCls} />
+      {(type === 'qbittorrent' || type === 'transmission') && (
+        <div>
+          <label className={labelCls}>Username</label>
+          <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" className={inputCls} />
+        </div>
       )}
-      <input value={credential} onChange={e => setCredential(e.target.value)} placeholder={type === 'qbittorrent' ? 'Password' : 'API Key'} type="password" className={inputCls} />
-      <input value={category} onChange={e => setCategory(e.target.value)} placeholder="Category" className={inputCls} />
+      <div>
+        <label className={labelCls}>{type === 'qbittorrent' || type === 'transmission' ? 'Password' : 'API Key'}</label>
+        <input value={credential} onChange={e => setCredential(e.target.value)} placeholder={type === 'qbittorrent' || type === 'transmission' ? 'Password' : 'API Key'} type="password" className={inputCls} />
+      </div>
+      <div>
+        <label className={labelCls}>{type === 'transmission' ? 'Download Directory' : 'Category'}</label>
+        <input value={category} onChange={e => setCategory(e.target.value)} placeholder={type === 'transmission' ? '/downloads (leave blank for default)' : 'Category'} className={inputCls} />
+        {type === 'transmission' && <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">Optional absolute path override. Leave blank to use Transmission's configured default download directory.</p>}
+      </div>
       <div className="flex gap-2 justify-end">
         <button onClick={onClose} className="px-3 py-1.5 text-sm text-slate-600 dark:text-zinc-400">Cancel</button>
         <button onClick={submit} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium">Save</button>
@@ -1696,6 +1761,7 @@ function AddIndexerForm({ onClose, onAdded }: { onClose: () => void; onAdded: (i
   const [url, setUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [categories, setCategories] = useState('7020')
+  const labelCls = 'block text-xs text-slate-600 dark:text-zinc-400 mb-1'
 
   const submit = async () => {
     const idx = await api.addIndexer({ name, url, apiKey, type, categories: parseCats(categories), enabled: true })
@@ -1705,15 +1771,29 @@ function AddIndexerForm({ onClose, onAdded }: { onClose: () => void; onAdded: (i
   return (
     <div className="mt-4 p-4 border border-slate-300 dark:border-zinc-700 rounded-lg bg-slate-200/50 dark:bg-zinc-800/50 space-y-3">
       <div className="flex gap-2">
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="Name (e.g. NZBGeek)" className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
-        <select value={type} onChange={e => setType(e.target.value as 'newznab' | 'torznab')} className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
-          <option value="newznab">Newznab</option>
-          <option value="torznab">Torznab</option>
-        </select>
+        <div className="flex-1">
+          <label className={labelCls}>Name</label>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="Name (e.g. NZBGeek)" className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
+        </div>
+        <div className="w-40">
+          <label className={labelCls}>Indexer Type</label>
+          <select value={type} onChange={e => setType(e.target.value as 'newznab' | 'torznab')} className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
+            <option value="newznab">Newznab</option>
+            <option value="torznab">Torznab</option>
+          </select>
+        </div>
       </div>
-      <input value={url} onChange={e => setUrl(e.target.value)} placeholder="URL (e.g. https://api.nzbgeek.info)" className={inputCls} />
-      <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="API Key" type="password" className={inputCls} />
       <div>
+        <label className={labelCls}>URL</label>
+        <input value={url} onChange={e => setUrl(e.target.value)} placeholder="URL (e.g. https://api.nzbgeek.info or http://prowlarr:9696/1/api)" className={inputCls} />
+        <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">For Prowlarr, paste the Torznab endpoint URL (usually ending in /api) and API key.</p>
+      </div>
+      <div>
+        <label className={labelCls}>API Key</label>
+        <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="API Key" type="password" className={inputCls} />
+      </div>
+      <div>
+        <label className={labelCls}>Categories</label>
         <input value={categories} onChange={e => setCategories(e.target.value)} placeholder="Categories (e.g. 7020, 7120, 3030)" className={inputCls} />
         <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">Comma-separated Newznab category IDs. 7020 = eBooks, 3030 = Audiobooks. Add custom IDs for indexers with non-standard categories (e.g. 7120 for German books).</p>
       </div>
@@ -1727,22 +1807,34 @@ function AddIndexerForm({ onClose, onAdded }: { onClose: () => void; onAdded: (i
 
 function AddClientForm({ onClose, onAdded }: { onClose: () => void; onAdded: (c: DownloadClient) => void }) {
   const [name, setName] = useState('SABnzbd')
-  const [type, setType] = useState<'sabnzbd' | 'qbittorrent'>('sabnzbd')
+  const [type, setType] = useState<'sabnzbd' | 'qbittorrent' | 'transmission'>('sabnzbd')
   const [host, setHost] = useState('')
   const [port, setPort] = useState('8080')
   const [credential, setCredential] = useState('')
   const [username, setUsername] = useState('')
   const [category, setCategory] = useState('books')
+  const labelCls = 'block text-xs text-slate-600 dark:text-zinc-400 mb-1'
 
-  const handleTypeChange = (newType: 'sabnzbd' | 'qbittorrent') => {
+  const handleTypeChange = (newType: 'sabnzbd' | 'qbittorrent' | 'transmission') => {
     setType(newType)
     setCredential('')
     setUsername('')
-    setName(newType === 'qbittorrent' ? 'qBittorrent' : 'SABnzbd')
+    if (newType === 'qbittorrent') {
+      setName('qBittorrent')
+      setPort('8080')
+      return
+    }
+    if (newType === 'transmission') {
+      setName('Transmission')
+      setPort('9091')
+      return
+    }
+    setName('SABnzbd')
+    setPort('8080')
   }
 
   const submit = async () => {
-    const data = type === 'qbittorrent'
+    const data = type === 'qbittorrent' || type === 'transmission'
       ? { name, host, port: parseInt(port), username, password: credential, apiKey: '', category, type, enabled: true }
       : { name, host, port: parseInt(port), apiKey: credential, username: '', password: '', category, type, enabled: true }
     const c = await api.addDownloadClient(data)
@@ -1752,24 +1844,42 @@ function AddClientForm({ onClose, onAdded }: { onClose: () => void; onAdded: (c:
   return (
     <div className="mt-4 p-4 border border-slate-300 dark:border-zinc-700 rounded-lg bg-slate-200/50 dark:bg-zinc-800/50 space-y-3">
       <div className="flex gap-2">
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
-        <select value={type} onChange={e => handleTypeChange(e.target.value as 'sabnzbd' | 'qbittorrent')} className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
-          <option value="sabnzbd">SABnzbd</option>
-          <option value="qbittorrent">qBittorrent</option>
-        </select>
+        <div className="flex-1">
+          <label className={labelCls}>Name</label>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="Name" className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
+        </div>
+        <div className="w-40">
+          <label className={labelCls}>Client Type</label>
+          <select value={type} onChange={e => handleTypeChange(e.target.value as 'sabnzbd' | 'qbittorrent' | 'transmission')} className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
+            <option value="sabnzbd">SABnzbd</option>
+            <option value="qbittorrent">qBittorrent</option>
+            <option value="transmission">Transmission</option>
+          </select>
+        </div>
       </div>
       <div>
+        <label className={labelCls}>Connection</label>
         <div className="flex gap-2">
           <input value={host} onChange={e => setHost(e.target.value)} placeholder="Host" className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
           <input value={port} onChange={e => setPort(e.target.value)} placeholder="Port" className="w-24 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
         </div>
         <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">In Docker, use the service/container name (e.g. <code className="font-mono">sabnzbd</code>) — not <code className="font-mono">localhost</code>.</p>
       </div>
-      {type === 'qbittorrent' && (
-        <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" className={inputCls} />
+      {(type === 'qbittorrent' || type === 'transmission') && (
+        <div>
+          <label className={labelCls}>Username</label>
+          <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" className={inputCls} />
+        </div>
       )}
-      <input value={credential} onChange={e => setCredential(e.target.value)} placeholder={type === 'qbittorrent' ? 'Password' : 'API Key'} type="password" className={inputCls} />
-      <input value={category} onChange={e => setCategory(e.target.value)} placeholder="Category" className={inputCls} />
+      <div>
+        <label className={labelCls}>{type === 'qbittorrent' || type === 'transmission' ? 'Password' : 'API Key'}</label>
+        <input value={credential} onChange={e => setCredential(e.target.value)} placeholder={type === 'qbittorrent' || type === 'transmission' ? 'Password' : 'API Key'} type="password" className={inputCls} />
+      </div>
+      <div>
+        <label className={labelCls}>{type === 'transmission' ? 'Download Directory' : 'Category'}</label>
+        <input value={category} onChange={e => setCategory(e.target.value)} placeholder={type === 'transmission' ? '/downloads (leave blank for default)' : 'Category'} className={inputCls} />
+        {type === 'transmission' && <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">Optional absolute path override. Leave blank to use Transmission's configured default download directory.</p>}
+      </div>
       <div className="flex gap-2 justify-end">
         <button onClick={onClose} className="px-3 py-1.5 text-sm text-slate-600 dark:text-zinc-400">Cancel</button>
         <button onClick={submit} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium">Save</button>
@@ -1935,6 +2045,208 @@ function SecuritySection() {
         )}
       </div>
     </section>
+  )
+}
+
+function formatBlocklistDate(s: string) {
+  return new Date(s).toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  })
+}
+
+function BlocklistTab() {
+  const { t } = useTranslation()
+  const [entries, setEntries] = useState<BlocklistEntry[]>([])
+  const [loading, setLoading] = useState(true)
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [deleting, setDeleting] = useState(false)
+
+  const load = () => {
+    setLoading(true)
+    api.listBlocklist().then(setEntries).catch(console.error).finally(() => setLoading(false))
+  }
+
+  useEffect(() => { load() }, [])
+
+  const handleDelete = async (id: number) => {
+    await api.deleteBlocklistEntry(id).catch(console.error)
+    setEntries(prev => prev.filter(e => e.id !== id))
+    setSelected(prev => { const s = new Set(prev); s.delete(id); return s })
+  }
+
+  const handleBulkDelete = async () => {
+    if (selected.size === 0) return
+    if (!confirm(t('blocklist.deleteConfirm', { count: selected.size }))) return
+    setDeleting(true)
+    try {
+      await api.bulkDeleteBlocklist(Array.from(selected))
+      setEntries(prev => prev.filter(e => !selected.has(e.id)))
+      setSelected(new Set())
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const toggleSelect = (id: number) => {
+    setSelected(prev => {
+      const s = new Set(prev)
+      if (s.has(id)) s.delete(id)
+      else s.add(id)
+      return s
+    })
+  }
+
+  const toggleAll = () => {
+    if (selected.size === entries.length) {
+      setSelected(new Set())
+    } else {
+      setSelected(new Set(entries.map(e => e.id)))
+    }
+  }
+
+  const allSelected = entries.length > 0 && selected.size === entries.length
+
+  const { pageItems, paginationProps } = usePagination(entries, 50, 'blocklist')
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <h3 className="text-lg font-semibold">{t('blocklist.title')}</h3>
+        <div className="flex items-center gap-3">
+          {selected.size > 0 && (
+            <button
+              onClick={handleBulkDelete}
+              disabled={deleting}
+              className="px-3 py-1.5 bg-red-600 hover:bg-red-500 rounded text-xs font-medium transition-colors disabled:opacity-50"
+            >
+              {deleting ? t('blocklist.deleting') : t('blocklist.deleteSelected', { count: selected.size })}
+            </button>
+          )}
+          <span className="text-sm text-slate-600 dark:text-zinc-500">{t('blocklist.entries', { count: entries.length })}</span>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="text-slate-600 dark:text-zinc-500">{t('common.loading')}</div>
+      ) : entries.length === 0 ? (
+        <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
+          <p className="text-lg mb-2">{t('blocklist.empty')}</p>
+          <p className="text-sm">{t('blocklist.emptyHint')}</p>
+        </div>
+      ) : (
+        <>
+          {/* Desktop table */}
+          <div className="hidden sm:block border border-slate-200 dark:border-zinc-800 rounded-lg overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-slate-100 dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800">
+                    <th className="px-4 py-3 w-10">
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        onChange={toggleAll}
+                        className="accent-emerald-500"
+                      />
+                    </th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">{t('blocklist.colTitle')}</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">{t('blocklist.colReason')}</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase tracking-wider">{t('blocklist.colDate')}</th>
+                    <th className="px-4 py-3" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 dark:divide-zinc-800">
+                  {pageItems.map(entry => (
+                    <tr key={entry.id} className={`transition-colors hover:bg-slate-200/50 dark:hover:bg-zinc-800/50 ${selected.has(entry.id) ? 'bg-slate-200/30 dark:bg-zinc-800/30' : 'bg-slate-100/50 dark:bg-zinc-900/50'}`}>
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(entry.id)}
+                          onChange={() => toggleSelect(entry.id)}
+                          className="accent-emerald-500"
+                        />
+                      </td>
+                      <td className="px-4 py-3 max-w-xs">
+                        <p className="text-slate-800 dark:text-zinc-200 truncate" title={entry.title}>{entry.title}</p>
+                        {entry.guid && (
+                          <p className="text-[10px] text-slate-500 dark:text-zinc-600 mt-0.5 font-mono truncate">{entry.guid}</p>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-xs px-2 py-0.5 rounded bg-red-500/20 text-red-400">
+                          {entry.reason || 'Unknown'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-slate-600 dark:text-zinc-400 whitespace-nowrap text-xs">
+                        {formatBlocklistDate(entry.createdAt)}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          onClick={() => handleDelete(entry.id)}
+                          className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                        >
+                          {t('common.delete')}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Mobile card list */}
+          <div className="sm:hidden space-y-2">
+            <div className="flex items-center gap-2 mb-2">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={toggleAll}
+                className="accent-emerald-500"
+              />
+              <span className="text-xs text-slate-600 dark:text-zinc-500">{t('blocklist.selectAll')}</span>
+            </div>
+            {pageItems.map(entry => (
+              <div
+                key={entry.id}
+                className={`border border-slate-200 dark:border-zinc-800 rounded-lg p-3 transition-colors ${selected.has(entry.id) ? 'bg-slate-200/30 dark:bg-zinc-800/30' : 'bg-slate-100/50 dark:bg-zinc-900/50'}`}
+              >
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(entry.id)}
+                    onChange={() => toggleSelect(entry.id)}
+                    className="accent-emerald-500 mt-0.5 flex-shrink-0"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-slate-800 dark:text-zinc-200 break-words">{entry.title}</p>
+                    {entry.guid && (
+                      <p className="text-[10px] text-slate-500 dark:text-zinc-600 mt-0.5 font-mono truncate">{entry.guid}</p>
+                    )}
+                    <div className="flex flex-wrap items-center gap-2 mt-2">
+                      <span className="text-xs px-2 py-0.5 rounded bg-red-500/20 text-red-400">
+                        {entry.reason || 'Unknown'}
+                      </span>
+                      <span className="text-[10px] text-slate-600 dark:text-zinc-500">{formatBlocklistDate(entry.createdAt)}</span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleDelete(entry.id)}
+                    className="text-xs text-red-400 hover:text-red-300 transition-colors flex-shrink-0 py-1 px-2"
+                  >
+                    {t('common.delete')}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      <Pagination {...paginationProps} />
+    </div>
   )
 }
 

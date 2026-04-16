@@ -28,6 +28,7 @@ import (
 	"github.com/vavallee/bindery/internal/models"
 	"github.com/vavallee/bindery/internal/notifier"
 	"github.com/vavallee/bindery/internal/opds"
+	"github.com/vavallee/bindery/internal/recommender"
 	"github.com/vavallee/bindery/internal/scheduler"
 	"github.com/vavallee/bindery/internal/webui"
 )
@@ -207,6 +208,12 @@ func main() {
 	// Register the Calibre importer as the 24-hour sync job. The scheduler
 	// only fires the job when the syncer is non-nil, so no guard needed here.
 	sched.WithCalibreSyncer(calibreImporter)
+
+	// Recommendation engine (24-hour job, gated on recommendations.enabled).
+	recRepo := db.NewRecommendationRepo(database)
+	recEngine := recommender.New(bookRepo, authorRepo, seriesRepo, recRepo, settingsRepo)
+	sched.WithRecommender(recEngine)
+
 	sched.Start()
 	defer sched.Stop()
 
@@ -245,6 +252,7 @@ func main() {
 	calibreImportHandler := api.NewCalibreImportHandler(calibreImporter, func() calibre.Config {
 		return api.LoadCalibreConfig(settingsRepo)
 	})
+	recHandler := api.NewRecommendationHandler(recRepo, recEngine, authorRepo, bookRepo, sched)
 	imageProxyHandler := api.NewImageProxyHandler(cfg.DataDir)
 	migrateHandler := api.NewMigrateHandler(
 		authorRepo, indexerRepo, dlClientRepo, blocklistRepo, bookRepo, metaAgg,
@@ -379,6 +387,16 @@ func main() {
 		// Series
 		r.Get("/series", seriesHandler.List)
 		r.Get("/series/{id}", seriesHandler.Get)
+
+		// Recommendations
+		r.Get("/recommendations", recHandler.List)
+		r.Post("/recommendations/{id}/dismiss", recHandler.Dismiss)
+		r.Post("/recommendations/{id}/add", recHandler.Add)
+		r.Post("/recommendations/refresh", recHandler.Refresh)
+		r.Delete("/recommendations/dismissals", recHandler.ClearDismissals)
+		r.Get("/recommendations/exclude-author", recHandler.ListAuthorExclusions)
+		r.Post("/recommendations/exclude-author", recHandler.ExcludeAuthor)
+		r.Delete("/recommendations/exclude-author/{name}", recHandler.RemoveAuthorExclusion)
 
 		// Tags
 		r.Get("/tag", tagHandler.List)
