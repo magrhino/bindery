@@ -79,12 +79,12 @@ func (h *ImageProxyHandler) Serve(w http.ResponseWriter, r *http.Request) {
 	// the caller's context (cancellation, deadline). The URL has already been
 	// validated by h.validateURL; the nolint suppresses the gosec taint warning
 	// that can't trace through the validateURL indirection.
-	upReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, raw, nil) //nolint:gosec // #nosec -- URL validated above via h.validateURL
+	upReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, raw, nil) // #nosec -- URL validated above via h.validateURL (PolicyStrict)
 	if err != nil {
 		http.Error(w, "upstream fetch failed", http.StatusBadGateway)
 		return
 	}
-	resp, err := h.client.Do(upReq) //nolint:gosec // #nosec -- URL validated above via h.validateURL
+	resp, err := h.client.Do(upReq) // #nosec -- URL validated above via h.validateURL (PolicyStrict)
 	if err != nil {
 		http.Error(w, "upstream fetch failed", http.StatusBadGateway)
 		return
