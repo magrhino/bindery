@@ -196,7 +196,8 @@
       "import": "Import",
       "rootfolders": "Root Folders",
       "logs": "Logs",
-      "general": "General"
+      "general": "General",
+      "blocklist": "Blocklist"
     },
     "indexers": {
       "heading": "Indexers",

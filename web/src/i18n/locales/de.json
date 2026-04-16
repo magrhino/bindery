@@ -197,7 +197,8 @@
       "import": "Import",
       "rootfolders": "Stammordner",
       "logs": "Protokolle",
-      "general": "Allgemein"
+      "general": "Allgemein",
+      "blocklist": "Blockliste"
     },
     "indexers": {
       "heading": "Indexer",
