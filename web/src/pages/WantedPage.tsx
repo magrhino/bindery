@@ -20,15 +20,16 @@ export default function WantedPage() {
   const [unmonitoringId, setUnmonitoringId] = useState<number | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [bulkBusy, setBulkBusy] = useState(false)
+  const [showExcluded, setShowExcluded] = useState(false)
   const selectAllRef = useRef<HTMLInputElement>(null)
 
   const load = () => {
-    api.listWanted().then(setBooks).catch(console.error).finally(() => setLoading(false))
+    api.listWanted({ includeExcluded: showExcluded }).then(setBooks).catch(console.error).finally(() => setLoading(false))
   }
 
   useEffect(() => {
     load()
-  }, [])
+  }, [showExcluded])
 
   const filtered = useMemo(() => {
     if (!search.trim()) return books
@@ -145,7 +146,18 @@ export default function WantedPage() {
     <div className={selectedIds.size > 0 ? 'pb-16' : ''}>
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold">{t('wanted.title')}</h2>
-        <span className="text-sm text-slate-600 dark:text-zinc-500">{t('wanted.countLabel', { filtered: filtered.length, total: books.length })}</span>
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-zinc-400 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showExcluded}
+              onChange={e => setShowExcluded(e.target.checked)}
+              className="rounded border-slate-400 dark:border-zinc-600 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0"
+            />
+            {t('wanted.showExcluded')}
+          </label>
+          <span className="text-sm text-slate-600 dark:text-zinc-500">{t('wanted.countLabel', { filtered: filtered.length, total: books.length })}</span>
+        </div>
       </div>
 
       <input
@@ -233,6 +245,11 @@ export default function WantedPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
+                    {book.excluded && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-amber-500/20 text-amber-700 dark:text-amber-400">
+                        {t('wanted.excluded')}
+                      </span>
+                    )}
                     <button
                       onClick={() => unmonitor(book)}
                       disabled={unmonitoringId === book.id}

@@ -329,6 +329,7 @@ func main() {
 		r.Put("/book/{id}", bookHandler.Update)
 		r.Delete("/book/{id}", bookHandler.Delete)
 		r.Delete("/book/{id}/file", bookHandler.DeleteFile)
+		r.Put("/book/{id}/exclude", bookHandler.ToggleExcluded)
 		r.Post("/book/{id}/enrich-audiobook", bookHandler.EnrichAudiobook)
 		r.Post("/book/{id}/search", indexerHandler.SearchBook)
 		r.Get("/book/{id}/file", fileHandler.Download)
