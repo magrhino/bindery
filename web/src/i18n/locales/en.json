@@ -332,7 +332,21 @@
       "resultAdded": "added",
       "resultSkipped": "skipped (already exist)",
       "resultFailed": "failed",
-      "showFailures": "Show {{count}} failures"
+      "showFailures": "Show {{count}} failures",
+      "hardcoverHeading": "Hardcover reading lists",
+      "hardcoverDescription": "Sync books from your Hardcover reading lists. Books are imported as Wanted and checked every 24 hours.",
+      "hardcoverAddButton": "+ Add Hardcover List",
+      "hardcoverName": "Name",
+      "hardcoverNamePlaceholder": "e.g. To Read",
+      "hardcoverToken": "API Token",
+      "hardcoverTokenPlaceholder": "Hardcover API token",
+      "hardcoverList": "List",
+      "hardcoverListPlaceholder": "Enter token to load lists",
+      "hardcoverListLoading": "Loading lists...",
+      "hardcoverNoLists": "No lists found",
+      "hardcoverEmpty": "No Hardcover import lists configured.",
+      "hardcoverLastSync": "Last sync: {{date}}",
+      "hardcoverNeverSynced": "Never synced"
     }
   },
   "addAuthorModal": {

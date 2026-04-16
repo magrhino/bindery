@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/metadata/hardcover"
 	"github.com/vavallee/bindery/internal/models"
 )
 
@@ -104,6 +105,23 @@ func (h *ImportListHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// HardcoverLists returns the authenticated user's Hardcover reading lists.
+// GET /api/v1/importlist/hardcover/lists?token=<tok>
+func (h *ImportListHandler) HardcoverLists(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token query parameter required"})
+		return
+	}
+	client := hardcover.NewAuthenticated(token)
+	lists, err := client.GetUserLists(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, lists)
 }
 
 // --- Exclusions ---

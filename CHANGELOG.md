@@ -6,15 +6,25 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased] — development branch
 
+## [v0.15.1] — 2026-04-16
+
+### Fixed
+
+- **Authors page pagination** — clicking any page number after page 1 immediately jumped back to page 1. Root cause: `reset()` in `usePagination` was a new function reference on every render; `useEffect([reset])` in AuthorsPage fired on every page change, resetting the page. Fixed by wrapping `reset` with `useCallback`. Closes #161.
+- **Scan Library ignores BINDERY_AUDIOBOOK_DIR** — `ScanLibrary` only walked `BINDERY_LIBRARY_DIR`. Audiobooks in a separately configured `BINDERY_AUDIOBOOK_DIR` were never reconciled against the Wanted list. Both directories are now walked; the author-inference fallback (strip root prefix to extract the author directory component) handles both roots. Closes #162.
+- **Calibre author metadata refresh errors** — authors imported via Calibre sync carry synthetic `calibre:author:N` foreign IDs with no OpenLibrary counterpart. Every scheduled and manual metadata refresh logged an ERROR 404. Both the API handler (`FetchAuthorBooks`) and the scheduled `refreshMetadata` job now skip these authors silently at debug level. Closes #164.
+
 ## [v0.15.0] — 2026-04-16
 
 ### Added
 
-- **Book exclude flag (closes [#103](https://github.com/vavallee/bindery/issues/103))** — books can now be excluded without deleting or unmonitoring them. An excluded book is hidden from the Wanted page, skipped by the 12-hour auto-search job, and not counted toward author statistics, but stays in the database and is recoverable. Toggle via the book detail page ("Exclude" / "Un-exclude"). Author detail and Wanted pages gain a **Show excluded** toggle that reveals excluded books with an amber badge. Stored in the database via a new migration (016) so it survives metadata refreshes.
+- **Book exclude flag (closes #103)** — excluded books are hidden from the Wanted page and skipped by the auto-search scheduler. Toggle per-book from the book detail page or Wanted list.
+- **Hardcover reading list import** — connect your Hardcover account under **Settings → Import Lists** and choose which lists to sync. Books on those lists are added as Wanted automatically. Syncs every 24 h; one-way only (Hardcover is source of truth). Closes #106.
+- **Recommendation engine — Discover page** — local content-based engine surfaces personalised suggestions (series continuation, author new works, genre similar, serendipity picks). Opt-in via **Settings → General → Recommendations**. Closes #100.
 
 ### Fixed
 
-- **Page size shared across tabs** — changing the "per page" selector on one tab (Authors, Books, Wanted, History, Queue) now persists to all other tabs via `localStorage`, so the user's preferred page size is not reset when navigating between sections.
+- **Page size shared across tabs** — the per-page size selector now persists to `localStorage` and is shared across all paginated pages. Navigating between tabs no longer resets to the default. Closes #159.
 
 ## [v0.14.0] — 2026-04-16
 

@@ -17,6 +17,7 @@ import (
 	"github.com/vavallee/bindery/internal/calibre"
 	"github.com/vavallee/bindery/internal/config"
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/hardcoverlistsyncer"
 	"github.com/vavallee/bindery/internal/importer"
 	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/logbuf"
@@ -222,6 +223,10 @@ func main() {
 	}
 	sched.WithRecommender(recEngine)
 
+	// Register the Hardcover list syncer (24-hour job).
+	hcSyncer := hardcoverlistsyncer.New(importListRepo, authorRepo, bookRepo)
+	sched.WithHardcoverSyncer(hcSyncer)
+
 	sched.Start()
 	defer sched.Stop()
 
@@ -415,6 +420,7 @@ func main() {
 		// Import lists
 		r.Get("/importlist", importListHandler.List)
 		r.Post("/importlist", importListHandler.Create)
+		r.Get("/importlist/hardcover/lists", importListHandler.HardcoverLists)
 		r.Get("/importlist/{id}", importListHandler.Get)
 		r.Put("/importlist/{id}", importListHandler.Update)
 		r.Delete("/importlist/{id}", importListHandler.Delete)

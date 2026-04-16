@@ -21,7 +21,7 @@ const (
 )
 
 // Client implements metadata.Provider for Hardcover.app using its public GraphQL API.
-// Set a Bearer token via WithToken to enable authenticated queries (e.g. GetUserWishlist).
+// Set a Bearer token via WithToken or NewAuthenticated to enable authenticated queries.
 type Client struct {
 	http  *http.Client
 	token string // optional Bearer token; required for user-specific queries
@@ -38,6 +38,15 @@ func New() *Client {
 // Required for authenticated queries such as GetUserWishlist.
 func (c *Client) WithToken(token string) *Client {
 	return &Client{http: c.http, token: token}
+}
+
+// NewAuthenticated creates a new client that sends Authorization: Bearer <token>
+// for authenticated queries (e.g. reading user lists).
+func NewAuthenticated(token string) *Client {
+	return &Client{
+		http:  &http.Client{Timeout: 15 * time.Second},
+		token: token,
+	}
 }
 
 func (c *Client) Name() string { return "hardcover" }
@@ -265,6 +274,98 @@ func (c *Client) GetUserWishlist(ctx context.Context, limit int) ([]models.Recom
 		candidates = append(candidates, cand)
 	}
 	return candidates, nil
+}
+
+// --- Authenticated list queries ---
+
+// HCList represents a Hardcover reading list.
+type HCList struct {
+	ID         int    `json:"id"`
+	Name       string `json:"name"`
+	Slug       string `json:"slug"`
+	BooksCount int    `json:"booksCount"`
+}
+
+// GetUserLists returns the authenticated user's reading lists.
+func (c *Client) GetUserLists(ctx context.Context) ([]HCList, error) {
+	gql := `query GetUserLists {
+		me {
+			lists {
+				id
+				name
+				slug
+				books_count
+			}
+		}
+	}`
+	var resp struct {
+		Data struct {
+			Me struct {
+				Lists []struct {
+					ID         int    `json:"id"`
+					Name       string `json:"name"`
+					Slug       string `json:"slug"`
+					BooksCount int    `json:"books_count"`
+				} `json:"lists"`
+			} `json:"me"`
+		} `json:"data"`
+	}
+	if err := c.query(ctx, gql, nil, &resp); err != nil {
+		return nil, fmt.Errorf("hardcover get user lists: %w", err)
+	}
+	lists := make([]HCList, 0, len(resp.Data.Me.Lists))
+	for _, l := range resp.Data.Me.Lists {
+		lists = append(lists, HCList{
+			ID:         l.ID,
+			Name:       l.Name,
+			Slug:       l.Slug,
+			BooksCount: l.BooksCount,
+		})
+	}
+	return lists, nil
+}
+
+// GetListBooks returns all books in the given list as Bindery models.
+func (c *Client) GetListBooks(ctx context.Context, listID int) ([]models.Book, error) {
+	gql := `query GetListBooks($id: Int!) {
+		list(id: $id) {
+			id
+			name
+			slug
+			list_books {
+				book {
+					id
+					title
+					slug
+					description
+					image { url }
+					release_year
+					ratings_count
+					rating
+					contributions {
+						author { id name slug }
+					}
+				}
+			}
+		}
+	}`
+	var resp struct {
+		Data struct {
+			List struct {
+				ListBooks []struct {
+					Book hcBook `json:"book"`
+				} `json:"list_books"`
+			} `json:"list"`
+		} `json:"data"`
+	}
+	if err := c.query(ctx, gql, map[string]any{"id": listID}, &resp); err != nil {
+		return nil, fmt.Errorf("hardcover get list books: %w", err)
+	}
+	books := make([]models.Book, 0, len(resp.Data.List.ListBooks))
+	for _, lb := range resp.Data.List.ListBooks {
+		books = append(books, c.toBook(lb.Book))
+	}
+	return books, nil
 }
 
 // --- GraphQL transport ---

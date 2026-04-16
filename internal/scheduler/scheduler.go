@@ -6,6 +6,7 @@ package scheduler
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"github.com/robfig/cron/v3"
 
@@ -38,6 +39,12 @@ type RecommendationEngine interface {
 	Run(ctx context.Context, userID int64) error
 }
 
+// HCListSyncer is the interface the scheduler calls to sync Hardcover import
+// lists. Implemented by *hardcoverlistsyncer.ListSyncer.
+type HCListSyncer interface {
+	Sync(ctx context.Context) error
+}
+
 // Scheduler runs background jobs on configurable intervals.
 type Scheduler struct {
 	cron     *cron.Cron
@@ -54,6 +61,7 @@ type Scheduler struct {
 	blocklist     *db.BlocklistRepo
 	calibreSyncer CalibreSyncer        // optional; nil if Calibre is not configured
 	recommender   RecommendationEngine // optional; generates recommendations
+	hcSyncer      HCListSyncer         // optional; syncs Hardcover import lists
 }
 
 // New creates a new scheduler.
@@ -94,6 +102,12 @@ func (s *Scheduler) WithCalibreSyncer(syncer CalibreSyncer) {
 // Must be called before Start.
 func (s *Scheduler) WithRecommender(engine RecommendationEngine) {
 	s.recommender = engine
+}
+
+// WithHardcoverSyncer registers a Hardcover list syncer that runs every 24
+// hours to import books from the user's Hardcover reading lists.
+func (s *Scheduler) WithHardcoverSyncer(syncer HCListSyncer) {
+	s.hcSyncer = syncer
 }
 
 // Start registers and runs all background jobs.
@@ -144,6 +158,16 @@ func (s *Scheduler) Start() {
 			}
 			if err := s.recommender.Run(context.Background(), 1); err != nil {
 				slog.Error("recommendation engine failed", "error", err)
+			}
+		})
+	}
+
+	// Sync Hardcover import lists every 24 hours.
+	if s.hcSyncer != nil {
+		s.cron.AddFunc("@every 24h", func() {
+			slog.Info("job: sync hardcover lists")
+			if err := s.hcSyncer.Sync(context.Background()); err != nil {
+				slog.Error("hardcover list sync failed", "error", err)
 			}
 		})
 	}
@@ -366,6 +390,12 @@ func (s *Scheduler) refreshMetadata() {
 
 	for _, author := range authors {
 		if !author.Monitored {
+			continue
+		}
+
+		// Calibre-imported authors have synthetic "calibre:author:N" IDs with
+		// no counterpart in OL/Hardcover; skip to avoid noisy 404 errors.
+		if strings.HasPrefix(author.ForeignID, "calibre:") {
 			continue
 		}
 
