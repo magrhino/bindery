@@ -197,7 +197,8 @@
       "import": "Importation",
       "rootfolders": "Dossiers racines",
       "logs": "Journaux",
-      "general": "Général"
+      "general": "Général",
+      "blocklist": "Liste de blocage"
     },
     "indexers": {
       "heading": "Indexeurs",

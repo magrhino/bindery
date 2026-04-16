@@ -197,7 +197,8 @@
       "import": "Importeren",
       "rootfolders": "Hoofdmappen",
       "logs": "Logboeken",
-      "general": "Algemeen"
+      "general": "Algemeen",
+      "blocklist": "Blokkeerlijst"
     },
     "indexers": {
       "heading": "Indexers",
