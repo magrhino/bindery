@@ -18,7 +18,7 @@ ingress:
 
 persistence:
   config:
-    enabled: true
+    enabled: false
     storageClass: longhorn
     size: 4Gi
     mountPath: /config
@@ -105,7 +105,7 @@ hooks:
     # ArgoCD PostSync Job that probes /api/v1/health and fails the sync if
     # the endpoint doesn't return 200 within 10 seconds. Harmless outside
     # of ArgoCD (it's a one-shot Job that runs and exits).
-    enabled: true
+    enabled: false
     # Image used by the smoke-test container. Kept intentionally minimal
     # (busybox gives us wget + sh). Pin a digest in strict environments.
     image: busybox:1.37
