@@ -47,6 +47,11 @@ export default function DiscoverPage() {
     checkEnabled()
   }, [load, checkEnabled])
 
+  useEffect(() => {
+    document.title = 'Discover · Bindery'
+    return () => { document.title = 'Bindery' }
+  }, [])
+
   const showToast = (msg: string) => {
     setToast(msg)
     setTimeout(() => setToast(null), 2500)

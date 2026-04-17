@@ -92,6 +92,11 @@ export default function BooksPage() {
     if (selectAllRef.current) selectAllRef.current.indeterminate = somePageSelected
   }, [somePageSelected])
 
+  useEffect(() => {
+    document.title = 'Books · Bindery'
+    return () => { document.title = 'Bindery' }
+  }, [])
+
   const toggleSelect = (id: number) => {
     setSelectedIds(prev => {
       const next = new Set(prev)

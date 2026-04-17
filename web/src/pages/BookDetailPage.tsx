@@ -45,6 +45,13 @@ export default function BookDetailPage() {
   const [togglingExclude, setTogglingExclude] = useState(false)
 
   useEffect(() => {
+    if (book?.title) {
+      document.title = `${book.title} · Bindery`
+      return () => { document.title = 'Bindery' }
+    }
+  }, [book?.title])
+
+  useEffect(() => {
     let cancelled = false
     setLoading(true)
     Promise.all([
