@@ -359,6 +359,11 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool)
 		seenTitles[normalizedTitle] = true
 
 		if err := h.books.Create(ctx, &b); err != nil {
+			// A UNIQUE constraint on foreign_id means the book was already
+			// created by a concurrent or earlier sync — treat as a benign skip.
+			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+				continue
+			}
 			slog.Warn("failed to create book", "title", b.Title, "error", err)
 			continue
 		}
