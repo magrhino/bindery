@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/decision"
 	"github.com/vavallee/bindery/internal/httpsec"
 	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/indexer/newznab"
@@ -190,8 +191,10 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 
 	results := h.searcher.SearchBook(r.Context(), idxs, crit)
 
-	// Apply language filter using the author's metadata-profile allowed languages.
-	// Fall back to the global search.preferredLanguage setting when no profile is found.
+	// Build decision specs.
+	var specs []decision.Specification
+
+	// Language filter: author profile takes precedence, fall back to global setting.
 	lang := langFilterFromAllowed(allowedLangs)
 	if lang == "" {
 		if s, _ := h.settings.Get(r.Context(), "search.preferredLanguage"); s != nil {
@@ -200,26 +203,47 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 	}
 	results = indexer.FilterByLanguage(results, lang)
 
-	// Filter out blocklisted GUIDs so they never surface again.
+	// Blocklist spec.
 	if h.blocklist != nil {
-		filtered := make([]newznab.SearchResult, 0, len(results))
-		for _, res := range results {
-			if blocked, _ := h.blocklist.IsBlocked(r.Context(), res.GUID); !blocked {
-				filtered = append(filtered, res)
-			}
-		}
-		results = filtered
+		entries, _ := h.blocklist.List(r.Context())
+		specs = append(specs, decision.NewBlocklistedSpec(entries))
 	}
 
-	writeJSON(w, http.StatusOK, results)
+	// Already-imported spec.
+	specs = append(specs, decision.AlreadyImportedSpec{})
+
+	dm := decision.New(specs...)
+	releases := make([]decision.Release, len(results))
+	for i, res := range results {
+		releases[i] = decision.ReleaseFromSearchResult(res)
+	}
+
+	decisions := dm.Evaluate(releases, *book)
+
+	type searchDecision struct {
+		newznab.SearchResult
+		Approved  bool   `json:"approved"`
+		Rejection string `json:"rejection,omitempty"`
+	}
+	out := make([]searchDecision, len(decisions))
+	for i, d := range decisions {
+		out[i] = searchDecision{
+			SearchResult: results[i],
+			Approved:     d.Approved,
+			Rejection:    d.Rejection,
+		}
+	}
+
+	writeJSON(w, http.StatusOK, out)
 }
 
 // resolveAllowedLanguages returns the parsed allowed-language list for an
-// author's metadata profile, falling back to English-only if the profile
-// cannot be loaded (preserves existing filtering behaviour for new installs).
+// author's metadata profile. Returns empty (no filter) when the profile
+// cannot be loaded — imposing English-only as a fallback silently breaks
+// users whose indexers return language-tagged releases.
 func (h *IndexerHandler) resolveAllowedLanguages(ctx context.Context, author *models.Author) []string {
 	if h.profiles == nil {
-		return []string{"eng"}
+		return []string{}
 	}
 	id := models.DefaultMetadataProfileID
 	if author.MetadataProfileID != nil {
@@ -227,7 +251,7 @@ func (h *IndexerHandler) resolveAllowedLanguages(ctx context.Context, author *mo
 	}
 	p, err := h.profiles.GetByID(ctx, id)
 	if err != nil || p == nil {
-		return []string{"eng"}
+		return []string{}
 	}
 	return models.ParseAllowedLanguages(p.AllowedLanguages)
 }

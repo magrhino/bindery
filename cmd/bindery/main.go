@@ -30,6 +30,7 @@ import (
 	"github.com/vavallee/bindery/internal/models"
 	"github.com/vavallee/bindery/internal/notifier"
 	"github.com/vavallee/bindery/internal/opds"
+	"github.com/vavallee/bindery/internal/prowlarr"
 	"github.com/vavallee/bindery/internal/recommender"
 	"github.com/vavallee/bindery/internal/scheduler"
 	"github.com/vavallee/bindery/internal/webui"
@@ -105,6 +106,7 @@ func main() {
 	tagRepo := db.NewTagRepo(database)
 	rootFolderRepo := db.NewRootFolderRepo(database)
 	importListRepo := db.NewImportListRepo(database)
+	prowlarrRepo := db.NewProwlarrRepo(database)
 	metadataProfileRepo := db.NewMetadataProfileRepo(database)
 	delayProfileRepo := db.NewDelayProfileRepo(database)
 	customFormatRepo := db.NewCustomFormatRepo(database)
@@ -165,11 +167,19 @@ func main() {
 		cfg.DownloadPathRemap,
 	)
 
-	calibreClient := calibre.New(api.LoadCalibreConfig(settingsRepo))
 	modeResolver := func() calibre.Mode { return api.LoadCalibreMode(settingsRepo) }
-	importScanner.WithCalibre(modeResolver, calibreClient)
-	if api.LoadCalibreMode(settingsRepo) == calibre.ModeCalibredb {
-		slog.Info("calibre integration enabled", "mode", "calibredb")
+	calibreCfg := api.LoadCalibreConfig(settingsRepo)
+	currentMode := api.LoadCalibreMode(settingsRepo)
+	if currentMode == calibre.ModePlugin {
+		pluginClient := calibre.NewPluginClient(calibreCfg.PluginURL, calibreCfg.PluginAPIKey)
+		importScanner.WithCalibre(modeResolver, pluginClient)
+		slog.Info("calibre integration enabled", "mode", "plugin", "url", calibreCfg.PluginURL)
+	} else {
+		calibreClient := calibre.New(calibreCfg)
+		importScanner.WithCalibre(modeResolver, calibreClient)
+		if currentMode == calibre.ModeCalibredb {
+			slog.Info("calibre integration enabled", "mode", "calibredb")
+		}
 	}
 
 	// Library import (read side). Importer holds live progress state in
@@ -189,6 +199,25 @@ func main() {
 			}()
 		} else {
 			slog.Info("calibre sync_on_startup is on but integration is not configured — skipping")
+		}
+	}
+
+	// Prowlarr startup sync: kick off sync for all enabled instances that have
+	// sync_on_startup set. Runs concurrently so it doesn't block server start.
+	{
+		instances, _ := prowlarrRepo.List(context.Background())
+		for _, inst := range instances {
+			if !inst.Enabled || !inst.SyncOnStartup {
+				continue
+			}
+			inst := inst // capture
+			go func() {
+				client := prowlarr.New(inst.URL, inst.APIKey)
+				syncer := prowlarr.NewSyncer(client, indexerRepo, prowlarrRepo)
+				if _, err := syncer.Sync(context.Background(), inst.ID); err != nil {
+					slog.Warn("prowlarr startup sync failed", "instance", inst.Name, "error", err)
+				}
+			}()
 		}
 	}
 
@@ -228,7 +257,7 @@ func main() {
 	bookHandler := api.NewBookHandler(bookRepo, metaAgg, historyRepo, sched).WithSettings(settingsRepo)
 	indexerHandler := api.NewIndexerHandler(indexerRepo, bookRepo, authorRepo, metadataProfileRepo, idxSearcher, settingsRepo, blocklistRepo)
 	dlClientHandler := api.NewDownloadClientHandler(dlClientRepo)
-	queueHandler := api.NewQueueHandler(downloadRepo, dlClientRepo, bookRepo, historyRepo)
+	queueHandler := api.NewQueueHandler(downloadRepo, dlClientRepo, bookRepo, historyRepo).WithNotifier(notif)
 	importScanner.WithSettings(settingsRepo)
 	importScanner.WithRootFolders(rootFolderRepo)
 	libraryHandler := api.NewLibraryHandler(importScanner).WithSettings(settingsRepo)
@@ -248,6 +277,7 @@ func main() {
 	backupHandler := api.NewBackupHandler(cfg.DBPath, cfg.DataDir)
 	rootFolderHandler := api.NewRootFolderHandler(rootFolderRepo)
 	logHandler := api.NewLogHandler(ring)
+	prowlarrHandler := api.NewProwlarrHandler(prowlarrRepo, indexerRepo)
 	calibreHandler := api.NewCalibreHandler(settingsRepo)
 	calibreImportHandler := api.NewCalibreImportHandler(calibreImporter, func() calibre.Config {
 		return api.LoadCalibreConfig(settingsRepo)
@@ -311,6 +341,7 @@ func main() {
 		// Authors
 		r.Get("/author", authorHandler.List)
 		r.Post("/author", authorHandler.Create)
+		r.Post("/author/book", authorHandler.AddBook)
 		r.Post("/author/bulk", bulkHandler.AuthorsBulk)
 		r.Get("/author/{id}", authorHandler.Get)
 		r.Put("/author/{id}", authorHandler.Update)
@@ -343,6 +374,15 @@ func main() {
 		r.Delete("/indexer/{id}", indexerHandler.Delete)
 		r.Post("/indexer/{id}/test", indexerHandler.Test)
 		r.Get("/indexer/search", indexerHandler.SearchQuery)
+
+		// Prowlarr indexer sync
+		r.Get("/prowlarr", prowlarrHandler.List)
+		r.Post("/prowlarr", prowlarrHandler.Create)
+		r.Get("/prowlarr/{id}", prowlarrHandler.Get)
+		r.Put("/prowlarr/{id}", prowlarrHandler.Update)
+		r.Delete("/prowlarr/{id}", prowlarrHandler.Delete)
+		r.Post("/prowlarr/{id}/test", prowlarrHandler.Test)
+		r.Post("/prowlarr/{id}/sync", prowlarrHandler.Sync)
 
 		// Root folders
 		r.Get("/rootfolder", rootFolderHandler.List)

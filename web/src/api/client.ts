@@ -83,6 +83,10 @@ export const api = {
   searchBooks: (term: string) => request<Book[]>(`/search/book?term=${encodeURIComponent(term)}`),
   lookupISBN: (isbn: string) => request<Book>(`/book/lookup?isbn=${encodeURIComponent(isbn)}`),
 
+  // Add a single book to wanted (adds author silently if new)
+  addBook: (data: { foreignBookId: string; foreignAuthorId: string; authorName?: string; searchOnAdd?: boolean }) =>
+    request<Book>('/author/book', { method: 'POST', body: JSON.stringify(data) }),
+
   // Authors
   listAuthors: () => request<Author[]>('/author'),
   getAuthor: (id: number) => request<Author>(`/author/${id}`),
@@ -136,6 +140,14 @@ export const api = {
   updateIndexer: (id: number, data: Partial<Indexer>) => request<Indexer>(`/indexer/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteIndexer: (id: number) => request<void>(`/indexer/${id}`, { method: 'DELETE' }),
   testIndexer: (id: number) => request<{ message: string }>(`/indexer/${id}/test`, { method: 'POST' }),
+
+  // Prowlarr indexer sync
+  listProwlarr: () => request<ProwlarrInstance[]>('/prowlarr'),
+  addProwlarr: (data: Partial<ProwlarrInstance>) => request<ProwlarrInstance>('/prowlarr', { method: 'POST', body: JSON.stringify(data) }),
+  updateProwlarr: (id: number, data: Partial<ProwlarrInstance>) => request<ProwlarrInstance>(`/prowlarr/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteProwlarr: (id: number) => request<void>(`/prowlarr/${id}`, { method: 'DELETE' }),
+  testProwlarr: (id: number) => request<{ ok: string; version?: string; error?: string }>(`/prowlarr/${id}/test`, { method: 'POST' }),
+  syncProwlarr: (id: number) => request<{ added: number; updated: number; removed: number }>(`/prowlarr/${id}/sync`, { method: 'POST' }),
   searchIndexers: (q: string) => request<SearchResult[]>(`/indexer/search?q=${encodeURIComponent(q)}`),
 
   // Download clients
@@ -314,8 +326,8 @@ export interface Book {
 
 // CalibreMode selects which integration flow runs after a successful
 // Bindery import. 'off' skips Calibre entirely, 'calibredb' shells out to
-// the calibredb CLI.
-export type CalibreMode = 'off' | 'calibredb'
+// the calibredb CLI, 'plugin' posts to the Bindery Bridge Calibre plugin.
+export type CalibreMode = 'off' | 'calibredb' | 'plugin'
 
 // CalibreSettings mirrors the `calibre.*` keys stored in the settings table.
 export interface CalibreSettings {
@@ -364,6 +376,17 @@ export interface Indexer {
   apiKey: string
   categories: number[]
   enabled: boolean
+  prowlarrInstanceId?: number
+}
+
+export interface ProwlarrInstance {
+  id: number
+  name: string
+  url: string
+  apiKey: string
+  syncOnStartup: boolean
+  enabled: boolean
+  lastSyncAt?: string
 }
 
 export interface DownloadClient {
@@ -405,6 +428,8 @@ export interface SearchResult {
   pubDate: string
   protocol: string  // "usenet" or "torrent"
   language?: string // ISO 639-1 from newznab:attr language (when present)
+  approved?: boolean
+  rejection?: string
 }
 
 export interface AddAuthorRequest {

@@ -411,11 +411,12 @@ export default function BookDetailPage() {
           <h3 className="text-sm font-semibold mb-2 text-slate-800 dark:text-zinc-200">Results ({results.length})</h3>
           <div className="space-y-1">
             {results.slice(0, 20).map(r => (
-              <div key={r.guid} className="flex items-center justify-between p-2 bg-slate-100 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded text-xs">
+              <div key={r.guid} className={`flex items-center justify-between p-2 border rounded text-xs ${r.approved === false ? 'bg-slate-50 dark:bg-zinc-950 border-slate-200 dark:border-zinc-800 opacity-60' : 'bg-slate-100 dark:bg-zinc-900 border-slate-200 dark:border-zinc-800'}`}>
                 <div className="min-w-0 mr-3">
                   <span className="truncate block text-slate-800 dark:text-zinc-200">{r.title}</span>
                   <span className="text-slate-500 dark:text-zinc-500 truncate block">
                     {r.indexerName} · {formatSize(r.size)} · {r.grabs} grabs
+                    {r.rejection && <span className="ml-2 text-amber-600 dark:text-amber-400">· {r.rejection}</span>}
                   </span>
                 </div>
                 <button

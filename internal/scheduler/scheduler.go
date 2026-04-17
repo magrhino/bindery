@@ -14,6 +14,7 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/decision"
 	"github.com/vavallee/bindery/internal/downloader"
 	"github.com/vavallee/bindery/internal/importer"
 	"github.com/vavallee/bindery/internal/indexer"
@@ -228,7 +229,7 @@ func (s *Scheduler) searchAndGrabFormat(ctx context.Context, book models.Book, m
 		}
 	}
 
-	lang := "en"
+	lang := ""
 	if s.settings != nil {
 		if langSetting, err := s.settings.Get(ctx, "search.preferredLanguage"); err != nil {
 			slog.Warn("failed to load preferred search language", "error", err)
@@ -257,12 +258,28 @@ func (s *Scheduler) searchAndGrabFormat(ctx context.Context, book models.Book, m
 
 	results := s.searcher.SearchBook(ctx, idxs, crit)
 	results = indexer.FilterByLanguage(results, lang)
-	results = filterBlocklisted(ctx, s.blocklist, results)
-	if len(results) == 0 {
+
+	var specs []decision.Specification
+	if s.blocklist != nil {
+		if entries, err := s.blocklist.List(ctx); err == nil {
+			specs = append(specs, decision.NewBlocklistedSpec(entries))
+		}
+	}
+	dm := decision.New(specs...)
+	releases := make([]decision.Release, len(results))
+	for i, res := range results {
+		releases[i] = decision.ReleaseFromSearchResult(res)
+	}
+	var best *newznab.SearchResult
+	for i, d := range dm.Evaluate(releases, book) {
+		if d.Approved {
+			best = &results[i]
+			break
+		}
+	}
+	if best == nil {
 		return
 	}
-
-	best := results[0]
 
 	candidates, err := s.clients.GetEnabledByProtocol(ctx, best.Protocol)
 	if err != nil {
@@ -309,7 +326,7 @@ func (s *Scheduler) searchAndGrabFormat(ctx context.Context, book models.Book, m
 		Title:            best.Title,
 		NZBURL:           best.NZBURL,
 		Size:             best.Size,
-		Status:           models.DownloadStatusQueued,
+		Status:           models.StateGrabbed,
 		Protocol:         best.Protocol,
 		Quality:          indexer.ParseRelease(best.Title).Format,
 	}
@@ -338,8 +355,8 @@ func (s *Scheduler) searchAndGrabFormat(ctx context.Context, book models.Book, m
 			}
 		}
 	}
-	if err := s.downloads.UpdateStatus(ctx, dl.ID, models.DownloadStatusDownloading); err != nil {
-		slog.Warn("failed to update download status", "download_id", dl.ID, "status", models.DownloadStatusDownloading, "error", err)
+	if err := s.downloads.UpdateStatus(ctx, dl.ID, models.StateDownloading); err != nil {
+		slog.Warn("failed to update download status", "download_id", dl.ID, "status", models.StateDownloading, "error", err)
 	}
 	slog.Info("sent to downloader", "client", client.Type, "title", best.Title)
 }
@@ -374,27 +391,6 @@ func (s *Scheduler) searchWanted() {
 		}
 		s.SearchAndGrabBook(ctx, book)
 	}
-}
-
-// filterBlocklisted drops any result whose GUID is in the blocklist. A nil
-// or erroring repo is treated as "nothing blocked".
-func filterBlocklisted(ctx context.Context, bl *db.BlocklistRepo, results []newznab.SearchResult) []newznab.SearchResult {
-	if bl == nil {
-		return results
-	}
-	out := make([]newznab.SearchResult, 0, len(results))
-	for _, r := range results {
-		blocked, err := bl.IsBlocked(ctx, r.GUID)
-		if err != nil {
-			slog.Warn("failed to check blocklist", "guid", r.GUID, "error", err)
-			out = append(out, r)
-			continue
-		}
-		if !blocked {
-			out = append(out, r)
-		}
-	}
-	return out
 }
 
 func (s *Scheduler) refreshMetadata() {
@@ -460,7 +456,7 @@ func (s *Scheduler) checkStalledDownloads(ctx context.Context) {
 		}
 	}
 
-	active, err := s.downloads.ListByStatus(ctx, models.DownloadStatusDownloading)
+	active, err := s.downloads.ListByStatus(ctx, models.StateDownloading)
 	if err != nil || len(active) == 0 {
 		return
 	}
