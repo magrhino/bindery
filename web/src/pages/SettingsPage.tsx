@@ -1473,12 +1473,13 @@ function CalibreTab() {
       .finally(() => setLoading(false))
   }, [])
 
-  const saveSetting = async (key: string) => {
+  const saveSetting = async (key: string): Promise<string | null> => {
     setSaving(key)
     try {
       await api.setSetting(key, settings[key] ?? '')
+      return null
     } catch (err) {
-      console.error(err)
+      return err instanceof Error ? err.message : 'Save failed'
     } finally {
       setSaving(null)
     }
@@ -1507,15 +1508,22 @@ function CalibreSection({
 }: {
   settings: Record<string, string>
   setSettings: (fn: (prev: Record<string, string>) => Record<string, string>) => void
-  saveSetting: (key: string) => Promise<void>
+  saveSetting: (key: string) => Promise<string | null>
   saving: string | null
 }) {
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
   const [testingPaths, setTestingPaths] = useState(false)
   const [testPathsResult, setTestPathsResult] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [saveError, setSaveError] = useState<{ key: string; msg: string } | null>(null)
   const [importProgress, setImportProgress] = useState<CalibreImportProgress | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
+
+  const saveSettingWithError = async (key: string) => {
+    setSaveError(null)
+    const err = await saveSetting(key)
+    if (err) setSaveError({ key, msg: err })
+  }
 
   // Legacy fallback: a pre-migration DB with `calibre.enabled=true` but no
   // mode set should still render as 'calibredb' so the user's existing
@@ -1641,13 +1649,16 @@ function CalibreSection({
                 className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
               />
               <button
-                onClick={() => saveSetting('calibre.library_path')}
+                onClick={() => saveSettingWithError('calibre.library_path')}
                 disabled={saving === 'calibre.library_path'}
                 className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
               >
                 {saving === 'calibre.library_path' ? 'Saving...' : 'Save'}
               </button>
             </div>
+            {saveError?.key === 'calibre.library_path' && (
+              <p className="text-xs text-red-600 dark:text-red-400 mt-1">{saveError.msg}</p>
+            )}
           </div>
         )}
 
@@ -1663,13 +1674,16 @@ function CalibreSection({
                 className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
               />
               <button
-                onClick={() => saveSetting('calibre.binary_path')}
+                onClick={() => saveSettingWithError('calibre.binary_path')}
                 disabled={saving === 'calibre.binary_path'}
                 className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
               >
                 {saving === 'calibre.binary_path' ? 'Saving...' : 'Save'}
               </button>
             </div>
+            {saveError?.key === 'calibre.binary_path' && (
+              <p className="text-xs text-red-600 dark:text-red-400 mt-1">{saveError.msg}</p>
+            )}
           </div>
         )}
 
@@ -1687,13 +1701,16 @@ function CalibreSection({
                 className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
               />
               <button
-                onClick={() => saveSetting('calibre.drop_folder_path')}
+                onClick={() => saveSettingWithError('calibre.drop_folder_path')}
                 disabled={saving === 'calibre.drop_folder_path'}
                 className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
               >
                 {saving === 'calibre.drop_folder_path' ? 'Saving...' : 'Save'}
               </button>
             </div>
+            {saveError?.key === 'calibre.drop_folder_path' && (
+              <p className="text-xs text-red-600 dark:text-red-400 mt-1">{saveError.msg}</p>
+            )}
           </div>
         )}
 
@@ -1776,13 +1793,16 @@ function CalibreSection({
                     className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
                   />
                   <button
-                    onClick={() => saveSetting('calibre.library_path')}
+                    onClick={() => saveSettingWithError('calibre.library_path')}
                     disabled={saving === 'calibre.library_path'}
                     className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
                   >
                     {saving === 'calibre.library_path' ? 'Saving...' : 'Save'}
                   </button>
                 </div>
+                {saveError?.key === 'calibre.library_path' && (
+                  <p className="text-xs text-red-600 dark:text-red-400 mt-1">{saveError.msg}</p>
+                )}
               </div>
 
               <div className="flex items-center justify-between">
