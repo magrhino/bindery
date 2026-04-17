@@ -30,6 +30,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => { refresh() }, [refresh])
 
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [refresh])
+
   const logout = useCallback(async () => {
     try { await api.authLogout() } catch { /* ignore — we're clearing state anyway */ }
     await refresh()
