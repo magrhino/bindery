@@ -17,6 +17,11 @@ export default function QueuePage() {
     return () => clearInterval(interval)
   }, [])
 
+  useEffect(() => {
+    document.title = 'Queue · Bindery'
+    return () => { document.title = 'Bindery' }
+  }, [])
+
   const handleDelete = async (id: number) => {
     await api.deleteFromQueue(id)
     load()

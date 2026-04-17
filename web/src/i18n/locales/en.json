@@ -104,7 +104,8 @@
     "sortTitleZA": "Z–A",
     "sortNewest": "Newest",
     "sortOldest": "Oldest",
-    "empty": "No books found",
+    "empty": "No books in your library yet",
+    "emptyHint": "Add an author first — books are imported automatically when an author is monitored",
     "noMatch": "No books match your filters",
     "colTitle": "Title",
     "colAuthor": "Author",
@@ -189,7 +190,9 @@
     "title": "Calendar",
     "today": "Today",
     "noReleases": "No monitored books releasing this month",
-    "releasingIn": "Releasing in {{month}} {{year}}"
+    "releasingIn": "Releasing in {{month}} {{year}}",
+    "prevMonth": "Previous month",
+    "nextMonth": "Next month"
   },
   "settings": {
     "title": "Settings",

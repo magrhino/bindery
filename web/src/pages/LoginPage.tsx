@@ -41,7 +41,7 @@ export default function LoginPage() {
 
   return (
     <CardShell title={t('login.title')} subtitle="">
-      <form onSubmit={submit} className="space-y-4">
+      <form onSubmit={submit} method="post" className="space-y-4">
         <Field label={t('login.username')}>
           <input
             type="text"

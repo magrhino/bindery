@@ -30,6 +30,11 @@ export default function CalendarPage() {
     api.listBooks().then(setBooks).catch(console.error).finally(() => setLoading(false))
   }, [])
 
+  useEffect(() => {
+    document.title = 'Calendar · Bindery'
+    return () => { document.title = 'Bindery' }
+  }, [])
+
   const prevMonth = () => {
     if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1) }
     else setViewMonth(m => m - 1)
@@ -84,6 +89,7 @@ export default function CalendarPage() {
           )}
           <button
             onClick={prevMonth}
+            aria-label={t('calendar.prevMonth')}
             className="px-3 py-1.5 text-sm text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 rounded transition-colors"
           >
             ‹
@@ -93,6 +99,7 @@ export default function CalendarPage() {
           </span>
           <button
             onClick={nextMonth}
+            aria-label={t('calendar.nextMonth')}
             className="px-3 py-1.5 text-sm text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 rounded transition-colors"
           >
             ›

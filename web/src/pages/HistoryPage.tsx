@@ -63,6 +63,11 @@ export default function HistoryPage() {
 
   useEffect(() => { load() }, [load])
 
+  useEffect(() => {
+    document.title = 'History · Bindery'
+    return () => { document.title = 'Bindery' }
+  }, [])
+
   const handleFilterChange = (val: string) => {
     setTypeFilter(val)
     setLoading(true)
