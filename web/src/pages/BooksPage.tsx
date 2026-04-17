@@ -174,7 +174,14 @@ export default function BooksPage() {
         <div className="text-slate-600 dark:text-zinc-500">{t('common.loading')}</div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
-          <p>{books.length === 0 ? t('books.empty') : t('books.noMatch')}</p>
+          {books.length === 0 ? (
+            <>
+              <p className="font-medium">{t('books.empty')}</p>
+              <p className="text-sm mt-1">{t('books.emptyHint')}</p>
+            </>
+          ) : (
+            <p>{t('books.noMatch')}</p>
+          )}
         </div>
       ) : (
         view === 'table' ? (
