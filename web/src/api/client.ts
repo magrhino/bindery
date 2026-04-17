@@ -200,6 +200,7 @@ export const api = {
 
   // Calibre
   testCalibre: () => request<CalibreTestResult>('/calibre/test', { method: 'POST' }),
+  calibreTestPaths: () => request<{ ok: string; message: string }>('/calibre/test-paths', { method: 'POST' }),
   calibreImportStart: () => request<CalibreImportProgress>('/calibre/import', { method: 'POST' }),
   calibreImportStatus: () => request<CalibreImportProgress>('/calibre/import/status'),
 

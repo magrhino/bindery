@@ -198,6 +198,7 @@
       "rootfolders": "Dossiers racines",
       "logs": "Journaux",
       "general": "Général",
+      "calibre": "Calibre",
       "blocklist": "Liste de blocage"
     },
     "indexers": {

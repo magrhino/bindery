@@ -203,6 +203,7 @@
       "rootfolders": "Root Folders",
       "logs": "Logs",
       "general": "General",
+      "calibre": "Calibre",
       "blocklist": "Blocklist"
     },
     "indexers": {

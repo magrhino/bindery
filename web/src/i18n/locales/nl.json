@@ -198,6 +198,7 @@
       "rootfolders": "Hoofdmappen",
       "logs": "Logboeken",
       "general": "Algemeen",
+      "calibre": "Calibre",
       "blocklist": "Blokkeerlijst"
     },
     "indexers": {

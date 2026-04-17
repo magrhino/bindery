@@ -7,7 +7,7 @@ import ThemeToggle from '../components/ThemeToggle'
 import LanguageSwitcher from '../components/LanguageSwitcher'
 import { useAuth } from '../auth/AuthContext'
 
-type Tab = 'indexers' | 'clients' | 'notifications' | 'quality' | 'metadata' | 'general' | 'import' | 'rootfolders' | 'logs' | 'blocklist'
+type Tab = 'indexers' | 'clients' | 'notifications' | 'quality' | 'metadata' | 'general' | 'import' | 'rootfolders' | 'logs' | 'blocklist' | 'calibre'
 
 const inputCls = 'w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600'
 const tabCls = (active: boolean) =>
@@ -73,7 +73,7 @@ export default function SettingsPage() {
       <h2 className="text-2xl font-bold mb-6">{t('settings.title')}</h2>
 
       <div className="flex flex-wrap gap-2 mb-6">
-        {(['general', 'indexers', 'clients', 'rootfolders', 'quality', 'metadata', 'notifications', 'import', 'blocklist', 'logs'] as Tab[]).map(tabKey => (
+        {(['general', 'indexers', 'clients', 'rootfolders', 'quality', 'metadata', 'notifications', 'calibre', 'import', 'blocklist', 'logs'] as Tab[]).map(tabKey => (
           <button key={tabKey} onClick={() => setTab(tabKey)} className={tabCls(tab === tabKey)}>
             {t(`settings.tabs.${tabKey}`)}
           </button>
@@ -558,6 +558,10 @@ export default function SettingsPage() {
 
       {tab === 'general' && (
         <GeneralTab />
+      )}
+
+      {tab === 'calibre' && (
+        <CalibreTab />
       )}
 
       {tab === 'blocklist' && (
@@ -1181,84 +1185,6 @@ function GeneralTab() {
         </div>
       </section>
 
-      {/* Downloads */}
-      <section>
-        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.downloads')}</h3>
-        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-3">
-          <div>
-            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">{t('settings.general.preferredLanguage')}</label>
-            <p className="text-xs text-slate-600 dark:text-zinc-500 mb-2">{t('settings.general.preferredLanguageHint')}</p>
-            <div className="flex gap-2">
-              <select
-                value={settings['search.preferredLanguage'] ?? 'en'}
-                onChange={e => setSettings(s => ({ ...s, 'search.preferredLanguage': e.target.value }))}
-                className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
-              >
-                <option value="any">{t('settings.general.preferredLanguageAny')}</option>
-                <option value="en">{t('settings.general.preferredLanguageEn')}</option>
-              </select>
-              <button
-                onClick={() => saveSetting('search.preferredLanguage')}
-                disabled={saving === 'search.preferredLanguage'}
-                className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
-              >
-                {saving === 'search.preferredLanguage' ? t('common.saving') : t('common.save')}
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Auto-grab */}
-      <section>
-        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.autoGrab')}</h3>
-        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
-          <div className="flex items-center justify-between">
-            <div>
-              <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">{t('settings.general.autoGrabLabel')}</label>
-              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">{t('settings.general.autoGrabHint')}</p>
-            </div>
-            <button
-              onClick={async () => {
-                const current = (settings['autoGrab.enabled'] ?? 'true').toLowerCase()
-                const next = current === 'false' ? 'true' : 'false'
-                setSettings(s => ({ ...s, 'autoGrab.enabled': next }))
-                await api.setSetting('autoGrab.enabled', next).catch(console.error)
-              }}
-              className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${(settings['autoGrab.enabled'] ?? 'true') !== 'false' ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
-              title={(settings['autoGrab.enabled'] ?? 'true') !== 'false' ? t('common.disable') : t('common.enable')}
-            >
-              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${(settings['autoGrab.enabled'] ?? 'true') !== 'false' ? 'translate-x-4' : ''}`} />
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {/* Recommendations */}
-      <section>
-        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.recommendations')}</h3>
-        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
-          <div className="flex items-center justify-between">
-            <div>
-              <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">{t('settings.general.recommendationsLabel')}</label>
-              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">{t('settings.general.recommendationsHint')}</p>
-            </div>
-            <button
-              onClick={async () => {
-                const current = (settings['recommendations.enabled'] ?? 'false').toLowerCase()
-                const next = current === 'true' ? 'false' : 'true'
-                setSettings(s => ({ ...s, 'recommendations.enabled': next }))
-                await api.setSetting('recommendations.enabled', next).catch(console.error)
-              }}
-              className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${(settings['recommendations.enabled'] ?? 'false') === 'true' ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
-              title={(settings['recommendations.enabled'] ?? 'false') === 'true' ? t('common.disable') : t('common.enable')}
-            >
-              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${(settings['recommendations.enabled'] ?? 'false') === 'true' ? 'translate-x-4' : ''}`} />
-            </button>
-          </div>
-        </div>
-      </section>
-
       {/* Naming */}
       <section>
         <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.fileNaming')}</h3>
@@ -1329,29 +1255,28 @@ function GeneralTab() {
         </div>
       </section>
 
-      {/* Security */}
-      <SecuritySection />
-
-      {/* API Keys */}
+      {/* Downloads */}
       <section>
-        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.apiKeys')}</h3>
-        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-4">
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.downloads')}</h3>
+        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-3">
           <div>
-            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">{t('settings.general.googleBooksKey')}</label>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">{t('settings.general.preferredLanguage')}</label>
+            <p className="text-xs text-slate-600 dark:text-zinc-500 mb-2">{t('settings.general.preferredLanguageHint')}</p>
             <div className="flex gap-2">
-              <input
-                value={settings['googlebooks.apiKey'] ?? ''}
-                onChange={e => setSettings(s => ({ ...s, 'googlebooks.apiKey': e.target.value }))}
-                placeholder="AIza..."
-                type="password"
+              <select
+                value={settings['search.preferredLanguage'] ?? 'en'}
+                onChange={e => setSettings(s => ({ ...s, 'search.preferredLanguage': e.target.value }))}
                 className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
-              />
+              >
+                <option value="any">{t('settings.general.preferredLanguageAny')}</option>
+                <option value="en">{t('settings.general.preferredLanguageEn')}</option>
+              </select>
               <button
-                onClick={() => saveSetting('googlebooks.apiKey')}
-                disabled={saving === 'googlebooks.apiKey'}
+                onClick={() => saveSetting('search.preferredLanguage')}
+                disabled={saving === 'search.preferredLanguage'}
                 className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
               >
-                {saving === 'googlebooks.apiKey' ? t('common.saving') : t('common.save')}
+                {saving === 'search.preferredLanguage' ? t('common.saving') : t('common.save')}
               </button>
             </div>
           </div>
@@ -1394,6 +1319,85 @@ function GeneralTab() {
         </div>
       </section>
 
+      {/* Auto-grab */}
+      <section>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.autoGrab')}</h3>
+        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
+          <div className="flex items-center justify-between">
+            <div>
+              <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">{t('settings.general.autoGrabLabel')}</label>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">{t('settings.general.autoGrabHint')}</p>
+            </div>
+            <button
+              onClick={async () => {
+                const current = (settings['autoGrab.enabled'] ?? 'true').toLowerCase()
+                const next = current === 'false' ? 'true' : 'false'
+                setSettings(s => ({ ...s, 'autoGrab.enabled': next }))
+                await api.setSetting('autoGrab.enabled', next).catch(console.error)
+              }}
+              className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${(settings['autoGrab.enabled'] ?? 'true') !== 'false' ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
+              title={(settings['autoGrab.enabled'] ?? 'true') !== 'false' ? t('common.disable') : t('common.enable')}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${(settings['autoGrab.enabled'] ?? 'true') !== 'false' ? 'translate-x-4' : ''}`} />
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* Recommendations */}
+      <section>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.recommendations')}</h3>
+        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
+          <div className="flex items-center justify-between">
+            <div>
+              <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">{t('settings.general.recommendationsLabel')}</label>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">{t('settings.general.recommendationsHint')}</p>
+            </div>
+            <button
+              onClick={async () => {
+                const current = (settings['recommendations.enabled'] ?? 'false').toLowerCase()
+                const next = current === 'true' ? 'false' : 'true'
+                setSettings(s => ({ ...s, 'recommendations.enabled': next }))
+                await api.setSetting('recommendations.enabled', next).catch(console.error)
+              }}
+              className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${(settings['recommendations.enabled'] ?? 'false') === 'true' ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
+              title={(settings['recommendations.enabled'] ?? 'false') === 'true' ? t('common.disable') : t('common.enable')}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${(settings['recommendations.enabled'] ?? 'false') === 'true' ? 'translate-x-4' : ''}`} />
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* Security */}
+      <SecuritySection />
+
+      {/* API Keys */}
+      <section>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.apiKeys')}</h3>
+        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-4">
+          <div>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">{t('settings.general.googleBooksKey')}</label>
+            <div className="flex gap-2">
+              <input
+                value={settings['googlebooks.apiKey'] ?? ''}
+                onChange={e => setSettings(s => ({ ...s, 'googlebooks.apiKey': e.target.value }))}
+                placeholder="AIza..."
+                type="password"
+                className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
+              />
+              <button
+                onClick={() => saveSetting('googlebooks.apiKey')}
+                disabled={saving === 'googlebooks.apiKey'}
+                className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
+              >
+                {saving === 'googlebooks.apiKey' ? t('common.saving') : t('common.save')}
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* OPDS */}
       <section>
         <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.opds')}</h3>
@@ -1415,14 +1419,6 @@ function GeneralTab() {
           </div>
         </div>
       </section>
-
-      {/* Calibre */}
-      <CalibreSection
-        settings={settings}
-        setSettings={setSettings}
-        saveSetting={saveSetting}
-        saving={saving}
-      />
 
       {/* Backup */}
       <section>
@@ -1461,6 +1457,42 @@ function parseCats(s: string): number[] {
   return s.split(',').map(t => parseInt(t.trim(), 10)).filter(n => !isNaN(n))
 }
 
+function CalibreTab() {
+  const [settings, setSettings] = useState<Record<string, string>>({})
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState<string | null>(null)
+
+  useEffect(() => {
+    api.listSettings()
+      .then(list => {
+        const map: Record<string, string> = {}
+        list.forEach(s => { map[s.key] = s.value })
+        setSettings(map)
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false))
+  }, [])
+
+  const saveSetting = async (key: string) => {
+    setSaving(key)
+    try {
+      await api.setSetting(key, settings[key] ?? '')
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  if (loading) return <div className="text-slate-600 dark:text-zinc-500">Loading…</div>
+
+  return (
+    <div className="space-y-8">
+      <CalibreSection settings={settings} setSettings={setSettings} saveSetting={saveSetting} saving={saving} />
+    </div>
+  )
+}
+
 // CalibreSection renders the calibre.* settings fields plus a Test button
 // that hits /calibre/test. The Mode radio picks between two integration
 // flows: `calibredb` shells out to the CLI (requires Calibre on the host),
@@ -1480,6 +1512,8 @@ function CalibreSection({
 }) {
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [testingPaths, setTestingPaths] = useState(false)
+  const [testPathsResult, setTestPathsResult] = useState<{ ok: boolean; msg: string } | null>(null)
   const [importProgress, setImportProgress] = useState<CalibreImportProgress | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
 
@@ -1533,6 +1567,19 @@ function CalibreSection({
       setTestResult({ ok: false, msg: err instanceof Error ? err.message : 'Test failed' })
     } finally {
       setTesting(false)
+    }
+  }
+
+  const runTestPaths = async () => {
+    setTestingPaths(true)
+    setTestPathsResult(null)
+    try {
+      const r = await api.calibreTestPaths()
+      setTestPathsResult({ ok: true, msg: r.message })
+    } catch (err) {
+      setTestPathsResult({ ok: false, msg: err instanceof Error ? err.message : 'Test failed' })
+    } finally {
+      setTestingPaths(false)
     }
   }
 
@@ -1665,6 +1712,25 @@ function CalibreSection({
               className="px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded text-sm font-medium disabled:opacity-50 flex-shrink-0"
             >
               {testing ? 'Testing…' : 'Test connection'}
+            </button>
+          </div>
+        )}
+
+        {mode === 'drop_folder' && (
+          <div className="flex items-center justify-between pt-1 border-t border-slate-200 dark:border-zinc-800">
+            <div className="text-xs">
+              {testPathsResult && (
+                <span className={testPathsResult.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}>
+                  {testPathsResult.msg}
+                </span>
+              )}
+            </div>
+            <button
+              onClick={runTestPaths}
+              disabled={testingPaths}
+              className="px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded text-sm font-medium disabled:opacity-50 flex-shrink-0"
+            >
+              {testingPaths ? 'Testing…' : 'Test paths'}
             </button>
           </div>
         )}

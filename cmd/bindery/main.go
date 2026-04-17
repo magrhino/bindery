@@ -466,6 +466,7 @@ func main() {
 		// Calibre integration — settings live under /setting/calibre.*,
 		// this endpoint just validates + probes the configured install.
 		r.Post("/calibre/test", calibreHandler.Test)
+		r.Post("/calibre/test-paths", calibreHandler.TestPaths)
 
 		// Calibre library import (read side). Start is fire-and-forget;
 		// the UI polls Status while it runs.
