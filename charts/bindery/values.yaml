@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/vavallee/bindery
-  tag: "sha-6868dfc"
+  tag: "sha-bfb19d8"
   pullPolicy: IfNotPresent
 
 service:
@@ -35,14 +35,14 @@ env:
   BINDERY_DATA_DIR: /config
   BINDERY_LOG_LEVEL: info
   BINDERY_DOWNLOAD_DIR: /downloads
-  BINDERY_LIBRARY_DIR: /books
+  BINDERY_LIBRARY_DIR: /media/BOOKS/incoming
   # Separate destination for audiobook imports. Leave unset to fall back
   # to BINDERY_LIBRARY_DIR.
   # BINDERY_AUDIOBOOK_DIR: /audiobooks
   # Comma-separated from:to pairs rewriting paths reported by the download
   # client into paths bindery can see. Needed when SAB and bindery run in
   # separate pods with different mount points for the same storage.
-  BINDERY_DOWNLOAD_PATH_REMAP: /downloads:/media
+  BINDERY_DOWNLOAD_PATH_REMAP: /downloads:/media/BOOKS/incoming
 
 resources:
   requests:
