@@ -189,7 +189,9 @@
     "title": "Calendar",
     "today": "Today",
     "noReleases": "No monitored books releasing this month",
-    "releasingIn": "Releasing in {{month}} {{year}}"
+    "releasingIn": "Releasing in {{month}} {{year}}",
+    "prevMonth": "Previous month",
+    "nextMonth": "Next month"
   },
   "settings": {
     "title": "Settings",
