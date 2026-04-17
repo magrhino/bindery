@@ -10,7 +10,7 @@ service:
   port: 8787
 
 ingress:
-  enabled: true
+  enabled: false
   host: bindery.example.com
   entryPoints:
     - internal-https
@@ -24,7 +24,7 @@ persistence:
     mountPath: /config
 
 nfs:
-  enabled: true
+  enabled: false
   server: ""
   path: /volume1/media
   mountPath: /media
@@ -83,7 +83,7 @@ networkPolicy:
   # ingress to the given selector and egress to DNS + explicitly listed
   # peers. Leave disabled unless your cluster has a NetworkPolicy-capable
   # CNI (Calico, Cilium, etc).
-  enabled: true
+  enabled: false
   # Label selector(s) allowed to reach the Bindery pod on its service port.
   # Example: { matchLabels: { app.kubernetes.io/part-of: media-stack } }
   ingressSelector: {}
