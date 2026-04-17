@@ -2,8 +2,10 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/vavallee/bindery/internal/calibre"
@@ -150,5 +152,39 @@ func (h *CalibreHandler) Test(w http.ResponseWriter, r *http.Request) {
 		"ok":      "true",
 		"version": version,
 		"message": "calibredb reachable",
+	})
+}
+
+// TestPaths validates the drop-folder mode paths: checks that metadata.db is
+// readable at library_path and that drop_folder_path is writable.
+func (h *CalibreHandler) TestPaths(w http.ResponseWriter, r *http.Request) {
+	cfg := LoadDropFolderConfig(h.settings)
+	if cfg.LibraryPath == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "library_path is not set"})
+		return
+	}
+	metaDB := filepath.Join(cfg.LibraryPath, "metadata.db")
+	if _, err := os.Stat(metaDB); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": fmt.Sprintf("metadata.db not found at %s: %v", metaDB, err),
+		})
+		return
+	}
+	if cfg.DropFolderPath == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "drop_folder_path is not set"})
+		return
+	}
+	tmp, err := os.CreateTemp(cfg.DropFolderPath, ".bindery-test-*")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": fmt.Sprintf("drop folder not writable: %v", err),
+		})
+		return
+	}
+	tmp.Close()
+	os.Remove(tmp.Name())
+	writeJSON(w, http.StatusOK, map[string]string{
+		"ok":      "true",
+		"message": "library path readable · drop folder writable",
 	})
 }

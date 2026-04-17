@@ -198,6 +198,7 @@
       "rootfolders": "Stammordner",
       "logs": "Protokolle",
       "general": "Allgemein",
+      "calibre": "Calibre",
       "blocklist": "Blockliste"
     },
     "indexers": {

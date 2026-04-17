@@ -206,6 +206,7 @@ func main() {
 	// Scheduler
 	sched := scheduler.New(importScanner, idxSearcher, metaAgg,
 		authorRepo, bookRepo, indexerRepo, downloadRepo, dlClientRepo, settingsRepo, blocklistRepo)
+	sched.WithHistory(historyRepo)
 	// Register the Calibre importer as the 24-hour sync job. The scheduler
 	// only fires the job when the syncer is non-nil, so no guard needed here.
 	sched.WithCalibreSyncer(calibreImporter)
@@ -466,6 +467,7 @@ func main() {
 		// Calibre integration — settings live under /setting/calibre.*,
 		// this endpoint just validates + probes the configured install.
 		r.Post("/calibre/test", calibreHandler.Test)
+		r.Post("/calibre/test-paths", calibreHandler.TestPaths)
 
 		// Calibre library import (read side). Start is fire-and-forget;
 		// the UI polls Status while it runs.
