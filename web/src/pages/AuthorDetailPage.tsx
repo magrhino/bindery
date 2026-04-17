@@ -99,6 +99,13 @@ export default function AuthorDetailPage() {
   }, [dateSort])
 
   useEffect(() => {
+    if (author?.authorName) {
+      document.title = `${author.authorName} · Bindery`
+      return () => { document.title = 'Bindery' }
+    }
+  }, [author?.authorName])
+
+  useEffect(() => {
     let cancelled = false
     setLoading(true)
     Promise.all([

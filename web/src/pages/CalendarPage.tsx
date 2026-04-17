@@ -30,6 +30,11 @@ export default function CalendarPage() {
     api.listBooks().then(setBooks).catch(console.error).finally(() => setLoading(false))
   }, [])
 
+  useEffect(() => {
+    document.title = 'Calendar · Bindery'
+    return () => { document.title = 'Bindery' }
+  }, [])
+
   const prevMonth = () => {
     if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1) }
     else setViewMonth(m => m - 1)

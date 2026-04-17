@@ -10,6 +10,11 @@ export default function SeriesPage() {
     api.listSeries().then(setSeriesList).catch(console.error).finally(() => setLoading(false))
   }, [])
 
+  useEffect(() => {
+    document.title = 'Series · Bindery'
+    return () => { document.title = 'Bindery' }
+  }, [])
+
   const toggleExpanded = (id: number) => {
     setExpanded(prev => (prev === id ? null : id))
   }

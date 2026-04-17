@@ -42,6 +42,11 @@ export default function SettingsPage() {
   }, [])
 
   useEffect(() => {
+    document.title = 'Settings · Bindery'
+    return () => { document.title = 'Bindery' }
+  }, [])
+
+  useEffect(() => {
     if (tab === 'notifications') api.listNotifications().then(setNotifications).catch(console.error)
     if (tab === 'quality') api.listQualityProfiles().then(setQualityProfiles).catch(console.error)
     if (tab === 'metadata') api.listMetadataProfiles().then(setMetadataProfiles).catch(console.error)
