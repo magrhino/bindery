@@ -37,10 +37,8 @@ spec:
             - |
               set -e
               echo "Running post-sync smoke test..."
-              STATUS=$(wget -q -O /dev/null -S --max-redirect=0 \
-                --timeout=10 \
-                "http://{{ include "bindery.fullname" . }}:{{ .Values.service.port }}/api/v1/health" \
-                2>&1 | grep "HTTP/" | awk '{print $2}' | head -1)
+              URL="http://{{ include "bindery.fullname" . }}:{{ .Values.service.port }}/api/v1/health"
+              STATUS=$(wget -q -S -O /dev/null -T 10 "$URL" 2>&1 | grep "HTTP/" | awk '{print $2}' | head -1)
               if [ "$STATUS" = "200" ]; then
                 echo "Health check passed (HTTP $STATUS)"
                 exit 0
