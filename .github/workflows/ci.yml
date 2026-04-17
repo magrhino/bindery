@@ -111,22 +111,28 @@ jobs:
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
-      # Deploy: bump Helm chart image tag on main and development branches.
-      # ArgoCD can track either branch — switch targetRevision to flip
-      # between prod (main) and dev (development).
+      # Deploy: bump Helm chart image tag in development via the GitHub API.
+      # Always targets development regardless of which branch triggered the build —
+      # main is PR-gated so a direct git push is rejected by branch protection.
+      # ArgoCD watches development; tag bumps reach main naturally via merge.
       - name: Update Helm image tag
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           IMAGE_TAG="sha-${GITHUB_SHA::7}"
-          sed -i "s|tag:.*|tag: \"${IMAGE_TAG}\"|" charts/bindery/values.yaml
-      - name: Commit and push
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development'
-        run: |
-          git config user.name "vavallee"
-          git config user.email "75899046+vavallee@users.noreply.github.com"
-          git add charts/bindery/values.yaml
-          git diff --staged --quiet || git commit -m "chore(deploy): update bindery image to sha-${GITHUB_SHA::7} [skip ci]"
-          git push
+          FILE_PATH="charts/bindery/values.yaml"
+          FILE_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${FILE_PATH}" \
+            --jq .sha -f ref=development)
+          CONTENT=$(sed "s|tag:.*|tag: \"${IMAGE_TAG}\"|" "${FILE_PATH}" | base64 -w0)
+          gh api "repos/${GITHUB_REPOSITORY}/contents/${FILE_PATH}" \
+            -X PUT \
+            -f message="chore(deploy): update bindery image to ${IMAGE_TAG} [skip ci]" \
+            -f content="${CONTENT}" \
+            -f sha="${FILE_SHA}" \
+            -f branch="development" \
+            --silent
+          echo "Pushed ${IMAGE_TAG} to development/${FILE_PATH}"
 
       - name: Trigger Argo CD refresh
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development'
