@@ -58,12 +58,14 @@ spec:
             failureThreshold: 30
             periodSeconds: 5
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /api/v1/health
               port: http
             failureThreshold: 3
             periodSeconds: 10
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: /api/v1/health
               port: http
             failureThreshold: 5
             initialDelaySeconds: 30

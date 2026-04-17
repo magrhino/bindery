@@ -126,7 +126,23 @@ jobs:
           git config user.email "75899046+vavallee@users.noreply.github.com"
           git add charts/bindery/values.yaml
           git diff --staged --quiet || git commit -m "chore(deploy): update bindery image to sha-${GITHUB_SHA::7} [skip ci]"
-          git push || true  # best-effort: branch protection may reject on development
+          git push
+
+      - name: Trigger Argo CD refresh
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development'
+        env:
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+          ARGOCD_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
+        run: |
+          if [ -z "${ARGOCD_SERVER:-}" ] || [ -z "${ARGOCD_TOKEN:-}" ]; then
+            echo "::warning::ARGOCD_SERVER or ARGOCD_TOKEN not configured — Argo will pick up changes on next poll"
+            exit 0
+          fi
+          curl -sf -X POST \
+            -H "Authorization: Bearer ${ARGOCD_TOKEN}" \
+            "${ARGOCD_SERVER}/api/v1/applications/bindery?refresh=hard" \
+            && echo "Argo CD refresh triggered" \
+            || echo "::warning::Argo CD refresh trigger failed — Argo will pick up changes on next poll"
 
       # Create GitHub Release on tag push using the matching CHANGELOG section.
       # Idempotent: updates notes if a release for the tag already exists.
