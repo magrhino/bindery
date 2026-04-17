@@ -36,6 +36,7 @@ export default function BookDetailPage() {
   const [saving, setSaving] = useState(false)
   const [searching, setSearching] = useState(false)
   const [results, setResults] = useState<SearchResult[] | null>(null)
+  const [hasIndexers, setHasIndexers] = useState<boolean | null>(null)
   const [grabbing, setGrabbing] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [asinDraft, setAsinDraft] = useState('')
@@ -77,7 +78,12 @@ export default function BookDetailPage() {
     setResults(null)
     setError(null)
     try {
-      setResults(await api.searchBook(book.id))
+      const [r, indexers] = await Promise.all([
+        api.searchBook(book.id),
+        api.listIndexers(),
+      ])
+      setHasIndexers(indexers.length > 0)
+      setResults(r)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Search failed')
     } finally {
@@ -387,7 +393,9 @@ export default function BookDetailPage() {
 
       {results !== null && results.length === 0 && (
         <div className="mb-6 text-center py-6 text-sm text-slate-600 dark:text-zinc-500 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
-          No results on any indexer.
+          {hasIndexers === false
+            ? <>No indexers configured — add one in <Link to="/settings" className="underline">Settings</Link>.</>
+            : 'No results on any indexer.'}
         </div>
       )}
 
