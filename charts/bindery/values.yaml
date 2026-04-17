@@ -26,7 +26,7 @@ persistence:
 nfs:
   enabled: false
   server: ""
-  path: /volume1/media
+  path: /volume1/MEDIA
   mountPath: /media
 
 env:

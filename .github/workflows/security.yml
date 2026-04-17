@@ -82,7 +82,6 @@ jobs:
 
       - name: npm audit
         run: npm audit --audit-level=high --prefix web
-        continue-on-error: true
 
       - name: Install ESLint security tooling
         run: |
@@ -239,7 +238,7 @@ jobs:
           format: sarif
           output: trivy.sarif
           severity: CRITICAL,HIGH
-          exit-code: '0'
+          exit-code: '1'
 
       - name: Upload Trivy SARIF
         uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4.35.2
@@ -255,7 +254,7 @@ jobs:
           image: bindery:scan
           output-format: sarif
           output-file: grype.sarif
-          fail-build: false
+          fail-build: true
 
       - name: Upload Grype SARIF
         uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4.35.2

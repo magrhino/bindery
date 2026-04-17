@@ -12,6 +12,29 @@ The `development` branch carries the in-flight feature set for the next release.
 
 - **Calibre library import (closes [#63](https://github.com/vavallee/bindery/issues/63))** — Bindery can now ingest an existing Calibre library via a new **Import library** button in Settings → General → Calibre. The importer opens Calibre's `metadata.db` read-only, streams authors / books / series / editions / ISBNs / covers, and upserts them into Bindery — deduplicating via `books.calibre_id` first and author-alias-aware title match second, so running the import twice is idempotent. Co-authors become alias rows on the canonical author. A polled progress endpoint (`GET /api/v1/calibre/import/status`) drives a live progress bar and a final summary of `{authorsAdded, booksAdded, editionsAdded, duplicatesMerged, skipped}`. A new **Sync on startup** toggle runs the same import on every boot (off by default).
 
+## [v0.16.0] — 2026-04-17
+
+Calibre library import, Settings reorganisation, stalled download detection, and image proxy hardening.
+
+### Added
+
+- **Calibre library import** ([#63](https://github.com/vavallee/bindery/issues/63)) — import books, authors, and editions from an existing Calibre `metadata.db` via Settings → Calibre → Library import. Incremental and idempotent; progress bar with live stats.
+- **Calibre Settings tab** — Calibre settings extracted from the General tab into a dedicated tab. Eliminates the duplicate `library_path` field; single shared path at the top used by both write integration and library import. Adds "Test paths" button for drop-folder mode (validates `metadata.db` readable, drop folder writable).
+- **Stalled download detection** ([#142](https://github.com/vavallee/bindery/issues/142)) — background job detects qBittorrent `stalledDL` torrents and Transmission stopped-with-error states. Automatically marks failed, blocklists the release, and triggers a re-search.
+
+### Fixed
+
+- **calibredb error messages** ([#160](https://github.com/vavallee/bindery/issues/160)) — "no such file or directory" now includes the path and explains the binary must be accessible inside the Bindery container, not just on the Docker host.
+- **Image proxy cache** ([#138](https://github.com/vavallee/bindery/issues/138)) — sharded cache directories, LRU eviction, and atomic writes prevent corruption on large libraries.
+- **Calibre import when write mode is off** — library import no longer incorrectly gated behind the write-mode toggle.
+- **Calibre crash recovery** — pod restarts between `Create` and `SetCalibreID` no longer produce duplicate book rows.
+- **Author sync duplicate constraint** — UNIQUE constraint on `books.foreign_id` during concurrent author syncs treated as benign skip.
+- **TOCTOU-safe file copy** — importer uses `os.Root` for directory copy/hardlink to prevent symlink traversal.
+
+### Upgrade notes
+
+- **Schema:** migration `018_calibre_sync.sql` adds tables for Calibre library import. Drop-in binary or image replacement is safe.
+
 ## [v0.8.0] — 2026-04-14
 
 Major feature release. Calibre users can finally automate the last mile — finished Bindery imports land in Calibre with no manual "Add books" step. Library curation gets a sharper tool: the author list stops fragmenting into "RR Haywood" / "R.R. Haywood" / "R R Haywood" duplicates, and the new **Merge authors** flow reunites them under one canonical row. Backend test coverage continues its climb, with `internal/api` and `internal/importer` both breaking 60%.
