@@ -1292,9 +1292,10 @@ function GeneralTab() {
               How Bindery places completed downloads into the library.
               Use <strong>Hardlink</strong> or <strong>Copy</strong> to keep the source file intact for torrent seeding.
               Hardlink requires the download folder and library to be on the same filesystem/volume.
+              Use <strong>External</strong> if another tool (Calibre, Grimmory, etc.) manages your library — Bindery grabs the download and stops; your tool processes it, then Bindery reconciles on the next library scan.
             </p>
-            <div className="flex gap-2">
-              {(['move', 'copy', 'hardlink'] as const).map(m => (
+            <div className="flex gap-2 flex-wrap">
+              {(['move', 'copy', 'hardlink', 'external'] as const).map(m => (
                 <button
                   key={m}
                   onClick={async () => {
