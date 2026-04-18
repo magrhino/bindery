@@ -1,5 +1,5 @@
 // Package downloader provides a unified interface for dispatching download
-// requests to different download clients (SABnzbd, Transmission, qBittorrent).
+// requests to different download clients (SABnzbd, NZBGet, Transmission, qBittorrent).
 package downloader
 
 import (
@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/vavallee/bindery/internal/downloader/nzbget"
 	"github.com/vavallee/bindery/internal/downloader/qbittorrent"
 	"github.com/vavallee/bindery/internal/downloader/sabnzbd"
 	"github.com/vavallee/bindery/internal/downloader/transmission"
@@ -30,6 +31,11 @@ func IsTorrentClient(clientType string) bool {
 	return clientType == "transmission" || clientType == "qbittorrent"
 }
 
+// IsNZBGetClient reports whether the given client type is NZBGet.
+func IsNZBGetClient(clientType string) bool {
+	return clientType == "nzbget"
+}
+
 func ProtocolForClient(clientType string) string {
 	if IsTorrentClient(clientType) {
 		return "torrent"
@@ -45,6 +51,9 @@ func TestClient(ctx context.Context, client *models.DownloadClient) error {
 	case "qbittorrent":
 		qb := qbittorrent.New(client.Host, client.Port, client.Username, client.Password, client.UseSSL)
 		return qb.Test(ctx)
+	case "nzbget":
+		ng := nzbget.New(client.Host, client.Port, client.Username, client.Password, client.UseSSL)
+		return ng.Test(ctx)
 	default:
 		sab := sabnzbd.New(client.Host, client.Port, client.APIKey, client.UseSSL)
 		return sab.Test(ctx)
@@ -89,6 +98,14 @@ func SendDownload(ctx context.Context, client *models.DownloadClient, sourceURL,
 		}
 		result.RemoteID = hash
 		return result, nil
+	case "nzbget":
+		ng := nzbget.New(client.Host, client.Port, client.Username, client.Password, client.UseSSL)
+		nzbID, err := ng.Add(ctx, sourceURL, title, client.Category, 0)
+		if err != nil {
+			return nil, err
+		}
+		result.RemoteID = strconv.Itoa(nzbID)
+		return result, nil
 	default:
 		sab := sabnzbd.New(client.Host, client.Port, client.APIKey, client.UseSSL)
 		resp, err := sab.AddURL(ctx, sourceURL, title, client.Category, 0)
@@ -120,6 +137,16 @@ func RemoveDownload(ctx context.Context, client *models.DownloadClient, dl *mode
 		}
 		qb := qbittorrent.New(client.Host, client.Port, client.Username, client.Password, client.UseSSL)
 		return qb.DeleteTorrent(ctx, *dl.TorrentID, deleteFiles)
+	case "nzbget":
+		if dl.SABnzbdNzoID == nil || *dl.SABnzbdNzoID == "" {
+			return nil
+		}
+		nzbID, err := nzbget.ParseNZBID(*dl.SABnzbdNzoID)
+		if err != nil {
+			return err
+		}
+		ng := nzbget.New(client.Host, client.Port, client.Username, client.Password, client.UseSSL)
+		return ng.Remove(ctx, nzbID)
 	default:
 		if dl.SABnzbdNzoID == nil || *dl.SABnzbdNzoID == "" {
 			return nil
@@ -178,6 +205,10 @@ func GetLiveStatuses(ctx context.Context, client *models.DownloadClient) (map[st
 		statuses, err := getTorrentLiveStatuses(ctx, client)
 		return statuses, true, err
 	}
+	if IsNZBGetClient(client.Type) {
+		statuses, err := getNZBGetLiveStatuses(ctx, client)
+		return statuses, false, err
+	}
 	statuses, err := getSABLiveStatuses(ctx, client)
 	return statuses, false, err
 }
@@ -195,6 +226,28 @@ func getSABLiveStatuses(ctx context.Context, client *models.DownloadClient) (map
 			Percentage: slot.Percentage,
 			TimeLeft:   slot.TimeLeft,
 			Speed:      queue.Speed,
+		}
+	}
+	return out, nil
+}
+
+func getNZBGetLiveStatuses(ctx context.Context, client *models.DownloadClient) (map[string]LiveStatus, error) {
+	ng := nzbget.New(client.Host, client.Port, client.Username, client.Password, client.UseSSL)
+	groups, err := ng.GetQueue(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make(map[string]LiveStatus, len(groups))
+	for _, g := range groups {
+		id := strconv.Itoa(g.NZBID)
+		pct := ""
+		if g.FileSizeMB > 0 {
+			done := g.FileSizeMB - g.RemainingSizeMB
+			pct = fmt.Sprintf("%.1f", done/g.FileSizeMB*100)
+		}
+		out[id] = LiveStatus{
+			Percentage: pct,
 		}
 	}
 	return out, nil

@@ -1993,7 +1993,7 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
   const [type, setType] = useState(client.type || 'sabnzbd')
   const [host, setHost] = useState(client.host)
   const [port, setPort] = useState(String(client.port))
-  const [credential, setCredential] = useState(client.type === 'qbittorrent' || client.type === 'transmission' ? (client.password || '') : (client.apiKey || ''))
+  const [credential, setCredential] = useState(client.type === 'qbittorrent' || client.type === 'transmission' || client.type === 'nzbget' ? (client.password || '') : (client.apiKey || ''))
   const [username, setUsername] = useState(client.username || '')
   const [category, setCategory] = useState(client.category)
   const labelCls = 'block text-xs text-slate-600 dark:text-zinc-400 mb-1'
@@ -2005,7 +2005,7 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
   }
 
   const submit = async () => {
-    const data = type === 'qbittorrent' || type === 'transmission'
+    const data = type === 'qbittorrent' || type === 'transmission' || type === 'nzbget'
       ? { ...client, name, type, host, port: parseInt(port), username, password: credential, apiKey: '', category }
       : { ...client, name, type, host, port: parseInt(port), apiKey: credential, username: '', password: '', category }
     const updated = await api.updateDownloadClient(client.id, data)
@@ -2023,6 +2023,7 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
           <label className={labelCls}>Client Type</label>
           <select value={type} onChange={e => handleTypeChange(e.target.value)} className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
             <option value="sabnzbd">SABnzbd</option>
+            <option value="nzbget">NZBGet</option>
             <option value="qbittorrent">qBittorrent</option>
             <option value="transmission">Transmission</option>
           </select>
@@ -2034,17 +2035,17 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
           <input value={host} onChange={e => setHost(e.target.value)} placeholder="Host" className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
           <input value={port} onChange={e => setPort(e.target.value)} placeholder="Port" className="w-24 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
         </div>
-        <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">In Docker, use the service/container name (e.g. <code className="font-mono">sabnzbd</code>) — not <code className="font-mono">localhost</code>.</p>
+        <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">In Docker, use the service/container name (e.g. <code className="font-mono">nzbget</code>) — not <code className="font-mono">localhost</code>.</p>
       </div>
-      {(type === 'qbittorrent' || type === 'transmission') && (
+      {(type === 'qbittorrent' || type === 'transmission' || type === 'nzbget') && (
         <div>
           <label className={labelCls}>Username</label>
           <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" className={inputCls} />
         </div>
       )}
       <div>
-        <label className={labelCls}>{type === 'qbittorrent' || type === 'transmission' ? 'Password' : 'API Key'}</label>
-        <input value={credential} onChange={e => setCredential(e.target.value)} placeholder={type === 'qbittorrent' || type === 'transmission' ? 'Password' : 'API Key'} type="password" className={inputCls} />
+        <label className={labelCls}>{type === 'qbittorrent' || type === 'transmission' || type === 'nzbget' ? 'Password' : 'API Key'}</label>
+        <input value={credential} onChange={e => setCredential(e.target.value)} placeholder={type === 'qbittorrent' || type === 'transmission' || type === 'nzbget' ? 'Password' : 'API Key'} type="password" className={inputCls} />
       </div>
       <div>
         <label className={labelCls}>{type === 'transmission' ? 'Download Directory' : 'Category'}</label>
@@ -2162,7 +2163,7 @@ function AddIndexerForm({ onClose, onAdded }: { onClose: () => void; onAdded: (i
 
 function AddClientForm({ onClose, onAdded }: { onClose: () => void; onAdded: (c: DownloadClient) => void }) {
   const [name, setName] = useState('SABnzbd')
-  const [type, setType] = useState<'sabnzbd' | 'qbittorrent' | 'transmission'>('sabnzbd')
+  const [type, setType] = useState<'sabnzbd' | 'nzbget' | 'qbittorrent' | 'transmission'>('sabnzbd')
   const [host, setHost] = useState('')
   const [port, setPort] = useState('8080')
   const [credential, setCredential] = useState('')
@@ -2170,10 +2171,15 @@ function AddClientForm({ onClose, onAdded }: { onClose: () => void; onAdded: (c:
   const [category, setCategory] = useState('books')
   const labelCls = 'block text-xs text-slate-600 dark:text-zinc-400 mb-1'
 
-  const handleTypeChange = (newType: 'sabnzbd' | 'qbittorrent' | 'transmission') => {
+  const handleTypeChange = (newType: 'sabnzbd' | 'nzbget' | 'qbittorrent' | 'transmission') => {
     setType(newType)
     setCredential('')
     setUsername('')
+    if (newType === 'nzbget') {
+      setName('NZBGet')
+      setPort('6789')
+      return
+    }
     if (newType === 'qbittorrent') {
       setName('qBittorrent')
       setPort('8080')
@@ -2189,7 +2195,7 @@ function AddClientForm({ onClose, onAdded }: { onClose: () => void; onAdded: (c:
   }
 
   const submit = async () => {
-    const data = type === 'qbittorrent' || type === 'transmission'
+    const data = type === 'qbittorrent' || type === 'transmission' || type === 'nzbget'
       ? { name, host, port: parseInt(port), username, password: credential, apiKey: '', category, type, enabled: true }
       : { name, host, port: parseInt(port), apiKey: credential, username: '', password: '', category, type, enabled: true }
     const c = await api.addDownloadClient(data)
@@ -2205,8 +2211,9 @@ function AddClientForm({ onClose, onAdded }: { onClose: () => void; onAdded: (c:
         </div>
         <div className="w-40">
           <label className={labelCls}>Client Type</label>
-          <select value={type} onChange={e => handleTypeChange(e.target.value as 'sabnzbd' | 'qbittorrent' | 'transmission')} className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
+          <select value={type} onChange={e => handleTypeChange(e.target.value as 'sabnzbd' | 'nzbget' | 'qbittorrent' | 'transmission')} className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600">
             <option value="sabnzbd">SABnzbd</option>
+            <option value="nzbget">NZBGet</option>
             <option value="qbittorrent">qBittorrent</option>
             <option value="transmission">Transmission</option>
           </select>
@@ -2218,17 +2225,17 @@ function AddClientForm({ onClose, onAdded }: { onClose: () => void; onAdded: (c:
           <input value={host} onChange={e => setHost(e.target.value)} placeholder="Host" className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
           <input value={port} onChange={e => setPort(e.target.value)} placeholder="Port" className="w-24 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600" />
         </div>
-        <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">In Docker, use the service/container name (e.g. <code className="font-mono">sabnzbd</code>) — not <code className="font-mono">localhost</code>.</p>
+        <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">In Docker, use the service/container name (e.g. <code className="font-mono">nzbget</code>) — not <code className="font-mono">localhost</code>.</p>
       </div>
-      {(type === 'qbittorrent' || type === 'transmission') && (
+      {(type === 'qbittorrent' || type === 'transmission' || type === 'nzbget') && (
         <div>
           <label className={labelCls}>Username</label>
           <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" className={inputCls} />
         </div>
       )}
       <div>
-        <label className={labelCls}>{type === 'qbittorrent' || type === 'transmission' ? 'Password' : 'API Key'}</label>
-        <input value={credential} onChange={e => setCredential(e.target.value)} placeholder={type === 'qbittorrent' || type === 'transmission' ? 'Password' : 'API Key'} type="password" className={inputCls} />
+        <label className={labelCls}>{type === 'qbittorrent' || type === 'transmission' || type === 'nzbget' ? 'Password' : 'API Key'}</label>
+        <input value={credential} onChange={e => setCredential(e.target.value)} placeholder={type === 'qbittorrent' || type === 'transmission' || type === 'nzbget' ? 'Password' : 'API Key'} type="password" className={inputCls} />
       </div>
       <div>
         <label className={labelCls}>{type === 'transmission' ? 'Download Directory' : 'Category'}</label>
