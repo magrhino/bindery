@@ -200,6 +200,20 @@ func (s *Scanner) updateDownloadStatus(ctx context.Context, id int64, status mod
 	}
 }
 
+// failImport records an import failure with a user-facing reason. It persists
+// the status + message and emits an importFailed history event so the cause
+// is visible in the Queue/History UI.
+func (s *Scanner) failImport(ctx context.Context, dl *models.Download, status models.DownloadState, reason string) {
+	if err := s.downloads.SetErrorWithStatus(ctx, dl.ID, status, reason); err != nil {
+		slog.Warn("failed to persist import error", "download_id", dl.ID, "status", status, "error", err)
+	}
+	s.createHistoryEvent(ctx, models.HistoryEventImportFailed, dl.Title, dl.BookID, map[string]string{
+		"guid":    dl.GUID,
+		"message": reason,
+		"status":  string(status),
+	})
+}
+
 func (s *Scanner) createHistoryEvent(ctx context.Context, eventType string, sourceTitle string, bookID *int64, data map[string]string) {
 	if s.history == nil {
 		return
@@ -440,7 +454,7 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 	if s.libraryDir == "" {
 		slog.Warn("no library directory configured, skipping import")
 		// Not writable/configured — needs user action before import can proceed.
-		s.updateDownloadStatus(ctx, dl.ID, models.StateImportBlocked)
+		s.failImport(ctx, dl, models.StateImportBlocked, "no library directory configured — set one in Settings")
 		return
 	}
 
@@ -463,7 +477,7 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 	if len(bookFiles) == 0 {
 		slog.Warn("no book files found in download", "path", downloadPath)
 		// No files — retryable if the downloader hasn't flushed them yet.
-		s.updateDownloadStatus(ctx, dl.ID, models.StateImportFailed)
+		s.failImport(ctx, dl, models.StateImportFailed, fmt.Sprintf("no book files found in %q", downloadPath))
 		return
 	}
 
@@ -515,7 +529,7 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 		}
 		if dirErr != nil {
 			slog.Error("failed to import audiobook folder", "src", downloadPath, "mode", mode, "error", dirErr)
-			s.updateDownloadStatus(ctx, dl.ID, models.StateImportBlocked)
+			s.failImport(ctx, dl, models.StateImportBlocked, fmt.Sprintf("audiobook %s failed: %v", mode, dirErr))
 			return
 		}
 		if book != nil {
@@ -543,6 +557,7 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 	}
 
 	var imported, failed int
+	var lastFileErr error
 	for _, srcFile := range bookFiles {
 		if book == nil {
 			// Try to match from filename
@@ -567,6 +582,7 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 		if fileErr != nil {
 			slog.Error("failed to import", "src", srcFile, "mode", mode, "error", fileErr)
 			failed++
+			lastFileErr = fileErr
 			continue
 		}
 		imported++
@@ -586,7 +602,18 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 	// If every file failed to copy/move, the destination is likely not writable —
 	// mark as blocked so the user knows manual intervention is needed.
 	if imported == 0 && failed > 0 {
-		s.updateDownloadStatus(ctx, dl.ID, models.StateImportBlocked)
+		reason := fmt.Sprintf("all %d file(s) failed to import", failed)
+		if lastFileErr != nil {
+			reason = fmt.Sprintf("%s: %v", reason, lastFileErr)
+		}
+		s.failImport(ctx, dl, models.StateImportBlocked, reason)
+		return
+	}
+
+	// Matched nothing — no book resolved and nothing imported. Surface that
+	// so the user can manually intervene rather than seeing a silent queue.
+	if imported == 0 && failed == 0 && book == nil {
+		s.failImport(ctx, dl, models.StateImportFailed, "could not match any book to this download — check the release title")
 		return
 	}
 

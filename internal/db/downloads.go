@@ -118,6 +118,23 @@ func (r *DownloadRepo) SetError(ctx context.Context, id int64, errMsg string) er
 	return err
 }
 
+// SetErrorWithStatus transitions the download to the given failure state and
+// persists the error message. Use this for import failures (StateImportFailed,
+// StateImportBlocked) so the user can see why an import didn't complete.
+func (r *DownloadRepo) SetErrorWithStatus(ctx context.Context, id int64, status models.DownloadState, errMsg string) error {
+	var current models.DownloadState
+	if err := r.db.QueryRowContext(ctx, "SELECT status FROM downloads WHERE id=?", id).Scan(&current); err != nil {
+		return fmt.Errorf("lookup current state: %w", err)
+	}
+	if current != status && !current.CanTransitionTo(status) {
+		return models.ErrInvalidTransition{From: current, To: status}
+	}
+	_, err := r.db.ExecContext(ctx,
+		"UPDATE downloads SET status=?, error_message=? WHERE id=?",
+		status, errMsg, id)
+	return err
+}
+
 func (r *DownloadRepo) Delete(ctx context.Context, id int64) error {
 	_, err := r.db.ExecContext(ctx, "DELETE FROM downloads WHERE id=?", id)
 	return err
