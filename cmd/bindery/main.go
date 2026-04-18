@@ -503,6 +503,10 @@ func main() {
 		r.Get("/system/loglevel", logHandler.GetLevel)
 		r.Put("/system/loglevel", logHandler.SetLevel)
 
+		// Storage paths (read-only view of the env/config-driven dirs)
+		storageHandler := api.NewStorageHandler(cfg)
+		r.Get("/system/storage", storageHandler.Get)
+
 		// Library
 		r.Post("/library/scan", libraryHandler.Scan)
 		r.Get("/library/scan/status", libraryHandler.ScanStatus)
