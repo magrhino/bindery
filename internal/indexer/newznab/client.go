@@ -152,6 +152,59 @@ func (c *Client) Test(ctx context.Context) error {
 	return err
 }
 
+// ProbeResult summarizes a lightweight connectivity check against the indexer.
+type ProbeResult struct {
+	Status        int    `json:"status"`
+	Categories    int    `json:"categories"`
+	BookSearch    bool   `json:"bookSearch"`
+	GeneralSearch bool   `json:"generalSearch"`
+	LatencyMs     int64  `json:"latencyMs"`
+	Error         string `json:"error,omitempty"`
+}
+
+// Probe performs a capabilities fetch and returns a structured summary
+// (HTTP status, category count, latency) without writing anything to the
+// database. The response is the zero-cost "t=caps" endpoint described in
+// https://github.com/Sonarr/Sonarr/wiki/Implementing-a-New-Indexer — it is
+// safe to call from a "Test" button and never creates queue entries.
+func (c *Client) Probe(ctx context.Context) ProbeResult {
+	u, err := c.buildURL("caps", map[string]string{})
+	if err != nil {
+		return ProbeResult{Error: err.Error()}
+	}
+
+	start := time.Now()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return ProbeResult{Error: err.Error()}
+	}
+	req.Header.Set("User-Agent", "Bindery/0.1")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return ProbeResult{LatencyMs: time.Since(start).Milliseconds(), Error: err.Error()}
+	}
+	defer resp.Body.Close()
+
+	result := ProbeResult{Status: resp.StatusCode, LatencyMs: time.Since(start).Milliseconds()}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		result.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return result
+	}
+
+	var caps capsResponse
+	if err := xml.NewDecoder(resp.Body).Decode(&caps); err != nil {
+		result.Error = fmt.Sprintf("parse caps: %v", err)
+		return result
+	}
+
+	result.Categories = len(caps.Categories.Categories)
+	result.BookSearch = strings.EqualFold(caps.Searching.BookSearch.Available, "yes")
+	result.GeneralSearch = strings.EqualFold(caps.Searching.Search.Available, "yes")
+	return result
+}
+
 func (c *Client) parseResults(items []rssItem) []SearchResult {
 	results := make([]SearchResult, 0, len(items))
 	for _, item := range items {
