@@ -11,11 +11,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/vavallee/bindery/internal/calibre"
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/downloader/nzbget"
 	"github.com/vavallee/bindery/internal/downloader/qbittorrent"
 	"github.com/vavallee/bindery/internal/downloader/sabnzbd"
 	"github.com/vavallee/bindery/internal/downloader/transmission"
@@ -169,6 +171,8 @@ func (s *Scanner) CheckDownloads(ctx context.Context) {
 		s.checkTransmissionDownloads(ctx, client)
 	case "qbittorrent":
 		s.checkQbittorrentDownloads(ctx, client)
+	case "nzbget":
+		s.checkNZBGetDownloads(ctx, client)
 	default:
 		s.checkSABnzbdDownloads(ctx, client)
 	}
@@ -256,6 +260,54 @@ func (s *Scanner) checkSABnzbdDownloads(ctx context.Context, client *models.Down
 			}
 		}
 	}
+}
+
+// checkNZBGetDownloads polls NZBGet for status changes using its JSON-RPC API.
+func (s *Scanner) checkNZBGetDownloads(ctx context.Context, client *models.DownloadClient) {
+	ng := nzbget.New(client.Host, client.Port, client.Username, client.Password, client.UseSSL)
+
+	// Check history for completed/failed downloads (matched by NZBID stored as sabnzbd_nzo_id).
+	history, err := ng.GetHistory(ctx)
+	if err != nil {
+		slog.Debug("failed to fetch NZBGet history", "error", err)
+		return
+	}
+
+	for _, item := range history {
+		nzbIDStr := strconv.Itoa(item.NZBID)
+		dl, err := s.downloads.GetByNzoID(ctx, nzbIDStr)
+		if err != nil || dl == nil {
+			continue
+		}
+
+		if nzbget.IsSuccess(item.Status) {
+			if dl.Status == models.StateDownloading || dl.Status == models.StateGrabbed {
+				localPath := s.remapper.Apply(item.DestDir)
+				if localPath != item.DestDir {
+					slog.Debug("remapped download path", "nzbget", item.DestDir, "local", localPath)
+				}
+				slog.Info("download completed", "title", dl.Title, "path", localPath)
+				s.updateDownloadStatus(ctx, dl.ID, models.StateCompleted)
+				s.tryImportNZBGet(ctx, ng, dl, item.NZBID, localPath)
+			}
+		} else if nzbget.IsFailure(item.Status) {
+			if dl.Status != models.StateFailed {
+				msg := fmt.Sprintf("NZBGet reported status: %s", item.Status)
+				slog.Warn("download failed", "title", dl.Title, "status", item.Status)
+				s.setDownloadError(ctx, dl.ID, msg)
+				s.createHistoryEvent(ctx, models.HistoryEventDownloadFailed, dl.Title, dl.BookID, map[string]string{"guid": dl.GUID, "message": msg})
+			}
+		}
+	}
+}
+
+// tryImportNZBGet attempts to import a completed NZBGet download into the library.
+// ng is used to clean up the NZBGet history entry once bindery has taken ownership.
+func (s *Scanner) tryImportNZBGet(ctx context.Context, ng *nzbget.Client, dl *models.Download, nzbID int, downloadPath string) {
+	nzbIDStr := strconv.Itoa(nzbID)
+	s.tryImportInternal(ctx, dl, downloadPath, "nzbget", nzbIDStr, func() error {
+		return ng.RemoveHistory(ctx, nzbID)
+	})
 }
 
 // checkTransmissionDownloads polls Transmission for status changes.
