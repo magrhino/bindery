@@ -50,6 +50,8 @@ export const api = {
   getLogLevel: () => request<{ level: string }>('/system/loglevel'),
   setLogLevel: (level: string) =>
     request<{ level: string }>('/system/loglevel', { method: 'PUT', body: JSON.stringify({ level }) }),
+  getStorage: () =>
+    request<{ downloadDir: string; libraryDir: string; audiobookDir: string }>('/system/storage'),
 
   // Auth
   authStatus: () => request<AuthStatus>('/auth/status'),
@@ -139,7 +141,7 @@ export const api = {
   addIndexer: (data: Partial<Indexer>) => request<Indexer>('/indexer', { method: 'POST', body: JSON.stringify(data) }),
   updateIndexer: (id: number, data: Partial<Indexer>) => request<Indexer>(`/indexer/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteIndexer: (id: number) => request<void>(`/indexer/${id}`, { method: 'DELETE' }),
-  testIndexer: (id: number) => request<{ message: string }>(`/indexer/${id}/test`, { method: 'POST' }),
+  testIndexer: (id: number) => request<IndexerTestResult>(`/indexer/${id}/test`, { method: 'POST' }),
 
   // Prowlarr indexer sync
   listProwlarr: () => request<ProwlarrInstance[]>('/prowlarr'),
@@ -384,6 +386,16 @@ export interface Indexer {
   categories: number[]
   enabled: boolean
   prowlarrInstanceId?: number
+}
+
+export interface IndexerTestResult {
+  ok: boolean
+  status: number
+  categories: number
+  bookSearch: boolean
+  latencyMs: number
+  message?: string
+  error?: string
 }
 
 export interface PendingRelease {
