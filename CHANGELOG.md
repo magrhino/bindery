@@ -8,6 +8,16 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v0.19.1] — 2026-04-18
+
+### Added
+
+- **External import mode for Calibre/Grimmory workflows** ([#235](https://github.com/vavallee/bindery/pull/235)) — new `external` import mode lets Bindery hand off completed downloads to an external process (Calibre, Grimmory, or a custom script) via a configurable command hook, rather than managing the import itself. Useful for users who run their own post-processing pipeline alongside Bindery.
+
+### Fixed
+
+- **NZBGet download client support** ([#233](https://github.com/vavallee/bindery/pull/233)) — NZBGet client is now stable and promoted from experimental. Resolves edge cases with authentication and path mapping reported after v0.19.0.
+
 ## [v0.19.0] — 2026-04-18
 
 ### Added
