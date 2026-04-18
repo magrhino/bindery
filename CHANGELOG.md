@@ -10,19 +10,12 @@ The `development` branch carries the in-flight feature set for the next release.
 
 ## [v0.19.1] — 2026-04-18
 
-### Added
-
-- **External import mode for Calibre/Grimmory workflows** ([#235](https://github.com/vavallee/bindery/pull/235)) — new `external` import mode lets Bindery hand off completed downloads to an external process (Calibre, Grimmory, or a custom script) via a configurable command hook, rather than managing the import itself. Useful for users who run their own post-processing pipeline alongside Bindery.
-
-### Fixed
-
-- **NZBGet download client support** ([#233](https://github.com/vavallee/bindery/pull/233)) — NZBGet client is now stable and promoted from experimental. Resolves edge cases with authentication and path mapping reported after v0.19.0.
-
-## [v0.19.0] — 2026-04-18
+Re-release of the v0.19.0 feature set plus the external-import and newznab-coverage PRs. The previously-tagged `v0.19.0` artifact predated these merges; `v0.19.1` is the authoritative release for this feature batch.
 
 ### Added
 
 - **NZBGet download client** ([#233](https://github.com/vavallee/bindery/pull/233)) — adds NZBGet alongside SABnzbd as a Usenet download target. Configure under Settings → Download Clients; Bindery tracks grabs, monitors status, and imports completed downloads the same way it does for SABnzbd.
+- **External import mode for Calibre / Grimmory workflows** ([#235](https://github.com/vavallee/bindery/pull/235)) — new import mode that lets Bindery hand completed downloads off to an external importer (Calibre `calibredb add` in a sidecar, or Grimmory's ingest pipeline) instead of moving files directly into the library. Useful when another tool owns the final file layout.
 - **Series gap detection and Fill gaps** ([#234](https://github.com/vavallee/bindery/pull/234)) — the Series page now shows how many books are missing from each series ("N missing" badge) and a **Fill gaps** button that marks all non-imported entries as Wanted and kicks off indexer searches immediately. No more manually hunting for which entries you're missing.
 - **Series monitoring toggle** — mark a series as monitored so it's easy to identify which series you're actively tracking. Foundation for future automation (auto-adding new entries when they appear).
 - **Indexer Test button reports HTTP status, categories, and latency** ([#243](https://github.com/vavallee/bindery/pull/243)) — clicking Test on an indexer now returns a structured probe result (status code, category count, `bookSearch` availability, round-trip latency) instead of a bare "OK / failed" string. Makes misconfigured endpoints and slow indexers much easier to diagnose.
@@ -38,6 +31,10 @@ The `development` branch carries the in-flight feature set for the next release.
 ### Internal
 
 - **Newznab indexer client test coverage** ([#251](https://github.com/vavallee/bindery/pull/251)) — lifted `internal/indexer/newznab` coverage from 56.6% to 89.5% with focused tests for BookSearch tier fallbacks, Probe result shape, URL normalization, and error paths.
+
+## [v0.19.0] — 2026-04-18
+
+Initial tag for the above feature batch; artifact was published before the PRs it was meant to include were merged. Use `v0.19.1` or newer — this tag is retained only for historical reference.
 
 ## [v0.18.3] — 2026-04-17
 
