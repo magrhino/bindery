@@ -60,7 +60,7 @@ type BookLister interface {
 // at a time — a second call returns ErrSyncAlreadyRunning. Progress is
 // mutex-protected and can be polled concurrently with the running job.
 type Syncer struct {
-	books    BookLister
+	books     BookLister
 	newClient func(cfg Config) pluginPusher
 
 	mu       sync.Mutex

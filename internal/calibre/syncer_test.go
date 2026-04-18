@@ -73,9 +73,9 @@ func TestSyncer_Start_MixedOutcomesCountedCorrectly(t *testing.T) {
 		},
 	}
 	pusher := &fakePusher{calls: map[string]func() (int64, error){
-		"/l/fresh.epub":   func() (int64, error) { return 101, nil },
-		"/l/dup.epub":     func() (int64, error) { return 202, ErrAlreadyInCalibre },
-		"/l/broken.epub":  func() (int64, error) { return 0, errors.New("boom") },
+		"/l/fresh.epub":  func() (int64, error) { return 101, nil },
+		"/l/dup.epub":    func() (int64, error) { return 202, ErrAlreadyInCalibre },
+		"/l/broken.epub": func() (int64, error) { return 0, errors.New("boom") },
 	}}
 
 	s := NewSyncer(books)
