@@ -8,17 +8,26 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
-## [v0.19.0] — 2026-04-17
+## [v0.19.0] — 2026-04-18
 
 ### Added
 
+- **NZBGet download client** ([#233](https://github.com/vavallee/bindery/pull/233)) — adds NZBGet alongside SABnzbd as a Usenet download target. Configure under Settings → Download Clients; Bindery tracks grabs, monitors status, and imports completed downloads the same way it does for SABnzbd.
 - **Series gap detection and Fill gaps** ([#234](https://github.com/vavallee/bindery/pull/234)) — the Series page now shows how many books are missing from each series ("N missing" badge) and a **Fill gaps** button that marks all non-imported entries as Wanted and kicks off indexer searches immediately. No more manually hunting for which entries you're missing.
 - **Series monitoring toggle** — mark a series as monitored so it's easy to identify which series you're actively tracking. Foundation for future automation (auto-adding new entries when they appear).
+- **Indexer Test button reports HTTP status, categories, and latency** ([#243](https://github.com/vavallee/bindery/pull/243)) — clicking Test on an indexer now returns a structured probe result (status code, category count, `bookSearch` availability, round-trip latency) instead of a bare "OK / failed" string. Makes misconfigured endpoints and slow indexers much easier to diagnose.
+- **Import failure reason surfaced in Queue and History** ([#244](https://github.com/vavallee/bindery/pull/244)) — failed imports now record and display the underlying error (permission denied, path missing, Calibre rejected the file, etc.) instead of silently disappearing. Addresses the top recurring pain point from user feedback: "silent failures make it impossible to know what went wrong."
+- **Storage paths visible in Settings UI** ([#245](https://github.com/vavallee/bindery/pull/245)) — download, incoming, and library paths are now surfaced in Settings → Storage so users can confirm where Bindery is reading from and writing to without digging through env vars or ConfigMaps.
+- **Auto-grab checkbox persists in Add Author dialog** ([#242](https://github.com/vavallee/bindery/pull/242)) — the "auto-grab on add" toggle now remembers its last value across dialog opens, so users who always (or never) want auto-grab don't have to reset it every time.
 
 ### Fixed
 
 - **Indexers tab crash** ([#227](https://github.com/vavallee/bindery/pull/227)) — clicking Settings → Indexers caused a white screen for users without Prowlarr configured.
 - **Language filter now rejects books with unknown language** ([#228](https://github.com/vavallee/bindery/pull/228)) — non-English editions no longer slip through English-only metadata profiles when OpenLibrary omits language data.
+
+### Internal
+
+- **Newznab indexer client test coverage** ([#251](https://github.com/vavallee/bindery/pull/251)) — lifted `internal/indexer/newznab` coverage from 56.6% to 89.5% with focused tests for BookSearch tier fallbacks, Probe result shape, URL normalization, and error paths.
 
 ## [v0.18.3] — 2026-04-17
 
