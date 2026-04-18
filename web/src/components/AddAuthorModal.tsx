@@ -7,6 +7,18 @@ interface Props {
   onAdded: () => void
 }
 
+const AUTO_GRAB_STORAGE_KEY = 'addAuthor.autoGrab'
+
+function loadAutoGrabDefault(): boolean {
+  try {
+    const stored = localStorage.getItem(AUTO_GRAB_STORAGE_KEY)
+    if (stored === null) return true
+    return stored === 'true'
+  } catch {
+    return true
+  }
+}
+
 export default function AddAuthorModal({ onClose, onAdded }: Props) {
   const { t } = useTranslation()
   const [query, setQuery] = useState('')
@@ -18,7 +30,7 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
   const [profileId, setProfileId] = useState<number | null>(null)
   const [rootFolders, setRootFolders] = useState<RootFolder[]>([])
   const [rootFolderId, setRootFolderId] = useState<number | null>(null)
-  const [searchOnAdd, setSearchOnAdd] = useState(true)
+  const [searchOnAdd, setSearchOnAdd] = useState(loadAutoGrabDefault)
 
   useEffect(() => {
     api.listMetadataProfiles().then(ps => {
@@ -60,6 +72,11 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
         metadataProfileId: profileId,
         rootFolderId: rootFolderId,
       })
+      try {
+        localStorage.setItem(AUTO_GRAB_STORAGE_KEY, String(searchOnAdd))
+      } catch {
+        // ignore storage failures (private mode, quota, etc.)
+      }
       onAdded()
       onClose()
     } catch (err: unknown) {
