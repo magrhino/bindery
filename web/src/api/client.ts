@@ -50,6 +50,8 @@ export const api = {
   getLogLevel: () => request<{ level: string }>('/system/loglevel'),
   setLogLevel: (level: string) =>
     request<{ level: string }>('/system/loglevel', { method: 'PUT', body: JSON.stringify({ level }) }),
+  getStorage: () =>
+    request<{ downloadDir: string; libraryDir: string; audiobookDir: string }>('/system/storage'),
 
   // Auth
   authStatus: () => request<AuthStatus>('/auth/status'),

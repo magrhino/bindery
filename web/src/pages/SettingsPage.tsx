@@ -1181,6 +1181,7 @@ function GeneralTab() {
   const [scanningLibrary, setScanningLibrary] = useState(false)
   const [scanMessage, setScanMessage] = useState<string | null>(null)
   const [lastScan, setLastScan] = useState<{ ran_at: string; files_found: number; reconciled: number; unmatched: number } | null>(null)
+  const [storage, setStorage] = useState<{ downloadDir: string; libraryDir: string; audiobookDir: string } | null>(null)
 
   useEffect(() => {
     api.listSettings()
@@ -1193,6 +1194,7 @@ function GeneralTab() {
       .finally(() => setLoading(false))
     api.listBackups().then(setBackups).catch(console.error)
     api.libraryScanStatus().then(setLastScan).catch(() => {/* no prior scan — ignore 404 */})
+    api.getStorage().then(setStorage).catch(console.error)
   }, [])
 
   const saveSetting = async (key: string) => {
@@ -1376,6 +1378,48 @@ function GeneralTab() {
                 {saving === 'search.preferredLanguage' ? t('common.saving') : t('common.save')}
               </button>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Storage */}
+      <section>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.storage')}</h3>
+        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-3">
+          <p className="text-xs text-slate-600 dark:text-zinc-500">{t('settings.general.storageHint')}</p>
+          <div>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">
+              {t('settings.general.downloadDir')} <code className="font-mono bg-slate-200 dark:bg-zinc-800 px-1 rounded">BINDERY_DOWNLOAD_DIR</code>
+            </label>
+            <input
+              readOnly
+              value={storage?.downloadDir ?? ''}
+              className={`${inputCls} font-mono opacity-80 cursor-default`}
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">
+              {t('settings.general.libraryDir')} <code className="font-mono bg-slate-200 dark:bg-zinc-800 px-1 rounded">BINDERY_LIBRARY_DIR</code>
+            </label>
+            <input
+              readOnly
+              value={storage?.libraryDir ?? ''}
+              className={`${inputCls} font-mono opacity-80 cursor-default`}
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">
+              {t('settings.general.audiobookDir')} <code className="font-mono bg-slate-200 dark:bg-zinc-800 px-1 rounded">BINDERY_AUDIOBOOK_DIR</code>
+            </label>
+            <input
+              readOnly
+              value={storage?.audiobookDir || (storage?.libraryDir ?? '')}
+              placeholder={storage?.libraryDir ?? ''}
+              className={`${inputCls} font-mono opacity-80 cursor-default`}
+            />
+            {storage && !storage.audiobookDir && (
+              <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">{t('settings.general.audiobookDirFallback')}</p>
+            )}
           </div>
         </div>
       </section>
