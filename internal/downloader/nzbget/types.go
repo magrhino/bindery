@@ -25,15 +25,15 @@ type editQueueResponse struct {
 
 // Group represents an active download in NZBGet's queue (listgroups).
 type Group struct {
-	NZBID         int    `json:"NZBID"`
-	NZBName       string `json:"NZBName"`
-	Status        string `json:"Status"`
-	Category      string `json:"Category"`
-	FileSizeMB    float64 `json:"FileSizeMB"`
-	RemainingSizeMB float64 `json:"RemainingSizeMB"`
+	NZBID            int     `json:"NZBID"`
+	NZBName          string  `json:"NZBName"`
+	Status           string  `json:"Status"`
+	Category         string  `json:"Category"`
+	FileSizeMB       float64 `json:"FileSizeMB"`
+	RemainingSizeMB  float64 `json:"RemainingSizeMB"`
 	DownloadedSizeMB float64 `json:"DownloadedSizeMB"`
-	ActiveDownloads int    `json:"ActiveDownloads"`
-	URL           string `json:"URL"`
+	ActiveDownloads  int     `json:"ActiveDownloads"`
+	URL              string  `json:"URL"`
 }
 
 // listGroupsResponse is the result of calling "listgroups".
@@ -43,13 +43,13 @@ type listGroupsResponse struct {
 
 // HistoryItem represents a completed/failed download in NZBGet's history.
 type HistoryItem struct {
-	NZBID        int    `json:"NZBID"`
-	NZBName      string `json:"NZBName"`
-	Status       string `json:"Status"`
-	Category     string `json:"Category"`
-	FileSizeMB   float64 `json:"FileSizeMB"`
-	DestDir      string `json:"DestDir"`
-	URL          string `json:"URL"`
+	NZBID      int     `json:"NZBID"`
+	NZBName    string  `json:"NZBName"`
+	Status     string  `json:"Status"`
+	Category   string  `json:"Category"`
+	FileSizeMB float64 `json:"FileSizeMB"`
+	DestDir    string  `json:"DestDir"`
+	URL        string  `json:"URL"`
 }
 
 // historyResponse is the result of calling "history".

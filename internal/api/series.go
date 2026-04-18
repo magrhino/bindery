@@ -106,7 +106,7 @@ func (h *SeriesHandler) Fill(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		queued++
-		go h.searcher.SearchAndGrabBook(context.Background(), b)
+		go h.searcher.SearchAndGrabBook(context.WithoutCancel(r.Context()), b)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]int{"queued": queued})

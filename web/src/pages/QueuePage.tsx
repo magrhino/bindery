@@ -121,7 +121,14 @@ export default function QueuePage() {
                       </div>
                     )}
                     {item.errorMessage && (
-                      <div className="mt-1 text-xs text-red-400 bg-red-400/10 rounded px-2 py-1">
+                      <div className="mt-1 text-xs text-red-400 bg-red-400/10 rounded px-2 py-1 break-words">
+                        <span className="font-medium">
+                          {item.status === 'importFailed'
+                            ? 'Import failed: '
+                            : item.status === 'importBlocked'
+                            ? 'Import blocked: '
+                            : 'Error: '}
+                        </span>
                         {item.errorMessage}
                       </div>
                     )}

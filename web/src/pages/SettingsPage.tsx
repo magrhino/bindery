@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, AuthConfig, AuthStatus, BlocklistEntry, Indexer, ProwlarrInstance, DownloadClient, NotificationConfig, QualityProfile, MetadataProfile, CalibreImportProgress, RootFolder, LogEntry, ImportList, HardcoverList } from '../api/client'
+import { api, AuthConfig, AuthStatus, BlocklistEntry, Indexer, IndexerTestResult, ProwlarrInstance, DownloadClient, NotificationConfig, QualityProfile, MetadataProfile, CalibreImportProgress, RootFolder, LogEntry, ImportList, HardcoverList } from '../api/client'
 import Pagination from '../components/Pagination'
 import { usePagination } from '../components/usePagination'
 import ThemeToggle from '../components/ThemeToggle'
@@ -31,6 +31,7 @@ export default function SettingsPage() {
   const [showAddClient, setShowAddClient] = useState(false)
   const [showAddNotification, setShowAddNotification] = useState(false)
   const [editingIndexer, setEditingIndexer] = useState<number | null>(null)
+  const [indexerTestResults, setIndexerTestResults] = useState<Record<number, IndexerTestResult & { testing?: boolean }>>({})
   const [editingClient, setEditingClient] = useState<number | null>(null)
   const [editingNotification, setEditingNotification] = useState<number | null>(null)
   const [logEntries, setLogEntries] = useState<LogEntry[]>([])
@@ -124,17 +125,19 @@ export default function SettingsPage() {
                     <div className="flex items-center gap-3 flex-shrink-0">
                       <button onClick={() => setEditingIndexer(editingIndexer === idx.id ? null : idx.id)} className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white">{t('common.edit')}</button>
                       <button
+                        disabled={indexerTestResults[idx.id]?.testing}
                         onClick={async () => {
+                          setIndexerTestResults(prev => ({ ...prev, [idx.id]: { ...(prev[idx.id] ?? { ok: false, status: 0, categories: 0, bookSearch: false, latencyMs: 0 }), testing: true } }))
                           try {
-                            await api.testIndexer(idx.id)
-                            alert(t('common.connOk'))
+                            const r = await api.testIndexer(idx.id)
+                            setIndexerTestResults(prev => ({ ...prev, [idx.id]: { ...r, testing: false } }))
                           } catch (err: unknown) {
-                            alert(t('common.connFail', { error: err instanceof Error ? err.message : 'Unknown error' }))
+                            setIndexerTestResults(prev => ({ ...prev, [idx.id]: { ok: false, status: 0, categories: 0, bookSearch: false, latencyMs: 0, error: err instanceof Error ? err.message : 'Request failed', testing: false } }))
                           }
                         }}
-                        className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white"
+                        className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white disabled:opacity-50"
                       >
-                        {t('common.test')}
+                        {indexerTestResults[idx.id]?.testing ? t('common.testing') : t('common.test')}
                       </button>
                       <button
                         onClick={async () => {
@@ -147,6 +150,29 @@ export default function SettingsPage() {
                       </button>
                     </div>
                   </div>
+                  {indexerTestResults[idx.id] && !indexerTestResults[idx.id].testing && (
+                    <div
+                      role="status"
+                      className={`mt-2 px-3 py-2 rounded text-xs flex items-center gap-2 ${indexerTestResults[idx.id].ok ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300'}`}
+                    >
+                      <span className={`inline-block w-2 h-2 rounded-full ${indexerTestResults[idx.id].ok ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                      {indexerTestResults[idx.id].ok ? (
+                        <span>
+                          {t('settings.indexers.testOk', {
+                            status: indexerTestResults[idx.id].status,
+                            categories: indexerTestResults[idx.id].categories,
+                            latency: indexerTestResults[idx.id].latencyMs,
+                          })}
+                        </span>
+                      ) : (
+                        <span>
+                          {t('settings.indexers.testFail', {
+                            error: indexerTestResults[idx.id].error ?? 'Unknown error',
+                          })}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   {editingIndexer === idx.id && (
                     <EditIndexerForm
                       indexer={idx}
@@ -1181,6 +1207,7 @@ function GeneralTab() {
   const [scanningLibrary, setScanningLibrary] = useState(false)
   const [scanMessage, setScanMessage] = useState<string | null>(null)
   const [lastScan, setLastScan] = useState<{ ran_at: string; files_found: number; reconciled: number; unmatched: number } | null>(null)
+  const [storage, setStorage] = useState<{ downloadDir: string; libraryDir: string; audiobookDir: string } | null>(null)
 
   useEffect(() => {
     api.listSettings()
@@ -1193,6 +1220,7 @@ function GeneralTab() {
       .finally(() => setLoading(false))
     api.listBackups().then(setBackups).catch(console.error)
     api.libraryScanStatus().then(setLastScan).catch(() => {/* no prior scan — ignore 404 */})
+    api.getStorage().then(setStorage).catch(console.error)
   }, [])
 
   const saveSetting = async (key: string) => {
@@ -1377,6 +1405,48 @@ function GeneralTab() {
                 {saving === 'search.preferredLanguage' ? t('common.saving') : t('common.save')}
               </button>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Storage */}
+      <section>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.storage')}</h3>
+        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-3">
+          <p className="text-xs text-slate-600 dark:text-zinc-500">{t('settings.general.storageHint')}</p>
+          <div>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">
+              {t('settings.general.downloadDir')} <code className="font-mono bg-slate-200 dark:bg-zinc-800 px-1 rounded">BINDERY_DOWNLOAD_DIR</code>
+            </label>
+            <input
+              readOnly
+              value={storage?.downloadDir ?? ''}
+              className={`${inputCls} font-mono opacity-80 cursor-default`}
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">
+              {t('settings.general.libraryDir')} <code className="font-mono bg-slate-200 dark:bg-zinc-800 px-1 rounded">BINDERY_LIBRARY_DIR</code>
+            </label>
+            <input
+              readOnly
+              value={storage?.libraryDir ?? ''}
+              className={`${inputCls} font-mono opacity-80 cursor-default`}
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">
+              {t('settings.general.audiobookDir')} <code className="font-mono bg-slate-200 dark:bg-zinc-800 px-1 rounded">BINDERY_AUDIOBOOK_DIR</code>
+            </label>
+            <input
+              readOnly
+              value={storage?.audiobookDir || (storage?.libraryDir ?? '')}
+              placeholder={storage?.libraryDir ?? ''}
+              className={`${inputCls} font-mono opacity-80 cursor-default`}
+            />
+            {storage && !storage.audiobookDir && (
+              <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">{t('settings.general.audiobookDirFallback')}</p>
+            )}
           </div>
         </div>
       </section>

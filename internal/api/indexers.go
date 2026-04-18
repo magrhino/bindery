@@ -133,6 +133,20 @@ func (h *IndexerHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// IndexerTestResponse summarizes a lightweight connectivity probe. The
+// handler always returns HTTP 200 on a reachable-but-failed probe (e.g. 401
+// from the upstream indexer) so the UI can render the specific error inline
+// instead of a generic "request failed" toast.
+type IndexerTestResponse struct {
+	OK         bool   `json:"ok"`
+	Status     int    `json:"status"`
+	Categories int    `json:"categories"`
+	BookSearch bool   `json:"bookSearch"`
+	LatencyMs  int64  `json:"latencyMs"`
+	Message    string `json:"message,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
 func (h *IndexerHandler) Test(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(w, r)
 	if !ok {
@@ -145,11 +159,21 @@ func (h *IndexerHandler) Test(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := newznab.New(idx.URL, idx.APIKey)
-	if err := client.Test(r.Context()); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	probe := client.Probe(r.Context())
+	resp := IndexerTestResponse{
+		Status:     probe.Status,
+		Categories: probe.Categories,
+		BookSearch: probe.BookSearch,
+		LatencyMs:  probe.LatencyMs,
+	}
+	if probe.Error != "" {
+		resp.Error = probe.Error
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"message": "ok"})
+	resp.OK = true
+	resp.Message = "ok"
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // SearchBook searches all enabled indexers for a specific book.
