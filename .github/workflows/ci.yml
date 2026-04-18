@@ -122,8 +122,8 @@ jobs:
         run: |
           IMAGE_TAG="sha-${GITHUB_SHA::7}"
           FILE_PATH="charts/bindery/values.yaml"
-          FILE_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${FILE_PATH}" \
-            --jq .sha -f ref=development)
+          FILE_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${FILE_PATH}?ref=development" \
+            --jq .sha)
           CONTENT=$(sed "s|tag:.*|tag: \"${IMAGE_TAG}\"|" "${FILE_PATH}" | base64 -w0)
           gh api "repos/${GITHUB_REPOSITORY}/contents/${FILE_PATH}" \
             -X PUT \
