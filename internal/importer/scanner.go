@@ -105,8 +105,8 @@ func (s *Scanner) WithSettings(sr *db.SettingsRepo) *Scanner {
 }
 
 // importMode reads the "import.mode" setting and returns one of "move",
-// "copy", or "hardlink". Defaults to "move" when the setting is absent or
-// unrecognised so upgrades are transparent for existing installs.
+// "copy", "hardlink", or "external". Defaults to "move" when the setting is
+// absent or unrecognised so upgrades are transparent for existing installs.
 func (s *Scanner) importMode(ctx context.Context) string {
 	if s.settings == nil {
 		return "move"
@@ -116,7 +116,7 @@ func (s *Scanner) importMode(ctx context.Context) string {
 		return "move"
 	}
 	switch setting.Value {
-	case "copy", "hardlink":
+	case "copy", "hardlink", "external":
 		return setting.Value
 	default:
 		return "move"
@@ -459,6 +459,24 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 	}
 
 	s.updateDownloadStatus(ctx, dl.ID, models.StateImportPending)
+
+	// External mode: skip all file operations and reset the book to wanted so
+	// the library scan can reconcile it after the user's external tool (Calibre,
+	// Grimmory, etc.) processes and places the file in the library directory.
+	if s.importMode(ctx) == "external" {
+		if dl.BookID != nil {
+			if b, err := s.books.GetByID(ctx, *dl.BookID); err == nil && b != nil {
+				b.Status = models.BookStatusWanted
+				if err := s.books.Update(ctx, b); err != nil {
+					slog.Warn("external import: failed to reset book status", "bookId", b.ID, "error", err)
+				}
+			}
+		}
+		s.updateDownloadStatus(ctx, dl.ID, models.StateImported)
+		slog.Info("external import: download handed off, awaiting library scan", "title", dl.Title)
+		s.createHistoryEvent(ctx, models.HistoryEventBookImported, dl.Title, dl.BookID, map[string]string{"mode": "external"})
+		return
+	}
 
 	// Find book files in the download path
 	var bookFiles []string
