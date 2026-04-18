@@ -8,6 +8,20 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v0.19.2] — 2026-04-18
+
+### Fixed
+
+- **Create destination directory before audiobook import** ([#255](https://github.com/vavallee/bindery/pull/255)) — import no longer fails when the target library directory does not yet exist; Bindery now creates it before attempting to move files. Resolves a silent failure that left audiobooks stranded in the download folder.
+- **Search consistency for "both" media type** ([#256](https://github.com/vavallee/bindery/pull/256)) — books monitored as `both` now run separate ebook (7xxx) and audiobook (3xxx) category searches and union the results, instead of falling through to the ebook branch only. Also normalises subtitle-heavy query strings to improve match rates on all indexers.
+
+### Added
+
+- **Unknown-language badge and pass/fail setting** ([#257](https://github.com/vavallee/bindery/pull/257)) — books whose language metadata is absent or unrecognised are now surfaced with an "unknown language" badge in the UI. A new setting controls whether unknown-language books pass or fail the language filter, giving users explicit control instead of silent rejection.
+- **Search debug panel** ([#258](https://github.com/vavallee/bindery/pull/258)) — a collapsible debug panel on the Book Search page shows every indexer that was queried, how many results each returned, and which pipeline stage (dedupe, junk filter, relevance, language, decision) dropped each candidate. The last debug payload is cached server-side so the panel survives page reloads.
+- **Push all to Calibre sync button** ([#259](https://github.com/vavallee/bindery/pull/259)) — a single button on the Calibre settings page triggers a full library sync, pushing every imported book to Calibre in one shot. Useful after initial setup or after a Calibre database restore.
+- **Global default media type and bulk author update** ([#260](https://github.com/vavallee/bindery/pull/260)) — a new global setting establishes the default media type for newly added authors. A bulk-update action on the Authors page lets you apply any media-type change across all (or selected) authors at once, eliminating tedious one-by-one edits.
+
 ## [v0.19.1] — 2026-04-18
 
 Re-release of the v0.19.0 feature set plus the external-import and newznab-coverage PRs. The previously-tagged `v0.19.0` artifact predated these merges; `v0.19.1` is the authoritative release for this feature batch.
