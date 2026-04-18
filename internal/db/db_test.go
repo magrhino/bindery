@@ -822,6 +822,19 @@ func TestDownloadRepoCRUD(t *testing.T) {
 		t.Errorf("SetError: %v", err)
 	}
 
+	// SetErrorWithStatus — transitions from StateFailed must reject (no valid
+	// transitions from StateFailed) but setting to the same state should succeed.
+	if err := repo.SetErrorWithStatus(ctx, dl.ID, models.StateFailed, "still broken"); err != nil {
+		t.Errorf("SetErrorWithStatus same-state: %v", err)
+	}
+	got, getErr := repo.GetByGUID(ctx, dl.GUID)
+	if getErr != nil || got == nil {
+		t.Fatalf("reload after SetErrorWithStatus: %v", getErr)
+	}
+	if got.ErrorMessage != "still broken" {
+		t.Errorf("expected error message persisted, got %q", got.ErrorMessage)
+	}
+
 	// Delete
 	if err := repo.Delete(ctx, dl.ID); err != nil {
 		t.Fatalf("delete: %v", err)
