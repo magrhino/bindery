@@ -7,6 +7,7 @@ import fr from './locales/fr.json'
 import de from './locales/de.json'
 import es from './locales/es.json'
 import nl from './locales/nl.json'
+import tl from './locales/tl.json'
 
 // Reads from localStorage key 'bindery.lang' first, then falls back to the
 // browser's navigator.language. This mirrors the theme bootstrap so the first
@@ -21,6 +22,7 @@ i18n
       de: { translation: de },
       es: { translation: es },
       nl: { translation: nl },
+      tl: { translation: tl },
     },
     fallbackLng: 'en',
     detection: {
