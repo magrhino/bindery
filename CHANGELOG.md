@@ -8,6 +8,26 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v1.0.0] — 2026-04-19
+
+### Added
+
+- **Reverse-proxy SSO** (#238/#239) — new `proxy` auth mode trusts an upstream identity header (`X-Forwarded-User` by default) when the request arrives from a configured trusted proxy IP. Startup refuses proxy mode without `BINDERY_TRUSTED_PROXY` set.
+- **Native OIDC client** (#237) — Authorization Code + PKCE with multi-provider support (Google, GitHub/Dex, Authelia, Keycloak). Providers configured via Settings → Authentication; users identified by stable `(issuer, sub)` pair.
+- **Multi-user scoping** (#236) — every user-owned entity (authors, books, downloads, profiles, root folders) scoped to its owner. First user auto-promoted to admin; admin users manage all settings.
+- **Admin user management** — Users page (admin only): invite users, set roles, delete with last-admin guard.
+- **Settings split** — per-user tabs (API key, password, notifications) and admin-only tabs (indexers, clients, profiles, system).
+- **CSRF double-submit tokens** (#240) — `GET /auth/csrf` issues a session-bound token; all authenticated mutations require matching `X-CSRF-Token` header. API-key requests exempt.
+
+### Fixed
+
+- **CSRF middleware login bypass** — `POST /auth/login` was incorrectly blocked by CSRF check before a session cookie existed; fixed to skip CSRF when no session is present.
+
+### Breaking
+
+- **Database migration 025**: `owner_user_id` added to all user-owned tables; existing data migrated to user ID 1. Back up before upgrading. See [upgrade guide](https://github.com/vavallee/bindery/wiki/Howto-Migrate-to-multi-user).
+- **CSRF tokens required**: browser-based API consumers must call `GET /auth/csrf` and include `X-CSRF-Token` on mutations. API-key clients unaffected.
+
 ## [v0.22.0] — 2026-04-19
 
 ### Fixed
