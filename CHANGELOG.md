@@ -8,6 +8,18 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v0.22.0] — 2026-04-19
+
+### Fixed
+
+- **Grab FK constraint crash** — clicking Grab on a search result no longer fails with a foreign-key violation; `bookId`/`indexerId` are now treated as optional nullable fields so free-text search grabs always succeed (#285)
+- **Audiobook search details blank page** — `SearchDebug.Filters` is now initialised to an empty slice instead of `null`, preventing a JS crash in `SearchDebugPanel` that was more likely to trigger on audiobook searches (#282)
+- **ISBN lookup cryptic error** — unknown ISBNs now surface a friendly "No book found for ISBN X. Check the number, or try searching by title instead." message instead of a misleading upstream-unavailable error (#284)
+
+### Improved
+
+- **Calibre Test Connection feedback** — the Test Connection button now shows ✓/✗ prefixes and the exact plugin reachability message; stale results are cleared whenever Calibre settings are saved (#262)
+
 ## [v0.21.0] — 2026-04-19
 
 ### Added
