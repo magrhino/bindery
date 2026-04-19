@@ -117,6 +117,7 @@ jobs:
       # main is PR-gated so a direct git push is rejected by branch protection.
       # ArgoCD watches development; tag bumps reach main naturally via merge.
       - name: Update Helm image tag
+        continue-on-error: true
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -318,3 +319,4 @@ jobs:
           BINDERY_URL: https://bindery.autonomy.ninja
           BINDERY_API_KEY: ${{ secrets.BINDERY_SMOKE_API_KEY }}
         run: make predeploy-smoke
+
