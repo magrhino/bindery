@@ -43,6 +43,9 @@ env:
   # client into paths bindery can see. Needed when SAB and bindery run in
   # separate pods with different mount points for the same storage.
   BINDERY_DOWNLOAD_PATH_REMAP: /downloads:/media
+  # IP or CIDR of the reverse proxy in front of Bindery. When set, X-Forwarded-For
+  # is trusted only from that address. Required for local-only auth mode to be safe.
+  # BINDERY_TRUSTED_PROXY: "192.168.1.1"
 
 resources:
   requests:

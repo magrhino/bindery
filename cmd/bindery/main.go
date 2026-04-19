@@ -306,7 +306,11 @@ func main() {
 	// Router
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	// BINDERY_TRUSTED_PROXY (optional): comma-separated IP/CIDR list of
+	// reverse proxies permitted to set X-Forwarded-For. When unset, XFF
+	// headers are ignored — required for local-only auth mode to be safe
+	// against on-network spoofing.
+	r.Use(trustedProxyMiddleware())
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5))
 	r.Use(api.SecurityHeaders)
