@@ -30,7 +30,6 @@ const NAV_KEYS = [
   { to: '/series', key: 'series' },
   { to: '/calendar', key: 'calendar' },
   { to: '/discover', key: 'discover' },
-  { to: '/search', key: 'search' },
 ]
 
 function Shell() {
@@ -73,6 +72,19 @@ function Shell() {
             </nav>
 
             <div className="flex items-center gap-3 flex-shrink-0">
+              <NavLink
+                to="/search"
+                className={({ isActive }) =>
+                  `hidden lg:block p-2 rounded-md transition-colors ${
+                    isActive ? 'bg-slate-200 dark:bg-zinc-800 text-slate-900 dark:text-white' : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/50 dark:hover:bg-zinc-800/50'
+                  }`
+                }
+                title={t('nav.search')}
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 3h14M5 21h14M7 3v5l5 4-5 4v5M17 3v5l-5 4 5 4v5" />
+                </svg>
+              </NavLink>
               <NavLink
                 to="/settings"
                 className={({ isActive }) =>
@@ -143,6 +155,13 @@ function Shell() {
                   {t(`nav.${item.key}`)}
                 </NavLink>
               ))}
+              <NavLink
+                to="/search"
+                className={mobileLinkClass}
+                onClick={() => setMenuOpen(false)}
+              >
+                {t('nav.search')}
+              </NavLink>
               <NavLink
                 to="/settings"
                 className={mobileLinkClass}
