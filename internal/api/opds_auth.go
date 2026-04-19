@@ -2,6 +2,7 @@ package api
 
 import (
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 
@@ -22,7 +23,7 @@ import (
 //
 // The realm ("Bindery OPDS") is what shows in the client's credential
 // prompt; keep it descriptive so users know which server is asking.
-func OPDSAuth(p auth.Provider, users *db.UserRepo) func(http.Handler) http.Handler {
+func OPDSAuth(p auth.Provider, users *db.UserRepo, limiter *auth.LoginLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			mode := p.Mode()
@@ -46,10 +47,22 @@ func OPDSAuth(p auth.Provider, users *db.UserRepo) func(http.Handler) http.Handl
 				}
 			}
 			if username, password, ok := r.BasicAuth(); ok && users != nil {
+				ip := opdsClientIP(r)
+				if limiter != nil && !limiter.Allow(ip) {
+					w.Header().Set("WWW-Authenticate", `Basic realm="Bindery OPDS"`)
+					http.Error(w, "too many attempts", http.StatusTooManyRequests)
+					return
+				}
 				u, err := users.GetByUsername(r.Context(), strings.TrimSpace(username))
 				if err == nil && u != nil && auth.VerifyPassword(password, u.PasswordHash) {
+					if limiter != nil {
+						limiter.Reset(ip)
+					}
 					next.ServeHTTP(w, r)
 					return
+				}
+				if limiter != nil {
+					limiter.Record(ip)
 				}
 			}
 
@@ -62,6 +75,14 @@ func OPDSAuth(p auth.Provider, users *db.UserRepo) func(http.Handler) http.Handl
 			}
 		})
 	}
+}
+
+func opdsClientIP(r *http.Request) string {
+	host := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return strings.Trim(host, "[]")
 }
 
 func opdsAPIKey(r *http.Request) string {

@@ -6,10 +6,19 @@ const BASE = '/api/v1'
 const PUBLIC_PATHS = new Set(['/login', '/setup'])
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  // Merge caller-supplied headers on top of the defaults so we can't lose
+  // the CSRF header if a caller passes their own `headers`.
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    'X-Requested-With': 'bindery-ui',
+  })
+  if (options?.headers) {
+    new Headers(options.headers).forEach((v, k) => headers.set(k, v))
+  }
   const res = await fetch(`${BASE}${path}`, {
     credentials: 'include', // send + accept the session cookie
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers,
   })
   if (res.status === 401 && !PUBLIC_PATHS.has(window.location.pathname)) {
     // Session expired or missing — punt to login. The router there will
@@ -233,7 +242,10 @@ export const api = {
   addImportList: (data: Partial<ImportList>) => request<ImportList>('/importlist', { method: 'POST', body: JSON.stringify(data) }),
   updateImportList: (id: number, data: Partial<ImportList>) => request<ImportList>(`/importlist/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteImportList: (id: number) => request<void>(`/importlist/${id}`, { method: 'DELETE' }),
-  hardcoverLists: (token: string) => request<HardcoverList[]>(`/importlist/hardcover/lists?token=${encodeURIComponent(token)}`),
+  hardcoverLists: (token: string) =>
+    request<HardcoverList[]>('/importlist/hardcover/lists', {
+      headers: { Authorization: `Bearer ${token}` },
+    }),
 
   // Metadata Profiles
   listMetadataProfiles: () => request<MetadataProfile[]>('/metadataprofile'),

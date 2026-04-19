@@ -318,6 +318,7 @@ func main() {
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(auth.Middleware(authProvider))
+		r.Use(auth.RequireXRequestedWith)
 
 		// System
 		r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -550,7 +551,7 @@ func main() {
 	opdsBuilder := opds.NewBuilder(opds.Config{Title: "Bindery", PageSize: 50}, bookRepo, authorRepo, seriesRepo)
 	opdsHandler := api.NewOPDSHandler(opdsBuilder, bookRepo, fileHandler)
 	r.Route("/opds", func(r chi.Router) {
-		r.Use(api.OPDSAuth(authProvider, userRepo))
+		r.Use(api.OPDSAuth(authProvider, userRepo, loginLimiter))
 		r.Get("/", opdsHandler.Root)
 		r.Get("/authors", opdsHandler.Authors)
 		r.Get("/authors/{id}", opdsHandler.Author)

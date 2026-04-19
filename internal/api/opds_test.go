@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -79,7 +80,7 @@ func opdsFixture(t *testing.T) (*chi.Mux, *db.UserRepo, *db.SettingsRepo, string
 
 	r := chi.NewRouter()
 	r.Route("/opds", func(r chi.Router) {
-		r.Use(OPDSAuth(p, users))
+		r.Use(OPDSAuth(p, users, auth.NewLoginLimiter(5, 15*time.Minute)))
 		r.Get("/", h.Root)
 		r.Get("/authors", h.Authors)
 		r.Get("/authors/{id}", h.Author)
