@@ -8,6 +8,18 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v0.20.0] — 2026-04-18
+
+### Added
+
+- **Deluge download client** ([#263](https://github.com/vavallee/bindery/pull/263)) — adds Deluge alongside qBittorrent and Transmission as a supported torrent client. Configure under Settings → Download Clients with host, port (default 8112), password, and optional label (requires the Label plugin). Deluge authenticates with a single password and no username, which the UI reflects.
+- **Direct indexer search page** ([#266](https://github.com/vavallee/bindery/pull/266)) — a new **Search** nav item runs freeform queries across every configured indexer without needing a tracked book. Each result row has a **Grab** button that sends the release straight to the download client, bypassing the per-book decision pipeline. Useful for grabbing one-off titles or testing indexer responses.
+- **{ASIN} naming token** ([#269](https://github.com/vavallee/bindery/pull/269)) — `{ASIN}` can now be used in rename templates (e.g. `{Author}/{ASIN}/{Title}.{ext}`). ASINs are also extracted from filenames during library scans and stripped from the title, so Amazon-origin files no longer pollute title matching. Empty string when the book has no ASIN in its metadata.
+
+### Fixed
+
+- **Indexer Test probes with a real search** ([#265](https://github.com/vavallee/bindery/pull/265)) — after the caps probe, **Test** now runs a `t=search&q=book` request across the indexer's book categories. The UI surfaces an amber warning when zero results are returned, catching misconfigured API keys and category mappings that previously reported success on caps alone.
+
 ## [v0.19.2] — 2026-04-18
 
 ### Fixed
