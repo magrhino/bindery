@@ -4,6 +4,7 @@ import { api, AuthStatus } from '../api/client'
 interface AuthContextValue {
   status: AuthStatus | null
   loading: boolean
+  isAdmin: boolean
   refresh: () => Promise<void>
   logout: () => Promise<void>
 }
@@ -19,9 +20,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const s = await api.authStatus()
       setStatus(s)
     } catch {
-      // Auth endpoints should always respond (they're in AllowUnauthPath).
-      // A network error here leaves status null; the guard will redirect
-      // to /login which is the safe fallback.
       setStatus(null)
     } finally {
       setLoading(false)
@@ -42,8 +40,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.location.href = '/login'
   }, [refresh])
 
+  const isAdmin = status?.role === 'admin'
+
   return (
-    <AuthContext.Provider value={{ status, loading, refresh, logout }}>
+    <AuthContext.Provider value={{ status, loading, isAdmin, refresh, logout }}>
       {children}
     </AuthContext.Provider>
   )

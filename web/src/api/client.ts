@@ -68,7 +68,17 @@ export interface AuthStatus {
   authenticated: boolean
   setupRequired: boolean
   username?: string
+  role?: string
   mode: 'enabled' | 'local-only' | 'disabled' | 'proxy'
+}
+
+export interface ManagedUser {
+  id: number
+  username: string
+  role: string
+  email?: string
+  displayName?: string
+  createdAt: string
 }
 
 export interface AuthConfig {
@@ -142,6 +152,12 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ mode }),
     }),
+  listUsers: () => request<ManagedUser[]>('/auth/users'),
+  createUser: (username: string, password: string, role: string) =>
+    request<ManagedUser>('/auth/users', { method: 'POST', body: JSON.stringify({ username, password, role }) }),
+  deleteUser: (id: number) => request<{ ok: boolean }>(`/auth/users/${id}`, { method: 'DELETE' }),
+  setUserRole: (id: number, role: string) =>
+    request<{ ok: boolean }>(`/auth/users/${id}/role`, { method: 'PUT', body: JSON.stringify({ role }) }),
 
   // Metadata search
   searchAuthors: (term: string) => request<Author[]>(`/search/author?term=${encodeURIComponent(term)}`),

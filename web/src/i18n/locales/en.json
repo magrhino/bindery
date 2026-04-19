@@ -42,7 +42,8 @@
     "discover": "Discover",
     "search": "Search",
     "blocklist": "Blocklist",
-    "settings": "Settings"
+    "settings": "Settings",
+    "users": "Users"
   },
   "search": {
     "heading": "Search Indexers",
@@ -457,5 +458,27 @@
       "coldStart": "Add more books to unlock personalized genre recommendations.",
       "goToSettings": "Go to Settings"
     }
+  },
+  "users": {
+    "title": "Users",
+    "colUsername": "Username",
+    "colRole": "Role",
+    "colCreated": "Created",
+    "you": "you",
+    "addButton": "+ Add User",
+    "addHeading": "New User",
+    "fieldUsername": "Username",
+    "fieldPassword": "Password",
+    "fieldRole": "Role",
+    "roleAdmin": "Admin",
+    "roleUser": "User",
+    "createButton": "Create User",
+    "promote": "Make admin",
+    "demote": "Make user",
+    "deleteConfirm": "Delete user \"{{username}}\"? This cannot be undone.",
+    "loadFail": "Failed to load users",
+    "deleteFail": "Failed to delete user",
+    "roleFail": "Failed to change role",
+    "createFail": "Failed to create user"
   }
 }

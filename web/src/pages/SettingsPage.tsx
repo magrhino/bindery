@@ -16,6 +16,7 @@ const tabCls = (active: boolean) =>
 
 export default function SettingsPage() {
   const { t, i18n } = useTranslation()
+  const { isAdmin } = useAuth()
   const [tab, setTab] = useState<Tab>('general')
   const [indexers, setIndexers] = useState<Indexer[]>([])
   const [clients, setClients] = useState<DownloadClient[]>([])
@@ -84,7 +85,10 @@ export default function SettingsPage() {
       <h2 className="text-2xl font-bold mb-6">{t('settings.title')}</h2>
 
       <div className="flex flex-wrap gap-2 mb-6">
-        {(['general', 'indexers', 'clients', 'rootfolders', 'quality', 'metadata', 'notifications', 'calibre', 'import', 'blocklist', 'logs'] as Tab[]).map(tabKey => (
+        {(isAdmin
+          ? ['general', 'indexers', 'clients', 'rootfolders', 'quality', 'metadata', 'notifications', 'calibre', 'import', 'blocklist', 'logs'] as Tab[]
+          : ['general'] as Tab[]
+        ).map(tabKey => (
           <button key={tabKey} onClick={() => setTab(tabKey)} className={tabCls(tab === tabKey)}>
             {t(`settings.tabs.${tabKey}`)}
           </button>
