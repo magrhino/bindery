@@ -8,6 +8,15 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v0.20.3] — 2026-04-19
+
+### Security
+
+- **Trusted proxy configuration** — `BINDERY_TRUSTED_PROXY` gates `X-Forwarded-For` rewriting to a configured proxy IP/CIDR. Without it, forwarded headers are ignored and the direct peer IP is used, preventing XFF spoofing in local-only auth mode (mirrors Sonarr CVE-2026-30975).
+- **File download path validation** — the file download endpoint now verifies `book.FilePath` falls within a configured library root before serving. Paths outside `BINDERY_LIBRARY_DIR` / `BINDERY_AUDIOBOOK_DIR` return 403.
+- **CSRF header exemption for API key requests** — the `X-Requested-With` CSRF check now correctly exempts API-key-authenticated requests; only cookie-session requests are required to supply the header.
+- All fixes from v0.20.1: SSRF validation on Prowlarr URLs, path traversal protection in file renamer, strict backup filename regex, image proxy redirect re-validation, Hardcover token moved to Authorization header, OPDS rate limiting, CI hardening.
+
 ## [v0.20.0] — 2026-04-18
 
 ### Added
