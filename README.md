@@ -137,7 +137,7 @@
 - **Authentication** — First-run setup creates an admin account (argon2id password hashing, signed session cookies). Three modes: **Enabled** (always require login), **Local only** (bypass auth for private IPs — home network convenience), **Disabled** (no auth, for trusted reverse-proxy deployments). Per-account API key for external integrations. Per-IP rate limiting on the login endpoint.
 
 ### UI
-- **Multilingual UI** — English, French, German, and Dutch. Language auto-detected from the browser; manual override in Settings → General → Language. Persists to `localStorage` so the first paint is always in the right language.
+- **Multilingual UI** — English, French, German, Dutch, Spanish, Filipino (Tagalog), and Indonesian. Language auto-detected from the browser; manual override in Settings → General → Language. Persists to `localStorage` so the first paint is always in the right language.
 - **Light and dark themes** — iOS-style slider toggle in Settings → General → Appearance. First-load default respects the browser's `prefers-color-scheme`; preference persists to localStorage.
 - **Modern React SPA** — React 19 + TypeScript + Tailwind CSS 3, built with Vite.
 - **Detail pages** — Routed `/book/:id` and `/author/:id` pages replace the previous modal flow. Deep-linkable, back-button friendly, hold per-book history inline.
