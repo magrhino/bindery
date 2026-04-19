@@ -67,6 +67,7 @@ type statusResponse struct {
 	Authenticated bool   `json:"authenticated"`
 	SetupRequired bool   `json:"setupRequired"`
 	Username      string `json:"username,omitempty"`
+	Role          string `json:"role,omitempty"`
 	Mode          string `json:"mode"`
 }
 
@@ -107,10 +108,13 @@ func (h *AuthHandler) Status(w http.ResponseWriter, r *http.Request) {
 		if u, _ := h.users.GetByID(ctx, uid); u != nil {
 			resp.Authenticated = true
 			resp.Username = u.Username
+			resp.Role = u.Role
 		}
 	} else if mode == auth.ModeDisabled || (mode == auth.ModeLocalOnly && auth.IsLocalRequest(r)) {
 		// Trusted bypass — the UI should render normally without a login screen.
+		// Treat as admin so role-gated UI surfaces correctly.
 		resp.Authenticated = true
+		resp.Role = "admin"
 	}
 
 	writeOK(w, resp)
