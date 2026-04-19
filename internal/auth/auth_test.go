@@ -411,16 +411,17 @@ func TestRequireCSRFToken_AllowsSafeMethod(t *testing.T) {
 	}
 }
 
-func TestRequireCSRFToken_AllowsMutationWithoutSessionCookie(t *testing.T) {
+func TestRequireCSRFToken_AllowsUnauthPath(t *testing.T) {
 	secret := []byte("s")
 	mw := RequireCSRFToken(func() []byte { return secret })
 	called := false
 	h := mw(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true }))
-	// No session cookie → not cookie-authenticated (e.g. POST /auth/login); must pass through.
+	// AllowUnauthPath routes must always pass through, even with a stale session cookie.
 	req, _ := http.NewRequest("POST", "/api/v1/auth/login", nil)
+	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "stale-cookie-value"})
 	h.ServeHTTP(nopWriter{}, req)
 	if !called {
-		t.Fatal("POST without session cookie must pass through — CSRF only applies to cookie-auth sessions")
+		t.Fatal("POST to AllowUnauthPath must pass through regardless of session cookie")
 	}
 }
 
