@@ -15,11 +15,18 @@ import (
 )
 
 type FileHandler struct {
-	books *db.BookRepo
+	books        *db.BookRepo
+	allowedRoots []string
 }
 
-func NewFileHandler(books *db.BookRepo) *FileHandler {
-	return &FileHandler{books: books}
+func NewFileHandler(books *db.BookRepo, allowedRoots ...string) *FileHandler {
+	var roots []string
+	for _, r := range allowedRoots {
+		if r != "" {
+			roots = append(roots, filepath.Clean(r))
+		}
+	}
+	return &FileHandler{books: books, allowedRoots: roots}
 }
 
 // Download serves the book's content for browser download.
@@ -44,6 +51,14 @@ func (h *FileHandler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Defence-in-depth: refuse to serve paths that aren't under a configured
+	// library root, even if a tampered DB row or importer bug set FilePath
+	// to something outside the library (e.g. /etc/passwd, /config/*).
+	if !h.isAllowedPath(book.FilePath) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
+		return
+	}
+
 	info, err := os.Stat(book.FilePath)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found on disk"})
@@ -59,6 +74,28 @@ func (h *FileHandler) Download(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+filename+"\"")
 	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	http.ServeFile(w, r, book.FilePath)
+}
+
+// isAllowedPath reports whether p falls under one of the configured library
+// roots. Paths are compared after filepath.Clean so trailing slashes and
+// `..` traversal don't bypass the check. If no roots are configured the
+// handler falls back to allowing any path — this preserves behaviour for
+// installs that haven't set BINDERY_LIBRARY_DIR and for tests that wire
+// the handler without roots.
+func (h *FileHandler) isAllowedPath(p string) bool {
+	if len(h.allowedRoots) == 0 {
+		return true
+	}
+	p = filepath.Clean(p)
+	for _, root := range h.allowedRoots {
+		if root == "" || root == "." {
+			continue
+		}
+		if p == root || strings.HasPrefix(p, root+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // streamZip writes a zip archive of every regular file under srcDir to the
