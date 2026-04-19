@@ -6,7 +6,7 @@ The short version lives in the [README](../README.md#roadmap). ✅ items have la
 
 ## Planned
 
-- ⬜ **Multi-user support** — per-user libraries, per-user monitored authors, per-user quality profiles.
+- ✅ **Multi-user support** (v1.0.0/v1.0.1) — per-user libraries, per-user monitored authors, per-user quality profiles.
 
   Today Bindery assumes a single administrator — the auth schema has a `users` table but is seeded with exactly one row. Multi-user support needs role/permission scoping across the rest of the schema and UI:
 
@@ -17,18 +17,14 @@ The short version lives in the [README](../README.md#roadmap). ✅ items have la
 
 - **OIDC / SSO** — support both deployment shapes so Bindery fits any environment.
 
-  - ⬜ **Native OIDC client** — sign in directly against Authelia / Authentik / Keycloak / Google / GitHub without a reverse proxy in the path. Session cookies from the OIDC flow live alongside the existing username/password and API-key auth; users can mix.
-  - ⬜ **Reverse-proxy SSO** — accept upstream-proxy identity headers (`X-Forwarded-User` / `Remote-User`) when auth mode is **Disabled** or the trusted-proxy allowlist is configured. Already the documented workaround today (see the [Reverse-proxy & SSO wiki page](https://github.com/vavallee/bindery/wiki/Reverse-proxy-and-SSO)); formalize it as a first-class path with a trust list so operators don't have to turn auth off wholesale. Overlaps with the [Reverse-proxy header trust](#) item below.
+  - ✅ **Native OIDC client** (v1.0.0) — sign in directly against Authelia / Authentik / Keycloak / Google / GitHub without a reverse proxy in the path. Session cookies from the OIDC flow live alongside the existing username/password and API-key auth; users can mix.
+  - ✅ **Reverse-proxy SSO** (v1.0.0) — accept upstream-proxy identity headers (`X-Forwarded-User` / `Remote-User`) when the request arrives from a configured trusted proxy IP. First-class `proxy` auth mode with startup guard. See the [Reverse-proxy & SSO wiki page](https://github.com/vavallee/bindery/wiki/Reverse-proxy-and-SSO).
 
   Goal: the same release supports both homelab users who already run Authelia at the edge **and** users who want to plug OIDC straight into Bindery without standing up a proxy.
 
-- ⬜ **Reverse-proxy header trust** — accept `X-Forwarded-User` / `Remote-User` from a configurable list of trusted upstream proxies so SSO-at-the-edge setups don't require the auth-mode-disabled escape hatch.
+- ✅ **Reverse-proxy header trust** (v1.0.0) — `X-Forwarded-User` (configurable) trusted from `BINDERY_TRUSTED_PROXY` CIDR list. Startup refuses to start in proxy mode without a trust list configured.
 
-  Needs a trust list, header allowlist, and clear docs on the footgun (a misconfigured proxy becomes an auth bypass).
-
-- ⬜ **CSRF tokens** — explicit CSRF token middleware to harden browser flows.
-
-  Session cookies today use `SameSite=Lax`, which blocks cross-site form posts. On the list for a subsequent hardening pass.
+- ✅ **CSRF tokens** (v1.0.0) — double-submit token via `GET /auth/csrf`; all session-cookie mutations require matching `X-CSRF-Token` header. API-key clients exempt. See [Use CSRF tokens in scripts](https://github.com/vavallee/bindery/wiki/Howto-CSRF-tokens).
 
 - ⬜ **External database support (MySQL / Postgres)** ([#86](https://github.com/vavallee/bindery/issues/86)) — optional settings for DB host, credentials, and connection path so Bindery can run against a shared MySQL/Postgres instance instead of the bundled SQLite file.
 
@@ -72,9 +68,9 @@ The short version lives in the [README](../README.md#roadmap). ✅ items have la
 
 These items are too large or architectural for a minor release. They define the v2 milestone — the set of changes that would warrant a major version bump.
 
-- **Multi-user with role separation** — Full multi-tenant model: every author, book, profile, and download history row is scoped to an owner. Admin role retains global access (indexers, download clients, system settings). Library overlap handled by shared "global" authors that any user can monitor. Needs schema migration, API layer changes, and a rewritten Settings page split into per-user and admin sections. Blocked on the token-based OIDC work below (need identity from multiple providers before multi-user makes sense).
+- ✅ **Multi-user with role separation** — shipped in v1.0.0/v1.0.1.
 
-- **Native OIDC / SSO with multi-provider discovery** — Sign in against Authelia, Authentik, Keycloak, Google, or GitHub natively without an external reverse proxy. Session tokens issued by Bindery after validating the OIDC callback. Overlaps with the multi-user story: each OIDC subject maps to a Bindery user row.
+- ✅ **Native OIDC / SSO with multi-provider discovery** — shipped in v1.0.0.
 
 - **External database (MySQL / Postgres)** ([#86](https://github.com/vavallee/bindery/issues/86)) — The current `modernc.org/sqlite` driver is zero-CGO and ships inside the binary, which is excellent for single-instance homelabs. Multi-replica HA requires a shared external store. SQLite WAL is not a substitute for row-level locking under concurrent writers. The schema is already designed with foreign keys and explicit transactions; porting to `database/sql` + a MySQL/Postgres driver is feasible but requires end-to-end testing against both engines, a migration planner that works per-engine, and probably a connection-pool configurator in Settings.
 
