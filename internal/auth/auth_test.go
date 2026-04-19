@@ -411,17 +411,32 @@ func TestRequireCSRFToken_AllowsSafeMethod(t *testing.T) {
 	}
 }
 
-func TestRequireCSRFToken_BlocksMutationWithoutToken(t *testing.T) {
+func TestRequireCSRFToken_AllowsMutationWithoutSessionCookie(t *testing.T) {
 	secret := []byte("s")
 	mw := RequireCSRFToken(func() []byte { return secret })
 	called := false
 	h := mw(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true }))
-	// Simulate a cross-origin POST: no session cookie, no CSRF token.
+	// No session cookie → not cookie-authenticated (e.g. POST /auth/login); must pass through.
+	req, _ := http.NewRequest("POST", "/api/v1/auth/login", nil)
+	h.ServeHTTP(nopWriter{}, req)
+	if !called {
+		t.Fatal("POST without session cookie must pass through — CSRF only applies to cookie-auth sessions")
+	}
+}
+
+func TestRequireCSRFToken_BlocksMutationWithSessionButNoToken(t *testing.T) {
+	secret := []byte("s")
+	sessionVal := SignSession(secret, 1, time.Now().Add(time.Hour))
+	mw := RequireCSRFToken(func() []byte { return secret })
+	called := false
+	h := mw(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true }))
+	// Session cookie present but no CSRF token — cross-origin attack scenario.
 	req, _ := http.NewRequest("POST", "/api/v1/author", nil)
+	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: sessionVal})
 	w := &captureWriter{}
 	h.ServeHTTP(w, req)
 	if called {
-		t.Fatal("POST without CSRF token and no API key must be rejected")
+		t.Fatal("POST with session cookie but no CSRF token must be rejected")
 	}
 	if w.status != http.StatusForbidden {
 		t.Errorf("status = %d; want 403", w.status)

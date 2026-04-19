@@ -32,7 +32,8 @@ func ValidCSRFToken(secret []byte, r *http.Request, token string) bool {
 // RequireCSRFToken rejects state-mutating requests that lack a valid
 // X-CSRF-Token header. Requests authenticated via API key are exempt because
 // CSRF only threatens cookie-based auth. GET / HEAD / OPTIONS are safe methods
-// and are always passed through.
+// and are always passed through. Requests with no session cookie are also
+// exempt — they are not cookie-authenticated (e.g. POST /auth/login).
 func RequireCSRFToken(secret func() []byte) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -41,6 +42,10 @@ func RequireCSRFToken(secret func() []byte) func(http.Handler) http.Handler {
 				// safe methods — no mutation risk
 			default:
 				if requestAPIKey(r) == "" {
+					// No session cookie → not a cookie-authenticated request; CSRF doesn't apply.
+					if c, err := r.Cookie(SessionCookieName); err != nil || c.Value == "" {
+						break
+					}
 					tok := r.Header.Get("X-CSRF-Token")
 					if !ValidCSRFToken(secret(), r, tok) {
 						w.Header().Set("Content-Type", "application/json")
