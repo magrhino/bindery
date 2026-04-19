@@ -8,6 +8,13 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v0.21.0] — 2026-04-19
+
+### Added
+
+- **Spanish, Filipino, and Indonesian UI translations** — language switcher now offers English, Français, Deutsch, Español, Filipino, Nederlands, and Bahasa Indonesia. Browser language is auto-detected on first visit; manual override persists to localStorage.
+- **Search hourglass icon** — the Search nav item moves off the main navigation bar and becomes an hourglass icon next to the settings gear, keeping the header cleaner. On mobile it remains accessible as a text item in the hamburger dropdown.
+
 ## [v0.20.3] — 2026-04-19
 
 ### Security
