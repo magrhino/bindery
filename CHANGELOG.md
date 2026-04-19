@@ -8,6 +8,12 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v1.0.1] — 2026-04-19
+
+### Fixed
+
+- **Admin UI missing from v1.0.0** — the Users management page (`/users`), admin nav icon, role-gated Settings tabs, and `isAdmin` context were omitted from the v1.0.0 build. All admin UI components now ship correctly (#301).
+
 ## [v1.0.0] — 2026-04-19
 
 ### Added
