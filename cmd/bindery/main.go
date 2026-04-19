@@ -356,6 +356,7 @@ func main() {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(auth.Middleware(authProvider))
 		r.Use(auth.RequireXRequestedWith)
+		r.Use(auth.RequireCSRFToken(authProvider.SessionSecret))
 
 		// System
 		r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -375,6 +376,7 @@ func main() {
 		// middleware (see auth.AllowUnauthPath). The config + mutation
 		// endpoints below sit behind it.
 		r.Get("/auth/status", authHandler.Status)
+		r.Get("/auth/csrf", authHandler.CSRF)
 		r.Post("/auth/login", authHandler.Login)
 		r.Post("/auth/logout", authHandler.Logout)
 		r.Post("/auth/setup", authHandler.Setup)

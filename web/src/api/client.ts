@@ -5,6 +5,32 @@ const BASE = '/api/v1'
 // try to redirect to /login from the login/setup pages themselves.
 const PUBLIC_PATHS = new Set(['/login', '/setup'])
 
+// CSRF double-submit token, fetched once on init and refreshed after login.
+let csrfToken = ''
+
+// Read from the bindery_csrf cookie (set by GET /auth/csrf).
+function readCSRFCookie(): string {
+  const m = document.cookie.match(/(?:^|;\s*)bindery_csrf=([^;]+)/)
+  return m ? decodeURIComponent(m[1]) : ''
+}
+
+export async function initCSRF(): Promise<void> {
+  try {
+    const res = await fetch(`${BASE}/auth/csrf`, {
+      credentials: 'include',
+      headers: { 'X-Requested-With': 'bindery-ui' },
+    })
+    if (res.ok) {
+      const data = await res.json()
+      csrfToken = data.csrfToken || readCSRFCookie()
+    }
+  } catch {
+    // Non-fatal — mutations will fail with 403 if still missing.
+  }
+}
+
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   // Merge caller-supplied headers on top of the defaults so we can't lose
   // the CSRF header if a caller passes their own `headers`.
@@ -12,6 +38,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     'Content-Type': 'application/json',
     'X-Requested-With': 'bindery-ui',
   })
+  const method = (options?.method ?? 'GET').toUpperCase()
+  if (!SAFE_METHODS.has(method) && csrfToken) {
+    headers.set('X-CSRF-Token', csrfToken)
+  }
   if (options?.headers) {
     new Headers(options.headers).forEach((v, k) => headers.set(k, v))
   }
@@ -81,12 +111,19 @@ export const api = {
   oidcProviders: () => request<OidcProvider[]>('/auth/oidc/providers'),
   oidcSetProviders: (providers: OidcProviderConfig[]) =>
     request<void>('/auth/oidc/providers', { method: 'PUT', body: JSON.stringify(providers) }),
-  authLogin: (username: string, password: string, rememberMe: boolean) =>
-    request<{ ok: boolean; username: string }>('/auth/login', {
+  authLogin: async (username: string, password: string, rememberMe: boolean) => {
+    const res = await request<{ ok: boolean; username: string }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ username, password, rememberMe }),
-    }),
-  authLogout: () => request<{ ok: boolean }>('/auth/logout', { method: 'POST' }),
+    })
+    await initCSRF()
+    return res
+  },
+  authLogout: async () => {
+    const res = await request<{ ok: boolean }>('/auth/logout', { method: 'POST' })
+    csrfToken = ''
+    return res
+  },
   authSetup: (username: string, password: string) =>
     request<{ ok: boolean }>('/auth/setup', {
       method: 'POST',

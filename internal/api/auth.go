@@ -280,6 +280,43 @@ func (h *AuthHandler) RegenerateAPIKey(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, map[string]any{"apiKey": key})
 }
 
+// CSRF issues (or re-issues) a double-submit CSRF token bound to the caller's
+// session cookie. The token is returned as JSON and also set as a readable
+// (non-HttpOnly) cookie so the frontend JS can read it. Unauthenticated
+// callers receive a 200 with an empty token — they have no session to bind to,
+// so the cookie-absent check in RequireCSRFToken will reject mutations anyway.
+func (h *AuthHandler) CSRF(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	c, err := r.Cookie(auth.SessionCookieName)
+	if err != nil || c.Value == "" {
+		writeOK(w, map[string]any{"csrfToken": ""})
+		return
+	}
+	secret := h.sessionSecret(ctx)
+	token := auth.MakeCSRFToken(secret, c.Value)
+
+	var secure bool
+	switch CookieSecureMode() {
+	case "always":
+		secure = true
+	case "never":
+		secure = false
+	default:
+		secure = r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+	}
+
+	// Readable (no HttpOnly) so JS can access it.
+	http.SetCookie(w, &http.Cookie{
+		Name:     auth.CSRFCookieName,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: false,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
+	})
+	writeOK(w, map[string]any{"csrfToken": token})
+}
+
 // SetMode persists the auth mode setting.
 func (h *AuthHandler) SetMode(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

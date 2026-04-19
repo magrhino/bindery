@@ -109,6 +109,7 @@ func AllowUnauthPath(path string) bool {
 		"/api/v1/auth/login",
 		"/api/v1/auth/logout",
 		"/api/v1/auth/setup",
+		"/api/v1/auth/csrf",
 		"/api/v1/auth/oidc/providers":
 		return true
 	}

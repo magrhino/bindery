@@ -378,3 +378,102 @@ func TestProxyAuthTrustedIPNoHeader(t *testing.T) {
 		t.Errorf("status = %d; want 401", w.status)
 	}
 }
+
+// --- CSRF tests --------------------------------------------------------
+
+func TestMakeCSRFToken_DifferentSessionsDiffer(t *testing.T) {
+	secret := []byte("test-secret")
+	tok1 := MakeCSRFToken(secret, "session-value-a")
+	tok2 := MakeCSRFToken(secret, "session-value-b")
+	if tok1 == tok2 {
+		t.Fatal("tokens for different sessions must differ")
+	}
+}
+
+func TestMakeCSRFToken_SameInputsSameOutput(t *testing.T) {
+	secret := []byte("test-secret")
+	tok1 := MakeCSRFToken(secret, "session-value")
+	tok2 := MakeCSRFToken(secret, "session-value")
+	if tok1 != tok2 {
+		t.Fatal("same inputs must produce the same token")
+	}
+}
+
+func TestRequireCSRFToken_AllowsSafeMethod(t *testing.T) {
+	secret := []byte("s")
+	mw := RequireCSRFToken(func() []byte { return secret })
+	called := false
+	h := mw(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true }))
+	req, _ := http.NewRequest("GET", "/api/v1/author", nil)
+	h.ServeHTTP(nopWriter{}, req)
+	if !called {
+		t.Fatal("GET must pass without CSRF token")
+	}
+}
+
+func TestRequireCSRFToken_BlocksMutationWithoutToken(t *testing.T) {
+	secret := []byte("s")
+	mw := RequireCSRFToken(func() []byte { return secret })
+	called := false
+	h := mw(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true }))
+	// Simulate a cross-origin POST: no session cookie, no CSRF token.
+	req, _ := http.NewRequest("POST", "/api/v1/author", nil)
+	w := &captureWriter{}
+	h.ServeHTTP(w, req)
+	if called {
+		t.Fatal("POST without CSRF token and no API key must be rejected")
+	}
+	if w.status != http.StatusForbidden {
+		t.Errorf("status = %d; want 403", w.status)
+	}
+}
+
+func TestRequireCSRFToken_AllowsMutationWithAPIKey(t *testing.T) {
+	secret := []byte("s")
+	mw := RequireCSRFToken(func() []byte { return secret })
+	called := false
+	h := mw(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true }))
+	req, _ := http.NewRequest("POST", "/api/v1/author", nil)
+	req.Header.Set("X-Api-Key", "apikey-value")
+	h.ServeHTTP(nopWriter{}, req)
+	if !called {
+		t.Fatal("POST with API key must bypass CSRF check")
+	}
+}
+
+func TestRequireCSRFToken_AllowsMutationWithValidToken(t *testing.T) {
+	secret := []byte("test-secret")
+	sessionVal := SignSession(secret, 1, time.Now().Add(time.Hour))
+	token := MakeCSRFToken(secret, sessionVal)
+
+	mw := RequireCSRFToken(func() []byte { return secret })
+	called := false
+	h := mw(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true }))
+	req, _ := http.NewRequest("DELETE", "/api/v1/author/1", nil)
+	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: sessionVal})
+	req.Header.Set("X-CSRF-Token", token)
+	h.ServeHTTP(nopWriter{}, req)
+	if !called {
+		t.Fatal("DELETE with valid CSRF token must pass")
+	}
+}
+
+func TestRequireCSRFToken_BlocksMutationWithWrongToken(t *testing.T) {
+	secret := []byte("test-secret")
+	sessionVal := SignSession(secret, 1, time.Now().Add(time.Hour))
+
+	mw := RequireCSRFToken(func() []byte { return secret })
+	called := false
+	h := mw(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true }))
+	req, _ := http.NewRequest("PUT", "/api/v1/author/1", nil)
+	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: sessionVal})
+	req.Header.Set("X-CSRF-Token", "bad-token")
+	w := &captureWriter{}
+	h.ServeHTTP(w, req)
+	if called {
+		t.Fatal("PUT with wrong CSRF token must be rejected")
+	}
+	if w.status != http.StatusForbidden {
+		t.Errorf("status = %d; want 403", w.status)
+	}
+}
