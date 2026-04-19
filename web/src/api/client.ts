@@ -47,6 +47,20 @@ export interface AuthConfig {
   username: string
 }
 
+export interface OidcProvider {
+  id: string
+  name: string
+}
+
+export interface OidcProviderConfig {
+  id: string
+  name: string
+  issuer: string
+  client_id: string
+  client_secret: string
+  scopes: string[]
+}
+
 export const api = {
   // System
   health: () => request<{ status: string; version: string }>('/health'),
@@ -64,6 +78,9 @@ export const api = {
 
   // Auth
   authStatus: () => request<AuthStatus>('/auth/status'),
+  oidcProviders: () => request<OidcProvider[]>('/auth/oidc/providers'),
+  oidcSetProviders: (providers: OidcProviderConfig[]) =>
+    request<void>('/auth/oidc/providers', { method: 'PUT', body: JSON.stringify(providers) }),
   authLogin: (username: string, password: string, rememberMe: boolean) =>
     request<{ ok: boolean; username: string }>('/auth/login', {
       method: 'POST',

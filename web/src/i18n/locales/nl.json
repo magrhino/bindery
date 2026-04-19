@@ -54,7 +54,9 @@
     "errorFailed": "Inloggen mislukt",
     "signOut": "Uitloggen",
     "signedInAs": "Ingelogd als",
-    "proxyHint": "Meld u aan via uw SSO-provider"
+    "proxyHint": "Meld u aan via uw SSO-provider",
+    "signInWith": "Inloggen met {{name}}",
+    "orLocal": "of"
   },
   "setup": {
     "title": "Eerste installatie",
@@ -333,6 +335,22 @@
       "resultSkipped": "overgeslagen (bestaan al)",
       "resultFailed": "mislukt",
       "showFailures": "{{count}} fout(en) tonen"
+    },
+    "oidc": {
+      "heading": "SSO / OIDC Providers",
+      "description": "Configure OpenID Connect providers. Users who sign in via OIDC are automatically provisioned a Bindery account on first login.",
+      "empty": "No OIDC providers configured.",
+      "addButton": "+ Add Provider",
+      "addHeading": "New OIDC Provider",
+      "addSave": "Add Provider",
+      "removeConfirm": "Remove this OIDC provider?",
+      "saveFail": "Failed to save providers",
+      "fieldId": "ID",
+      "fieldName": "Display Name",
+      "fieldIssuer": "Issuer URL",
+      "fieldClientId": "Client ID",
+      "fieldClientSecret": "Client Secret",
+      "fieldScopes": "Scopes"
     }
   },
   "addAuthorModal": {

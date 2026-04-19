@@ -66,7 +66,9 @@
     "errorFailed": "Nabigo ang pag-login",
     "signOut": "Mag-sign out",
     "signedInAs": "Naka-sign in bilang",
-    "proxyHint": "Mag-sign in sa pamamagitan ng iyong SSO provider"
+    "proxyHint": "Mag-sign in sa pamamagitan ng iyong SSO provider",
+    "signInWith": "Mag-sign in gamit ang {{name}}",
+    "orLocal": "o"
   },
   "setup": {
     "title": "Unang setup",
@@ -378,6 +380,22 @@
       "hardcoverEmpty": "Walang naka-configure na Hardcover import list.",
       "hardcoverLastSync": "Huling sync: {{date}}",
       "hardcoverNeverSynced": "Hindi pa kailanman na-sync"
+    },
+    "oidc": {
+      "heading": "SSO / OIDC Providers",
+      "description": "Configure OpenID Connect providers. Users who sign in via OIDC are automatically provisioned a Bindery account on first login.",
+      "empty": "No OIDC providers configured.",
+      "addButton": "+ Add Provider",
+      "addHeading": "New OIDC Provider",
+      "addSave": "Add Provider",
+      "removeConfirm": "Remove this OIDC provider?",
+      "saveFail": "Failed to save providers",
+      "fieldId": "ID",
+      "fieldName": "Display Name",
+      "fieldIssuer": "Issuer URL",
+      "fieldClientId": "Client ID",
+      "fieldClientSecret": "Client Secret",
+      "fieldScopes": "Scopes"
     }
   },
   "addAuthorModal": {

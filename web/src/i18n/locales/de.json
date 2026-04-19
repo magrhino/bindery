@@ -54,7 +54,9 @@
     "errorFailed": "Anmeldung fehlgeschlagen",
     "signOut": "Abmelden",
     "signedInAs": "Angemeldet als",
-    "proxyHint": "Melden Sie sich über Ihren SSO-Anbieter an"
+    "proxyHint": "Melden Sie sich über Ihren SSO-Anbieter an",
+    "signInWith": "Mit {{name}} anmelden",
+    "orLocal": "oder"
   },
   "setup": {
     "title": "Ersteinrichtung",
@@ -333,6 +335,22 @@
       "resultSkipped": "übersprungen (bereits vorhanden)",
       "resultFailed": "fehlgeschlagen",
       "showFailures": "{{count}} Fehler anzeigen"
+    },
+    "oidc": {
+      "heading": "SSO / OIDC Providers",
+      "description": "Configure OpenID Connect providers. Users who sign in via OIDC are automatically provisioned a Bindery account on first login.",
+      "empty": "No OIDC providers configured.",
+      "addButton": "+ Add Provider",
+      "addHeading": "New OIDC Provider",
+      "addSave": "Add Provider",
+      "removeConfirm": "Remove this OIDC provider?",
+      "saveFail": "Failed to save providers",
+      "fieldId": "ID",
+      "fieldName": "Display Name",
+      "fieldIssuer": "Issuer URL",
+      "fieldClientId": "Client ID",
+      "fieldClientSecret": "Client Secret",
+      "fieldScopes": "Scopes"
     }
   },
   "addAuthorModal": {

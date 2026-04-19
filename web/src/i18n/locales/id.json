@@ -66,7 +66,9 @@
     "errorFailed": "Login gagal",
     "signOut": "Keluar",
     "signedInAs": "Masuk sebagai",
-    "proxyHint": "Masuk melalui penyedia SSO Anda"
+    "proxyHint": "Masuk melalui penyedia SSO Anda",
+    "signInWith": "Masuk dengan {{name}}",
+    "orLocal": "atau"
   },
   "setup": {
     "title": "Pengaturan awal",
@@ -378,6 +380,22 @@
       "hardcoverEmpty": "Tidak ada daftar impor Hardcover terkonfigurasi.",
       "hardcoverLastSync": "Sinkronisasi terakhir: {{date}}",
       "hardcoverNeverSynced": "Belum pernah disinkronkan"
+    },
+    "oidc": {
+      "heading": "SSO / OIDC Providers",
+      "description": "Configure OpenID Connect providers. Users who sign in via OIDC are automatically provisioned a Bindery account on first login.",
+      "empty": "No OIDC providers configured.",
+      "addButton": "+ Add Provider",
+      "addHeading": "New OIDC Provider",
+      "addSave": "Add Provider",
+      "removeConfirm": "Remove this OIDC provider?",
+      "saveFail": "Failed to save providers",
+      "fieldId": "ID",
+      "fieldName": "Display Name",
+      "fieldIssuer": "Issuer URL",
+      "fieldClientId": "Client ID",
+      "fieldClientSecret": "Client Secret",
+      "fieldScopes": "Scopes"
     }
   },
   "addAuthorModal": {

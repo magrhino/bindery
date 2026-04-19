@@ -66,7 +66,9 @@
     "errorFailed": "Login failed",
     "signOut": "Sign out",
     "signedInAs": "Signed in as",
-    "proxyHint": "Sign in via your SSO provider"
+    "proxyHint": "Sign in via your SSO provider",
+    "signInWith": "Sign in with {{name}}",
+    "orLocal": "or"
   },
   "setup": {
     "title": "First-run setup",
@@ -378,6 +380,22 @@
       "hardcoverEmpty": "No Hardcover import lists configured.",
       "hardcoverLastSync": "Last sync: {{date}}",
       "hardcoverNeverSynced": "Never synced"
+    },
+    "oidc": {
+      "heading": "SSO / OIDC Providers",
+      "description": "Configure OpenID Connect providers. Users who sign in via OIDC are automatically provisioned a Bindery account on first login.",
+      "empty": "No OIDC providers configured.",
+      "addButton": "+ Add Provider",
+      "addHeading": "New OIDC Provider",
+      "addSave": "Add Provider",
+      "removeConfirm": "Remove this OIDC provider?",
+      "saveFail": "Failed to save providers",
+      "fieldId": "ID",
+      "fieldName": "Display Name",
+      "fieldIssuer": "Issuer URL",
+      "fieldClientId": "Client ID",
+      "fieldClientSecret": "Client Secret",
+      "fieldScopes": "Scopes"
     }
   },
   "addAuthorModal": {

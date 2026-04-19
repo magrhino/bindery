@@ -1,7 +1,7 @@
-import { FormEvent, useState } from 'react'
+import { FormEvent, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { api } from '../api/client'
+import { api, OidcProvider } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import Logo from '../components/Logo'
 
@@ -9,8 +9,13 @@ export default function LoginPage() {
   const { t } = useTranslation()
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [oidcProviders, setOidcProviders] = useState<OidcProvider[]>([])
   const { status, refresh } = useAuth()
   const navigate = useNavigate()
+
+  useEffect(() => {
+    api.oidcProviders().then(setOidcProviders).catch(() => setOidcProviders([]))
+  }, [])
 
   // Read values from the form at submit time instead of React state.
   // Browser autofill sets input.value directly without firing onChange, which
@@ -51,6 +56,24 @@ export default function LoginPage() {
 
   return (
     <CardShell title={t('login.title')} subtitle="">
+      {oidcProviders.length > 0 && (
+        <div className="space-y-2 mb-4">
+          {oidcProviders.map(p => (
+            <a
+              key={p.id}
+              href={`/api/v1/auth/oidc/${encodeURIComponent(p.id)}/login`}
+              className="flex items-center justify-center w-full border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-700 rounded-md py-2 text-sm font-medium transition-colors"
+            >
+              {t('login.signInWith', { name: p.name })}
+            </a>
+          ))}
+          <div className="relative flex items-center gap-3 py-1">
+            <div className="flex-1 border-t border-slate-200 dark:border-zinc-800" />
+            <span className="text-xs text-slate-500 dark:text-zinc-500">{t('login.orLocal')}</span>
+            <div className="flex-1 border-t border-slate-200 dark:border-zinc-800" />
+          </div>
+        </div>
+      )}
       <form onSubmit={submit} method="post" className="space-y-4">
         <Field label={t('login.username')}>
           <input

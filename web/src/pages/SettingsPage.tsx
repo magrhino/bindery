@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, AuthConfig, AuthStatus, BlocklistEntry, Indexer, IndexerTestResult, ProwlarrInstance, DownloadClient, NotificationConfig, QualityProfile, MetadataProfile, CalibreImportProgress, CalibreSyncProgress, RootFolder, LogEntry, ImportList, HardcoverList } from '../api/client'
+import AuthSettings from '../settings/AuthSettings'
 import Pagination from '../components/Pagination'
 import { usePagination } from '../components/usePagination'
 import ThemeToggle from '../components/ThemeToggle'
@@ -1580,6 +1581,9 @@ function GeneralTab() {
 
       {/* Security */}
       <SecuritySection />
+
+      {/* OIDC providers */}
+      <AuthSettings />
 
       {/* API Keys */}
       <section>
