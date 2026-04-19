@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // Config holds the application configuration loaded from environment variables.
@@ -19,6 +20,9 @@ type Config struct {
 	LibraryDir        string
 	AudiobookDir      string
 	DownloadPathRemap string
+	// Proxy SSO settings (Phase 1).
+	ProxyAuthHeader    string // BINDERY_PROXY_AUTH_HEADER
+	ProxyAutoProvision bool   // BINDERY_PROXY_AUTO_PROVISION
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -33,15 +37,17 @@ type Config struct {
 // takes precedence and the env var becomes a no-op.
 func Load() *Config {
 	return &Config{
-		Port:              envOr("BINDERY_PORT", "8787"),
-		DBPath:            envOr("BINDERY_DB_PATH", defaultDBPath(runtime.GOOS, os.UserConfigDir)),
-		DataDir:           envOr("BINDERY_DATA_DIR", defaultDataDir(runtime.GOOS, os.UserConfigDir)),
-		LogLevel:          envOr("BINDERY_LOG_LEVEL", "info"),
-		APIKey:            envOr("BINDERY_API_KEY", ""),
-		DownloadDir:       envOr("BINDERY_DOWNLOAD_DIR", "/downloads"),
-		LibraryDir:        envOr("BINDERY_LIBRARY_DIR", "/books"),
-		AudiobookDir:      envOr("BINDERY_AUDIOBOOK_DIR", ""),
-		DownloadPathRemap: envOr("BINDERY_DOWNLOAD_PATH_REMAP", ""),
+		Port:               envOr("BINDERY_PORT", "8787"),
+		DBPath:             envOr("BINDERY_DB_PATH", defaultDBPath(runtime.GOOS, os.UserConfigDir)),
+		DataDir:            envOr("BINDERY_DATA_DIR", defaultDataDir(runtime.GOOS, os.UserConfigDir)),
+		LogLevel:           envOr("BINDERY_LOG_LEVEL", "info"),
+		APIKey:             envOr("BINDERY_API_KEY", ""),
+		DownloadDir:        envOr("BINDERY_DOWNLOAD_DIR", "/downloads"),
+		LibraryDir:         envOr("BINDERY_LIBRARY_DIR", "/books"),
+		AudiobookDir:       envOr("BINDERY_AUDIOBOOK_DIR", ""),
+		DownloadPathRemap:  envOr("BINDERY_DOWNLOAD_PATH_REMAP", ""),
+		ProxyAuthHeader:    envOr("BINDERY_PROXY_AUTH_HEADER", "X-Forwarded-User"),
+		ProxyAutoProvision: envBool("BINDERY_PROXY_AUTO_PROVISION", true),
 	}
 }
 
@@ -76,6 +82,17 @@ func defaultDataDir(goos string, userConfigDir func() (string, error)) string {
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func envBool(key string, fallback bool) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	switch v {
+	case "false", "0", "no":
+		return false
+	case "true", "1", "yes":
+		return true
 	}
 	return fallback
 }
