@@ -17,6 +17,7 @@ export default function UsersPage() {
   const [newRole, setNewRole] = useState<'user' | 'admin'>('user')
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
+  const [, setResetError] = useState<Record<number, string>>({})
 
   useEffect(() => {
     document.title = 'Users · Bindery'
@@ -65,6 +66,17 @@ export default function UsersPage() {
       setUsers(prev => prev.map(x => x.id === u.id ? { ...x, role: next } : x))
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : t('users.roleFail'))
+    }
+  }
+
+  async function handleReset(id: number) {
+    const pw = prompt('New password (min 8 characters):')
+    if (!pw) return
+    try {
+      await api.resetUserPassword(id, pw)
+      setResetError(prev => ({ ...prev, [id]: '' }))
+    } catch (e: unknown) {
+      setResetError(prev => ({ ...prev, [id]: e instanceof Error ? e.message : 'Failed' }))
     }
   }
 
@@ -121,6 +133,12 @@ export default function UsersPage() {
                       className={`${btnCls} text-xs bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300`}
                     >
                       {u.role === 'admin' ? t('users.demote') : t('users.promote')}
+                    </button>
+                    <button
+                      onClick={() => handleReset(u.id)}
+                      className={`${btnCls} text-xs bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300`}
+                    >
+                      {t('users.resetPassword')}
                     </button>
                     <button
                       onClick={() => handleDelete(u)}
