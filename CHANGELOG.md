@@ -8,6 +8,22 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v1.0.3] — 2026-04-20
+
+### Fixed
+
+- **CSRF token lost on page reload** (#315) — sessions survived reloads cookie-wise, but `initCSRF()` only ran on login, so subsequent mutations hit 403 until next login. `AuthContext.refresh()` now re-hydrates the token whenever the session is authenticated.
+- **Calibre-imported authors stuck with no metadata** (#316) — authors with a `calibre:` foreign ID were hard-skipped by the metadata refresh. They are now re-linked to the metadata provider on first refresh via exact name match (case/whitespace-insensitive), pulling real image/description/sort name in place.
+- **Misleading author search book count** (#317) — the "books" number on author search results is OpenLibrary's raw work count before dedup/language-filter; relabelled to "up to N works" with a tooltip explaining the post-filter catalogue will be smaller.
+
+### Docs
+
+- **Auth, multi-user, and v1 upgrade guides** (#318) — added `docs/auth-multiuser.md`, `docs/auth-oidc.md`, `docs/auth-proxy.md`, `docs/multi-user.md`, `docs/troubleshooting-auth.md`, `docs/upgrade-v2.md` covering the v1.0 role model, OIDC/proxy setup, and migration path.
+
+### Chores
+
+- Dependency bumps: golang base image (#307), node base image (#308), `modernc.org/sqlite` (#309), eslint 9→10 (#311).
+
 ## [v1.0.2] — 2026-04-20
 
 ### Added
