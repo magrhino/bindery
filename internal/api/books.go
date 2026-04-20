@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
@@ -347,7 +348,17 @@ func removeBookPath(p string) error {
 	if info.IsDir() {
 		return os.RemoveAll(p)
 	}
-	return os.Remove(p)
+	if err := os.Remove(p); err != nil { //nosec G304 -- p is a DB-stored path written by the import pipeline, not user input
+		return err
+	}
+	// After removing a file, clean up the parent directory if it is now empty.
+	// This handles multi-format NZBs where several formats share one folder.
+	parent := filepath.Dir(p)
+	entries, err := os.ReadDir(parent)
+	if err == nil && len(entries) == 0 {
+		_ = os.Remove(parent) //nosec G304 -- derived from DB-stored path, not user input
+	}
+	return nil
 }
 
 func (h *BookHandler) ListWanted(w http.ResponseWriter, r *http.Request) {
