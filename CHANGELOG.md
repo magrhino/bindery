@@ -8,6 +8,17 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v1.0.2] — 2026-04-20
+
+### Added
+
+- **Admin password reset** (#292/#305) — admins can reset any local user's password from the Users page without requiring the user to log out. New endpoint `PUT /auth/users/{id}/reset-password`.
+
+### Fixed
+
+- **Books sort with missing release dates** (#304) — books without a release date were bubbling to the top of "oldest first" date sorts. They now sort to the end in both directions.
+- **Empty folders left behind after deleting books** (#290/#306) — when the last file in a book folder was removed, the now-empty parent directory stayed behind. `removeBookPath` now cleans up the parent on a best-effort basis. Multi-format folders shared between ebook + audiobook are only removed when both formats are gone.
+
 ## [v1.0.1] — 2026-04-19
 
 ### Fixed
