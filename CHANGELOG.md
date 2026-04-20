@@ -8,7 +8,13 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
-## [v1.0.3] — 2026-04-20
+## [v1.0.4] — 2026-04-20
+
+### Reverted
+
+- **eslint 9→10 bump** (#311) — reverted because `eslint-plugin-react-hooks@7.0.1` still peers eslint at `^9.0.0`, breaking `npm ci` in the Docker build. v1.0.3 tag was cut but never produced an image; v1.0.4 ships the same fixes without the eslint upgrade. Will retry once react-hooks catches up.
+
+## [v1.0.3] — 2026-04-20 *(tagged but not released — CI build failure, see v1.0.4)*
 
 ### Fixed
 
@@ -22,7 +28,7 @@ The `development` branch carries the in-flight feature set for the next release.
 
 ### Chores
 
-- Dependency bumps: golang base image (#307), node base image (#308), `modernc.org/sqlite` (#309), eslint 9→10 (#311).
+- Dependency bumps: golang base image (#307), node base image (#308), `modernc.org/sqlite` (#309).
 
 ## [v1.0.2] — 2026-04-20
 
