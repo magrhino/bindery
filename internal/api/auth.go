@@ -152,6 +152,14 @@ func (h *AuthHandler) Setup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "create user: "+err.Error())
 		return
 	}
+	// The first user is the admin. Create defaults role to "user"; without this
+	// promotion the freshly-set-up operator is locked out of every admin-gated
+	// page (Calibre plugin, user management, etc).
+	if err := h.users.PromoteFirstUser(ctx); err != nil {
+		writeErr(w, http.StatusInternalServerError, "promote admin: "+err.Error())
+		return
+	}
+	u.Role = "admin"
 	// Log the user in immediately.
 	h.issueSession(w, r, ctx, u.ID, true)
 	slog.Info("first-run setup complete", "username", u.Username)

@@ -83,10 +83,15 @@ func TestSetup_CreatesFirstAdmin(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	// User exists in DB.
+	// User exists in DB and is promoted to admin (regression: #321 — first-run
+	// setup left the user with role="user", locking the operator out of every
+	// admin-gated config page until they manually edited the database).
 	u, err := users.GetByUsername(ctx, "admin")
 	if err != nil || u == nil {
 		t.Fatalf("expected user created, got u=%v err=%v", u, err)
+	}
+	if u.Role != "admin" {
+		t.Errorf("expected first-run user promoted to admin, got role=%q", u.Role)
 	}
 	// Session cookie issued.
 	var haveCookie bool
