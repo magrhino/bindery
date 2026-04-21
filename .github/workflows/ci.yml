@@ -115,14 +115,18 @@ jobs:
       # Deploy: bump Helm chart image tag in development via the GitHub API.
       # Always targets development regardless of which branch triggered the build —
       # main is PR-gated so a direct git push is rejected by branch protection.
+      # Tag pushes use the semver tag (v1.2.3); branch pushes use sha-XXXXXXX.
       # ArgoCD watches development; tag bumps reach main naturally via merge.
       - name: Update Helm image tag
-        continue-on-error: true
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development' || startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          IMAGE_TAG="sha-${GITHUB_SHA::7}"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            IMAGE_TAG="${GITHUB_REF_NAME}"
+          else
+            IMAGE_TAG="sha-${GITHUB_SHA::7}"
+          fi
           FILE_PATH="charts/bindery/values.yaml"
           FILE_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${FILE_PATH}?ref=development" \
             --jq .sha)
@@ -132,12 +136,11 @@ jobs:
             -f message="chore(deploy): update bindery image to ${IMAGE_TAG} [skip ci]" \
             -f content="${CONTENT}" \
             -f sha="${FILE_SHA}" \
-            -f branch="development" \
-            --silent
+            -f branch="development"
           echo "Pushed ${IMAGE_TAG} to development/${FILE_PATH}"
 
       - name: Trigger Argo CD refresh
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development' || startsWith(github.ref, 'refs/tags/v')
         env:
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           ARGOCD_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
@@ -167,7 +170,7 @@ jobs:
           ' CHANGELOG.md)
 
           if [ -z "$NOTES" ]; then
-            echo "ERROR: No CHANGELOG section found for ${VERSION}. Aborting release."
+            echo "::error::No CHANGELOG section found for ${VERSION}. Add '## [${VERSION}]' to CHANGELOG.md before tagging."
             exit 1
           fi
 
