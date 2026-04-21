@@ -561,16 +561,52 @@ func TestGetBook_HTTP_CoverImage(t *testing.T) {
 
 // --- GetAuthorWorks ---
 
+// searchDocForAuthor mirrors the anonymous struct searchAuthorWorks decodes
+// into. Keeping it here lets individual tests construct primary responses
+// without re-declaring the shape each time.
+type searchDocForAuthor struct {
+	Key              string   `json:"key"`
+	Title            string   `json:"title"`
+	Language         []string `json:"language"`
+	EditionCount     int      `json:"edition_count"`
+	FirstPublishYear int      `json:"first_publish_year"`
+	CoverI           *int     `json:"cover_i"`
+	Subject          []string `json:"subject"`
+}
+
+type searchRespForAuthor struct {
+	Docs []searchDocForAuthor `json:"docs"`
+}
+
 func TestGetAuthorWorks_HTTP(t *testing.T) {
+	coverI := 12345
+	// Primary source: search index returns language + cover + subjects + year.
+	searchResp := searchRespForAuthor{
+		Docs: []searchDocForAuthor{
+			{
+				Key:              "/works/OL456W",
+				Title:            "Dune",
+				Language:         []string{"eng"},
+				FirstPublishYear: 1965,
+				CoverI:           &coverI,
+				Subject:          []string{"Sci-Fi"},
+			},
+			{
+				Key:      "/works/OL789W",
+				Title:    "Dune Messiah",
+				Language: []string{"eng"},
+			},
+		},
+	}
+	// Backfill: /authors/{id}/works.json adds series membership the search
+	// index doesn't expose.
 	worksResp := authorWorksResponse{
 		Size: 2,
 		Entries: []authorWorkEntry{
 			{
-				Key:      "/works/OL456W",
-				Title:    "Dune",
-				Covers:   []int{12345},
-				Series:   []string{"Dune Chronicles #1"},
-				Subjects: []string{"Sci-Fi"},
+				Key:    "/works/OL456W",
+				Title:  "Dune",
+				Series: []string{"Dune Chronicles #1"},
 			},
 			{
 				Key:   "/works/OL789W",
@@ -578,24 +614,10 @@ func TestGetAuthorWorks_HTTP(t *testing.T) {
 			},
 		},
 	}
-	// Also serve the language search response
-	langResp := struct {
-		Docs []struct {
-			Key      string   `json:"key"`
-			Language []string `json:"language"`
-		} `json:"docs"`
-	}{
-		Docs: []struct {
-			Key      string   `json:"key"`
-			Language []string `json:"language"`
-		}{
-			{Key: "/works/OL456W", Language: []string{"eng"}},
-		},
-	}
 
 	c := newClientWithPaths(t, map[string]interface{}{
+		"/search.json":               jsonStr(searchResp),
 		"/authors/OL123A/works.json": jsonStr(worksResp),
-		"/search.json":               jsonStr(langResp),
 	})
 
 	books, err := c.GetAuthorWorks(context.Background(), "OL123A")
@@ -611,15 +633,86 @@ func TestGetAuthorWorks_HTTP(t *testing.T) {
 	if books[0].Language != "eng" {
 		t.Errorf("first book language: want 'eng', got %q", books[0].Language)
 	}
+	if !strings.Contains(books[0].ImageURL, "12345") {
+		t.Errorf("first book ImageURL should contain cover 12345, got %q", books[0].ImageURL)
+	}
+	if books[0].ReleaseDate == nil || books[0].ReleaseDate.Year() != 1965 {
+		t.Errorf("first book ReleaseDate should be 1965, got %v", books[0].ReleaseDate)
+	}
 	if len(books[0].SeriesRefs) != 1 {
-		t.Errorf("expected 1 series ref for Dune, got %d", len(books[0].SeriesRefs))
+		t.Fatalf("expected 1 series ref for Dune (from backfill), got %d", len(books[0].SeriesRefs))
+	}
+	if books[0].SeriesRefs[0].Title != "Dune Chronicles" {
+		t.Errorf("series title: want 'Dune Chronicles', got %q", books[0].SeriesRefs[0].Title)
+	}
+	if books[0].Author == nil || books[0].Author.ForeignID != "OL123A" {
+		t.Errorf("author reference not populated: %+v", books[0].Author)
+	}
+}
+
+// Works present only in the /authors/{id}/works endpoint (not yet in the
+// search index) must still be returned — the backfill closes the gap when
+// OL's search indexing lags behind the author-works list (e.g. recent releases).
+func TestGetAuthorWorks_HTTP_BackfillFillsMissingWorks(t *testing.T) {
+	searchResp := searchRespForAuthor{
+		Docs: []searchDocForAuthor{
+			{Key: "/works/OLOLDW", Title: "Older Book", Language: []string{"eng"}},
+		},
+	}
+	worksResp := authorWorksResponse{
+		Entries: []authorWorkEntry{
+			{Key: "/works/OLOLDW", Title: "Older Book"},
+			{Key: "/works/OLNEWW", Title: "Recently Released"}, // not in search index yet
+		},
+	}
+	c := newClientWithPaths(t, map[string]interface{}{
+		"/search.json":               jsonStr(searchResp),
+		"/authors/OL123A/works.json": jsonStr(worksResp),
+	})
+
+	books, err := c.GetAuthorWorks(context.Background(), "OL123A")
+	if err != nil {
+		t.Fatalf("GetAuthorWorks: %v", err)
+	}
+	if len(books) != 2 {
+		t.Fatalf("expected 2 books (search + backfill extra), got %d", len(books))
+	}
+	var got []string
+	for _, b := range books {
+		got = append(got, b.Title)
+	}
+	if got[0] != "Older Book" || got[1] != "Recently Released" {
+		t.Errorf("expected [Older Book, Recently Released] in that order, got %v", got)
+	}
+}
+
+// Works present in the search index but not in the /authors/{id}/works
+// endpoint are still returned — the primary source stands on its own when
+// the backfill is silent. (Proves we don't require both endpoints to agree.)
+func TestGetAuthorWorks_HTTP_PrimaryOnlyWhenBackfillEmpty(t *testing.T) {
+	searchResp := searchRespForAuthor{
+		Docs: []searchDocForAuthor{
+			{Key: "/works/OL456W", Title: "Dune", Language: []string{"eng"}},
+		},
+	}
+	c := newClientWithPaths(t, map[string]interface{}{
+		"/search.json":               jsonStr(searchResp),
+		"/authors/OL123A/works.json": jsonStr(authorWorksResponse{}),
+	})
+	books, err := c.GetAuthorWorks(context.Background(), "OL123A")
+	if err != nil {
+		t.Fatalf("GetAuthorWorks: %v", err)
+	}
+	if len(books) != 1 || books[0].Title != "Dune" {
+		t.Fatalf("expected 1 primary book, got %+v", books)
 	}
 }
 
 // TestGetAuthorWorks_HTTP_ObjectSeries covers the schema variance seen with
 // Pierce Brown where OpenLibrary returns series as [{key,title}] objects
 // instead of plain strings. The parser should not error and should extract the
-// title when present.
+// title when present. The series data only comes from the works backfill; the
+// primary source exposes title + language.
 func TestGetAuthorWorks_HTTP_ObjectSeries(t *testing.T) {
 	worksBody := `{
 		"size": 1,
@@ -629,11 +722,11 @@ func TestGetAuthorWorks_HTTP_ObjectSeries(t *testing.T) {
 			"series": [{"key": "/works/OL9999W", "title": "Red Rising #1"}]
 		}]
 	}`
-	langResp := `{"docs":[{"key":"/works/OL12345W","language":["eng"]}]}`
+	searchBody := `{"docs":[{"key":"/works/OL12345W","title":"Red Rising","language":["eng"]}]}`
 
 	c := newClientWithPaths(t, map[string]interface{}{
+		"/search.json":               searchBody,
 		"/authors/OL999A/works.json": worksBody,
-		"/search.json":               langResp,
 	})
 
 	books, err := c.GetAuthorWorks(context.Background(), "OL999A")
@@ -657,41 +750,62 @@ func TestGetAuthorWorks_HTTP_ObjectSeries(t *testing.T) {
 	}
 }
 
+// Both endpoints failing is the only case where GetAuthorWorks reports an
+// error. Single-endpoint failures are logged and the healthy side is used.
 func TestGetAuthorWorks_HTTP_Error(t *testing.T) {
 	c := newClientWithStatus(t,
-		map[string]interface{}{"/authors/OL404A/works.json": "error"},
-		map[string]int{"/authors/OL404A/works.json": http.StatusInternalServerError},
+		map[string]interface{}{
+			"/search.json":               "error",
+			"/authors/OL404A/works.json": "error",
+		},
+		map[string]int{
+			"/search.json":               http.StatusInternalServerError,
+			"/authors/OL404A/works.json": http.StatusInternalServerError,
+		},
 	)
 	_, err := c.GetAuthorWorks(context.Background(), "OL404A")
 	if err == nil {
-		t.Fatal("expected error on 500")
+		t.Fatal("expected error when both endpoints fail")
+	}
+}
+
+// A failure in the /authors/{id}/works backfill must not abort ingestion —
+// the search index alone is enough to populate the catalogue.
+func TestGetAuthorWorks_HTTP_BackfillFailure(t *testing.T) {
+	searchResp := searchRespForAuthor{
+		Docs: []searchDocForAuthor{
+			{Key: "/works/OL1W", Title: "Only In Search", Language: []string{"eng"}},
+		},
+	}
+	c := newClientWithStatus(t,
+		map[string]interface{}{
+			"/search.json":               jsonStr(searchResp),
+			"/authors/OL1A/works.json":   "oops",
+		},
+		map[string]int{
+			"/authors/OL1A/works.json": http.StatusInternalServerError,
+		},
+	)
+	books, err := c.GetAuthorWorks(context.Background(), "OL1A")
+	if err != nil {
+		t.Fatalf("expected no error when only backfill fails: %v", err)
+	}
+	if len(books) != 1 || books[0].Title != "Only In Search" {
+		t.Errorf("expected primary source to still return, got %+v", books)
 	}
 }
 
 func TestGetAuthorWorks_HTTP_LangPreferEng(t *testing.T) {
-	worksResp := authorWorksResponse{
-		Entries: []authorWorkEntry{
-			{Key: "/works/OL100W", Title: "Multi-lang Book"},
+	// Search index returns a work with multiple languages — "eng" wins
+	// regardless of ordering.
+	searchResp := searchRespForAuthor{
+		Docs: []searchDocForAuthor{
+			{Key: "/works/OL100W", Title: "Multi-lang Book", Language: []string{"fre", "ger", "eng"}},
 		},
 	}
-	// Language search returns multiple languages; "eng" should be preferred.
-	langResp := struct {
-		Docs []struct {
-			Key      string   `json:"key"`
-			Language []string `json:"language"`
-		} `json:"docs"`
-	}{
-		Docs: []struct {
-			Key      string   `json:"key"`
-			Language []string `json:"language"`
-		}{
-			{Key: "/works/OL100W", Language: []string{"fre", "ger", "eng"}},
-		},
-	}
-
 	c := newClientWithPaths(t, map[string]interface{}{
-		"/authors/OL999A/works.json": jsonStr(worksResp),
-		"/search.json":               jsonStr(langResp),
+		"/search.json":               jsonStr(searchResp),
+		"/authors/OL999A/works.json": jsonStr(authorWorksResponse{}),
 	})
 
 	books, err := c.GetAuthorWorks(context.Background(), "OL999A")
@@ -703,6 +817,59 @@ func TestGetAuthorWorks_HTTP_LangPreferEng(t *testing.T) {
 	}
 	if books[0].Language != "eng" {
 		t.Errorf("Language: want 'eng', got %q", books[0].Language)
+	}
+}
+
+// Noise filter: study guides, summaries, and adaptations must be dropped
+// before they reach the ingestion pipeline. Subject-based and title-based
+// markers are both exercised here.
+func TestGetAuthorWorks_HTTP_NoiseFilter(t *testing.T) {
+	searchResp := searchRespForAuthor{
+		Docs: []searchDocForAuthor{
+			{Key: "/works/OLREAL1W", Title: "The Dutch House", Language: []string{"eng"}},
+			{Key: "/works/OLJUNK1W", Title: "Summary of The Dutch House", Language: []string{"eng"}},
+			{Key: "/works/OLJUNK2W", Title: "A Reader's Guide to Commonwealth", Language: []string{"eng"}},
+			{Key: "/works/OLJUNK3W", Title: "Film Companion", Language: []string{"eng"}, Subject: []string{"Motion picture adaptations"}},
+			{Key: "/works/OLJUNK4W", Title: "The Dutch House (Audio CD)", Language: []string{"eng"}},
+			{Key: "/works/OLJUNK5W", Title: "Commonwealth", Language: []string{"eng"}, Subject: []string{"Study guides"}},
+		},
+	}
+	c := newClientWithPaths(t, map[string]interface{}{
+		"/search.json":               jsonStr(searchResp),
+		"/authors/OL5A/works.json":   jsonStr(authorWorksResponse{}),
+	})
+	books, err := c.GetAuthorWorks(context.Background(), "OL5A")
+	if err != nil {
+		t.Fatalf("GetAuthorWorks: %v", err)
+	}
+	if len(books) != 1 {
+		t.Fatalf("expected 1 book to survive noise filter, got %d: %+v", len(books), books)
+	}
+	if books[0].Title != "The Dutch House" {
+		t.Errorf("surviving book: want 'The Dutch House', got %q", books[0].Title)
+	}
+}
+
+// Noise filter also drops entries that come in via the backfill (not just
+// the primary search results) — important because /authors/{id}/works has
+// its own share of tie-in companions.
+func TestGetAuthorWorks_HTTP_NoiseFilterBackfill(t *testing.T) {
+	c := newClientWithPaths(t, map[string]interface{}{
+		"/search.json": jsonStr(searchRespForAuthor{}),
+		"/authors/OL6A/works.json": jsonStr(authorWorksResponse{
+			Entries: []authorWorkEntry{
+				{Key: "/works/OL1W", Title: "Real Book"},
+				{Key: "/works/OL2W", Title: "CliffsNotes on Real Book"},
+				{Key: "/works/OL3W", Title: "Some Film Tie-in", Subjects: []string{"Film adaptations"}},
+			},
+		}),
+	})
+	books, err := c.GetAuthorWorks(context.Background(), "OL6A")
+	if err != nil {
+		t.Fatalf("GetAuthorWorks: %v", err)
+	}
+	if len(books) != 1 || books[0].Title != "Real Book" {
+		t.Fatalf("expected only 'Real Book' to survive, got %+v", books)
 	}
 }
 

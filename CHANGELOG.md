@@ -11,6 +11,7 @@ The `development` branch carries the in-flight feature set for the next release.
 ### Fixed
 
 - **NZB grabs misrouted to qBittorrent** (#320) — Prowlarr-synced indexers were hardcoded as `torznab` regardless of the upstream indexer's actual protocol, so NZB search results were tagged `protocol=torrent` and dispatched to qBittorrent, which then failed with `add torrent accepted but hash could not be determined`. The syncer now uses Prowlarr's `protocol` field to choose `newznab` vs `torznab`, and corrects mis-typed rows on the next sync. The scheduler no longer falls back across protocols when the protocol-matched client list is empty — an NZB release can never be pushed to a torrent client.
+- **Author ingestion drops books + catalogue noise** (#313) — `GetAuthorWorks` now uses OpenLibrary's search index as the primary source (one call returns title + language + subjects + cover + year) and keeps the `/authors/{id}/works` endpoint as a backfill that hydrates series membership and picks up works the search index has missed (e.g. recent releases). A new subject/title noise filter at the OL client layer drops study guides, summaries, film/TV adaptations, screenplays, and audio-CD pseudo-works before they reach the ingestion pipeline, stopping duplicates like the five "Dutch House" entries previously pulled for Ann Patchett.
 
 ## [v1.0.4] — 2026-04-20
 

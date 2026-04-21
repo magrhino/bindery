@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -188,87 +189,238 @@ func (c *Client) GetBook(ctx context.Context, foreignID string) (*models.Book, e
 	return b, nil
 }
 
-// GetAuthorWorks fetches all works by an author using the dedicated author works endpoint.
-// This is much more reliable than searching by author name.
+// GetAuthorWorks fetches all works by an author. It merges two OpenLibrary
+// endpoints: the search index (/search.json?author_key=X) is the primary
+// source because it matches the count shown in the Add-Author preview and
+// carries rich metadata (language, subjects, covers, year) in a single call;
+// the /authors/{id}/works endpoint is a backfill for works that the search
+// index hasn't picked up yet and hydrates series membership — which the
+// search index does not expose.
+//
+// Noise (study guides, screenplay companions, film adaptations, etc.) is
+// filtered at this layer so the authors-ingestion pipeline never sees it.
+// Both upstream calls are best-effort: as long as one returns, we proceed —
+// the other's failure is logged.
 func (c *Client) GetAuthorWorks(ctx context.Context, authorForeignID string) ([]models.Book, error) {
-	u := fmt.Sprintf("%s/authors/%s/works.json?limit=100", baseURL, authorForeignID)
-	var resp authorWorksResponse
-	if err := c.getJSON(ctx, u, &resp); err != nil {
-		return nil, fmt.Errorf("get author works %s: %w", authorForeignID, err)
+	primary, primaryErr := c.searchAuthorWorks(ctx, authorForeignID)
+	if primaryErr != nil {
+		slog.Warn("openlibrary: author search failed, falling back to works endpoint", "author", authorForeignID, "error", primaryErr)
+	}
+	backfill, backfillErr := c.authorWorksBackfill(ctx, authorForeignID)
+	if backfillErr != nil {
+		slog.Debug("openlibrary: author works backfill failed", "author", authorForeignID, "error", backfillErr)
+	}
+	if primaryErr != nil && backfillErr != nil {
+		return nil, fmt.Errorf("get author works %s: primary=%v backfill=%v", authorForeignID, primaryErr, backfillErr)
 	}
 
-	// Supplement with language data from the search index (best-effort; don't fail on error)
-	langMap := c.authorWorkLanguages(ctx, authorForeignID)
+	// index maps workID → position in `books`, letting backfill entries either
+	// enrich an existing primary book (series, description) or be appended
+	// when the search index hasn't seen them yet.
+	index := make(map[string]int, len(primary))
+	books := make([]models.Book, 0, len(primary)+len(backfill))
 
-	books := make([]models.Book, 0, len(resp.Entries))
-	for _, entry := range resp.Entries {
+	for _, b := range primary {
+		if shouldFilterOLNoise(b.Title, b.Genres) {
+			continue
+		}
+		b.Author = &models.Author{
+			ForeignID:        authorForeignID,
+			MetadataProvider: "openlibrary",
+		}
+		index[b.ForeignID] = len(books)
+		books = append(books, b)
+	}
+
+	for _, entry := range backfill {
 		workID := strings.TrimPrefix(entry.Key, "/works/")
+		seriesRefs := seriesRefsFrom(entry.Series)
+		if pos, ok := index[workID]; ok {
+			// Enrich existing book with data only the works endpoint carries.
+			if len(books[pos].SeriesRefs) == 0 && len(seriesRefs) > 0 {
+				books[pos].SeriesRefs = seriesRefs
+			}
+			if books[pos].Description == "" {
+				books[pos].Description = extractText(entry.Description)
+			}
+			continue
+		}
+		if shouldFilterOLNoise(entry.Title, entry.Subjects) {
+			continue
+		}
 		b := models.Book{
 			ForeignID:        workID,
 			Title:            entry.Title,
 			SortTitle:        entry.Title,
 			Description:      extractText(entry.Description),
 			Genres:           truncateSlice(entry.Subjects, 10),
-			Language:         langMap[workID],
 			MetadataProvider: "openlibrary",
 			Monitored:        true,
 			Status:           models.BookStatusWanted,
+			Author: &models.Author{
+				ForeignID:        authorForeignID,
+				MetadataProvider: "openlibrary",
+			},
 		}
 		if len(entry.Covers) > 0 && entry.Covers[0] > 0 {
 			b.ImageURL = fmt.Sprintf("%s/b/id/%d-L.jpg", coverURL, entry.Covers[0])
 		}
-		// Set author reference
-		b.Author = &models.Author{
-			ForeignID:        authorForeignID,
-			MetadataProvider: "openlibrary",
+		b.SeriesRefs = seriesRefs
+		index[workID] = len(books)
+		books = append(books, b)
+	}
+
+	return books, nil
+}
+
+// searchAuthorWorks queries the OL search index for all works by the given
+// author. It returns one Book per indexed work, pre-populated with the fields
+// the search index exposes (title, language, subjects, cover, first year).
+// Series membership is not in the search response — callers get it via
+// authorWorksBackfill.
+func (c *Client) searchAuthorWorks(ctx context.Context, authorForeignID string) ([]models.Book, error) {
+	u := fmt.Sprintf("%s/search.json?author_key=%s&fields=key,title,language,edition_count,first_publish_year,cover_i,subject&limit=200",
+		baseURL, authorForeignID)
+	var resp struct {
+		Docs []struct {
+			Key              string   `json:"key"`
+			Title            string   `json:"title"`
+			Language         []string `json:"language"`
+			EditionCount     int      `json:"edition_count"`
+			FirstPublishYear int      `json:"first_publish_year"`
+			CoverI           *int     `json:"cover_i"`
+			Subject          []string `json:"subject"`
+		} `json:"docs"`
+	}
+	if err := c.getJSON(ctx, u, &resp); err != nil {
+		return nil, err
+	}
+	books := make([]models.Book, 0, len(resp.Docs))
+	for _, doc := range resp.Docs {
+		workID := strings.TrimPrefix(doc.Key, "/works/")
+		if workID == "" || doc.Title == "" {
+			continue
 		}
-		// Parse series membership from the OL series strings.
-		for i, s := range entry.Series {
-			if s == "" {
-				continue
-			}
-			ref := parseSeriesRef(s)
-			ref.Primary = i == 0
-			b.SeriesRefs = append(b.SeriesRefs, ref)
+		b := models.Book{
+			ForeignID:        workID,
+			Title:            doc.Title,
+			SortTitle:        doc.Title,
+			Genres:           truncateSlice(doc.Subject, 10),
+			Language:         pickPreferredLanguage(doc.Language),
+			MetadataProvider: "openlibrary",
+			Monitored:        true,
+			Status:           models.BookStatusWanted,
+		}
+		if doc.CoverI != nil && *doc.CoverI > 0 {
+			b.ImageURL = fmt.Sprintf("%s/b/id/%d-L.jpg", coverURL, *doc.CoverI)
+		}
+		if doc.FirstPublishYear > 0 {
+			t := time.Date(doc.FirstPublishYear, 1, 1, 0, 0, 0, 0, time.UTC)
+			b.ReleaseDate = &t
 		}
 		books = append(books, b)
 	}
 	return books, nil
 }
 
-// authorWorkLanguages calls the OL search index to get the primary language for each
-// work by this author. Returns a map of workID (e.g. "OL123W") → language code (e.g. "eng").
-// Errors are silently swallowed — language data is best-effort.
-func (c *Client) authorWorkLanguages(ctx context.Context, authorForeignID string) map[string]string {
-	u := fmt.Sprintf("%s/search.json?author_key=%s&fields=key,language&limit=200", baseURL, authorForeignID)
-	var resp struct {
-		Docs []struct {
-			Key      string   `json:"key"`
-			Language []string `json:"language"`
-		} `json:"docs"`
-	}
+// authorWorksBackfill fetches the author's works list from OpenLibrary's
+// /authors/{id}/works endpoint. The raw entries are returned so the caller
+// can decide how to merge them with the primary search-index results.
+func (c *Client) authorWorksBackfill(ctx context.Context, authorForeignID string) ([]authorWorkEntry, error) {
+	u := fmt.Sprintf("%s/authors/%s/works.json?limit=100", baseURL, authorForeignID)
+	var resp authorWorksResponse
 	if err := c.getJSON(ctx, u, &resp); err != nil {
-		slog.Debug("could not fetch language data for author works", "author", authorForeignID, "error", err)
+		return nil, err
+	}
+	return resp.Entries, nil
+}
+
+// pickPreferredLanguage returns "eng" if present in the list, otherwise the
+// first entry. Empty list returns "". Books with an empty language still pass
+// through the profile language filter via the unknown-language fallback.
+func pickPreferredLanguage(langs []string) string {
+	if len(langs) == 0 {
+		return ""
+	}
+	if slices.Contains(langs, "eng") {
+		return "eng"
+	}
+	return langs[0]
+}
+
+// seriesRefsFrom parses the OL series strings attached to a works-endpoint
+// entry into SeriesRefs with the first entry flagged Primary.
+func seriesRefsFrom(series []string) []models.SeriesRef {
+	if len(series) == 0 {
 		return nil
 	}
-
-	m := make(map[string]string, len(resp.Docs))
-	for _, doc := range resp.Docs {
-		if len(doc.Language) == 0 {
+	refs := make([]models.SeriesRef, 0, len(series))
+	for i, s := range series {
+		if s == "" {
 			continue
 		}
-		workID := strings.TrimPrefix(doc.Key, "/works/")
-		// Prefer "eng" if present among the languages, otherwise use the first entry.
-		lang := doc.Language[0]
-		for _, l := range doc.Language {
-			if l == "eng" {
-				lang = "eng"
-				break
+		ref := parseSeriesRef(s)
+		ref.Primary = i == 0
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
+// olNoiseSubjects are case-insensitive substrings in an OL work's subjects
+// array that signal companion material, criticism, or adaptations rather
+// than a primary authored work.
+var olNoiseSubjects = []string{
+	"study guides",
+	"study and teaching",
+	"literary criticism",
+	"criticism and interpretation",
+	"cliffsnotes",
+	"sparknotes",
+	"motion picture adaptations",
+	"film adaptations",
+	"television adaptations",
+	"screenplays",
+}
+
+// olNoiseTitleFragments are case-insensitive substrings in a work title that
+// flag summaries, study guides, or audio-only physical editions that OL
+// sometimes represents as separate Works rather than editions.
+var olNoiseTitleFragments = []string{
+	"summary and analysis",
+	"summary & analysis",
+	"summary of",
+	"study guide",
+	"reader's guide",
+	"reading guide",
+	"teacher's guide",
+	"cliffsnotes",
+	"sparknotes",
+	"supersummary",
+	"instaread",
+	"workbook",
+	"audio cd",
+}
+
+// shouldFilterOLNoise returns true when an OpenLibrary work looks like
+// companion material (study guide, summary, adaptation, audio-CD edition)
+// rather than a real authored work. The goal is to keep an author's
+// catalogue clean without being aggressive enough to drop legitimate works.
+func shouldFilterOLNoise(title string, subjects []string) bool {
+	lt := strings.ToLower(title)
+	for _, f := range olNoiseTitleFragments {
+		if strings.Contains(lt, f) {
+			return true
+		}
+	}
+	for _, s := range subjects {
+		ls := strings.ToLower(s)
+		for _, n := range olNoiseSubjects {
+			if strings.Contains(ls, n) {
+				return true
 			}
 		}
-		m[workID] = lang
 	}
-	return m
+	return false
 }
 
 func (c *Client) GetEditions(ctx context.Context, bookForeignID string) ([]models.Edition, error) {
