@@ -8,6 +8,15 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v1.1.1] — 2026-04-21
+
+### Security
+
+- **API key exposed to non-admin users** — `GET /api/v1/auth/config` returned the global API key to every authenticated account. Since the key is also accepted via the `?apikey=` query string, any regular user could authenticate with full API access. The key is now redacted unless the caller has `role=admin`.
+- **Cross-user author visibility** — `GET /api/v1/author` returned all authors regardless of `owner_user_id`, letting one user see (and enumerate) another user's library. The list is now scoped to the authenticated user.
+- **Non-admin auth-mode escalation** — `PUT /api/v1/auth/mode` lacked a `RequireAdmin` guard. A regular user could switch the instance to `local-only`, granting unauthenticated access to every client on the local network. The endpoint now requires admin role.
+- **Untrusted `X-Forwarded-*` header injection** — `X-Forwarded-Proto` and `X-Forwarded-Host` were accepted from any client when `BINDERY_TRUSTED_PROXY` was not set, enabling OPDS base-URL injection and spurious HSTS headers. All forwarded headers are now stripped from requests that do not originate from a configured trusted proxy.
+
 ## [v1.1.0] — 2026-04-20
 
 ### Added
