@@ -8,6 +8,10 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+### Added
+
+- **Audible-direct author lookup** (#302) — audiobook-heavy users no longer lose most of a prolific author's Audible catalogue to OpenLibrary/Hardcover ASIN gaps. When the effective media type is `audiobook` or `both`, `FetchAuthorBooks` supplements OpenLibrary's works list with results from Audible's public catalogue endpoint (`api.audible.com/1.0/catalog/products`). Supplemental books flow through the same dedup + metadata-profile `allowed_languages` filter as OpenLibrary, so foreign-language ASINs are filtered out before persisting.
+
 ### Fixed
 
 - **NZB grabs misrouted to qBittorrent** (#320) — Prowlarr-synced indexers were hardcoded as `torznab` regardless of the upstream indexer's actual protocol, so NZB search results were tagged `protocol=torrent` and dispatched to qBittorrent, which then failed with `add torrent accepted but hash could not be determined`. The syncer now uses Prowlarr's `protocol` field to choose `newznab` vs `torznab`, and corrects mis-typed rows on the next sync. The scheduler no longer falls back across protocols when the protocol-matched client list is empty — an NZB release can never be pushed to a torrent client.

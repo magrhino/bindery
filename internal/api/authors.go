@@ -416,6 +416,26 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool,
 		return
 	}
 
+	// Supplement with Audible-direct author lookup for audiobook-favoring
+	// flows. OpenLibrary and Hardcover both miss a large share of
+	// audiobook ASINs for prolific authors, so Audible's own catalogue
+	// fills the gap (#302). Audible books carry MediaType=audiobook with
+	// an ASIN preset; they feed through the same dedup + language filter
+	// as the OL results below, so foreign-language ASINs do NOT slip past
+	// the active metadata profile's allowed_languages set.
+	//
+	// Gated on the effective media type — ebook-only setups would just
+	// see audiobook rows they never asked for, and each call spends a
+	// network round-trip to api.audible.com.
+	if mediaType == models.MediaTypeAudiobook || mediaType == models.MediaTypeBoth {
+		if audibleBooks, err := h.meta.GetAuthorAudiobooks(ctx, author.Name); err != nil {
+			slog.Warn("audible author lookup failed", "author", author.Name, "error", err)
+		} else if len(audibleBooks) > 0 {
+			slog.Debug("audible author lookup supplemented catalogue", "author", author.Name, "count", len(audibleBooks))
+			books = append(books, audibleBooks...)
+		}
+	}
+
 	// Resolve the author's metadata profile (falling back to the seeded
 	// default) and parse its allowed_languages CSV. Nil means "no filter".
 	allowedLangs, unknownFail := h.resolveAllowedLanguages(ctx, author)

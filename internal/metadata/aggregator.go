@@ -5,9 +5,11 @@ package metadata
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/vavallee/bindery/internal/metadata/audible"
 	"github.com/vavallee/bindery/internal/metadata/audnex"
 	"github.com/vavallee/bindery/internal/models"
 )
@@ -18,6 +20,7 @@ type Aggregator struct {
 	primary   Provider
 	enrichers []Provider
 	audnex    *audnex.Client
+	audible   *audible.Client
 	cache     *ttlCache
 }
 
@@ -27,6 +30,7 @@ func NewAggregator(primary Provider, enrichers ...Provider) *Aggregator {
 		primary:   primary,
 		enrichers: enrichers,
 		audnex:    audnex.New(""),
+		audible:   audible.New(),
 		cache:     newTTLCache(24 * time.Hour),
 	}
 }
@@ -54,6 +58,42 @@ func (a *Aggregator) EnrichAudiobook(ctx context.Context, book *models.Book) err
 		book.Description = b.Summary
 	}
 	return nil
+}
+
+// GetAuthorAudiobooks queries the Audible catalogue directly for the given
+// author name. Returned books carry MediaType=audiobook, an ASIN, and a
+// normalized language code; the caller applies the active metadata
+// profile's allowed_languages filter alongside OpenLibrary-sourced books.
+//
+// Callers use this as a supplement to GetAuthorWorks — neither OpenLibrary
+// nor Hardcover has full Audible ASIN cross-referencing, so prolific
+// authors (Sanderson, King, etc.) are missing a large share of their
+// narrated catalogue without a direct Audible source.
+//
+// Returns an empty slice when the audible client is unconfigured (test
+// aggregators) rather than nil-derefing. Errors propagate so the caller
+// can log them without failing the broader ingestion.
+func (a *Aggregator) GetAuthorAudiobooks(ctx context.Context, authorName string) ([]models.Book, error) {
+	if a.audible == nil {
+		return nil, nil
+	}
+	authorName = strings.TrimSpace(authorName)
+	if authorName == "" {
+		return nil, nil
+	}
+	key := "audible-author:" + strings.ToLower(authorName)
+	if cached, ok := a.cache.get(key); ok {
+		return cached.([]models.Book), nil
+	}
+	books, err := a.audible.SearchBooksByAuthor(ctx, authorName)
+	if err != nil {
+		return nil, err
+	}
+	if books == nil {
+		books = []models.Book{}
+	}
+	a.cache.set(key, books)
+	return books, nil
 }
 
 func (a *Aggregator) SearchAuthors(ctx context.Context, query string) ([]models.Author, error) {

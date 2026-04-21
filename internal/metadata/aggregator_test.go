@@ -412,6 +412,34 @@ func TestAggregator_EnrichAudiobook_NoASIN(t *testing.T) {
 	}
 }
 
+// TestAggregator_GetAuthorAudiobooks_Unconfigured verifies the nil-audible
+// path used by every test aggregator returns an empty result instead of
+// panicking — the aggregator is constructed without an audible.Client in
+// unit tests, and callers rely on a safe fallback.
+func TestAggregator_GetAuthorAudiobooks_Unconfigured(t *testing.T) {
+	agg := newTestAggregator(&mockProvider{name: "ol"})
+	books, err := agg.GetAuthorAudiobooks(context.Background(), "Frank Herbert")
+	if err != nil {
+		t.Fatalf("GetAuthorAudiobooks (nil client): %v", err)
+	}
+	if books != nil {
+		t.Errorf("want nil, got %v", books)
+	}
+}
+
+// TestAggregator_GetAuthorAudiobooks_EmptyName guards against the trivial
+// case where an unnamed author triggers an unfiltered Audible browse.
+func TestAggregator_GetAuthorAudiobooks_EmptyName(t *testing.T) {
+	agg := newTestAggregator(&mockProvider{name: "ol"})
+	books, err := agg.GetAuthorAudiobooks(context.Background(), "   ")
+	if err != nil {
+		t.Fatalf("GetAuthorAudiobooks (empty): %v", err)
+	}
+	if books != nil {
+		t.Errorf("want nil, got %v", books)
+	}
+}
+
 func TestAggregator_EnrichBook_SkipsOnSearchError(t *testing.T) {
 	primary := &mockProvider{
 		name:    "ol",
