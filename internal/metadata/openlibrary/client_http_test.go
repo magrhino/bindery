@@ -779,8 +779,8 @@ func TestGetAuthorWorks_HTTP_BackfillFailure(t *testing.T) {
 	}
 	c := newClientWithStatus(t,
 		map[string]interface{}{
-			"/search.json":               jsonStr(searchResp),
-			"/authors/OL1A/works.json":   "oops",
+			"/search.json":             jsonStr(searchResp),
+			"/authors/OL1A/works.json": "oops",
 		},
 		map[string]int{
 			"/authors/OL1A/works.json": http.StatusInternalServerError,
@@ -835,8 +835,8 @@ func TestGetAuthorWorks_HTTP_NoiseFilter(t *testing.T) {
 		},
 	}
 	c := newClientWithPaths(t, map[string]interface{}{
-		"/search.json":               jsonStr(searchResp),
-		"/authors/OL5A/works.json":   jsonStr(authorWorksResponse{}),
+		"/search.json":             jsonStr(searchResp),
+		"/authors/OL5A/works.json": jsonStr(authorWorksResponse{}),
 	})
 	books, err := c.GetAuthorWorks(context.Background(), "OL5A")
 	if err != nil {

@@ -211,7 +211,7 @@ func (c *Client) GetAuthorWorks(ctx context.Context, authorForeignID string) ([]
 		slog.Debug("openlibrary: author works backfill failed", "author", authorForeignID, "error", backfillErr)
 	}
 	if primaryErr != nil && backfillErr != nil {
-		return nil, fmt.Errorf("get author works %s: primary=%v backfill=%v", authorForeignID, primaryErr, backfillErr)
+		return nil, fmt.Errorf("get author works %s: primary=%w backfill=%w", authorForeignID, primaryErr, backfillErr)
 	}
 
 	// index maps workID → position in `books`, letting backfill entries either

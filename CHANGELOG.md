@@ -8,15 +8,39 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v1.1.0] — 2026-04-20
+
 ### Added
 
 - **Audible-direct author lookup** (#302) — audiobook-heavy users no longer lose most of a prolific author's Audible catalogue to OpenLibrary/Hardcover ASIN gaps. When the effective media type is `audiobook` or `both`, `FetchAuthorBooks` supplements OpenLibrary's works list with results from Audible's public catalogue endpoint (`api.audible.com/1.0/catalog/products`). Supplemental books flow through the same dedup + metadata-profile `allowed_languages` filter as OpenLibrary, so foreign-language ASINs are filtered out before persisting.
 
 ### Fixed
 
-- **NZB grabs misrouted to qBittorrent** (#320) — Prowlarr-synced indexers were hardcoded as `torznab` regardless of the upstream indexer's actual protocol, so NZB search results were tagged `protocol=torrent` and dispatched to qBittorrent, which then failed with `add torrent accepted but hash could not be determined`. The syncer now uses Prowlarr's `protocol` field to choose `newznab` vs `torznab`, and corrects mis-typed rows on the next sync. The scheduler no longer falls back across protocols when the protocol-matched client list is empty — an NZB release can never be pushed to a torrent client.
 - **Author ingestion drops books + catalogue noise** (#313) — `GetAuthorWorks` now uses OpenLibrary's search index as the primary source (one call returns title + language + subjects + cover + year) and keeps the `/authors/{id}/works` endpoint as a backfill that hydrates series membership and picks up works the search index has missed (e.g. recent releases). A new subject/title noise filter at the OL client layer drops study guides, summaries, film/TV adaptations, screenplays, and audio-CD pseudo-works before they reach the ingestion pipeline, stopping duplicates like the five "Dutch House" entries previously pulled for Ann Patchett.
 - **Audiobook library scan misses tagged files** (#303) — the library scan now reads embedded ID3/iTunes tags (title, author, ASIN) from MP3/M4B/M4A/FLAC/OGG files during reconciliation. Match priority is ASIN → tag title+author → fuzzy filename fallback, so well-tagged Audible/organised libraries match without manual correction. Files whose tags can't be read surface as scan warnings and a new `tag_read_failed` counter in `library.lastScan`.
+
+### Chores
+
+- **golangci-lint cleanup** — resolve errorlint (`%v` → `%w` for double-wrapped errors), staticcheck (apply De Morgan on ASIN charset check), and gofmt formatting noise introduced alongside the three fixes above.
+
+## [v1.0.5] — 2026-04-20
+
+### Fixed
+
+- **Admin role required on fresh install** (#321) — new users created via first-run setup were stored without the admin role, so Settings → Config showed only the General section and any config mutation (Calibre plugin, users, indexers) 403'd with "admin role required" regardless of the security mode. First-run user is now explicitly promoted to admin before the session is issued; existing single-user installs are unaffected. Unblocks #314 reporters from retesting the Calibre metadata fix.
+- **NZB grabs misrouted to qBittorrent** (#320) — Prowlarr-synced indexers were hardcoded as `torznab` regardless of the upstream indexer's actual protocol, so NZB search results were tagged `protocol=torrent` and dispatched to qBittorrent, which then failed with `add torrent accepted but hash could not be determined`. The syncer now uses Prowlarr's `protocol` field to choose `newznab` vs `torznab`, and corrects mis-typed rows on the next sync. The scheduler no longer falls back across protocols when the protocol-matched client list is empty — an NZB release can never be pushed to a torrent client.
+
+### Added
+
+- **Bulk media-type update across monitored authors** (#247) — select multiple authors on the Authors page and switch their media type in one action (or flip all authors from a Settings one-shot). `PATCH /api/v1/authors/bulk` re-evaluates wanted/missing status for affected books so a flip from ebook → audiobook (or reverse) doesn't leave the catalogue in an inconsistent state. Companion to the existing global default media-type setting.
+
+### Docs
+
+- **Discord invite added to README and CONTRIBUTING** (#319) — new Community section links the BINDERY Discord server as a real-time channel for support and contributor onboarding, alongside GitHub Issues and Discussions. Security reports continue to go through `SECURITY.md`, not Discord.
+
+### Chores
+
+- **vitest 3.2.4 → 4.1.4** (#312) — dev-dependency bump for the web test runner.
 
 ## [v1.0.4] — 2026-04-20
 

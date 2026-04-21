@@ -101,21 +101,21 @@ type fakeMetadata struct {
 	composer    string
 }
 
-func (f fakeMetadata) Format() tag.Format       { return tag.ID3v2_4 }
-func (f fakeMetadata) FileType() tag.FileType   { return tag.MP3 }
-func (f fakeMetadata) Title() string            { return "" }
-func (f fakeMetadata) Album() string            { return "" }
-func (f fakeMetadata) Artist() string           { return f.artist }
-func (f fakeMetadata) AlbumArtist() string      { return f.albumArtist }
-func (f fakeMetadata) Composer() string         { return f.composer }
-func (f fakeMetadata) Year() int                { return 0 }
-func (f fakeMetadata) Genre() string            { return "" }
-func (f fakeMetadata) Track() (int, int)        { return 0, 0 }
-func (f fakeMetadata) Disc() (int, int)         { return 0, 0 }
-func (f fakeMetadata) Picture() *tag.Picture    { return nil }
-func (f fakeMetadata) Lyrics() string           { return "" }
-func (f fakeMetadata) Comment() string          { return "" }
-func (f fakeMetadata) Raw() map[string]any      { return nil }
+func (f fakeMetadata) Format() tag.Format     { return tag.ID3v2_4 }
+func (f fakeMetadata) FileType() tag.FileType { return tag.MP3 }
+func (f fakeMetadata) Title() string          { return "" }
+func (f fakeMetadata) Album() string          { return "" }
+func (f fakeMetadata) Artist() string         { return f.artist }
+func (f fakeMetadata) AlbumArtist() string    { return f.albumArtist }
+func (f fakeMetadata) Composer() string       { return f.composer }
+func (f fakeMetadata) Year() int              { return 0 }
+func (f fakeMetadata) Genre() string          { return "" }
+func (f fakeMetadata) Track() (int, int)      { return 0, 0 }
+func (f fakeMetadata) Disc() (int, int)       { return 0, 0 }
+func (f fakeMetadata) Picture() *tag.Picture  { return nil }
+func (f fakeMetadata) Lyrics() string         { return "" }
+func (f fakeMetadata) Comment() string        { return "" }
+func (f fakeMetadata) Raw() map[string]any    { return nil }
 
 func TestPickAudioAuthor_PrefersArtist(t *testing.T) {
 	got := pickAudioAuthor(fakeMetadata{artist: "Brandon Sanderson", albumArtist: "Narrator"})
