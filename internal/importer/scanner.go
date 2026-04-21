@@ -903,7 +903,7 @@ func (s *Scanner) ScanLibrary(ctx context.Context) {
 	slog.Info("library scan found files", "paths", []string{s.libraryDir, s.audiobookDir}, "count", len(foundFiles))
 
 	if len(foundFiles) == 0 {
-		s.writeScanResult(ctx, len(foundFiles), 0, 0)
+		s.writeScanResult(ctx, len(foundFiles), 0, 0, 0)
 		return
 	}
 
@@ -942,7 +942,7 @@ func (s *Scanner) ScanLibrary(ctx context.Context) {
 	// the correct earlier assignment.
 	reconciledBooks := make(map[int64]bool)
 
-	var reconciled, unmatched int
+	var reconciled, unmatched, tagReadFailed int
 	for _, path := range foundFiles {
 		// Skip files already tracked, or files inside a tracked directory
 		// (individual tracks inside an already-imported audiobook folder).
@@ -957,6 +957,29 @@ func (s *Scanner) ScanLibrary(ctx context.Context) {
 		// library root contains the file — most layouts are
 		// {Author}/{Title}/filename.ext.
 		parsed := ParseFilename(path)
+
+		// Prefer embedded audio tags over filename parsing for audiobook
+		// files. Well-tagged M4B/MP3 releases carry the author, title and
+		// often an ASIN in their ID3/iTunes atoms; using them avoids the
+		// fuzzy-match noise seen on users' organised libraries (#303).
+		if IsAudioTagFile(path) {
+			if tags, err := ReadAudioTags(path); err != nil {
+				slog.Warn("library scan: tag read failed, falling back to filename",
+					"path", path, "error", err)
+				tagReadFailed++
+			} else {
+				if tags.Title != "" {
+					parsed.Title = tags.Title
+				}
+				if tags.Author != "" {
+					parsed.Author = tags.Author
+				}
+				if tags.ASIN != "" {
+					parsed.ASIN = tags.ASIN
+				}
+			}
+		}
+
 		if parsed.Author == "" {
 			for _, root := range []string{s.libraryDir, s.audiobookDir} {
 				if root == "" {
@@ -1024,21 +1047,21 @@ func (s *Scanner) ScanLibrary(ctx context.Context) {
 	}
 
 	slog.Info("library scan complete", "path", s.libraryDir, "bookFiles", len(foundFiles),
-		"reconciled", reconciled, "unmatched", unmatched)
+		"reconciled", reconciled, "unmatched", unmatched, "tagReadFailed", tagReadFailed)
 
-	s.writeScanResult(ctx, len(foundFiles), reconciled, unmatched)
+	s.writeScanResult(ctx, len(foundFiles), reconciled, unmatched, tagReadFailed)
 }
 
 // writeScanResult persists the scan summary to the settings table under
 // "library.lastScan" so the UI can surface the result without polling logs.
-func (s *Scanner) writeScanResult(ctx context.Context, filesFound, reconciled, unmatched int) {
+func (s *Scanner) writeScanResult(ctx context.Context, filesFound, reconciled, unmatched, tagReadFailed int) {
 	if s.settings == nil {
 		return
 	}
 	payload := fmt.Sprintf(
-		`{"ran_at":%q,"files_found":%d,"reconciled":%d,"unmatched":%d}`,
+		`{"ran_at":%q,"files_found":%d,"reconciled":%d,"unmatched":%d,"tag_read_failed":%d}`,
 		time.Now().UTC().Format(time.RFC3339),
-		filesFound, reconciled, unmatched,
+		filesFound, reconciled, unmatched, tagReadFailed,
 	)
 	if err := s.settings.Set(ctx, "library.lastScan", payload); err != nil {
 		slog.Warn("library scan: failed to persist scan result", "error", err)

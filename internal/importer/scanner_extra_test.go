@@ -375,6 +375,129 @@ func TestScanLibrary_AudiobookDirectorySkipped(t *testing.T) {
 	}
 }
 
+// TestScanLibrary_AudiobookMatchesByEmbeddedASIN — a well-tagged audiobook
+// with an ASIN in its ID3 tags must reconcile against the book's ASIN even
+// when the filename would otherwise fail title/author matching (#303).
+func TestScanLibrary_AudiobookMatchesByEmbeddedASIN(t *testing.T) {
+	libDir := t.TempDir()
+
+	// File has an uninformative name and lives in a plain folder — without
+	// tag-reading, the filename-based matcher has nothing to go on.
+	abDir := filepath.Join(libDir, "Audible Download")
+	if err := os.MkdirAll(abDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	audioPath := filepath.Join(abDir, "part1.mp3")
+	if err := os.WriteFile(audioPath, buildID3v23("The Way of Kings", "Brandon Sanderson", "B003P2WO5E"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, books, authors, ctx := scannerFixture(t, libDir)
+	author := &models.Author{ForeignID: "OLA-asin", Name: "Brandon Sanderson", SortName: "Sanderson, Brandon"}
+	if err := authors.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	// The book's title deliberately does NOT share tokens with the
+	// filename "part1.mp3" — the only way this reconciles is via ASIN.
+	book := &models.Book{
+		ForeignID: "OLB-asin", AuthorID: author.ID,
+		Title: "The Way of Kings", ASIN: "B003P2WO5E",
+		Status: models.BookStatusWanted,
+	}
+	if err := books.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	s.ScanLibrary(ctx)
+
+	got, err := books.GetByID(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AudiobookFilePath != audioPath {
+		t.Errorf("expected ASIN-matched audiobook FilePath=%q, got AudiobookFilePath=%q",
+			audioPath, got.AudiobookFilePath)
+	}
+}
+
+// TestScanLibrary_AudiobookMatchesByEmbeddedTitleAuthor — when no ASIN is
+// present, embedded title+author tags still drive the match even if the
+// filename alone wouldn't.
+func TestScanLibrary_AudiobookMatchesByEmbeddedTitleAuthor(t *testing.T) {
+	libDir := t.TempDir()
+
+	audioPath := filepath.Join(libDir, "opaque.mp3")
+	if err := os.WriteFile(audioPath, buildID3v23("Mistborn", "Brandon Sanderson", ""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, books, authors, ctx := scannerFixture(t, libDir)
+	author := &models.Author{ForeignID: "OLA-tt", Name: "Brandon Sanderson", SortName: "Sanderson, Brandon"}
+	if err := authors.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	book := &models.Book{
+		ForeignID: "OLB-tt", AuthorID: author.ID,
+		Title: "Mistborn", Status: models.BookStatusWanted,
+	}
+	if err := books.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	s.ScanLibrary(ctx)
+
+	got, err := books.GetByID(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AudiobookFilePath != audioPath {
+		t.Errorf("expected tag-matched audiobook FilePath=%q, got AudiobookFilePath=%q",
+			audioPath, got.AudiobookFilePath)
+	}
+}
+
+// TestScanLibrary_AudiobookTagReadFailureFallsBack — when an audio file's
+// tags cannot be read (truncated / unrecognised), the scan must fall back
+// to filename parsing rather than crashing or skipping the file entirely.
+func TestScanLibrary_AudiobookTagReadFailureFallsBack(t *testing.T) {
+	libDir := t.TempDir()
+
+	// Author-inferred directory layout, filename contains the title. The
+	// file body is gibberish — tag.ReadFrom will error.
+	bookDir := filepath.Join(libDir, "Ursula K Le Guin")
+	if err := os.MkdirAll(bookDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	audioPath := filepath.Join(bookDir, "A Wizard of Earthsea.mp3")
+	if err := os.WriteFile(audioPath, []byte("garbage, not a real audio container"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, books, authors, ctx := scannerFixture(t, libDir)
+	author := &models.Author{ForeignID: "OLA-fb", Name: "Ursula K Le Guin", SortName: "Le Guin, Ursula K"}
+	if err := authors.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	book := &models.Book{
+		ForeignID: "OLB-fb", AuthorID: author.ID,
+		Title: "A Wizard of Earthsea", Status: models.BookStatusWanted,
+	}
+	if err := books.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	s.ScanLibrary(ctx)
+
+	got, err := books.GetByID(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AudiobookFilePath != audioPath {
+		t.Errorf("expected filename-fallback match to set AudiobookFilePath=%q, got %q",
+			audioPath, got.AudiobookFilePath)
+	}
+}
+
 // TestScanLibrary_DirectoryAuthorInference — when a file's name provides no
 // author hint, the scanner should infer the author from the first directory
 // component relative to libraryDir (the standard Author/Title/file.ext layout).
