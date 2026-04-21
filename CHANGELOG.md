@@ -8,6 +8,13 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v1.1.2] — 2026-04-21
+
+### Changed
+
+- Prowlarr package test coverage expanded from ~0% to ~98% — adds `client_test.go` covering all HTTP paths and `syncer_extra_test.go` with error-path and edge-case tests for the syncer.
+- Pinned all GitHub Actions in `scorecard.yml` to commit SHAs (OpenSSF Scorecard `Pinned-Dependencies` compliance).
+
 ## [v1.1.1] — 2026-04-21
 
 ### Security
