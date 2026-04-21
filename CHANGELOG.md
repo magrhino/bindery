@@ -8,6 +8,14 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v1.1.3] — 2026-04-21
+
+### Fixed
+
+- **Authors missing from list view** (#330) — authors with a NULL `owner_user_id` (created before the multi-user migration backfill ran, or imported without a user context) were silently excluded from `GET /api/v1/author`. The list query now includes `OR owner_user_id IS NULL` so all owned authors appear regardless of when they were added.
+- **Delete file leaves zombie on disk** (#290) — `DELETE /book/{id}/file` on legacy books (only `file_path` set, no `ebook_file_path`) cleared the DB column but never called `os.Remove` on the actual file. The legacy path is now handled explicitly in the deletion block.
+- **Download link missing for newer books** (#331) — `GET /api/v1/book/{id}/file` returned 404 for books added after the dual-format schema (migration 026+) because it only checked the legacy `file_path` column. It now falls back to `ebook_file_path` then `audiobook_file_path`. The book detail page also hid the "Download file" button for these books; it now appears whenever either path is present.
+
 ## [v1.1.2] — 2026-04-21
 
 ### Changed
