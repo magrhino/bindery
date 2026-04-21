@@ -112,19 +112,26 @@ jobs:
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
-      # Deploy: bump Helm chart image tag in development via the GitHub API.
-      # Always targets development regardless of which branch triggered the build —
-      # main is PR-gated so a direct git push is rejected by branch protection.
-      # ArgoCD watches development; tag bumps reach main naturally via merge.
+      # Deploy: on tag push, create a helm/vX.Y.Z-deploy branch from main and
+      # open a PR. Argo CD watches main; merging the PR triggers the live
+      # deployment. Branch pushes build and push the sha-* image but skip
+      # the deploy PR — sha images are not promoted without a release cut.
       - name: Update Helm image tag
-        continue-on-error: true
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development'
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          IMAGE_TAG="sha-${GITHUB_SHA::7}"
+          IMAGE_TAG="${GITHUB_REF_NAME#v}"  # strip leading v: v1.2.3 → 1.2.3
+          DEPLOY_BRANCH="helm/${GITHUB_REF_NAME}-deploy"
           FILE_PATH="charts/bindery/values.yaml"
-          FILE_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${FILE_PATH}?ref=development" \
+
+          # Create deploy branch from main (idempotent)
+          MAIN_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/git/refs/heads/main" --jq .object.sha)
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/heads/${DEPLOY_BRANCH}" \
+            -f sha="${MAIN_SHA}" 2>/dev/null || true
+
+          FILE_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${FILE_PATH}?ref=${DEPLOY_BRANCH}" \
             --jq .sha)
           CONTENT=$(sed "s|tag:.*|tag: \"${IMAGE_TAG}\"|" "${FILE_PATH}" | base64 -w0)
           gh api "repos/${GITHUB_REPOSITORY}/contents/${FILE_PATH}" \
@@ -132,12 +139,19 @@ jobs:
             -f message="chore(deploy): update bindery image to ${IMAGE_TAG} [skip ci]" \
             -f content="${CONTENT}" \
             -f sha="${FILE_SHA}" \
-            -f branch="development" \
-            --silent
-          echo "Pushed ${IMAGE_TAG} to development/${FILE_PATH}"
+            -f branch="${DEPLOY_BRANCH}"
+
+          if ! gh pr view "${DEPLOY_BRANCH}" &>/dev/null; then
+            gh pr create \
+              --head "${DEPLOY_BRANCH}" \
+              --base main \
+              --title "chore(deploy): update bindery to ${GITHUB_REF_NAME}" \
+              --body "Automated: bump Helm chart image tag to \`${IMAGE_TAG}\`."
+          fi
+          echo "Deploy PR ready: ${DEPLOY_BRANCH} → main (image ${IMAGE_TAG})"
 
       - name: Trigger Argo CD refresh
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development'
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           ARGOCD_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
@@ -167,7 +181,7 @@ jobs:
           ' CHANGELOG.md)
 
           if [ -z "$NOTES" ]; then
-            echo "ERROR: No CHANGELOG section found for ${VERSION}. Aborting release."
+            echo "::error::No CHANGELOG section found for ${VERSION}. Add '## [${VERSION}]' to CHANGELOG.md before tagging."
             exit 1
           fi
 
