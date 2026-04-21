@@ -16,6 +16,7 @@
   <a href="https://github.com/vavallee/bindery/pkgs/container/bindery"><img src="https://img.shields.io/badge/ghcr.io-vavallee%2Fbindery-blue" alt="Docker" /></a>
   <a href="https://goreportcard.com/report/github.com/vavallee/bindery"><img src="https://goreportcard.com/badge/github.com/vavallee/bindery" alt="Go Report Card" /></a>
   <a href="https://github.com/vavallee/bindery/blob/main/LICENSE"><img src="https://img.shields.io/github/license/vavallee/bindery" alt="License" /></a>
+  <a href="https://discord.gg/RpuYYRM9cZ"><img src="https://img.shields.io/badge/Discord-BINDERY-5865F2?logo=discord&logoColor=white" alt="Discord" /></a>
 </p>
 
 ---
@@ -315,6 +316,14 @@ Otherwise the server responds with `401`. The API key lives in **Settings → Ge
 | **Troubleshooting** — permission-denied, path-remap, import failures | [Wiki](https://github.com/vavallee/bindery/wiki/Troubleshooting) |
 | **Indexer & download-client recipes** — NZBGeek / DrunkenSlug / Prowlarr / Jackett / SAB / qBit tips | [Wiki](https://github.com/vavallee/bindery/wiki/Indexer-and-downloader-recipes) |
 | **Migrating from Readarr** — step-by-step with known failure modes | [Wiki](https://github.com/vavallee/bindery/wiki/Migrating-from-Readarr) |
+
+## Community
+
+- **Discord** — real-time help, setup questions, release chat: [discord.gg/RpuYYRM9cZ](https://discord.gg/RpuYYRM9cZ). The `#support` channel is the best place to ask; `#changelog` is updated on every release.
+- **GitHub Issues** — bug reports and feature requests: [issues](https://github.com/vavallee/bindery/issues).
+- **GitHub Discussions** — open-ended design questions, show-and-tell, integration recipes: [discussions](https://github.com/vavallee/bindery/discussions).
+
+Please keep security reports out of Discord and public issues — see [SECURITY.md](SECURITY.md) for the private disclosure channel.
 
 ## Security
 

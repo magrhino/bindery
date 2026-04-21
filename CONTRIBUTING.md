@@ -2,6 +2,8 @@
 
 Thanks for your interest. Bindery is a single-maintainer project that takes PRs, issues, and feedback via [GitHub](https://github.com/vavallee/bindery/issues). The goal is a small, reliable, audited codebase — PRs that narrow the diff and tighten guarantees are preferred over PRs that add surface area.
 
+For quick questions about dev setup, build failures, or whether an idea fits scope, the Discord server is usually faster than opening an issue: [discord.gg/RpuYYRM9cZ](https://discord.gg/RpuYYRM9cZ). **Do not** post security vulnerabilities there — see [Reporting security issues](#reporting-security-issues) below.
+
 ## Prerequisites
 
 - Go 1.25+
