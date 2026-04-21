@@ -284,7 +284,30 @@ func (h *BulkHandler) setBookMediaType(ctx context.Context, id int64, mediaType 
 		return fmt.Errorf("book not found")
 	}
 	book.MediaType = mediaType
+	reevaluateBookStatus(book)
 	return h.books.Update(ctx, book)
+}
+
+// reevaluateBookStatus recomputes the wanted↔imported boundary after a
+// media-type change so the book lands on the right list: switching a book
+// from 'ebook' to 'audiobook' when only the ebook is on disk must flip it
+// back to 'wanted' so it reappears on the Wanted page (and vice versa when
+// a file already satisfies the new type). Mid-pipeline ('downloading',
+// 'downloaded') and explicitly-skipped books are left alone — retriggering
+// a search on a book the download client is already working would duplicate
+// effort, and 'skipped' encodes a user decision we don't want to override.
+func reevaluateBookStatus(b *models.Book) {
+	switch b.Status {
+	case models.BookStatusSkipped, models.BookStatusDownloading, models.BookStatusDownloaded:
+		return
+	}
+	if b.NeedsEbook() || b.NeedsAudiobook() {
+		b.Status = models.BookStatusWanted
+		return
+	}
+	if b.EbookFilePath != "" || b.AudiobookFilePath != "" {
+		b.Status = models.BookStatusImported
+	}
 }
 
 // setAuthorBooksMediaType applies the given media type to every book in an
@@ -311,6 +334,7 @@ func (h *BulkHandler) setAuthorBooksMediaType(ctx context.Context, authorID int6
 			continue
 		}
 		books[i].MediaType = mediaType
+		reevaluateBookStatus(&books[i])
 		if err := h.books.Update(ctx, &books[i]); err != nil {
 			return fmt.Errorf("update book %d: %w", books[i].ID, err)
 		}

@@ -162,6 +162,105 @@ func TestAuthorsBulk_SetMediaType(t *testing.T) {
 	}
 }
 
+// Switching an author's imported ebook catalogue to audiobook must re-flag
+// the books as wanted so they reappear on the Wanted page — otherwise the
+// user sees "imported" rows with no audiobook on disk. Mirrors the
+// DeleteFile handler's "back to wanted if any wanted format is missing".
+func TestAuthorsBulk_SetMediaType_ReevaluatesToWanted(t *testing.T) {
+	h, _, books, author, ctx := bulkFixture(t)
+
+	// Imported ebook: has an ebook on disk, no audiobook.
+	imported := mustCreateBook(t, books, ctx, &models.Book{
+		ForeignID: "OL_IMP", AuthorID: author.ID, Title: "On Disk",
+		SortTitle: "on disk", Status: models.BookStatusImported,
+		MediaType: models.MediaTypeEbook,
+		Genres:    []string{}, MetadataProvider: "openlibrary", Monitored: true,
+	})
+	// Per-format paths are set via Update, not Create.
+	imported.EbookFilePath = "/library/on-disk.epub"
+	imported.FilePath = "/library/on-disk.epub"
+	if err := books.Update(ctx, imported); err != nil {
+		t.Fatal(err)
+	}
+
+	body := fmt.Sprintf(`{"ids":[%d],"action":"set_media_type","mediaType":"audiobook"}`, author.ID)
+	rec := postBulk(t, h.AuthorsBulk, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	got, _ := books.GetByID(ctx, imported.ID)
+	if got.MediaType != models.MediaTypeAudiobook {
+		t.Errorf("mediaType: want audiobook, got %q", got.MediaType)
+	}
+	if got.Status != models.BookStatusWanted {
+		t.Errorf("status: want wanted after ebook→audiobook flip (no audiobook on disk), got %q", got.Status)
+	}
+}
+
+// Opposite direction: a wanted book whose existing on-disk file satisfies
+// the new media type should flip back to imported.
+func TestAuthorsBulk_SetMediaType_ReevaluatesToImported(t *testing.T) {
+	h, _, books, author, ctx := bulkFixture(t)
+
+	wanted := mustCreateBook(t, books, ctx, &models.Book{
+		ForeignID: "OL_WANT", AuthorID: author.ID, Title: "Have Audio",
+		SortTitle: "have audio", Status: models.BookStatusWanted,
+		MediaType: models.MediaTypeEbook,
+		Genres:    []string{}, MetadataProvider: "openlibrary", Monitored: true,
+	})
+	wanted.AudiobookFilePath = "/library/have-audio.m4b"
+	if err := books.Update(ctx, wanted); err != nil {
+		t.Fatal(err)
+	}
+
+	body := fmt.Sprintf(`{"ids":[%d],"action":"set_media_type","mediaType":"audiobook"}`, author.ID)
+	rec := postBulk(t, h.AuthorsBulk, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	got, _ := books.GetByID(ctx, wanted.ID)
+	if got.Status != models.BookStatusImported {
+		t.Errorf("status: want imported after ebook→audiobook flip (audiobook already on disk), got %q", got.Status)
+	}
+}
+
+// Skipped and mid-pipeline books must survive a media-type flip unchanged —
+// skipped encodes an explicit user decision, and disturbing a downloading
+// book would duplicate work the download client is already doing.
+func TestAuthorsBulk_SetMediaType_PreservesSkippedAndInFlight(t *testing.T) {
+	h, _, books, author, ctx := bulkFixture(t)
+
+	skipped := mustCreateBook(t, books, ctx, &models.Book{
+		ForeignID: "OL_SKIP", AuthorID: author.ID, Title: "Skipped",
+		SortTitle: "skipped", Status: models.BookStatusSkipped,
+		MediaType: models.MediaTypeEbook,
+		Genres:    []string{}, MetadataProvider: "openlibrary",
+	})
+	downloading := mustCreateBook(t, books, ctx, &models.Book{
+		ForeignID: "OL_DL", AuthorID: author.ID, Title: "Downloading",
+		SortTitle: "downloading", Status: models.BookStatusDownloading,
+		MediaType: models.MediaTypeEbook,
+		Genres:    []string{}, MetadataProvider: "openlibrary", Monitored: true,
+	})
+
+	body := fmt.Sprintf(`{"ids":[%d],"action":"set_media_type","mediaType":"audiobook"}`, author.ID)
+	rec := postBulk(t, h.AuthorsBulk, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	gotSkipped, _ := books.GetByID(ctx, skipped.ID)
+	if gotSkipped.Status != models.BookStatusSkipped {
+		t.Errorf("skipped: want status preserved, got %q", gotSkipped.Status)
+	}
+	gotDL, _ := books.GetByID(ctx, downloading.ID)
+	if gotDL.Status != models.BookStatusDownloading {
+		t.Errorf("downloading: want status preserved, got %q", gotDL.Status)
+	}
+}
+
 func TestAuthorsBulk_SetMediaType_Invalid(t *testing.T) {
 	h, _, _, author, _ := bulkFixture(t)
 	body := fmt.Sprintf(`{"ids":[%d],"action":"set_media_type","mediaType":"videogame"}`, author.ID)
