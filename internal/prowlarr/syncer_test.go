@@ -11,18 +11,25 @@ import (
 )
 
 type fakeIndexerStore struct {
-	existing []models.Indexer
-	created  []models.Indexer
-	updated  []models.Indexer
-	deleted  []int64
-	nextID   int64
+	existing  []models.Indexer
+	created   []models.Indexer
+	updated   []models.Indexer
+	deleted   []int64
+	nextID    int64
+	listErr   error
+	createErr error
+	updateErr error
+	deleteErr error
 }
 
 func (f *fakeIndexerStore) ListByProwlarrInstance(_ context.Context, _ int64) ([]models.Indexer, error) {
-	return f.existing, nil
+	return f.existing, f.listErr
 }
 
 func (f *fakeIndexerStore) Create(_ context.Context, idx *models.Indexer) error {
+	if f.createErr != nil {
+		return f.createErr
+	}
 	f.nextID++
 	idx.ID = f.nextID
 	f.created = append(f.created, *idx)
@@ -30,11 +37,17 @@ func (f *fakeIndexerStore) Create(_ context.Context, idx *models.Indexer) error 
 }
 
 func (f *fakeIndexerStore) Update(_ context.Context, idx *models.Indexer) error {
+	if f.updateErr != nil {
+		return f.updateErr
+	}
 	f.updated = append(f.updated, *idx)
 	return nil
 }
 
 func (f *fakeIndexerStore) Delete(_ context.Context, id int64) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	f.deleted = append(f.deleted, id)
 	return nil
 }
