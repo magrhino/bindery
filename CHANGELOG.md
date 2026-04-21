@@ -8,6 +8,14 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v1.1.4] — 2026-04-21
+
+### Fixed
+
+- **Calibre import: Language unknown on all books** (#314) — `books_languages_link` was never queried, so every imported book showed "Language unknown" and editions were hardcoded to `"eng"`. The reader now reads the primary ISO 639-2 language code from Calibre's languages table (falls back gracefully for pre-0.7 Calibre libraries that predate the table). Language is applied to both the book row and the edition.
+- **Calibre import: Author ratings missing after first Refresh Metadata** (#314) — `relinkCalibreAuthor` fetched the full OL author but only copied image/description/sort name. `ratings_count` and `average_rating` are now copied as well.
+- **Calibre import: Duplicate book rows after Refresh Metadata** (#314) — `FetchAuthorBooks` skipped title-matched books with a bare `continue`, leaving calibre-imported stubs (synthetic `calibre:book:N` ForeignID, no language) un-upgraded when OpenLibrary returned the same title. Calibre stubs are now updated in-place with the real OL ForeignID and language instead of being silently skipped, preventing a second OL row from being created alongside them.
+
 ## [v1.1.3] — 2026-04-21
 
 ### Fixed
