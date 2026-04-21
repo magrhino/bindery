@@ -64,6 +64,10 @@ The short version lives in the [README](../README.md#roadmap). ✅ items have la
   - ✅ **Configurable per-library mode** ([#64](https://github.com/vavallee/bindery/issues/64), landed in v0.9.0) — Settings → General → Calibre exposes a mode selector: **Off** or **calibredb CLI**. Toggling takes effect without a restart.
   - ✅ **OPDS feed** ([#65](https://github.com/vavallee/bindery/issues/65), landed in v0.9.0) — OPDS 1.2 Atom catalogue at `/opds/v1.2/` so KOReader / Moon+ Reader / etc. can browse and download without running Calibre itself. Authenticated with HTTP Basic Auth (API key as password).
 
+- ⬜ **Storage location configurable from UI** ([#332](https://github.com/vavallee/bindery/issues/332)) — today the library root is set via the `BINDERY_LIBRARY_DIR` environment variable, which requires a container restart to change. A Settings → General field would let users update the path in-place, the same way download-client directories can already be edited.
+
+- ⬜ **Split ebook / audiobook results in search** ([#333](https://github.com/vavallee/bindery/issues/333)) — when both ebook and audiobook indexers are enabled, the search results page shows only one media type at a time based on the active filter. A two-section layout (ebooks / audiobooks) would surface both in the same view so users can compare and grab from either without toggling.
+
 ## v2 horizon
 
 These items are too large or architectural for a minor release. They define the v2 milestone — the set of changes that would warrant a major version bump.
