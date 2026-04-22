@@ -69,6 +69,8 @@ type Scheduler struct {
 	calibreSyncer CalibreSyncer        // optional; nil if Calibre is not configured
 	recommender   RecommendationEngine // optional; generates recommendations
 	hcSyncer      HCListSyncer         // optional; syncs Hardcover import lists
+	logs          *db.LogRepo          // optional; enables periodic log retention trim
+	logRetainDays int                  // 0 = use default (14)
 }
 
 // New creates a new scheduler.
@@ -133,6 +135,14 @@ func (s *Scheduler) WithRecommender(engine RecommendationEngine) {
 // hours to import books from the user's Hardcover reading lists.
 func (s *Scheduler) WithHardcoverSyncer(syncer HCListSyncer) {
 	s.hcSyncer = syncer
+}
+
+// WithLogRepo registers a log repository for the daily retention trim job.
+// retainDays controls how many days of log entries to keep; 0 uses the
+// default (14). Must be called before Start.
+func (s *Scheduler) WithLogRepo(logs *db.LogRepo, retainDays int) {
+	s.logs = logs
+	s.logRetainDays = retainDays
 }
 
 // Start registers and runs all background jobs.
@@ -201,6 +211,30 @@ func (s *Scheduler) Start() {
 			slog.Info("job: sync hardcover lists")
 			if err := s.hcSyncer.Sync(context.Background()); err != nil {
 				slog.Error("hardcover list sync failed", "error", err)
+			}
+		})
+	}
+
+	// Trim old log entries once per day.
+	if s.logs != nil {
+		defaultRetainDays := s.logRetainDays
+		if defaultRetainDays <= 0 {
+			defaultRetainDays = 14
+		}
+		s.cron.AddFunc("@every 24h", func() {
+			slog.Debug("job: trim log entries")
+			retainDays := defaultRetainDays
+			// Prefer the DB setting when available so UI changes take effect without restart.
+			if s.settings != nil {
+				if v, _ := s.settings.Get(context.Background(), "log.retention_days"); v != nil {
+					if n, err := strconv.Atoi(v.Value); err == nil && n > 0 {
+						retainDays = n
+					}
+				}
+			}
+			cutoff := time.Now().UTC().Add(-time.Duration(retainDays) * 24 * time.Hour)
+			if err := s.logs.Trim(context.Background(), cutoff); err != nil {
+				slog.Warn("log trim failed", "error", err)
 			}
 		})
 	}

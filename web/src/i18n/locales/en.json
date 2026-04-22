@@ -29,7 +29,9 @@
     "enable": "Enable",
     "disable": "Disable",
     "connOk": "Connection successful!",
-    "connFail": "Test failed: {{error}}"
+    "connFail": "Test failed: {{error}}",
+    "prev": "Prev",
+    "next": "Next"
   },
   "nav": {
     "authors": "Authors",
@@ -299,8 +301,15 @@
       "heading": "Logs",
       "level": "Level:",
       "noEntries": "No log entries",
-      "bufferNote": "Shows the most recent 200 entries from the in-process ring buffer (last 1 000 entries). Logs reset on restart. Change Level above to capture DEBUG output without restarting.",
-      "autoRefresh": "Auto"
+      "persistNote": "Entries are persisted to the database and survive restarts. Default range: last hour. Change Level to capture DEBUG output without restarting.",
+      "bufferNote": "Entries are persisted to the database and survive restarts. Default range: last hour.",
+      "autoRefresh": "Auto",
+      "from": "From:",
+      "to": "To:",
+      "componentPlaceholder": "Component",
+      "searchPlaceholder": "Search messages",
+      "clearFilters": "Clear filters",
+      "page": "Page {{page}}"
     },
     "general": {
       "appearance": "Appearance",
@@ -351,7 +360,11 @@
       "backupButton": "Create Backup",
       "backupCreating": "Creating...",
       "existingBackups": "Existing backups:",
-      "security": "Security"
+      "security": "Security",
+      "logRetention": "Log Retention",
+      "logRetentionLabel": "Keep log entries for",
+      "logRetentionHint": "Log entries older than this are deleted by the daily trim job. Set via BINDERY_LOG_RETENTION_DAYS or here.",
+      "days": "days"
     },
     "import": {
       "csvHeading": "CSV of author names",

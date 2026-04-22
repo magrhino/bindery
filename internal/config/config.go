@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -25,6 +26,8 @@ type Config struct {
 	ProxyAutoProvision bool   // BINDERY_PROXY_AUTO_PROVISION
 	// OIDC settings (Phase 2).
 	OIDCRedirectBaseURL string // BINDERY_OIDC_REDIRECT_BASE_URL
+	// Log retention in days (BINDERY_LOG_RETENTION_DAYS, default 14).
+	LogRetentionDays int
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -51,6 +54,7 @@ func Load() *Config {
 		ProxyAuthHeader:     envOr("BINDERY_PROXY_AUTH_HEADER", "X-Forwarded-User"),
 		ProxyAutoProvision:  envBool("BINDERY_PROXY_AUTO_PROVISION", true),
 		OIDCRedirectBaseURL: envOr("BINDERY_OIDC_REDIRECT_BASE_URL", ""),
+		LogRetentionDays:    envInt("BINDERY_LOG_RETENTION_DAYS", 14),
 	}
 }
 
@@ -85,6 +89,15 @@ func defaultDataDir(goos string, userConfigDir func() (string, error)) string {
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func envInt(key string, fallback int) int {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
 	}
 	return fallback
 }

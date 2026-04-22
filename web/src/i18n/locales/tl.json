@@ -29,7 +29,9 @@
     "enable": "Paganahin",
     "disable": "Huwag paganahin",
     "connOk": "Matagumpay ang koneksyon!",
-    "connFail": "Nabigo ang pagsubok: {{error}}"
+    "connFail": "Nabigo ang pagsubok: {{error}}",
+    "prev": "Prev",
+    "next": "Next"
   },
   "nav": {
     "authors": "Mga May-akda",
@@ -299,7 +301,14 @@
       "level": "Antas:",
       "noEntries": "Walang log entry",
       "bufferNote": "Ipinapakita ang pinakabagong 200 entry mula sa in-process ring buffer (huling 1,000 entry). Nire-reset ang mga log sa bawat restart. Baguhin ang Antas sa itaas para makuha ang DEBUG output nang hindi nagre-restart.",
-      "autoRefresh": "Auto"
+      "autoRefresh": "Auto",
+      "from": "From:",
+      "to": "To:",
+      "componentPlaceholder": "Component",
+      "searchPlaceholder": "Search messages",
+      "clearFilters": "Clear filters",
+      "page": "Page {{page}}",
+      "persistNote": "Entries are persisted to the database and survive restarts. Default range: last hour."
     },
     "general": {
       "appearance": "Hitsura",
@@ -350,7 +359,11 @@
       "backupButton": "Gumawa ng Backup",
       "backupCreating": "Ginagawa...",
       "existingBackups": "Mga umiiral na backup:",
-      "security": "Seguridad"
+      "security": "Seguridad",
+      "logRetention": "Log Retention",
+      "logRetentionLabel": "Keep log entries for",
+      "logRetentionHint": "Log entries older than this are deleted by the daily trim job.",
+      "days": "days"
     },
     "import": {
       "csvHeading": "CSV ng mga pangalan ng may-akda",

@@ -28,7 +28,9 @@
     "enable": "Aktivieren",
     "disable": "Deaktivieren",
     "connOk": "Verbindung erfolgreich!",
-    "connFail": "Test fehlgeschlagen: {{error}}"
+    "connFail": "Test fehlgeschlagen: {{error}}",
+    "prev": "Prev",
+    "next": "Next"
   },
   "nav": {
     "authors": "Autoren",
@@ -271,7 +273,14 @@
       "level": "Ebene:",
       "noEntries": "Keine Protokolleinträge",
       "bufferNote": "Zeigt die neuesten 200 Einträge aus dem prozessinternen Ringpuffer (letzte 1.000 Einträge). Protokolle werden beim Neustart zurückgesetzt. Ändern Sie die Ebene oben, um DEBUG-Ausgaben ohne Neustart zu erfassen.",
-      "autoRefresh": "Auto"
+      "autoRefresh": "Auto",
+      "from": "From:",
+      "to": "To:",
+      "componentPlaceholder": "Component",
+      "searchPlaceholder": "Search messages",
+      "clearFilters": "Clear filters",
+      "page": "Page {{page}}",
+      "persistNote": "Entries are persisted to the database and survive restarts. Default range: last hour."
     },
     "general": {
       "appearance": "Erscheinungsbild",
@@ -319,7 +328,11 @@
       "backupButton": "Sicherung erstellen",
       "backupCreating": "Wird erstellt...",
       "existingBackups": "Vorhandene Sicherungen:",
-      "security": "Sicherheit"
+      "security": "Sicherheit",
+      "logRetention": "Log Retention",
+      "logRetentionLabel": "Keep log entries for",
+      "logRetentionHint": "Log entries older than this are deleted by the daily trim job.",
+      "days": "days"
     },
     "import": {
       "csvHeading": "CSV mit Autorennamen",

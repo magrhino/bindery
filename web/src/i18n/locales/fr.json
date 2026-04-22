@@ -28,7 +28,9 @@
     "enable": "Activer",
     "disable": "Désactiver",
     "connOk": "Connexion réussie !",
-    "connFail": "Test échoué : {{error}}"
+    "connFail": "Test échoué : {{error}}",
+    "prev": "Prev",
+    "next": "Next"
   },
   "nav": {
     "authors": "Auteurs",
@@ -271,7 +273,14 @@
       "level": "Niveau :",
       "noEntries": "Aucune entrée de journal",
       "bufferNote": "Affiche les 200 entrées les plus récentes du tampon circulaire en cours (1 000 dernières entrées). Les journaux sont réinitialisés au redémarrage. Modifiez le niveau ci-dessus pour capturer la sortie DEBUG sans redémarrer.",
-      "autoRefresh": "Auto"
+      "autoRefresh": "Auto",
+      "from": "From:",
+      "to": "To:",
+      "componentPlaceholder": "Component",
+      "searchPlaceholder": "Search messages",
+      "clearFilters": "Clear filters",
+      "page": "Page {{page}}",
+      "persistNote": "Entries are persisted to the database and survive restarts. Default range: last hour."
     },
     "general": {
       "appearance": "Apparence",
@@ -319,7 +328,11 @@
       "backupButton": "Créer une sauvegarde",
       "backupCreating": "Création en cours...",
       "existingBackups": "Sauvegardes existantes :",
-      "security": "Sécurité"
+      "security": "Sécurité",
+      "logRetention": "Log Retention",
+      "logRetentionLabel": "Keep log entries for",
+      "logRetentionHint": "Log entries older than this are deleted by the daily trim job.",
+      "days": "days"
     },
     "import": {
       "csvHeading": "CSV de noms d'auteurs",

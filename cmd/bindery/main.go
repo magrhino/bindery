@@ -93,6 +93,11 @@ func main() {
 	defer database.Close()
 
 	// Repos
+	// Persistent log store — extend the slog pipeline to also write to SQLite.
+	logRepo := db.NewLogRepo(database)
+	logDBHandler := db.NewLogSlogHandler(logRepo, level)
+	slog.SetDefault(slog.New(logbuf.NewTee(logbuf.NewTee(stdoutHandler, ring), logDBHandler)))
+
 	authorRepo := db.NewAuthorRepo(database)
 	authorAliasRepo := db.NewAuthorAliasRepo(database)
 	bookRepo := db.NewBookRepo(database)
@@ -262,6 +267,7 @@ func main() {
 	// Register the Hardcover list syncer (24-hour job).
 	hcSyncer := hardcoverlistsyncer.New(importListRepo, authorRepo, bookRepo)
 	sched.WithHardcoverSyncer(hcSyncer)
+	sched.WithLogRepo(logRepo, cfg.LogRetentionDays)
 
 	sched.Start()
 	defer sched.Stop()
@@ -324,7 +330,7 @@ func main() {
 	bulkHandler := api.NewBulkHandler(authorRepo, bookRepo, blocklistRepo, sched)
 	backupHandler := api.NewBackupHandler(cfg.DBPath, cfg.DataDir)
 	rootFolderHandler := api.NewRootFolderHandler(rootFolderRepo)
-	logHandler := api.NewLogHandler(ring)
+	logHandler := api.NewLogHandler(ring).WithLogRepo(logRepo)
 	prowlarrHandler := api.NewProwlarrHandler(prowlarrRepo, indexerRepo)
 	calibreHandler := api.NewCalibreHandler(settingsRepo)
 	calibreImportHandler := api.NewCalibreImportHandler(calibreImporter, func() calibre.Config {

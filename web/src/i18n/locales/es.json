@@ -29,7 +29,9 @@
     "enable": "Activar",
     "disable": "Desactivar",
     "connOk": "¡Conexión exitosa!",
-    "connFail": "Error en la prueba: {{error}}"
+    "connFail": "Error en la prueba: {{error}}",
+    "prev": "Prev",
+    "next": "Next"
   },
   "nav": {
     "authors": "Autores",
@@ -299,7 +301,14 @@
       "level": "Nivel:",
       "noEntries": "Sin entradas en el registro",
       "bufferNote": "Muestra las 200 entradas más recientes del búfer en memoria (últimas 1 000 entradas). Los registros se reinician al reiniciar. Cambia el Nivel para capturar salida DEBUG sin reiniciar.",
-      "autoRefresh": "Auto"
+      "autoRefresh": "Auto",
+      "from": "From:",
+      "to": "To:",
+      "componentPlaceholder": "Component",
+      "searchPlaceholder": "Search messages",
+      "clearFilters": "Clear filters",
+      "page": "Page {{page}}",
+      "persistNote": "Entries are persisted to the database and survive restarts. Default range: last hour."
     },
     "general": {
       "appearance": "Apariencia",
@@ -350,7 +359,11 @@
       "backupButton": "Crear copia de seguridad",
       "backupCreating": "Creando...",
       "existingBackups": "Copias de seguridad existentes:",
-      "security": "Seguridad"
+      "security": "Seguridad",
+      "logRetention": "Log Retention",
+      "logRetentionLabel": "Keep log entries for",
+      "logRetentionHint": "Log entries older than this are deleted by the daily trim job.",
+      "days": "days"
     },
     "import": {
       "csvHeading": "CSV de nombres de autores",

@@ -80,7 +80,7 @@ These items are too large or architectural for a minor release. They define the 
 
   > **Ships with multi-user.** External DB support only makes sense alongside multi-user (#73 above) — a single-user instance has no concurrency pressure that justifies leaving SQLite. Plan to deliver both in the same release so the migration path is tested once, not twice.
 
-- **Persistent structured log store** — The current ring buffer (1 000 entries, in-process memory) is a good v1 for the log viewer (Settings → Logs, [#93](https://github.com/vavallee/bindery/issues/93)). A v2 log store would persist entries to the database (or a rolling log file), survive restarts, be queryable across date ranges, and support structured search. Useful for incident retrospectives on long-running instances.
+- ✅ **Persistent structured log store** ([#241](https://github.com/vavallee/bindery/issues/241), landed in development) — Persists log entries to SQLite (migration 026), survives restarts, queryable by date range / level / component / full-text. Retention defaults to 14 days and is configurable. The ring buffer remains as a fast in-process fallback when no DB is available.
 
 ## Explicitly out of scope
 

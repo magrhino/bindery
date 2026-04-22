@@ -29,7 +29,9 @@
     "enable": "Aktifkan",
     "disable": "Nonaktifkan",
     "connOk": "Koneksi berhasil!",
-    "connFail": "Uji gagal: {{error}}"
+    "connFail": "Uji gagal: {{error}}",
+    "prev": "Prev",
+    "next": "Next"
   },
   "nav": {
     "authors": "Penulis",
@@ -299,7 +301,14 @@
       "level": "Level:",
       "noEntries": "Tidak ada entri log",
       "bufferNote": "Menampilkan 200 entri terbaru dari buffer cincin dalam proses (1.000 entri terakhir). Log terhapus saat restart. Ubah Level di atas untuk menangkap keluaran DEBUG tanpa restart.",
-      "autoRefresh": "Otomatis"
+      "autoRefresh": "Otomatis",
+      "from": "From:",
+      "to": "To:",
+      "componentPlaceholder": "Component",
+      "searchPlaceholder": "Search messages",
+      "clearFilters": "Clear filters",
+      "page": "Page {{page}}",
+      "persistNote": "Entries are persisted to the database and survive restarts. Default range: last hour."
     },
     "general": {
       "appearance": "Tampilan",
@@ -350,7 +359,11 @@
       "backupButton": "Buat Cadangan",
       "backupCreating": "Membuat...",
       "existingBackups": "Cadangan yang ada:",
-      "security": "Keamanan"
+      "security": "Keamanan",
+      "logRetention": "Log Retention",
+      "logRetentionLabel": "Keep log entries for",
+      "logRetentionHint": "Log entries older than this are deleted by the daily trim job.",
+      "days": "days"
     },
     "import": {
       "csvHeading": "CSV nama penulis",
