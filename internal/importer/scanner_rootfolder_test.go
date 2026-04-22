@@ -2,6 +2,7 @@ package importer
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/vavallee/bindery/internal/db"
@@ -28,6 +29,30 @@ func scannerWithRootFolders(t *testing.T, libraryDir string) (*Scanner, *db.Root
 	s := NewScanner(downloads, clients, books, authors, history, libraryDir, "", "", "", "")
 	s.WithRootFolders(rf)
 	return s, rf, authors, context.Background()
+}
+
+// scannerWithRootFoldersAndSettings builds a Scanner with both RootFolderRepo
+// and SettingsRepo wired so the default-root-folder setting can be exercised.
+func scannerWithRootFoldersAndSettings(t *testing.T, libraryDir string) (*Scanner, *db.RootFolderRepo, *db.SettingsRepo, context.Context) {
+	t.Helper()
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	books := db.NewBookRepo(database)
+	authors := db.NewAuthorRepo(database)
+	history := db.NewHistoryRepo(database)
+	downloads := db.NewDownloadRepo(database)
+	clients := db.NewDownloadClientRepo(database)
+	rf := db.NewRootFolderRepo(database)
+	settings := db.NewSettingsRepo(database)
+
+	s := NewScanner(downloads, clients, books, authors, history, libraryDir, "", "", "", "")
+	s.WithRootFolders(rf)
+	s.WithSettings(settings)
+	return s, rf, settings, context.Background()
 }
 
 func TestEffectiveLibraryDir_NilAuthor(t *testing.T) {
@@ -105,5 +130,84 @@ func TestEffectiveLibraryDir_NoRootFolderRepo(t *testing.T) {
 	got := s.effectiveLibraryDir(context.Background(), author)
 	if got != "/default/lib" {
 		t.Errorf("no repo: want /default/lib, got %q", got)
+	}
+}
+
+func TestEffectiveLibraryDir_DefaultRootFolderSetting(t *testing.T) {
+	dir := t.TempDir()
+	s, rf, settings, ctx := scannerWithRootFoldersAndSettings(t, "/default/lib")
+
+	created, err := rf.Create(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.Set(ctx, "library.defaultRootFolderId", fmt.Sprintf("%d", created.ID)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Author with no explicit root folder should use the default setting.
+	author := &models.Author{RootFolderID: nil}
+	got := s.effectiveLibraryDir(ctx, author)
+	if got != dir {
+		t.Errorf("default setting: want %q, got %q", dir, got)
+	}
+}
+
+func TestEffectiveLibraryDir_DefaultRootFolderUnset(t *testing.T) {
+	s, _, _, ctx := scannerWithRootFoldersAndSettings(t, "/default/lib")
+
+	// No setting → falls back to libraryDir.
+	author := &models.Author{RootFolderID: nil}
+	got := s.effectiveLibraryDir(ctx, author)
+	if got != "/default/lib" {
+		t.Errorf("unset default: want /default/lib, got %q", got)
+	}
+}
+
+func TestEffectiveLibraryDir_DefaultRootFolderDeletedReverts(t *testing.T) {
+	dir := t.TempDir()
+	s, rf, settings, ctx := scannerWithRootFoldersAndSettings(t, "/default/lib")
+
+	created, err := rf.Create(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.Set(ctx, "library.defaultRootFolderId", fmt.Sprintf("%d", created.ID)); err != nil {
+		t.Fatal(err)
+	}
+	// Delete the root folder — default should revert to libraryDir.
+	if err := rf.Delete(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	author := &models.Author{RootFolderID: nil}
+	got := s.effectiveLibraryDir(ctx, author)
+	if got != "/default/lib" {
+		t.Errorf("deleted default RF: want /default/lib, got %q", got)
+	}
+}
+
+func TestEffectiveLibraryDir_AuthorRootFolderTakesPriorityOverDefault(t *testing.T) {
+	authorDir := t.TempDir()
+	defaultDir := t.TempDir()
+	s, rf, settings, ctx := scannerWithRootFoldersAndSettings(t, "/default/lib")
+
+	authorRF, err := rf.Create(ctx, authorDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultRF, err := rf.Create(ctx, defaultDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.Set(ctx, "library.defaultRootFolderId", fmt.Sprintf("%d", defaultRF.ID)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Author with explicit root folder — should use that, not the default.
+	author := &models.Author{RootFolderID: &authorRF.ID}
+	got := s.effectiveLibraryDir(ctx, author)
+	if got != authorDir {
+		t.Errorf("author RF should take priority: want %q, got %q", authorDir, got)
 	}
 }

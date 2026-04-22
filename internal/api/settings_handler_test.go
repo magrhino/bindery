@@ -179,3 +179,31 @@ func TestSettings_SetBadBody(t *testing.T) {
 		t.Errorf("expected 400, got %d", rec.Code)
 	}
 }
+
+func TestSettings_DefaultLibraryRootFolderID(t *testing.T) {
+	cases := []struct {
+		value   string
+		wantOK  bool
+	}{
+		{"", true},
+		{"1", true},
+		{"42", true},
+		{"0", false},
+		{"-1", false},
+		{"abc", false},
+		{"1.5", false},
+	}
+	for _, tc := range cases {
+		h, _, _ := settingsFixture(t)
+		body := bytes.NewBufferString(`{"value":"` + tc.value + `"}`)
+		req := withKey(httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+SettingDefaultLibraryRootFolderID, body), SettingDefaultLibraryRootFolderID)
+		rec := httptest.NewRecorder()
+		h.Set(rec, req)
+		if tc.wantOK && rec.Code != http.StatusOK {
+			t.Errorf("value %q: expected 200, got %d: %s", tc.value, rec.Code, rec.Body.String())
+		}
+		if !tc.wantOK && rec.Code != http.StatusBadRequest {
+			t.Errorf("value %q: expected 400, got %d", tc.value, rec.Code)
+		}
+	}
+}

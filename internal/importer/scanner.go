@@ -78,12 +78,21 @@ func (s *Scanner) WithRootFolders(rf *db.RootFolderRepo) *Scanner {
 }
 
 // effectiveLibraryDir returns the library root to use for the given author.
-// If the author has a rootFolderId and the repo is configured, that folder's
-// path is returned. Otherwise the global libraryDir is used.
+// Priority: (1) author's explicit RootFolderID, (2) library.defaultRootFolderId
+// setting, (3) global libraryDir from env-var.
 func (s *Scanner) effectiveLibraryDir(ctx context.Context, author *models.Author) string {
 	if author != nil && author.RootFolderID != nil && s.rootFolders != nil {
 		if rf, err := s.rootFolders.GetByID(ctx, *author.RootFolderID); err == nil && rf != nil {
 			return rf.Path
+		}
+	}
+	if s.settings != nil && s.rootFolders != nil {
+		if setting, err := s.settings.Get(ctx, "library.defaultRootFolderId"); err == nil && setting != nil && setting.Value != "" {
+			if id, err := strconv.ParseInt(setting.Value, 10, 64); err == nil && id > 0 {
+				if rf, err := s.rootFolders.GetByID(ctx, id); err == nil && rf != nil {
+					return rf.Path
+				}
+			}
 		}
 	}
 	return s.libraryDir

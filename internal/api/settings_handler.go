@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vavallee/bindery/internal/calibre"
@@ -18,6 +19,12 @@ import (
 // models.MediaTypeEbook / MediaTypeAudiobook / MediaTypeBoth; empty or
 // unset falls back to ebook for backwards compatibility.
 const SettingDefaultMediaType = "default.media_type"
+
+// SettingDefaultLibraryRootFolderID is the KV key that stores the ID of the
+// root folder used as the fallback library path when an author has no
+// per-author RootFolderID. Value is a decimal integer (the root_folder.id);
+// empty or unset means fall back to cfg.LibraryDir (the env-var default).
+const SettingDefaultLibraryRootFolderID = "library.defaultRootFolderId"
 
 type SettingsHandler struct {
 	settings *db.SettingsRepo
@@ -156,6 +163,16 @@ func validateSettingValue(key, value string) error {
 			return nil
 		default:
 			return fmt.Errorf("default.media_type %q is not one of: ebook, audiobook, both", value)
+		}
+	case SettingDefaultLibraryRootFolderID:
+		// Empty = unset (fall back to env-var default); non-empty must be a
+		// positive integer representing an existing root_folder.id.
+		if value == "" {
+			return nil
+		}
+		id, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || id <= 0 {
+			return fmt.Errorf("library.defaultRootFolderId %q must be a positive integer or empty", value)
 		}
 	case SettingCalibrePluginURL:
 		if value == "" {

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -291,6 +292,22 @@ func main() {
 	pendingHandler := api.NewPendingHandler(pendingReleaseRepo, queueHandler, downloadRepo, bookRepo)
 	importScanner.WithSettings(settingsRepo)
 	importScanner.WithRootFolders(rootFolderRepo)
+
+	// Startup check: warn if the configured default root folder no longer exists on disk.
+	if s, _ := settingsRepo.Get(ctxBoot, api.SettingDefaultLibraryRootFolderID); s != nil && s.Value != "" {
+		if id, err := strconv.ParseInt(s.Value, 10, 64); err == nil && id > 0 {
+			if rf, err := rootFolderRepo.GetByID(ctxBoot, id); err == nil && rf != nil {
+				if _, statErr := os.Stat(rf.Path); statErr != nil {
+					slog.Warn("default library root folder does not exist on disk — falling back to BINDERY_LIBRARY_DIR",
+						"path", rf.Path, "rootFolderId", id, "error", statErr)
+				}
+			} else {
+				slog.Warn("default library root folder ID not found in database — falling back to BINDERY_LIBRARY_DIR",
+					"rootFolderId", id)
+			}
+		}
+	}
+
 	libraryHandler := api.NewLibraryHandler(importScanner).WithSettings(settingsRepo)
 	fileHandler := api.NewFileHandler(bookRepo, cfg.LibraryDir, cfg.AudiobookDir)
 	historyHandler := api.NewHistoryHandler(historyRepo, blocklistRepo)
