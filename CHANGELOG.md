@@ -4,9 +4,9 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
-## [Unreleased] — development branch
+## [Unreleased]
 
-The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
+## [v1.2.0] — 2026-04-22
 
 ### Added
 
@@ -16,6 +16,7 @@ The `development` branch carries the in-flight feature set for the next release.
 
 ### Fixed
 
+- **Multi-file ebook downloads are now fully tracked** — Delete + files removes every file (mobi, epub, pdf, etc.) and rescan cannot re-claim orphan files. Library rescan now requires a matched file to live under the candidate book's configured root folder, preventing cross-author mismapping (#343).
 - **Ebook searches no longer include the parent Books category (7000)**, which could return comics and magazines. Affects Prowlarr-synced indexers: `filterCategoriesForMedia` now matches only the 702x ebook subcategory range (7020–7029) and 303x audiobook range (3030–3039), and the syncer drops parent categories (7000, 3000) at sync time and propagates category changes on re-sync. (#344)
 - **Author sync no longer creates duplicate book rows that differ only in edition suffix, whitespace, or Unicode normalization.** Existing duplicates are merged on upgrade. Search result filtering no longer drops valid releases when the book title contains a parenthesised edition qualifier (#283).
 
