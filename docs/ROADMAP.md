@@ -66,7 +66,7 @@ The short version lives in the [README](../README.md#roadmap). ✅ items have la
 
 - ✅ **Default library location configurable from Settings UI** ([#332](https://github.com/vavallee/bindery/issues/332)) — a new "Default root folder" dropdown in Settings → General lets users pick any configured root folder as the library fallback for authors with no per-author root folder. `BINDERY_LIBRARY_DIR` continues to work as an env-var fallback when the setting is unset.
 
-- ⬜ **Split ebook / audiobook results in search** ([#333](https://github.com/vavallee/bindery/issues/333)) — when both ebook and audiobook indexers are enabled, the search results page shows only one media type at a time based on the active filter. A two-section layout (ebooks / audiobooks) would surface both in the same view so users can compare and grab from either without toggling.
+- ✅ **Split ebook / audiobook results in search** ([#333](https://github.com/vavallee/bindery/issues/333)) — when both ebook and audiobook indexers are enabled, the search results page shows only one media type at a time based on the active filter. A two-section layout (ebooks / audiobooks) would surface both in the same view so users can compare and grab from either without toggling.
 
 ## v2 horizon
 

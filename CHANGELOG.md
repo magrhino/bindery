@@ -11,6 +11,7 @@ The `development` branch carries the in-flight feature set for the next release.
 ### Added
 
 - **Default library location can now be set from Settings → General** (#332). A new "Default root folder" dropdown lets you pick any configured root folder as the library path used when an author has no per-author root folder. Existing `BINDERY_LIBRARY_DIR` continues to work as a fallback when the setting is unset. An inline "Add root folder" affordance lets you create a new root folder without leaving the page. Startup logs a warning (but does not fail) if the configured default root folder no longer exists on disk.
+- **Search results grouped by media type** — For dual-format books (ebook + audiobook), the Book Detail page now displays results in two titled sections (Ebooks / Audiobooks) each with its own 20-result cap, so audiobook results can no longer fall past the UI cap. Single-format books retain the existing flat list. Each result row in the split view shows a colour-coded media-type badge (#333).
 
 ### Fixed
 

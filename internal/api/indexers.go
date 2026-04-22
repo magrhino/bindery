@@ -36,18 +36,25 @@ func (s *lastDebugStore) get() *indexer.SearchDebug {
 	return s.dbg
 }
 
+// indexerSearcher is the subset of indexer.Searcher used by IndexerHandler.
+// It is an interface so tests can inject a mock.
+type indexerSearcher interface {
+	SearchBookWithDebug(ctx context.Context, indexers []models.Indexer, c indexer.MatchCriteria) ([]newznab.SearchResult, *indexer.SearchDebug)
+	SearchQuery(ctx context.Context, indexers []models.Indexer, query string) []newznab.SearchResult
+}
+
 type IndexerHandler struct {
 	indexers  *db.IndexerRepo
 	books     *db.BookRepo
 	authors   *db.AuthorRepo
 	profiles  *db.MetadataProfileRepo
-	searcher  *indexer.Searcher
+	searcher  indexerSearcher
 	settings  *db.SettingsRepo
 	blocklist *db.BlocklistRepo
 	lastDebug *lastDebugStore
 }
 
-func NewIndexerHandler(indexers *db.IndexerRepo, books *db.BookRepo, authors *db.AuthorRepo, profiles *db.MetadataProfileRepo, searcher *indexer.Searcher, settings *db.SettingsRepo, blocklist *db.BlocklistRepo) *IndexerHandler {
+func NewIndexerHandler(indexers *db.IndexerRepo, books *db.BookRepo, authors *db.AuthorRepo, profiles *db.MetadataProfileRepo, searcher indexerSearcher, settings *db.SettingsRepo, blocklist *db.BlocklistRepo) *IndexerHandler {
 	return &IndexerHandler{
 		indexers: indexers, books: books, authors: authors, profiles: profiles,
 		searcher: searcher, settings: settings, blocklist: blocklist,
@@ -257,7 +264,13 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 		audioCrit := crit
 		audioCrit.MediaType = models.MediaTypeAudiobook
 		ebookResults, ebookDbg := h.searcher.SearchBookWithDebug(r.Context(), idxs, ebookCrit)
+		for i := range ebookResults {
+			ebookResults[i].MediaType = "ebook"
+		}
 		audioResults, audioDbg := h.searcher.SearchBookWithDebug(r.Context(), idxs, audioCrit)
+		for i := range audioResults {
+			audioResults[i].MediaType = "audiobook"
+		}
 		results = append(ebookResults, audioResults...)
 		results = indexer.DedupeResults(results)
 		// Merge debug info from both searches.

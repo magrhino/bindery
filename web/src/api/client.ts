@@ -580,8 +580,9 @@ export interface SearchResult {
   nzbUrl: string
   grabs: number
   pubDate: string
-  protocol: string  // "usenet" or "torrent"
-  language?: string // ISO 639-1 from newznab:attr language (when present)
+  protocol: string   // "usenet" or "torrent"
+  language?: string  // ISO 639-1 from newznab:attr language (when present)
+  mediaType?: string // "ebook" or "audiobook"; set for dual-format book searches
   approved?: boolean
   rejection?: string
 }

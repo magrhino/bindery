@@ -2,14 +2,39 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/indexer"
+	"github.com/vavallee/bindery/internal/indexer/newznab"
 	"github.com/vavallee/bindery/internal/models"
 )
+
+// mockIndexerSearcher implements indexerSearcher for unit tests.
+type mockIndexerSearcher struct {
+	ebookResults []newznab.SearchResult
+	audioResults []newznab.SearchResult
+}
+
+func (m *mockIndexerSearcher) SearchBookWithDebug(_ context.Context, _ []models.Indexer, c indexer.MatchCriteria) ([]newznab.SearchResult, *indexer.SearchDebug) {
+	switch c.MediaType {
+	case models.MediaTypeEbook:
+		return m.ebookResults, nil
+	case models.MediaTypeAudiobook:
+		return m.audioResults, nil
+	default:
+		return append(m.ebookResults, m.audioResults...), nil
+	}
+}
+
+func (m *mockIndexerSearcher) SearchQuery(_ context.Context, _ []models.Indexer, _ string) []newznab.SearchResult {
+	return nil
+}
 
 func indexerFixture(t *testing.T) *IndexerHandler {
 	t.Helper()
@@ -180,5 +205,83 @@ func TestLangFilterFromAllowed(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("%s: langFilterFromAllowed(%v) = %q, want %q", tc.desc, tc.langs, got, tc.want)
 		}
+	}
+}
+
+func TestSearchBook_DualFormat_MediaTypeTagging(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	ctx := context.Background()
+
+	authorRepo := db.NewAuthorRepo(database)
+	author := &models.Author{
+		ForeignID: "OL1A", Name: "Jane Doe", SortName: "Doe, Jane",
+		MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+
+	bookRepo := db.NewBookRepo(database)
+	book := &models.Book{
+		Title:     "Test Book",
+		ForeignID: "OL1M",
+		AuthorID:  author.ID,
+		MediaType: models.MediaTypeBoth,
+		Monitored: true,
+	}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &mockIndexerSearcher{
+		ebookResults: []newznab.SearchResult{{GUID: "eb1", Title: "Test Book epub"}},
+		audioResults: []newznab.SearchResult{{GUID: "au1", Title: "Test Book mp3"}},
+	}
+
+	h := NewIndexerHandler(
+		db.NewIndexerRepo(database),
+		bookRepo,
+		authorRepo,
+		db.NewMetadataProfileRepo(database),
+		mock,
+		db.NewSettingsRepo(database),
+		db.NewBlocklistRepo(database),
+	)
+
+	rec := httptest.NewRecorder()
+	req := withURLParam(
+		httptest.NewRequest(http.MethodGet, "/indexer/book/1/search", nil),
+		"id", strconv.FormatInt(book.ID, 10),
+	)
+	h.SearchBook(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Results []struct {
+			GUID      string `json:"guid"`
+			MediaType string `json:"mediaType"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	byGUID := make(map[string]string, len(resp.Results))
+	for _, r := range resp.Results {
+		byGUID[r.GUID] = r.MediaType
+	}
+	if byGUID["eb1"] != "ebook" {
+		t.Errorf("ebook result: got mediaType=%q, want %q", byGUID["eb1"], "ebook")
+	}
+	if byGUID["au1"] != "audiobook" {
+		t.Errorf("audiobook result: got mediaType=%q, want %q", byGUID["au1"], "audiobook")
 	}
 }

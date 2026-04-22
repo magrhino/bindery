@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, Book, HistoryEvent, SearchResult, SearchDebug } from '../api/client'
 import SearchDebugPanel from '../components/SearchDebugPanel'
+import MediaBadge from '../components/MediaBadge'
 
 function formatSize(n: number): string {
   if (!n || n <= 0) return ''
@@ -24,6 +25,75 @@ const statusColors: Record<string, string> = {
   downloaded: 'bg-purple-500/20 text-purple-700 dark:text-purple-400',
   imported: 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-400',
   skipped: 'bg-slate-300 dark:bg-zinc-700 text-slate-600 dark:text-zinc-400',
+}
+
+const resultRowCls = (approved?: boolean) =>
+  `flex items-center justify-between p-2 border rounded text-xs ${
+    approved === false
+      ? 'bg-slate-50 dark:bg-zinc-950 border-slate-200 dark:border-zinc-800 opacity-60'
+      : 'bg-slate-100 dark:bg-zinc-900 border-slate-200 dark:border-zinc-800'
+  }`
+
+export function SearchResultsSection({
+  results,
+  bookMediaType,
+  grabbing,
+  onGrab,
+}: {
+  results: SearchResult[]
+  bookMediaType?: string
+  grabbing: string | null
+  onGrab: (r: SearchResult) => void
+}) {
+  const renderRow = (r: SearchResult, fmt?: 'ebook' | 'audiobook') => (
+    <div key={r.guid} className={resultRowCls(r.approved)}>
+      <div className="min-w-0 mr-3">
+        <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+          {fmt && <MediaBadge type={fmt} />}
+          <span className="truncate text-slate-800 dark:text-zinc-200">{r.title}</span>
+        </div>
+        <span className="text-slate-500 dark:text-zinc-500 truncate block">
+          {r.indexerName} · {formatSize(r.size)} · {r.grabs} grabs
+          {r.rejection && <span className="ml-2 text-amber-600 dark:text-amber-400">· {r.rejection}</span>}
+        </span>
+      </div>
+      <button
+        onClick={() => onGrab(r)}
+        disabled={grabbing !== null}
+        className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded text-[11px] font-medium flex-shrink-0"
+      >
+        {grabbing === r.guid ? 'Grabbing…' : 'Grab'}
+      </button>
+    </div>
+  )
+
+  if (bookMediaType === 'both') {
+    const ebooks = results.filter(r => r.mediaType === 'ebook')
+    const audiobooks = results.filter(r => r.mediaType === 'audiobook')
+    return (
+      <>
+        {ebooks.length > 0 && (
+          <section className="mb-4">
+            <h3 className="text-sm font-semibold mb-2 text-slate-800 dark:text-zinc-200">Ebooks ({ebooks.length})</h3>
+            <div className="space-y-1">{ebooks.slice(0, 20).map(r => renderRow(r, 'ebook'))}</div>
+          </section>
+        )}
+        {audiobooks.length > 0 && (
+          <section className="mb-4">
+            <h3 className="text-sm font-semibold mb-2 text-slate-800 dark:text-zinc-200">Audiobooks ({audiobooks.length})</h3>
+            <div className="space-y-1">{audiobooks.slice(0, 20).map(r => renderRow(r, 'audiobook'))}</div>
+          </section>
+        )}
+      </>
+    )
+  }
+
+  return (
+    <section className="mb-6">
+      <h3 className="text-sm font-semibold mb-2 text-slate-800 dark:text-zinc-200">Results ({results.length})</h3>
+      <div className="space-y-1">{results.slice(0, 20).map(r => renderRow(r))}</div>
+    </section>
+  )
 }
 
 export default function BookDetailPage() {
@@ -426,29 +496,12 @@ export default function BookDetailPage() {
       )}
 
       {results !== null && results.length > 0 && (
-        <section className="mb-6">
-          <h3 className="text-sm font-semibold mb-2 text-slate-800 dark:text-zinc-200">Results ({results.length})</h3>
-          <div className="space-y-1">
-            {results.slice(0, 20).map(r => (
-              <div key={r.guid} className={`flex items-center justify-between p-2 border rounded text-xs ${r.approved === false ? 'bg-slate-50 dark:bg-zinc-950 border-slate-200 dark:border-zinc-800 opacity-60' : 'bg-slate-100 dark:bg-zinc-900 border-slate-200 dark:border-zinc-800'}`}>
-                <div className="min-w-0 mr-3">
-                  <span className="truncate block text-slate-800 dark:text-zinc-200">{r.title}</span>
-                  <span className="text-slate-500 dark:text-zinc-500 truncate block">
-                    {r.indexerName} · {formatSize(r.size)} · {r.grabs} grabs
-                    {r.rejection && <span className="ml-2 text-amber-600 dark:text-amber-400">· {r.rejection}</span>}
-                  </span>
-                </div>
-                <button
-                  onClick={() => grab(r)}
-                  disabled={grabbing !== null}
-                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded text-[11px] font-medium flex-shrink-0"
-                >
-                  {grabbing === r.guid ? 'Grabbing…' : 'Grab'}
-                </button>
-              </div>
-            ))}
-          </div>
-        </section>
+        <SearchResultsSection
+          results={results}
+          bookMediaType={book.mediaType}
+          grabbing={grabbing}
+          onGrab={grab}
+        />
       )}
 
       {events.length > 0 && (
