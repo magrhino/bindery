@@ -139,8 +139,8 @@ func TestIntSliceToCSV(t *testing.T) {
 	}{
 		{[]int{7000, 7020}, "7000,7020"},
 		{[]int{7000}, "7000"},
-		{nil, "7000,7020"},
-		{[]int{}, "7000,7020"},
+		{nil, "7020"},
+		{[]int{}, "7020"},
 	}
 	for _, tt := range tests {
 		got := intSliceToCSV(tt.input)

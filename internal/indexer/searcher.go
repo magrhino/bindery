@@ -49,10 +49,10 @@ type MatchCriteria struct {
 // than silently sending an ebook query — otherwise the search appears to
 // succeed but returns the wrong kind of release.
 func filterCategoriesForMedia(cats []int, mediaType string) []int {
-	wantPrefix := 7
-	fallback := []int{7000, 7020}
+	wantTens := 702
+	fallback := []int{7020}
 	if mediaType == "audiobook" {
-		wantPrefix = 3
+		wantTens = 303
 		fallback = []int{3030}
 	}
 	if len(cats) == 0 {
@@ -60,7 +60,7 @@ func filterCategoriesForMedia(cats []int, mediaType string) []int {
 	}
 	var out []int
 	for _, c := range cats {
-		if c/1000 == wantPrefix {
+		if c/10 == wantTens {
 			out = append(out, c)
 		}
 	}

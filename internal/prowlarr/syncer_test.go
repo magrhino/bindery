@@ -145,13 +145,47 @@ func TestSyncer_CorrectsMisTypedExistingIndexer(t *testing.T) {
 	}
 }
 
+func TestSyncer_PropagatesChangedCategories(t *testing.T) {
+	// Existing indexer was stored with the old broad category set [7000, 7020].
+	// Prowlarr now reports [7020] only. Re-sync must update Categories to [7020].
+	pID := 10
+	instID := int64(1)
+	existing := []models.Indexer{{
+		ID:                10,
+		Name:              "IndexerA",
+		Type:              "torznab",
+		Categories:        []int{7000, 7020},
+		ProwlarrInstanceID: &instID,
+		ProwlarrIndexerID:  &pID,
+	}}
+	srv := prowlarrStub(t, `[{"id":10,"name":"IndexerA","protocol":"torrent","supportsSearch":true,"categories":[{"id":7020}]}]`)
+	defer srv.Close()
+	existing[0].URL = srv.URL + "/10/api"
+
+	store := &fakeIndexerStore{existing: existing}
+	syncer := NewSyncer(New(srv.URL, "k"), store, fakeInstanceStore{})
+
+	if _, err := syncer.Sync(context.Background(), 1); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if len(store.updated) != 1 {
+		t.Fatalf("expected 1 update (categories changed), got %d updates", len(store.updated))
+	}
+	want := []int{7020}
+	got := store.updated[0].Categories
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Errorf("Categories = %v, want %v", got, want)
+	}
+}
+
 func TestSyncer_NoUpdateWhenNothingChanged(t *testing.T) {
 	pID := 7
 	instID := int64(1)
 	existing := []models.Indexer{{
-		ID:   11,
-		Name: "TrackerX",
-		Type: "torznab",
+		ID:         11,
+		Name:       "TrackerX",
+		Type:       "torznab",
+		Categories: []int{7020},
 		// URL is computed as {base}/{id}/api by the client; match it below.
 		ProwlarrInstanceID: &instID,
 		ProwlarrIndexerID:  &pID,

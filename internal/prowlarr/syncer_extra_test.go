@@ -43,7 +43,7 @@ func TestSyncer_ListError(t *testing.T) {
 }
 
 func TestSyncer_DefaultCategoriesWhenEmpty(t *testing.T) {
-	// No categories in remote → syncer must default to [7000, 7020].
+	// No categories in remote → syncer must default to [7020].
 	srv := prowlarrStub(t, `[{"id":5,"name":"Tracker","protocol":"torrent","supportsSearch":true,"categories":[]}]`)
 	defer srv.Close()
 
@@ -57,8 +57,8 @@ func TestSyncer_DefaultCategoriesWhenEmpty(t *testing.T) {
 		t.Fatalf("expected 1 created, got %d", len(store.created))
 	}
 	cats := store.created[0].Categories
-	if len(cats) != 2 || cats[0] != 7000 || cats[1] != 7020 {
-		t.Errorf("Categories = %v, want [7000 7020]", cats)
+	if len(cats) != 1 || cats[0] != 7020 {
+		t.Errorf("Categories = %v, want [7020]", cats)
 	}
 }
 

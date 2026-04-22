@@ -397,7 +397,7 @@ func normalizeEndpointURL(raw string) string {
 
 func intSliceToCSV(ints []int) string {
 	if len(ints) == 0 {
-		return "7000,7020"
+		return "7020"
 	}
 	parts := make([]string, len(ints))
 	for i, v := range ints {

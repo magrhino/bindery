@@ -72,9 +72,9 @@ func (s *Syncer) Sync(ctx context.Context, instanceID int64) (SyncResult, error)
 
 	for _, ri := range remotes {
 		seen[ri.ProwlarrID] = struct{}{}
-		cats := ri.Categories
+		cats := dropParentCategories(ri.Categories)
 		if len(cats) == 0 {
-			cats = []int{7000, 7020}
+			cats = []int{7020}
 		}
 
 		pID := ri.ProwlarrID
@@ -85,11 +85,13 @@ func (s *Syncer) Sync(ctx context.Context, instanceID int64) (SyncResult, error)
 			// Update only if something meaningful changed. Type is included so
 			// rows created by older versions (which hardcoded "torznab" for
 			// every indexer, misrouting usenet grabs to torrent clients) are
-			// corrected on the next sync.
-			if ex.Name != ri.Name || ex.URL != ri.TorznabURL || ex.Type != idxType {
+			// corrected on the next sync. Categories are included so that
+			// re-syncing propagates removed parent categories (7000, 3000).
+			if ex.Name != ri.Name || ex.URL != ri.TorznabURL || ex.Type != idxType || !intSliceEqual(ex.Categories, cats) {
 				ex.Name = ri.Name
 				ex.URL = ri.TorznabURL
 				ex.Type = idxType
+				ex.Categories = cats
 				ex.SupportsSearch = ri.SupportsSearch
 				if err := s.indexers.Update(ctx, ex); err != nil {
 					slog.Warn("prowlarr sync: update indexer failed",
@@ -149,4 +151,29 @@ func indexerTypeForProtocol(protocol string) string {
 		return "newznab"
 	}
 	return "torznab"
+}
+
+// dropParentCategories removes top-level Newznab parent categories (7000,
+// 3000) that match every item in their range, causing broad false-positive
+// results when used as search filters.
+func dropParentCategories(cats []int) []int {
+	out := make([]int, 0, len(cats))
+	for _, c := range cats {
+		if c != 7000 && c != 3000 {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func intSliceEqual(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

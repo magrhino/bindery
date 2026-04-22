@@ -262,22 +262,22 @@ func TestFilterByLanguageAny(t *testing.T) {
 func TestFilterCategoriesForMedia(t *testing.T) {
 	all := []int{7000, 7020, 3030}
 	ebook := filterCategoriesForMedia(all, "ebook")
-	if len(ebook) != 2 || ebook[0] != 7000 || ebook[1] != 7020 {
-		t.Errorf("ebook filter = %v, want [7000 7020]", ebook)
+	if len(ebook) != 1 || ebook[0] != 7020 {
+		t.Errorf("ebook filter = %v, want [7020]", ebook)
 	}
 	audio := filterCategoriesForMedia(all, "audiobook")
 	if len(audio) != 1 || audio[0] != 3030 {
 		t.Errorf("audiobook filter = %v, want [3030]", audio)
 	}
 	// Empty input falls back to the standard category for the media type.
-	if got := filterCategoriesForMedia(nil, "ebook"); len(got) != 2 || got[0] != 7000 {
-		t.Errorf("nil + ebook should fall back to [7000 7020], got %v", got)
+	if got := filterCategoriesForMedia(nil, "ebook"); len(got) != 1 || got[0] != 7020 {
+		t.Errorf("nil + ebook should fall back to [7020], got %v", got)
 	}
 	if got := filterCategoriesForMedia(nil, "audiobook"); len(got) != 1 || got[0] != 3030 {
 		t.Errorf("nil + audiobook should fall back to [3030], got %v", got)
 	}
 	// Unknown type falls back to books.
-	if got := filterCategoriesForMedia(all, ""); len(got) != 2 {
+	if got := filterCategoriesForMedia(all, ""); len(got) != 1 {
 		t.Errorf("empty type should default to books, got %v", got)
 	}
 	// Pre-v0.5.0 indexer config without 3030 still searches audiobooks
@@ -524,31 +524,44 @@ func TestFilterRelevantStopWordsBetweenKeywords(t *testing.T) {
 	}
 }
 
-// Custom indexer categories (e.g. 7120 for German books) must pass through
-// filterCategoriesForMedia unchanged.
+// Only standard Newznab ebook (702x) and audiobook (303x) subcategories pass.
+// Site-specific extensions like 7120 or 3130 are outside those ranges.
 func TestFilterCategoriesCustomIDs(t *testing.T) {
-	// SceneNZBs-style: 7120 = German books, 3130 = German audio.
 	cats := []int{7020, 7120, 3030, 3130}
 
 	ebook := filterCategoriesForMedia(cats, "ebook")
-	wantEbook := []int{7020, 7120}
-	if len(ebook) != len(wantEbook) {
-		t.Fatalf("ebook cats = %v, want %v", ebook, wantEbook)
-	}
-	for i, v := range wantEbook {
-		if ebook[i] != v {
-			t.Errorf("ebook[%d] = %d, want %d", i, ebook[i], v)
-		}
+	if len(ebook) != 1 || ebook[0] != 7020 {
+		t.Errorf("ebook cats = %v, want [7020]", ebook)
 	}
 
 	audio := filterCategoriesForMedia(cats, "audiobook")
-	wantAudio := []int{3030, 3130}
-	if len(audio) != len(wantAudio) {
-		t.Fatalf("audio cats = %v, want %v", audio, wantAudio)
+	if len(audio) != 1 || audio[0] != 3030 {
+		t.Errorf("audio cats = %v, want [3030]", audio)
 	}
-	for i, v := range wantAudio {
-		if audio[i] != v {
-			t.Errorf("audio[%d] = %d, want %d", i, audio[i], v)
+}
+
+func TestFilterCategoriesParentDrop(t *testing.T) {
+	cases := []struct {
+		cats      []int
+		mediaType string
+		want      []int
+	}{
+		{[]int{7000, 7020}, "ebook", []int{7020}},
+		{[]int{7000, 7020, 7030}, "ebook", []int{7020}},
+		{[]int{3000, 3030}, "audiobook", []int{3030}},
+		{nil, "ebook", []int{7020}},
+		{[]int{7020, 7021, 7022}, "ebook", []int{7020, 7021, 7022}},
+	}
+	for _, tc := range cases {
+		got := filterCategoriesForMedia(tc.cats, tc.mediaType)
+		if len(got) != len(tc.want) {
+			t.Errorf("filterCategoriesForMedia(%v, %q) = %v, want %v", tc.cats, tc.mediaType, got, tc.want)
+			continue
+		}
+		for i := range tc.want {
+			if got[i] != tc.want[i] {
+				t.Errorf("filterCategoriesForMedia(%v, %q)[%d] = %d, want %d", tc.cats, tc.mediaType, i, got[i], tc.want[i])
+			}
 		}
 	}
 }
