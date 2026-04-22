@@ -43,10 +43,9 @@ type Book struct {
 
 	Excluded bool `json:"excluded"`
 
-	// Deprecated: the book_files table is the source of truth for on-disk paths.
-	// These fields are computed views derived from book_files (first path per
-	// format) and kept for API backwards compatibility. Do not write to them
-	// directly; use BookRepo.AddBookFile instead.
+	// EbookFilePath and AudiobookFilePath are computed views over the book_files
+	// table (first path per format), kept for API backwards compatibility.
+	// Do not write to them directly; use BookRepo.AddBookFile instead.
 	EbookFilePath     string `json:"ebookFilePath"`
 	AudiobookFilePath string `json:"audiobookFilePath"`
 

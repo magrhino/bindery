@@ -93,17 +93,17 @@ func (h *LogHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 		if fromStr != "" {
 			if t, err := time.Parse(time.RFC3339, fromStr); err == nil {
-				f.FromTs = t
+				f.FromTS = t
 			}
 		}
 		if toStr != "" {
 			if t, err := time.Parse(time.RFC3339, toStr); err == nil {
-				f.ToTs = t
+				f.ToTS = t
 			}
 		}
 		// Default to the last hour when no explicit date range is supplied.
-		if f.FromTs.IsZero() && f.ToTs.IsZero() {
-			f.FromTs = time.Now().UTC().Add(-time.Hour)
+		if f.FromTS.IsZero() && f.ToTS.IsZero() {
+			f.FromTS = time.Now().UTC().Add(-time.Hour)
 		}
 
 		entries, err := h.logs.Query(r.Context(), f)

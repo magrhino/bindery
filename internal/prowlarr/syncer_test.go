@@ -151,10 +151,10 @@ func TestSyncer_PropagatesChangedCategories(t *testing.T) {
 	pID := 10
 	instID := int64(1)
 	existing := []models.Indexer{{
-		ID:                10,
-		Name:              "IndexerA",
-		Type:              "torznab",
-		Categories:        []int{7000, 7020},
+		ID:                 10,
+		Name:               "IndexerA",
+		Type:               "torznab",
+		Categories:         []int{7000, 7020},
 		ProwlarrInstanceID: &instID,
 		ProwlarrIndexerID:  &pID,
 	}}

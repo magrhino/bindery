@@ -13,7 +13,7 @@ import (
 // LogEntry is a single persisted log record.
 type LogEntry struct {
 	ID        int64
-	Ts        time.Time
+	TS        time.Time
 	Level     string
 	Component string
 	Message   string
@@ -25,8 +25,8 @@ type LogFilter struct {
 	Level     slog.Level
 	HasLevel  bool
 	Component string
-	FromTs    time.Time
-	ToTs      time.Time
+	FromTS    time.Time
+	ToTS      time.Time
 	Q         string
 	Limit     int
 	Offset    int
@@ -53,7 +53,7 @@ func (r *LogRepo) Insert(ctx context.Context, e LogEntry) error {
 	}
 	_, err = r.db.ExecContext(ctx,
 		`INSERT INTO logs (ts, level, component, message, fields) VALUES (?, ?, ?, ?, ?)`,
-		e.Ts.UTC(), e.Level, e.Component, e.Message, string(blob),
+		e.TS.UTC(), e.Level, e.Component, e.Message, string(blob),
 	)
 	return err
 }
@@ -71,13 +71,13 @@ func (r *LogRepo) Query(ctx context.Context, f LogFilter) ([]LogEntry, error) {
 		conds = append(conds, "component = ?")
 		args = append(args, f.Component)
 	}
-	if !f.FromTs.IsZero() {
+	if !f.FromTS.IsZero() {
 		conds = append(conds, "ts >= ?")
-		args = append(args, f.FromTs.UTC())
+		args = append(args, f.FromTS.UTC())
 	}
-	if !f.ToTs.IsZero() {
+	if !f.ToTS.IsZero() {
 		conds = append(conds, "ts <= ?")
-		args = append(args, f.ToTs.UTC())
+		args = append(args, f.ToTS.UTC())
 	}
 	if f.Q != "" {
 		conds = append(conds, "(message LIKE ? OR fields LIKE ?)")
@@ -116,13 +116,13 @@ func (r *LogRepo) Query(ctx context.Context, f LogFilter) ([]LogEntry, error) {
 			return nil, fmt.Errorf("scan log row: %w", err)
 		}
 		if t, err := time.Parse(time.RFC3339Nano, tsStr); err == nil {
-			e.Ts = t
+			e.TS = t
 		} else if t, err := time.Parse("2006-01-02T15:04:05Z", tsStr); err == nil {
-			e.Ts = t
+			e.TS = t
 		} else if t, err := time.Parse("2006-01-02 15:04:05", tsStr); err == nil {
-			e.Ts = t
+			e.TS = t
 		} else {
-			e.Ts = time.Now()
+			e.TS = time.Now()
 		}
 		if fieldsJSON != "" {
 			_ = json.Unmarshal([]byte(fieldsJSON), &e.Fields)

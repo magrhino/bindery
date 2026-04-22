@@ -19,7 +19,7 @@ func openLogDB(t *testing.T) (*LogRepo, func()) {
 func insertEntry(t *testing.T, repo *LogRepo, ts time.Time, level, component, msg string) {
 	t.Helper()
 	err := repo.Insert(context.Background(), LogEntry{
-		Ts:        ts,
+		TS:        ts,
 		Level:     level,
 		Component: component,
 		Message:   msg,
@@ -110,8 +110,8 @@ func TestLogRepo_QueryByDateRange(t *testing.T) {
 	insertEntry(t, repo, base, "INFO", "", "new")
 
 	entries, err := repo.Query(context.Background(), LogFilter{
-		FromTs: base.Add(-6 * time.Minute),
-		ToTs:   base.Add(-4 * time.Minute),
+		FromTS: base.Add(-6 * time.Minute),
+		ToTS:   base.Add(-4 * time.Minute),
 		Limit:  100,
 	})
 	if err != nil {
@@ -179,7 +179,7 @@ func TestLogRepo_Fields(t *testing.T) {
 	defer cleanup()
 
 	err := repo.Insert(context.Background(), LogEntry{
-		Ts:      time.Now().UTC(),
+		TS:      time.Now().UTC(),
 		Level:   "INFO",
 		Message: "test fields",
 		Fields:  map[string]string{"key": "value", "book": "Dune"},

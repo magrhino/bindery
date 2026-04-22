@@ -60,6 +60,12 @@ func OpenMemory() (*sql.DB, error) {
 		return nil, fmt.Errorf("open memory database: %w", err)
 	}
 
+	// SQLite in-memory databases are per-connection: a pool with multiple
+	// connections would give each goroutine its own empty database. Pin to a
+	// single connection so migrations and queries always see the same schema.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
 	if err := setPragmas(db); err != nil {
 		db.Close()
 		return nil, err

@@ -258,10 +258,9 @@ func (r *BookRepo) refreshBookStatus(ctx context.Context, bookID int64) error {
 // SetFormatFilePath records the on-disk path for a specific format and
 // recomputes the book's aggregate status. It now writes to book_files
 // (allowing multiple files per format) rather than overwriting a single column.
-//
-// Deprecated: callers that process multiple files should call AddBookFile
-// for each file. SetFormatFilePath is retained for callers that set a single
-// canonical path per format (e.g. audiobook folder imports, rescan).
+// Callers processing multiple files should call AddBookFile for each file.
+// SetFormatFilePath is retained for single-canonical-path callers (e.g.
+// audiobook folder imports, rescan).
 func (r *BookRepo) SetFormatFilePath(ctx context.Context, id int64, mediaType, filePath string) error {
 	return r.AddBookFile(ctx, id, mediaType, filePath)
 }

@@ -182,8 +182,8 @@ func TestSettings_SetBadBody(t *testing.T) {
 
 func TestSettings_DefaultLibraryRootFolderID(t *testing.T) {
 	cases := []struct {
-		value   string
-		wantOK  bool
+		value  string
+		wantOK bool
 	}{
 		{"", true},
 		{"1", true},

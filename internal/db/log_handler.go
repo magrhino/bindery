@@ -62,14 +62,14 @@ func (h *LogHandler) Handle(_ context.Context, rec slog.Record) error {
 	})
 
 	e := LogEntry{
-		Ts:        rec.Time,
+		TS:        rec.Time,
 		Level:     rec.Level.String(),
 		Component: component,
 		Message:   rec.Message,
 		Fields:    fields,
 	}
-	if e.Ts.IsZero() {
-		e.Ts = time.Now()
+	if e.TS.IsZero() {
+		e.TS = time.Now()
 	}
 
 	// Non-blocking send — drop if full.

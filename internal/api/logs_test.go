@@ -42,7 +42,7 @@ func seedRecord(ring *logbuf.Ring, level slog.Level, msg string, attrs ...slog.A
 func insertDBEntry(t *testing.T, repo *db.LogRepo, ts time.Time, level, component, msg string) {
 	t.Helper()
 	if err := repo.Insert(context.Background(), db.LogEntry{
-		Ts:        ts,
+		TS:        ts,
 		Level:     level,
 		Component: component,
 		Message:   msg,

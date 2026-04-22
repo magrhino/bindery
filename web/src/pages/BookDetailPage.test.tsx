@@ -7,17 +7,17 @@ vi.mock('../components/MediaBadge', () => ({
   default: ({ type }: { type?: string }) => <span data-testid={`badge-${type}`}>{type}</span>,
 }))
 
-function makeResult(overrides: Partial<SearchResult> & { guid: string }): SearchResult {
+function makeResult({ guid, title, ...rest }: Partial<SearchResult> & { guid: string }): SearchResult {
   return {
-    guid: overrides.guid,
+    guid,
     indexerName: 'TestIndexer',
-    title: overrides.title ?? overrides.guid,
+    title: title ?? guid,
     size: 1048576,
     nzbUrl: 'http://example.com/nzb',
     grabs: 0,
     pubDate: '2024-01-01',
     protocol: 'usenet',
-    ...overrides,
+    ...rest,
   }
 }
 

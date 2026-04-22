@@ -1121,8 +1121,8 @@ func TestMigrate026_DedupBooks(t *testing.T) {
 	}
 
 	idA := insertBook("OL-D1W", "Dune", "/books/dune.epub")
-	idB := insertBook("OL-D2W", "dune", "")       // case duplicate — no file
-	idC := insertBook("OL-D3W", "  Dune  ", "")   // whitespace duplicate — no file
+	idB := insertBook("OL-D2W", "dune", "")     // case duplicate — no file
+	idC := insertBook("OL-D3W", "  Dune  ", "") // whitespace duplicate — no file
 
 	// Seed a series_books row pointing at loser B.
 	_, err = database.ExecContext(ctx,
