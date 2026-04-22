@@ -14,6 +14,7 @@ import (
 
 	"github.com/vavallee/bindery/internal/auth"
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
 )
@@ -455,7 +456,7 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool,
 	existingBooks, _ := h.books.ListByAuthor(ctx, author.ID)
 	seenTitles := make(map[string]*models.Book)
 	for i := range existingBooks {
-		seenTitles[strings.ToLower(existingBooks[i].Title)] = &existingBooks[i]
+		seenTitles[indexer.NormalizeTitleForDedup(existingBooks[i].Title)] = &existingBooks[i]
 	}
 
 	normalizedAuthor := strings.ToLower(strings.TrimSpace(author.Name))
@@ -503,7 +504,8 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool,
 		// Exception: if the matching book is a calibre stub (calibre: ForeignID),
 		// upgrade it in place with the real OL foreign ID and language so it shows
 		// metadata without creating a second row.
-		if stub := seenTitles[normalizedTitle]; stub != nil {
+		dedupKey := indexer.NormalizeTitleForDedup(b.Title)
+		if stub := seenTitles[dedupKey]; stub != nil {
 			if strings.HasPrefix(stub.ForeignID, "calibre:") {
 				stub.ForeignID = b.ForeignID
 				if stub.Language == "" && b.Language != "" {
@@ -513,7 +515,7 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool,
 			}
 			continue
 		}
-		seenTitles[normalizedTitle] = &b
+		seenTitles[dedupKey] = &b
 
 		if err := h.books.Create(ctx, &b); err != nil {
 			// A UNIQUE constraint on foreign_id means the book was already

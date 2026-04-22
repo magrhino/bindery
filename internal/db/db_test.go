@@ -1076,3 +1076,107 @@ func TestUserRepoCRUD(t *testing.T) {
 		t.Errorf("expected superadmin, got %q", got.Username)
 	}
 }
+
+// TestMigrate026_DedupBooks verifies that migration 026 merges duplicate book
+// rows that differ only in whitespace/case, re-parents dependent rows, and
+// keeps the row with the best file state.
+func TestMigrate026_DedupBooks(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+
+	// Seed one author.
+	_, err = database.ExecContext(ctx,
+		`INSERT INTO authors (foreign_id, name, sort_name, monitored)
+		 VALUES ('OL-D1A', 'Test Author', 'Author, Test', 1)`)
+	if err != nil {
+		t.Fatal("seed author:", err)
+	}
+	var authorID int64
+	if err := database.QueryRowContext(ctx, `SELECT id FROM authors WHERE foreign_id='OL-D1A'`).Scan(&authorID); err != nil {
+		t.Fatal("get author id:", err)
+	}
+
+	// Insert 3 duplicate book rows: same normalised title, different whitespace/case.
+	// Row A has a file path (should be the winner).
+	// Row B and C are pure duplicates with no file.
+	insertBook := func(foreignID, title, filePath string) int64 {
+		_, err := database.ExecContext(ctx,
+			`INSERT INTO books (foreign_id, author_id, title, sort_title, monitored, any_edition_ok)
+			 VALUES (?, ?, ?, lower(?), 1, 1)`,
+			foreignID, authorID, title, title)
+		if err != nil {
+			t.Fatalf("insert book %s: %v", foreignID, err)
+		}
+		var id int64
+		database.QueryRowContext(ctx, `SELECT id FROM books WHERE foreign_id=?`, foreignID).Scan(&id)
+		if filePath != "" {
+			database.ExecContext(ctx, `UPDATE books SET ebook_file_path=? WHERE id=?`, filePath, id)
+		}
+		return id
+	}
+
+	idA := insertBook("OL-D1W", "Dune", "/books/dune.epub")
+	idB := insertBook("OL-D2W", "dune", "")       // case duplicate — no file
+	idC := insertBook("OL-D3W", "  Dune  ", "")   // whitespace duplicate — no file
+
+	// Seed a series_books row pointing at loser B.
+	_, err = database.ExecContext(ctx,
+		`INSERT INTO series (foreign_id, title) VALUES ('OL-S1', 'Dune Series')`)
+	if err != nil {
+		t.Fatal("insert series:", err)
+	}
+	var seriesID int64
+	database.QueryRowContext(ctx, `SELECT id FROM series WHERE foreign_id='OL-S1'`).Scan(&seriesID)
+	_, err = database.ExecContext(ctx,
+		`INSERT OR IGNORE INTO series_books (series_id, book_id, position_in_series, primary_series)
+		 VALUES (?, ?, '1', 1)`, seriesID, idB)
+	if err != nil {
+		t.Fatal("insert series_books:", err)
+	}
+
+	// Seed a history row pointing at loser C.
+	_, err = database.ExecContext(ctx,
+		`INSERT INTO history (book_id, event_type) VALUES (?, 'grabbed')`, idC)
+	if err != nil {
+		t.Fatal("insert history:", err)
+	}
+
+	// Re-run migrate (026 is position 25 in the sorted migration list and was
+	// already applied to the empty DB; roll back its marker so migrate() re-runs
+	// it against the seeded duplicate rows).
+	database.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version=25`)
+	if err := migrate(database); err != nil {
+		t.Fatal("re-run migrate:", err)
+	}
+
+	// Only the winner (idA) should survive.
+	var bookCount int
+	database.QueryRowContext(ctx, `SELECT COUNT(*) FROM books WHERE author_id=?`, authorID).Scan(&bookCount)
+	if bookCount != 1 {
+		t.Fatalf("expected 1 book after dedup, got %d", bookCount)
+	}
+	var survivorID int64
+	database.QueryRowContext(ctx, `SELECT id FROM books WHERE author_id=?`, authorID).Scan(&survivorID)
+	if survivorID != idA {
+		t.Errorf("expected winner to be idA (%d), got %d", idA, survivorID)
+	}
+
+	// series_books must point to the winner.
+	var sbBookID int64
+	database.QueryRowContext(ctx, `SELECT book_id FROM series_books WHERE series_id=?`, seriesID).Scan(&sbBookID)
+	if sbBookID != idA {
+		t.Errorf("series_books.book_id: expected %d (winner), got %d", idA, sbBookID)
+	}
+
+	// history must point to the winner.
+	var hBookID int64
+	database.QueryRowContext(ctx, `SELECT book_id FROM history WHERE event_type='grabbed'`).Scan(&hBookID)
+	if hBookID != idA {
+		t.Errorf("history.book_id: expected %d (winner), got %d", idA, hBookID)
+	}
+}

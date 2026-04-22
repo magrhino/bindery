@@ -190,6 +190,30 @@ func TestFilterRelevantApostrophe(t *testing.T) {
 	}
 }
 
+// TestFilterRelevantEditionQualifier — regression test for issue #283.
+// filterRelevant must accept real NZB releases for a book whose metadata
+// title carries a parenthesised edition qualifier. Before the fix,
+// "(German Edition)" was tokenised into sigWords as the keyword "(german",
+// which never matched any release name, causing the entire result set to be
+// dropped.
+func TestFilterRelevantEditionQualifier(t *testing.T) {
+	results := toResults(
+		"Herta.Mueller.Die.Stille.ist.ein.Geraeusch.epub",
+		"Die.Stille.ist.ein.Geraeusch.Mueller.epub",
+		"Some.Unrelated.Noise.epub",
+	)
+	got := filterRelevant(results, "Die Stille ist ein Geräusch (German Edition)", "Herta Müller")
+	if !contains(got, "Herta.Mueller.Die.Stille.ist.ein.Geraeusch.epub") {
+		t.Errorf("expected full-title release to pass, got %v", resultTitles(got))
+	}
+	if !contains(got, "Die.Stille.ist.ein.Geraeusch.Mueller.epub") {
+		t.Errorf("expected release without edition qualifier to pass, got %v", resultTitles(got))
+	}
+	if contains(got, "Some.Unrelated.Noise.epub") {
+		t.Error("unrelated noise must not pass")
+	}
+}
+
 func TestRankResultsRetailBeatsScene(t *testing.T) {
 	results := toResults(
 		"The.Sparrow.Russell.SCENE.epub",

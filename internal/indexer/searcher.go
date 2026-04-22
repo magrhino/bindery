@@ -248,6 +248,9 @@ func titleMatchesResult(normResult string, titleKws []string, surname string, al
 // dropped when an abbreviated result set the gate — e.g. "Name.Wind.epub"
 // enabling strict mode that then rejected "Name.of.the.Wind.epub".
 func filterRelevant(results []newznab.SearchResult, title, author string) []newznab.SearchResult {
+	// Strip edition qualifiers ("(German Edition)" etc.) and normalize
+	// smart quotes before tokenizing, so they don't become spurious keywords.
+	title = newznab.NormalizeQueryTitle(title)
 	fullKws := sigWords(title)
 	primaryKws := sigWords(primaryTitle(title))
 	authorKws := sigWords(author)

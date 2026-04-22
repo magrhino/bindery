@@ -16,6 +16,7 @@ The `development` branch carries the in-flight feature set for the next release.
 ### Fixed
 
 - **Ebook searches no longer include the parent Books category (7000)**, which could return comics and magazines. Affects Prowlarr-synced indexers: `filterCategoriesForMedia` now matches only the 702x ebook subcategory range (7020–7029) and 303x audiobook range (3030–3039), and the syncer drops parent categories (7000, 3000) at sync time and propagates category changes on re-sync. (#344)
+- **Author sync no longer creates duplicate book rows that differ only in edition suffix, whitespace, or Unicode normalization.** Existing duplicates are merged on upgrade. Search result filtering no longer drops valid releases when the book title contains a parenthesised edition qualifier (#283).
 
 ## [v1.1.7] — 2026-04-22
 

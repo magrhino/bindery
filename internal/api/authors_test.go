@@ -379,6 +379,110 @@ func TestFetchAuthorBooks_SkipsSearchWhenNotMonitored(t *testing.T) {
 	}
 }
 
+// TestFetchAuthorBooks_DedupsEditionSuffix is a regression test for issue #283.
+// When two provider results for the same work differ only in a trailing
+// parenthesised edition qualifier (e.g. "Dune" vs "Dune (German Edition)"),
+// ingestion must create exactly one book row, not two.
+func TestFetchAuthorBooks_DedupsEditionSuffix(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+
+	ctx := context.Background()
+	author := &models.Author{
+		ForeignID: "OL900A", Name: "Frank Herbert", SortName: "Herbert, Frank",
+		MetadataProvider: "openlibrary", Monitored: false,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+
+	// Two works for the same book — one with, one without the edition suffix.
+	stub := &stubMetaProvider{
+		works: []models.Book{
+			{ForeignID: "OL901W", Title: "Dune", SortTitle: "dune", Language: "eng", Status: models.BookStatusWanted, Genres: []string{}, MetadataProvider: "openlibrary"},
+			{ForeignID: "OL902W", Title: "Dune (German Edition)", SortTitle: "dune german edition", Language: "ger", Status: models.BookStatusWanted, Genres: []string{}, MetadataProvider: "openlibrary"},
+		},
+	}
+	agg := metadata.NewAggregator(stub)
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, agg, nil, profileRepo, nil)
+	h.FetchAuthorBooks(author, false, "")
+
+	books, err := bookRepo.ListByAuthor(ctx, author.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(books) != 1 {
+		t.Fatalf("expected 1 book after dedup, got %d: %v", len(books), func() []string {
+			var titles []string
+			for _, b := range books {
+				titles = append(titles, b.Title)
+			}
+			return titles
+		}())
+	}
+}
+
+// TestFetchAuthorBooks_DedupsExistingRows verifies that when the DB already
+// contains a row for "Dune (German Edition)" and the provider returns "Dune",
+// the sync does not create a second row — the existing row is recognised as the
+// same work via NormalizeTitleForDedup.
+func TestFetchAuthorBooks_DedupsExistingRows(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+
+	ctx := context.Background()
+	author := &models.Author{
+		ForeignID: "OL910A", Name: "Frank Herbert", SortName: "Herbert, Frank",
+		MetadataProvider: "openlibrary", Monitored: false,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed the DB with the edition-qualified title (simulates an older sync).
+	existing := &models.Book{
+		ForeignID: "OL911W", AuthorID: author.ID,
+		Title: "Dune (German Edition)", SortTitle: "dune german edition",
+		Language: "ger", Status: models.BookStatusWanted,
+		Genres: []string{}, MetadataProvider: "openlibrary", Monitored: false,
+	}
+	if err := bookRepo.Create(ctx, existing); err != nil {
+		t.Fatal(err)
+	}
+
+	// Provider now returns the non-qualified form.
+	stub := &stubMetaProvider{
+		works: []models.Book{
+			{ForeignID: "OL912W", Title: "Dune", SortTitle: "dune", Language: "eng", Status: models.BookStatusWanted, Genres: []string{}, MetadataProvider: "openlibrary"},
+		},
+	}
+	agg := metadata.NewAggregator(stub)
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, agg, nil, profileRepo, nil)
+	h.FetchAuthorBooks(author, false, "")
+
+	books, err := bookRepo.ListByAuthor(ctx, author.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(books) != 1 {
+		t.Fatalf("expected 1 book (no duplicate created), got %d", len(books))
+	}
+}
+
 // fixedAuthorProvider is a minimal metadata provider whose GetAuthor always
 // returns a pre-set author, regardless of the foreignID argument. Used to
 // simulate the race-condition path in TestCreateAuthor_DuplicateConstraint.
