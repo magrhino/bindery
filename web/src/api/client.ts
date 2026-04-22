@@ -402,6 +402,15 @@ export interface MergeAuthorsResult {
 
 export type MediaType = 'ebook' | 'audiobook' | 'both'
 
+export interface BookFile {
+  id: number
+  bookId: number
+  format: 'ebook' | 'audiobook'
+  path: string
+  sizeBytes: number
+  createdAt: string
+}
+
 export interface Book {
   id: number
   foreignBookId: string
@@ -418,6 +427,8 @@ export interface Book {
   // Per-format file paths for dual-format books (mediaType='both').
   ebookFilePath: string
   audiobookFilePath: string
+  // All on-disk files tracked in book_files (populated on single-book GET).
+  bookFiles?: BookFile[]
   excluded: boolean
   narrator?: string
   durationSeconds?: number
