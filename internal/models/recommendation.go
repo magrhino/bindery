@@ -23,7 +23,7 @@ type Recommendation struct {
 	AuthorID     *int64     `json:"authorId,omitempty"`
 	ImageURL     string     `json:"imageUrl"`
 	Description  string     `json:"description"`
-	Genres       string     `json:"genres"`
+	Genres       []string   `json:"genres"`
 	Rating       float64    `json:"rating"`
 	RatingsCount int        `json:"ratingsCount"`
 	ReleaseDate  *time.Time `json:"releaseDate"`

@@ -8,6 +8,12 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v1.1.7] — 2026-04-22
+
+### Fixed
+
+- **Discover page blank after first refresh** — `models.Recommendation.Genres` was typed as `string`, so the API serialised genres as a JSON-encoded string (`"[\"Fantasy\",...]"`) instead of a JSON array. The frontend called `.map()` on the string, threw a `TypeError`, and React unmounted the whole page. `Genres` is now `[]string`; the DB scan layer deserialises the stored JSON before the struct is marshalled to the API response.
+
 ## [v1.1.6] — 2026-04-22
 
 ### Fixed
