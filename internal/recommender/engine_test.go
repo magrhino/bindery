@@ -431,11 +431,14 @@ func TestEngine_Run_WithMonitoredAuthorProducesCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	// "Wanted" is in the library so it's owned; Run filters owned. Expect zero.
+	found := false
 	for _, r := range recs {
 		if r.ForeignID == "OLW" {
-			t.Errorf("owned book should not appear in recommendations")
+			found = true
 		}
+	}
+	if !found {
+		t.Errorf("wanted book from monitored author should appear as a recommendation")
 	}
 }
 

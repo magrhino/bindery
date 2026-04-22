@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/models"
 )
 
 // junkGenres are OpenLibrary subjects that add noise, not signal.
@@ -58,7 +59,9 @@ func BuildProfile(
 	genreDocCount := make(map[string]int)
 
 	for _, b := range allBooks {
-		p.OwnedForeignIDs[b.ForeignID] = true
+		if b.Status == models.BookStatusDownloaded || b.Status == models.BookStatusImported {
+			p.OwnedForeignIDs[b.ForeignID] = true
+		}
 		p.AuthorBookCounts[b.AuthorID]++
 
 		seen := make(map[string]bool)

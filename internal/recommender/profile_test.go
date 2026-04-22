@@ -75,6 +75,24 @@ func seedBook(t *testing.T, f profileFixtures, authorID int64, foreignID, title 
 	return b
 }
 
+func seedImportedBook(t *testing.T, f profileFixtures, authorID int64, foreignID, title string, genres []string) *models.Book {
+	t.Helper()
+	b := &models.Book{
+		ForeignID:        foreignID,
+		AuthorID:         authorID,
+		Title:            title,
+		SortTitle:        title,
+		Genres:           genres,
+		Status:           models.BookStatusImported,
+		MetadataProvider: "openlibrary",
+		Monitored:        true,
+	}
+	if err := f.books.Create(context.Background(), b); err != nil {
+		t.Fatalf("create book: %v", err)
+	}
+	return b
+}
+
 func TestBuildProfile_Empty(t *testing.T) {
 	f := newProfileFixtures(t)
 	p, err := BuildProfile(context.Background(), f.userID, f.books, f.authors, f.series, f.recs, f.settings)
@@ -129,19 +147,24 @@ func TestBuildProfile_OwnedAndAuthorCounts(t *testing.T) {
 	f := newProfileFixtures(t)
 	a := seedAuthor(t, f, "Prolific", "OL_PROLIFIC", true)
 	b := seedAuthor(t, f, "One Hit", "OL_ONEHIT", false)
-	seedBook(t, f, a.ID, "OL1W", "B1", []string{"fantasy"})
-	seedBook(t, f, a.ID, "OL2W", "B2", []string{"fantasy"})
-	seedBook(t, f, b.ID, "OL3W", "B3", []string{"romance"})
+	// Imported books should be "owned"; wanted books should not be.
+	seedImportedBook(t, f, a.ID, "OL1I", "B1 imported", []string{"fantasy"})
+	seedImportedBook(t, f, a.ID, "OL2I", "B2 imported", []string{"fantasy"})
+	seedBook(t, f, a.ID, "OL3W", "B3 wanted", []string{"fantasy"})
+	seedBook(t, f, b.ID, "OL4W", "B4 wanted", []string{"romance"})
 
 	p, err := BuildProfile(context.Background(), f.userID, f.books, f.authors, f.series, f.recs, f.settings)
 	if err != nil {
 		t.Fatalf("BuildProfile: %v", err)
 	}
-	if !p.OwnedForeignIDs["OL1W"] || !p.OwnedForeignIDs["OL2W"] || !p.OwnedForeignIDs["OL3W"] {
-		t.Errorf("OwnedForeignIDs missing entries: %v", p.OwnedForeignIDs)
+	if !p.OwnedForeignIDs["OL1I"] || !p.OwnedForeignIDs["OL2I"] {
+		t.Errorf("imported books missing from OwnedForeignIDs: %v", p.OwnedForeignIDs)
 	}
-	if p.AuthorBookCounts[a.ID] != 2 {
-		t.Errorf("Prolific book count: want 2, got %d", p.AuthorBookCounts[a.ID])
+	if p.OwnedForeignIDs["OL3W"] || p.OwnedForeignIDs["OL4W"] {
+		t.Errorf("wanted books should not be in OwnedForeignIDs: %v", p.OwnedForeignIDs)
+	}
+	if p.AuthorBookCounts[a.ID] != 3 {
+		t.Errorf("Prolific book count: want 3, got %d", p.AuthorBookCounts[a.ID])
 	}
 	if p.AuthorBookCounts[b.ID] != 1 {
 		t.Errorf("OneHit book count: want 1, got %d", p.AuthorBookCounts[b.ID])
