@@ -8,6 +8,12 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 The `development` branch carries the in-flight feature set for the next release. Images are published as `ghcr.io/vavallee/bindery:development` and `:dev-<sha>`; point ArgoCD at the `development` branch to follow. Treat these features as beta — schema migrations are additive and safe, but UX may still shift before tagging.
 
+## [v1.1.5] — 2026-04-22
+
+### Fixed
+
+- **Authors tab empty after adding author** (#339) — authors added via the UI or the AddBook implicit-create path were stored with `owner_user_id = NULL` because `Create()` always called `CreateForUser` with a hardcoded zero. The Authors list query filters by the authenticated user's ID, so every freshly-added author was invisible in the tab even though it existed in the database. Both creation sites now pass the user ID from the request context, so authors are correctly owned and appear immediately.
+
 ## [v1.1.4] — 2026-04-21
 
 ### Fixed
