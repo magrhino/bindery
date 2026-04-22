@@ -167,7 +167,7 @@ func (h *AuthorHandler) Create(w http.ResponseWriter, r *http.Request) {
 		author.MetadataProfileID = &def
 	}
 
-	if err := h.authors.Create(r.Context(), author); err != nil {
+	if err := h.authors.CreateForUser(r.Context(), author, auth.UserIDFromContext(r.Context())); err != nil {
 		slog.Error("create author failed", "foreign_id", req.ForeignID, "error", err)
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "author already exists"})
@@ -597,7 +597,7 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 		fetched.Monitored = false
 		def := models.DefaultMetadataProfileID
 		fetched.MetadataProfileID = &def
-		if err := h.authors.Create(ctx, fetched); err != nil {
+		if err := h.authors.CreateForUser(ctx, fetched, auth.UserIDFromContext(ctx)); err != nil {
 			if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
