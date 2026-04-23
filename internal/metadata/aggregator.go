@@ -36,9 +36,13 @@ func NewAggregator(primary Provider, enrichers ...Provider) *Aggregator {
 }
 
 // EnrichAudiobook fills narrator, duration, and cover from audnex when a
-// book has MediaType=audiobook and a known ASIN. No-op otherwise.
+// book has audiobook audio (MediaType=audiobook or both) and a known ASIN.
+// No-op otherwise.
 func (a *Aggregator) EnrichAudiobook(ctx context.Context, book *models.Book) error {
-	if book == nil || book.MediaType != models.MediaTypeAudiobook || book.ASIN == "" {
+	if book == nil || book.ASIN == "" {
+		return nil
+	}
+	if book.MediaType != models.MediaTypeAudiobook && book.MediaType != models.MediaTypeBoth {
 		return nil
 	}
 	b, err := a.audnex.GetBook(ctx, book.ASIN)

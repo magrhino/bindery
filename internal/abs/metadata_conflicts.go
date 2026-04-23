@@ -1,0 +1,188 @@
+package abs
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/vavallee/bindery/internal/models"
+	"github.com/vavallee/bindery/internal/textutil"
+)
+
+const (
+	MetadataSourceABS      = "abs"
+	MetadataSourceUpstream = "upstream"
+
+	conflictStatusUnresolved = "unresolved"
+	conflictStatusResolved   = "resolved"
+)
+
+var conflictFieldLabels = map[string]string{
+	"description":    "Description",
+	"image_url":      "Cover",
+	"disambiguation": "Disambiguation",
+	"sort_name":      "Sort name",
+	"original_title": "Original title",
+	"release_date":   "Release date",
+	"language":       "Language",
+	"average_rating": "Average rating",
+	"ratings_count":  "Ratings count",
+}
+
+var authorConflictFields = []string{"description", "image_url", "disambiguation", "sort_name"}
+var bookConflictFields = []string{"description", "image_url", "original_title", "release_date", "language", "average_rating", "ratings_count"}
+
+func ConflictFieldLabel(field string) string {
+	if label, ok := conflictFieldLabels[field]; ok {
+		return label
+	}
+	return field
+}
+
+func SerializeAuthorConflictValue(author *models.Author, field string) string {
+	if author == nil {
+		return ""
+	}
+	switch field {
+	case "description":
+		return textutil.CleanDescription(author.Description)
+	case "image_url":
+		return strings.TrimSpace(author.ImageURL)
+	case "disambiguation":
+		return strings.TrimSpace(author.Disambiguation)
+	case "sort_name":
+		return strings.TrimSpace(author.SortName)
+	default:
+		return ""
+	}
+}
+
+func SerializeBookConflictValue(book *models.Book, field string) string {
+	if book == nil {
+		return ""
+	}
+	switch field {
+	case "description":
+		return textutil.CleanDescription(book.Description)
+	case "image_url":
+		return strings.TrimSpace(book.ImageURL)
+	case "original_title":
+		return strings.TrimSpace(book.OriginalTitle)
+	case "release_date":
+		return formatConflictDate(book.ReleaseDate)
+	case "language":
+		return strings.TrimSpace(strings.ToLower(book.Language))
+	case "average_rating":
+		if book.AverageRating <= 0 {
+			return ""
+		}
+		return strconv.FormatFloat(book.AverageRating, 'f', -1, 64)
+	case "ratings_count":
+		if book.RatingsCount <= 0 {
+			return ""
+		}
+		return strconv.Itoa(book.RatingsCount)
+	default:
+		return ""
+	}
+}
+
+func ApplyAuthorConflictValue(author *models.Author, field, value string) error {
+	if author == nil {
+		return fmt.Errorf("author is nil")
+	}
+	switch field {
+	case "description":
+		author.Description = textutil.CleanDescription(value)
+	case "image_url":
+		author.ImageURL = strings.TrimSpace(value)
+	case "disambiguation":
+		author.Disambiguation = strings.TrimSpace(value)
+	case "sort_name":
+		author.SortName = strings.TrimSpace(value)
+	default:
+		return fmt.Errorf("unsupported author conflict field %q", field)
+	}
+	return nil
+}
+
+func ApplyBookConflictValue(book *models.Book, field, value string) error {
+	if book == nil {
+		return fmt.Errorf("book is nil")
+	}
+	switch field {
+	case "description":
+		book.Description = textutil.CleanDescription(value)
+	case "image_url":
+		book.ImageURL = strings.TrimSpace(value)
+	case "original_title":
+		book.OriginalTitle = strings.TrimSpace(value)
+	case "release_date":
+		book.ReleaseDate = parseConflictDate(value)
+	case "language":
+		book.Language = strings.TrimSpace(strings.ToLower(value))
+	case "average_rating":
+		book.AverageRating = parseConflictFloat(value)
+	case "ratings_count":
+		book.RatingsCount = parseConflictInt(value)
+	default:
+		return fmt.Errorf("unsupported book conflict field %q", field)
+	}
+	return nil
+}
+
+func normalizeConflictValue(field, value string) string {
+	value = strings.TrimSpace(value)
+	switch field {
+	case "description":
+		return textutil.CleanDescription(value)
+	case "language", "image_url":
+		return strings.ToLower(value)
+	default:
+		return value
+	}
+}
+
+func formatConflictDate(ts *time.Time) string {
+	if ts == nil || ts.IsZero() {
+		return ""
+	}
+	return ts.UTC().Format("2006-01-02")
+}
+
+func parseConflictDate(value string) *time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	for _, layout := range []string{"2006-01-02", time.RFC3339} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			utc := parsed.UTC()
+			return &utc
+		}
+	}
+	return nil
+}
+
+func parseConflictFloat(value string) float64 {
+	if strings.TrimSpace(value) == "" {
+		return 0
+	}
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
+func parseConflictInt(value string) int {
+	if strings.TrimSpace(value) == "" {
+		return 0
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0
+	}
+	return parsed
+}

@@ -7,8 +7,10 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/vavallee/bindery/internal/abs"
 	"github.com/vavallee/bindery/internal/calibre"
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/models"
@@ -39,7 +41,7 @@ func NewSettingsHandler(settings *db.SettingsRepo) *SettingsHandler {
 // values are surfaced through the dedicated /auth/* endpoints instead.
 func isSecretSetting(key string) bool {
 	switch key {
-	case "auth.api_key", "auth.session_secret", "auth.mode":
+	case "auth.api_key", "auth.session_secret", "auth.mode", SettingABSAPIKey:
 		return true
 	}
 	return false
@@ -187,6 +189,20 @@ func validateSettingValue(key, value string) error {
 		}
 		if u.Host == "" {
 			return fmt.Errorf("plugin_url %q is missing a host", value)
+		}
+	case SettingABSBaseURL:
+		if value == "" {
+			return nil
+		}
+		if _, err := abs.NormalizeBaseURL(value); err != nil {
+			return err
+		}
+	case SettingABSEnabled:
+		if value == "" {
+			return nil
+		}
+		if !strings.EqualFold(value, "true") && !strings.EqualFold(value, "false") {
+			return fmt.Errorf("abs.enabled %q is not one of: true, false", value)
 		}
 	}
 	return nil

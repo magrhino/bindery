@@ -16,6 +16,7 @@ import (
 	"github.com/vavallee/bindery/internal/importer"
 	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
+	"github.com/vavallee/bindery/internal/textutil"
 )
 
 type BookHandler struct {
@@ -75,6 +76,7 @@ func (h *BookHandler) EnrichAudiobook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	cleanBookDescription(book)
 	writeJSON(w, http.StatusOK, book)
 }
 
@@ -116,6 +118,7 @@ func (h *BookHandler) List(w http.ResponseWriter, r *http.Request) {
 		books = []models.Book{}
 	}
 	for i := range books {
+		cleanBookDescription(&books[i])
 		proxyBookImages(&books[i])
 	}
 	writeJSON(w, http.StatusOK, books)
@@ -138,8 +141,15 @@ func (h *BookHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	proxyBookImages(book)
+	cleanBookDescription(book)
 	h.attachBookFiles(r.Context(), book)
 	writeJSON(w, http.StatusOK, book)
+}
+
+func cleanBookDescription(book *models.Book) {
+	if book != nil {
+		book.Description = textutil.CleanDescription(book.Description)
+	}
 }
 
 // attachBookFiles populates book.BookFiles from the book_files table.
@@ -352,6 +362,7 @@ func (h *BookHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.attachBookFiles(r.Context(), book)
+	cleanBookDescription(book)
 
 	if h.history != nil {
 		data, err := json.Marshal(map[string]any{"paths": deletedPaths})
@@ -439,6 +450,9 @@ func (h *BookHandler) ListWanted(w http.ResponseWriter, r *http.Request) {
 	if books == nil {
 		books = []models.Book{}
 	}
+	for i := range books {
+		cleanBookDescription(&books[i])
+	}
 	writeJSON(w, http.StatusOK, books)
 }
 
@@ -461,5 +475,6 @@ func (h *BookHandler) ToggleExcluded(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	book.Excluded = newVal
+	cleanBookDescription(book)
 	writeJSON(w, http.StatusOK, book)
 }

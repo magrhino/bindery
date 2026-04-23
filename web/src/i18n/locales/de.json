@@ -204,6 +204,7 @@
       "logs": "Protokolle",
       "general": "Allgemein",
       "calibre": "Calibre",
+      "abs": "Audiobookshelf",
       "blocklist": "Blockliste"
     },
     "indexers": {
