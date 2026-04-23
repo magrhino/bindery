@@ -226,6 +226,7 @@
       "logs": "Logs",
       "general": "General",
       "calibre": "Calibre",
+      "abs": "Audiobookshelf",
       "blocklist": "Blocklist"
     },
     "indexers": {

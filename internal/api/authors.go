@@ -17,6 +17,7 @@ import (
 	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
+	"github.com/vavallee/bindery/internal/textutil"
 )
 
 var (
@@ -60,6 +61,7 @@ func (h *AuthorHandler) List(w http.ResponseWriter, r *http.Request) {
 		authors = []models.Author{}
 	}
 	for i := range authors {
+		cleanAuthorDescription(&authors[i])
 		proxyAuthorImages(&authors[i])
 	}
 	writeJSON(w, http.StatusOK, authors)
@@ -97,6 +99,7 @@ func (h *AuthorHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxyAuthorImages(author)
+	cleanAuthorDescription(author)
 	writeJSON(w, http.StatusOK, author)
 }
 
@@ -127,46 +130,42 @@ func (h *AuthorHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Alias dedupe: if the requested name (or foreign id) already resolves
-	// to a canonical author via the alias table, surface the canonical row
-	// to the client as a 409 with `canonicalAuthorId` so the UI can prompt
-	// for merge instead of creating a duplicate.
-	if h.aliases != nil {
-		if existingID, _ := h.aliases.LookupByName(r.Context(), req.Name); existingID != nil {
-			canonical, _ := h.authors.GetByID(r.Context(), *existingID)
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":             "author name already resolves to an existing author — confirm merge",
-				"canonicalAuthorId": *existingID,
-				"canonicalAuthor":   canonical,
-			})
+	author, err := h.fetchAuthorForCreate(r.Context(), req.ForeignID, req.Name)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	if author.ForeignID != "" {
+		if existing, _ := h.authors.GetByForeignID(r.Context(), author.ForeignID); existing != nil {
+			h.writeCanonicalAuthorConflict(w, existing, "author already exists")
 			return
 		}
 	}
-
-	// Fetch full author metadata
-	author, err := h.meta.GetAuthor(r.Context(), req.ForeignID)
-	if err != nil {
-		slog.Warn("metadata lookup failed, using provided name", "error", err)
-		author = &models.Author{
-			ForeignID:        req.ForeignID,
-			Name:             req.Name,
-			SortName:         sortName(req.Name),
-			MetadataProvider: "openlibrary",
+	if canonical, ambiguous, err := h.findCanonicalAuthorMatch(r.Context(), req.Name, author.Name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	} else if ambiguous {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "author name resolves ambiguously — merge manually"})
+		return
+	} else if canonical != nil {
+		if canRelinkAuthorToUpstream(canonical) {
+			if err := h.relinkExistingAuthorToUpstream(r.Context(), canonical, author, req.Name, req.Monitored, req.QualityProfileID, req.MetadataProfileID, req.RootFolderID); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			mediaType := req.MediaType
+			if mediaType == "" {
+				mediaType = h.resolveDefaultMediaType(r.Context())
+			}
+			go h.FetchAuthorBooks(canonical, req.SearchOnAdd, mediaType)
+			cleanAuthorDescription(canonical)
+			writeJSON(w, http.StatusOK, canonical)
+			return
 		}
+		h.writeCanonicalAuthorConflict(w, canonical, "author name already resolves to an existing author — confirm merge")
+		return
 	}
-	author.Monitored = req.Monitored
-	author.QualityProfileID = req.QualityProfileID
-	author.RootFolderID = req.RootFolderID
-	// Default to the seeded "Standard" profile (id=1) so the language filter
-	// has something to consult when the UI didn't send an explicit choice.
-	// The client can opt out by sending a profile whose allowed_languages is
-	// empty or "any".
-	if req.MetadataProfileID != nil {
-		author.MetadataProfileID = req.MetadataProfileID
-	} else {
-		def := models.DefaultMetadataProfileID
-		author.MetadataProfileID = &def
-	}
+	applyAuthorCreateOptions(author, req.Monitored, req.QualityProfileID, req.MetadataProfileID, req.RootFolderID)
 
 	if err := h.authors.CreateForUser(r.Context(), author, auth.UserIDFromContext(r.Context())); err != nil {
 		slog.Error("create author failed", "foreign_id", req.ForeignID, "error", err)
@@ -177,6 +176,7 @@ func (h *AuthorHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	h.recordAuthorCreateAlias(r.Context(), author, req.Name)
 
 	// Persist any OL alternate names as alias rows so non-latin primary names
 	// (e.g. "村上春樹") get their latin-script alternates ("Haruki Murakami")
@@ -195,7 +195,255 @@ func (h *AuthorHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// pass searchOnAdd so FetchAuthorBooks knows whether to also queue grabs.
 	go h.FetchAuthorBooks(author, req.SearchOnAdd, mediaType)
 
+	cleanAuthorDescription(author)
 	writeJSON(w, http.StatusCreated, author)
+}
+
+func cleanAuthorDescription(author *models.Author) {
+	if author != nil {
+		author.Description = textutil.CleanDescription(author.Description)
+	}
+}
+
+func (h *AuthorHandler) fetchAuthorForCreate(ctx context.Context, foreignID, fallbackName string) (*models.Author, error) {
+	if h.meta == nil {
+		return &models.Author{
+			ForeignID:        foreignID,
+			Name:             fallbackName,
+			SortName:         sortName(fallbackName),
+			MetadataProvider: "openlibrary",
+		}, nil
+	}
+	author, err := h.meta.GetAuthor(ctx, foreignID)
+	if err != nil {
+		slog.Warn("metadata lookup failed, using provided name", "foreignID", foreignID, "error", err)
+		return &models.Author{
+			ForeignID:        foreignID,
+			Name:             fallbackName,
+			SortName:         sortName(fallbackName),
+			MetadataProvider: "openlibrary",
+		}, nil
+	}
+	if author == nil {
+		return &models.Author{
+			ForeignID:        foreignID,
+			Name:             fallbackName,
+			SortName:         sortName(fallbackName),
+			MetadataProvider: "openlibrary",
+		}, nil
+	}
+	if strings.TrimSpace(author.Name) == "" {
+		author.Name = fallbackName
+	}
+	if strings.TrimSpace(author.SortName) == "" {
+		author.SortName = sortName(author.Name)
+	}
+	author.Description = textutil.CleanDescription(author.Description)
+	return author, nil
+}
+
+func applyAuthorCreateOptions(author *models.Author, monitored bool, qualityProfileID, metadataProfileID, rootFolderID *int64) {
+	author.Monitored = monitored
+	author.QualityProfileID = qualityProfileID
+	author.RootFolderID = rootFolderID
+	// Default to the seeded "Standard" profile (id=1) so the language filter
+	// has something to consult when the UI didn't send an explicit choice.
+	// The client can opt out by sending a profile whose allowed_languages is
+	// empty or "any".
+	if metadataProfileID != nil {
+		author.MetadataProfileID = metadataProfileID
+	} else {
+		def := models.DefaultMetadataProfileID
+		author.MetadataProfileID = &def
+	}
+}
+
+func canRelinkAuthorToUpstream(author *models.Author) bool {
+	if author == nil {
+		return false
+	}
+	provider := strings.TrimSpace(strings.ToLower(author.MetadataProvider))
+	foreignID := strings.TrimSpace(author.ForeignID)
+	return foreignID == "" || strings.HasPrefix(foreignID, "abs:") || provider == "audiobookshelf"
+}
+
+func (h *AuthorHandler) relinkExistingAuthorToUpstream(ctx context.Context, author, upstream *models.Author, requestedName string, monitored bool, qualityProfileID, metadataProfileID, rootFolderID *int64) error {
+	if author == nil || upstream == nil {
+		return errors.New("author relink requires local and upstream authors")
+	}
+	oldName := author.Name
+	if foreignID := strings.TrimSpace(upstream.ForeignID); foreignID != "" {
+		author.ForeignID = foreignID
+	}
+	if name := strings.TrimSpace(upstream.Name); name != "" {
+		author.Name = name
+	}
+	if upstreamSortName := strings.TrimSpace(upstream.SortName); upstreamSortName != "" {
+		author.SortName = upstreamSortName
+	} else if strings.TrimSpace(author.SortName) == "" {
+		author.SortName = sortName(author.Name)
+	}
+	if desc := textutil.CleanDescription(upstream.Description); desc != "" {
+		author.Description = desc
+	}
+	if imageURL := strings.TrimSpace(upstream.ImageURL); imageURL != "" {
+		author.ImageURL = imageURL
+	}
+	if disambiguation := strings.TrimSpace(upstream.Disambiguation); disambiguation != "" {
+		author.Disambiguation = disambiguation
+	}
+	if upstream.RatingsCount > 0 {
+		author.RatingsCount = upstream.RatingsCount
+	}
+	if upstream.AverageRating > 0 {
+		author.AverageRating = upstream.AverageRating
+	}
+	if provider := strings.TrimSpace(upstream.MetadataProvider); provider != "" {
+		author.MetadataProvider = provider
+	} else {
+		author.MetadataProvider = "openlibrary"
+	}
+	applyAuthorCreateOptions(author, monitored, qualityProfileID, metadataProfileID, rootFolderID)
+	now := time.Now().UTC()
+	author.LastMetadataRefreshAt = &now
+	if err := h.authors.Update(ctx, author); err != nil {
+		return err
+	}
+	h.recordAuthorCreateAlias(ctx, author, oldName)
+	h.recordAuthorCreateAlias(ctx, author, requestedName)
+	slog.Info("relinked existing author to upstream metadata", "author", author.Name, "foreignId", author.ForeignID, "previousName", oldName)
+	return nil
+}
+
+func (h *AuthorHandler) writeCanonicalAuthorConflict(w http.ResponseWriter, canonical *models.Author, message string) {
+	if canonical == nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": message})
+		return
+	}
+	writeJSON(w, http.StatusConflict, map[string]any{
+		"error":             message,
+		"canonicalAuthorId": canonical.ID,
+		"canonicalAuthor":   canonical,
+	})
+}
+
+func (h *AuthorHandler) findCanonicalAuthorMatch(ctx context.Context, names ...string) (*models.Author, bool, error) {
+	var resolved *models.Author
+	for _, name := range names {
+		match, ambiguous, err := h.findAuthorByNameOrAlias(ctx, name)
+		if err != nil {
+			return nil, false, err
+		}
+		if ambiguous {
+			return nil, true, nil
+		}
+		if match == nil {
+			continue
+		}
+		if resolved != nil && resolved.ID != match.ID {
+			return nil, true, nil
+		}
+		resolved = match
+	}
+	return resolved, false, nil
+}
+
+func (h *AuthorHandler) findAuthorByNameOrAlias(ctx context.Context, name string) (*models.Author, bool, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, false, nil
+	}
+	authors, err := h.authors.List(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	aliases := []models.AuthorAlias{}
+	if h.aliases != nil {
+		aliases, err = h.aliases.List(ctx)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+
+	exact := make(map[int64]*models.Author)
+	needle := strings.ToLower(name)
+	for idx := range authors {
+		if strings.ToLower(strings.TrimSpace(authors[idx].Name)) != needle {
+			continue
+		}
+		copy := authors[idx]
+		exact[copy.ID] = &copy
+	}
+	for _, alias := range aliases {
+		if strings.ToLower(strings.TrimSpace(alias.Name)) != needle {
+			continue
+		}
+		author, err := h.authors.GetByID(ctx, alias.AuthorID)
+		if err != nil {
+			return nil, false, err
+		}
+		if author != nil {
+			exact[author.ID] = author
+		}
+	}
+	if len(exact) == 1 {
+		for _, author := range exact {
+			return author, false, nil
+		}
+	}
+	if len(exact) > 1 {
+		return nil, true, nil
+	}
+
+	normNeedle := textutil.NormalizeAuthorName(name)
+	if normNeedle == "" {
+		return nil, false, nil
+	}
+	normalized := make(map[int64]*models.Author)
+	for idx := range authors {
+		if textutil.NormalizeAuthorName(authors[idx].Name) != normNeedle {
+			continue
+		}
+		copy := authors[idx]
+		normalized[copy.ID] = &copy
+	}
+	for _, alias := range aliases {
+		if textutil.NormalizeAuthorName(alias.Name) != normNeedle {
+			continue
+		}
+		author, err := h.authors.GetByID(ctx, alias.AuthorID)
+		if err != nil {
+			return nil, false, err
+		}
+		if author != nil {
+			normalized[author.ID] = author
+		}
+	}
+	if len(normalized) == 1 {
+		for _, author := range normalized {
+			return author, false, nil
+		}
+	}
+	if len(normalized) > 1 {
+		return nil, true, nil
+	}
+	return nil, false, nil
+}
+
+func (h *AuthorHandler) recordAuthorCreateAlias(ctx context.Context, author *models.Author, variant string) {
+	if author == nil || h.aliases == nil {
+		return
+	}
+	variant = strings.TrimSpace(variant)
+	if variant == "" || strings.EqualFold(strings.TrimSpace(author.Name), variant) {
+		return
+	}
+	if textutil.NormalizeAuthorName(author.Name) != textutil.NormalizeAuthorName(variant) {
+		return
+	}
+	if err := h.aliases.Create(ctx, &models.AuthorAlias{AuthorID: author.ID, Name: variant, SourceOLID: author.ForeignID}); err != nil {
+		slog.Debug("author create alias skipped", "author", author.Name, "variant", variant, "error", err)
+	}
 }
 
 func (h *AuthorHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -381,8 +629,8 @@ func (h *AuthorHandler) relinkCalibreAuthor(ctx context.Context, author *models.
 	if full.ImageURL != "" {
 		author.ImageURL = full.ImageURL
 	}
-	if full.Description != "" {
-		author.Description = full.Description
+	if desc := textutil.CleanDescription(full.Description); desc != "" {
+		author.Description = desc
 	}
 	if full.SortName != "" {
 		author.SortName = full.SortName

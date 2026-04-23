@@ -225,6 +225,7 @@
       "logs": "Registros",
       "general": "General",
       "calibre": "Calibre",
+      "abs": "Audiobookshelf",
       "blocklist": "Lista de bloqueo"
     },
     "indexers": {

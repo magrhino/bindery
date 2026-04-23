@@ -125,12 +125,12 @@ func (r *AuthorRepo) CreateForUser(ctx context.Context, a *models.Author, ownerU
 func (r *AuthorRepo) Update(ctx context.Context, a *models.Author) error {
 	now := time.Now().UTC()
 	_, err := r.db.ExecContext(ctx, `
-		UPDATE authors SET name=?, sort_name=?, description=?, image_url=?, disambiguation=?,
+		UPDATE authors SET foreign_id=?, name=?, sort_name=?, description=?, image_url=?, disambiguation=?,
 		                   ratings_count=?, average_rating=?, monitored=?, quality_profile_id=?,
 		                   metadata_profile_id=?, root_folder_id=?, metadata_provider=?,
 		                   last_metadata_refresh_at=?, updated_at=?
 		WHERE id=?`,
-		a.Name, a.SortName, a.Description, a.ImageURL, a.Disambiguation,
+		a.ForeignID, a.Name, a.SortName, a.Description, a.ImageURL, a.Disambiguation,
 		a.RatingsCount, a.AverageRating, a.Monitored, a.QualityProfileID,
 		a.MetadataProfileID, a.RootFolderID, a.MetadataProvider, a.LastMetadataRefreshAt, now, a.ID)
 	if err != nil {
