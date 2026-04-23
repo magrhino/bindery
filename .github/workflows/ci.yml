@@ -290,6 +290,28 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Pinned ABS compatibility suite. Runs self-contained against the
+  # repository's seeded Phase 6 fixture harness and can optionally target a
+  # real pinned ABS instance when the env vars below are provided.
+  abs-contract:
+    name: ABS contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.25.9"
+      - name: Run ABS contract suite
+        env:
+          BINDERY_ABS_CONTRACT_BASE_URL: ${{ secrets.BINDERY_ABS_CONTRACT_BASE_URL }}
+          BINDERY_ABS_CONTRACT_API_KEY: ${{ secrets.BINDERY_ABS_CONTRACT_API_KEY }}
+          BINDERY_ABS_CONTRACT_LIMITED_API_KEY: ${{ secrets.BINDERY_ABS_CONTRACT_LIMITED_API_KEY }}
+          BINDERY_ABS_CONTRACT_LIBRARY_ID: ${{ secrets.BINDERY_ABS_CONTRACT_LIBRARY_ID }}
+        run: |
+          make abs-contract
+
   # ── Pre-deploy smoke — hits dev after image deploys ────────────────────────
   # Update BINDERY_DEV_URL below (or add a BINDERY_DEV_URL secret) once you
   # have a dev/staging instance URL distinct from production.
