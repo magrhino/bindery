@@ -126,7 +126,12 @@ function Shell() {
                     {`v${version}`}
                   </a>
                 ) : (
-                  <span className="hidden lg:block text-xs text-slate-500 dark:text-zinc-600 whitespace-nowrap">{version}</span>
+                  <a
+                    href="https://github.com/vavallee/bindery/releases"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="hidden lg:block text-xs text-slate-500 dark:text-zinc-600 hover:underline whitespace-nowrap"
+                  >{version}</a>
                 )
               )}
               {status?.authenticated && status.mode !== 'disabled' && (
@@ -207,7 +212,12 @@ function Shell() {
                     {`v${version}`}
                   </a>
                 ) : (
-                  <span className="text-xs text-slate-500 dark:text-zinc-600">{version}</span>
+                  <a
+                    href="https://github.com/vavallee/bindery/releases"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-slate-500 dark:text-zinc-600 hover:underline"
+                  >{version}</a>
                 )
               )}
               {status?.authenticated && status.mode !== 'disabled' && (
