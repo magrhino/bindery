@@ -19,6 +19,7 @@ jobs:
       packages: write      # docker push to ghcr.io
       id-token: write      # SLSA attestation OIDC token
       attestations: write  # actions/attest-build-provenance
+      pull-requests: write # open Helm deploy PR on tag push
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development' || startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
