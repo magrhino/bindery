@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -13,6 +14,19 @@ import (
 	"github.com/vavallee/bindery/internal/httpsec"
 	"github.com/vavallee/bindery/internal/models"
 )
+
+// sanitizeHost strips any scheme prefix a user may have accidentally included
+// (e.g. "http://192.168.1.50" → "192.168.1.50"). The Host field expects a
+// bare hostname or IP; the scheme is determined by the UseSSL flag.
+func sanitizeHost(host string) string {
+	if after, ok := strings.CutPrefix(host, "https://"); ok {
+		return after
+	}
+	if after, ok := strings.CutPrefix(host, "http://"); ok {
+		return after
+	}
+	return host
+}
 
 // downloadClientURL assembles the effective URL that would be hit for a
 // download client, so httpsec.ValidateOutboundURL can check it.
@@ -68,6 +82,7 @@ func (h *DownloadClientHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name and host required"})
 		return
 	}
+	c.Host = sanitizeHost(c.Host)
 	if c.Type == "" {
 		c.Type = "sabnzbd"
 	}
@@ -103,6 +118,7 @@ func (h *DownloadClientHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if c.Host != "" {
+		c.Host = sanitizeHost(c.Host)
 		if err := httpsec.ValidateOutboundURL(downloadClientURL(&c), httpsec.PolicyLAN); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
