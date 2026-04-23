@@ -132,3 +132,11 @@ func (r *EditionRepo) Upsert(ctx context.Context, e *models.Edition) error {
 	e.UpdatedAt = now
 	return nil
 }
+
+func (r *EditionRepo) Delete(ctx context.Context, id int64) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM editions WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete edition %d: %w", id, err)
+	}
+	return nil
+}

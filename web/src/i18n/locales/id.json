@@ -225,6 +225,7 @@
       "logs": "Log",
       "general": "Umum",
       "calibre": "Calibre",
+      "abs": "Audiobookshelf",
       "blocklist": "Daftar blokir"
     },
     "indexers": {

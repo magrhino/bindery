@@ -56,7 +56,7 @@ func TestOpenMemory(t *testing.T) {
 	// Verify tables exist
 	tables := []string{"authors", "books", "series", "editions", "indexers",
 		"download_clients", "downloads", "root_folders", "quality_profiles",
-		"settings", "history", "schema_migrations"}
+		"settings", "history", "abs_import_runs", "abs_provenance", "abs_metadata_conflicts", "schema_migrations"}
 	for _, table := range tables {
 		var name string
 		err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&name)

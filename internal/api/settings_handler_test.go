@@ -41,6 +41,7 @@ func TestSettings_ListFiltersSecrets(t *testing.T) {
 		"auth.api_key":        "supersecret-apikey",
 		"auth.session_secret": "supersecret-hmac",
 		"auth.mode":           "enabled",
+		"abs.api_key":         "supersecret-abs",
 		"ui.theme":            "dark",
 		"importer.library":    "/books",
 	} {
@@ -59,7 +60,7 @@ func TestSettings_ListFiltersSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, s := range got {
-		if s.Key == "auth.api_key" || s.Key == "auth.session_secret" || s.Key == "auth.mode" {
+		if s.Key == "auth.api_key" || s.Key == "auth.session_secret" || s.Key == "auth.mode" || s.Key == "abs.api_key" {
 			t.Errorf("secret leaked through List: %s", s.Key)
 		}
 	}
@@ -177,6 +178,19 @@ func TestSettings_SetBadBody(t *testing.T) {
 	h.Set(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestSettings_GetABSSecretReturns404(t *testing.T) {
+	h, repo, ctx := settingsFixture(t)
+	if err := repo.Set(ctx, SettingABSAPIKey, "supersecret"); err != nil {
+		t.Fatal(err)
+	}
+	req := withKey(httptest.NewRequest(http.MethodGet, "/api/v1/settings/"+SettingABSAPIKey, nil), SettingABSAPIKey)
+	rec := httptest.NewRecorder()
+	h.Get(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for ABS secret Get, got %d", rec.Code)
 	}
 }
 

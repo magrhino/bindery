@@ -115,7 +115,7 @@ describe('Shell — mobile navigation', () => {
     expect(links).toContain('Authors')
     expect(links).toContain('Discover')
     expect(links).toContain('Settings')
-    expect(links.length).toBe(9) // 8 main + Settings
+    expect(links.length).toBe(10) // 8 main + Search + Settings
   })
 
   it('closes mobile menu when a nav link is clicked', () => {

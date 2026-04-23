@@ -20,6 +20,7 @@ type Config struct {
 	DownloadDir       string
 	LibraryDir        string
 	AudiobookDir      string
+	ABSFeatureEnabled bool
 	DownloadPathRemap string
 	// Proxy SSO settings (Phase 1).
 	ProxyAuthHeader    string // BINDERY_PROXY_AUTH_HEADER
@@ -50,6 +51,7 @@ func Load() *Config {
 		DownloadDir:         envOr("BINDERY_DOWNLOAD_DIR", "/downloads"),
 		LibraryDir:          envOr("BINDERY_LIBRARY_DIR", "/books"),
 		AudiobookDir:        envOr("BINDERY_AUDIOBOOK_DIR", ""),
+		ABSFeatureEnabled:   envBool("BINDERY_ABS_ENABLED", true),
 		DownloadPathRemap:   envOr("BINDERY_DOWNLOAD_PATH_REMAP", ""),
 		ProxyAuthHeader:     envOr("BINDERY_PROXY_AUTH_HEADER", "X-Forwarded-User"),
 		ProxyAutoProvision:  envBool("BINDERY_PROXY_AUTO_PROVISION", true),

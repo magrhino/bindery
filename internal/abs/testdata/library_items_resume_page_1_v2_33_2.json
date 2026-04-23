@@ -1,0 +1,67 @@
+{
+  "results": [
+    {
+      "id": "li_resume_3",
+      "libraryId": "lib-books",
+      "path": "/audiobooks/Author Three/Book Three.m4b",
+      "relPath": "Author Three/Book Three.m4b",
+      "isFile": true,
+      "mediaType": "book",
+      "media": {
+        "libraryItemId": "li_resume_3",
+        "metadata": {
+          "title": "Book Three",
+          "authors": [
+            {
+              "id": "au_three",
+              "name": "Author Three"
+            }
+          ]
+        },
+        "duration": 300,
+        "size": 3000,
+        "audioFiles": [
+          {
+            "ino": "ino_resume_3",
+            "index": 1,
+            "path": "/audiobooks/Author Three/Book Three.m4b"
+          }
+        ]
+      }
+    },
+    {
+      "id": "li_resume_4",
+      "libraryId": "lib-books",
+      "path": "/audiobooks/Author Four/Book Four.m4b",
+      "relPath": "Author Four/Book Four.m4b",
+      "isFile": true,
+      "mediaType": "book",
+      "media": {
+        "libraryItemId": "li_resume_4",
+        "metadata": {
+          "title": "Book Four",
+          "authors": [
+            {
+              "id": "au_four",
+              "name": "Author Four"
+            }
+          ]
+        },
+        "duration": 400,
+        "size": 4000,
+        "audioFiles": [
+          {
+            "ino": "ino_resume_4",
+            "index": 1,
+            "path": "/audiobooks/Author Four/Book Four.m4b"
+          }
+        ]
+      }
+    }
+  ],
+  "total": 4,
+  "limit": 2,
+  "page": 1,
+  "mediaType": "book",
+  "minified": true
+}

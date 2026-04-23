@@ -8,6 +8,7 @@ vi.mock('react-i18next', () => ({
       const strings: Record<string, string> = {
         'addAuthorModal.searchPlaceholder': 'Search by author name...',
         'addAuthorModal.search': 'Search',
+        'addAuthorModal.add': 'Add',
         'addAuthorModal.noResults': 'No results found',
       }
       if (key === 'addAuthorModal.searchError') {
@@ -22,8 +23,9 @@ vi.mock('react-i18next', () => ({
 vi.mock('../api/client', () => ({
   api: {
     listMetadataProfiles: vi.fn().mockResolvedValue([]),
-    listRootFolders: vi.fn().mockResolvedValue([]),
-    searchAuthors: vi.fn(),
+	    listRootFolders: vi.fn().mockResolvedValue([]),
+	    getSetting: vi.fn().mockRejectedValue(new Error('unset')),
+	    searchAuthors: vi.fn(),
     addAuthor: vi.fn(),
   },
 }))
@@ -37,9 +39,10 @@ describe('AddAuthorModal — search error handling', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(api.listMetadataProfiles).mockResolvedValue([])
-    vi.mocked(api.listRootFolders).mockResolvedValue([])
-  })
+	    vi.mocked(api.listMetadataProfiles).mockResolvedValue([])
+	    vi.mocked(api.listRootFolders).mockResolvedValue([])
+	    vi.mocked(api.getSetting).mockRejectedValue(new Error('unset'))
+	  })
 
   it('shows an error banner when the metadata provider is unreachable', async () => {
     vi.mocked(api.searchAuthors).mockRejectedValue(
@@ -123,5 +126,51 @@ describe('AddAuthorModal — search error handling', () => {
       expect(screen.queryByText(/HTTP 503/i)).not.toBeInTheDocument()
     )
     expect(screen.getByText('J.R.R. Tolkien')).toBeInTheDocument()
+  })
+
+  it('treats relink add responses as success', async () => {
+    vi.mocked(api.searchAuthors).mockResolvedValue([
+      {
+        id: 0,
+        foreignAuthorId: 'OL26320A',
+        authorName: 'J.R.R. Tolkien',
+        sortName: 'Tolkien, J.R.R.',
+        description: '',
+        imageUrl: '',
+        disambiguation: 'The Hobbit',
+        ratingsCount: 1619,
+        averageRating: 4.6,
+        monitored: true,
+      },
+    ])
+    vi.mocked(api.addAuthor).mockResolvedValue({
+      id: 37,
+      foreignAuthorId: 'OL26320A',
+      authorName: 'J.R.R. Tolkien',
+      sortName: 'Tolkien, J.R.R.',
+      description: 'Author of The Hobbit.',
+      imageUrl: '',
+      disambiguation: '',
+      ratingsCount: 0,
+      averageRating: 0,
+      monitored: true,
+    })
+
+    render(<AddAuthorModal onClose={onClose} onAdded={onAdded} />)
+
+    fireEvent.change(screen.getByPlaceholderText('Search by author name...'), {
+      target: { value: 'tolkien' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^search$/i }))
+    await waitFor(() => expect(screen.getByText('J.R.R. Tolkien')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: /^add$/i }))
+
+    await waitFor(() => expect(onAdded).toHaveBeenCalledTimes(1))
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(api.addAuthor).toHaveBeenCalledWith(expect.objectContaining({
+      foreignAuthorId: 'OL26320A',
+      authorName: 'J.R.R. Tolkien',
+    }))
   })
 })

@@ -1,0 +1,59 @@
+{
+  "results": [
+    {
+      "id": "li_single_file",
+      "libraryId": "lib-books",
+      "folderId": "fol-books",
+      "path": "/audiobooks/Andy Weir/Project Hail Mary.m4b",
+      "relPath": "Andy Weir/Project Hail Mary.m4b",
+      "isFile": true,
+      "mediaType": "book",
+      "media": {
+        "libraryItemId": "li_single_file",
+        "metadata": {
+          "title": "Project Hail Mary",
+          "authors": [
+            {
+              "id": "au_andy_weir",
+              "name": "Andy Weir"
+            }
+          ],
+          "narrators": [
+            "Ray Porter"
+          ],
+          "series": [],
+          "genres": [
+            "Science Fiction"
+          ],
+          "publishedYear": "2021",
+          "publishedDate": "2021-05-04",
+          "publisher": "Ballantine Books",
+          "description": "A lone astronaut must save humanity.",
+          "language": "en",
+          "isbn": "9780593135204",
+          "asin": "B08G9PRS1K"
+        },
+        "duration": 58032.12,
+        "size": 987654321,
+        "audioFiles": [
+          {
+            "ino": "ino_single_file",
+            "index": 1,
+            "path": "/audiobooks/Andy Weir/Project Hail Mary.m4b",
+            "duration": 58032.12,
+            "size": 987654321,
+            "metadata": {
+              "filename": "Project Hail Mary.m4b",
+              "ext": "m4b"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "page": 0,
+  "mediaType": "book",
+  "minified": true
+}

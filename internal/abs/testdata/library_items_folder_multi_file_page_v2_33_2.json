@@ -1,0 +1,45 @@
+{
+  "results": [
+    {
+      "id": "li_folder_multi",
+      "libraryId": "lib-books",
+      "folderId": "fol-books",
+      "path": "/audiobooks/Brandon Sanderson/The Way of Kings",
+      "relPath": "Brandon Sanderson/The Way of Kings",
+      "isFile": false,
+      "mediaType": "book",
+      "media": {
+        "libraryItemId": "li_folder_multi",
+        "metadata": {
+          "title": "The Way of Kings",
+          "authors": [
+            {
+              "id": "au_brandon_sanderson",
+              "name": "Brandon Sanderson"
+            }
+          ],
+          "narrators": [
+            "Michael Kramer",
+            "Kate Reading"
+          ],
+          "series": [
+            {
+              "id": "series_stormlight",
+              "sequence": "1"
+            }
+          ],
+          "genres": [
+            "Fantasy"
+          ],
+          "language": "en"
+        },
+        "audioFiles": []
+      }
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "page": 0,
+  "mediaType": "book",
+  "minified": true
+}
