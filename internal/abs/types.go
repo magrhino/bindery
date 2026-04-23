@@ -324,15 +324,11 @@ func NormalizeLibraryItem(item LibraryItem, detailFetched bool) NormalizedLibrar
 	}
 	out.Authors = make([]NormalizedAuthor, 0, len(item.Media.Metadata.Authors))
 	for _, author := range item.Media.Metadata.Authors {
-		out.Authors = append(out.Authors, NormalizedAuthor{ID: author.ID, Name: author.Name})
+		out.Authors = append(out.Authors, NormalizedAuthor(author))
 	}
 	out.Series = make([]NormalizedSeries, 0, len(item.Media.Metadata.Series))
 	for _, series := range item.Media.Metadata.Series {
-		out.Series = append(out.Series, NormalizedSeries{
-			ID:       series.ID,
-			Name:     series.Name,
-			Sequence: series.Sequence,
-		})
+		out.Series = append(out.Series, NormalizedSeries(series))
 	}
 	out.AudioFiles = make([]NormalizedAudioFile, 0, len(item.Media.AudioFiles))
 	for _, file := range item.Media.AudioFiles {

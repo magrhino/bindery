@@ -1,3 +1,4 @@
+// Package abs provides Audiobookshelf client, normalization, and import logic.
 package abs
 
 import (
