@@ -1,3 +1,4 @@
+// Package textutil contains small normalization and cleanup helpers used across imports and API responses.
 package textutil
 
 import (
