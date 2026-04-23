@@ -46,7 +46,7 @@ bindery/
 │   └── config/            # Environment-based configuration
 ├── web/                   # React frontend (Vite)
 ├── charts/bindery/        # Helm chart
-├── docs/                  # Deployment, roadmap
+├── docs/                  # Deployment, roadmap, ABS import guide
 └── .github/workflows/     # CI/CD
 ```
 
