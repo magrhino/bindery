@@ -2029,10 +2029,15 @@ function CalibreSection({
       const prefix = isPlugin ? '✓ Plugin reachable' : '✓ calibredb reachable'
       const detail = r.version || r.message
       setTestResult({ ok: true, msg: detail ? `${prefix} — ${detail}` : prefix })
+      // Mirror into bridgeReachable so the Push-all button flips to enabled
+      // on a successful manual test, without waiting for the silent probe
+      // to re-fire (which only triggers on mode/url/key *changes*).
+      if (isPlugin) setBridgeReachable(true)
     } catch (err) {
       const reason = err instanceof Error ? err.message : 'Test failed'
       const prefix = isPlugin ? '✗ Could not reach plugin' : '✗ calibredb unreachable'
       setTestResult({ ok: false, msg: `${prefix} — ${reason}` })
+      if (isPlugin) setBridgeReachable(false)
     } finally {
       setTesting(false)
     }
