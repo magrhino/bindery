@@ -185,6 +185,7 @@ export const api = {
   deleteAuthor: (id: number, deleteFiles = false) =>
     request<void>(`/author/${id}${deleteFiles ? '?deleteFiles=true' : ''}`, { method: 'DELETE' }),
   refreshAuthor: (id: number) => request<void>(`/author/${id}/refresh`, { method: 'POST' }),
+  relinkAuthorUpstream: (id: number) => request<Author>(`/author/${id}/relink-upstream`, { method: 'POST' }),
   listAuthorAliases: (id: number) => request<AuthorAlias[]>(`/author/${id}/aliases`),
   mergeAuthors: (targetId: number, sourceId: number, overwriteDefaults = true) =>
     request<MergeAuthorsResult>(`/author/${targetId}/merge`, {
@@ -734,6 +735,7 @@ export interface ABSMetadataConflict {
   appliedSource: 'abs' | 'upstream' | ''
   appliedValue: string
   preferredSource: 'abs' | 'upstream' | ''
+  authorRelinkEligible: boolean
   resolutionStatus: 'unresolved' | 'resolved'
   updatedAt: string
 }

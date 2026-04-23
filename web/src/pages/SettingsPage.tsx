@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { api, ABSConfig, ABSImportProgress, ABSImportRun, ABSLibrary, ABSMetadataConflict, ABSReviewItem, ABSRollbackResult, ABSTestResult, AuthConfig, AuthStatus, BlocklistEntry, Indexer, IndexerTestResult, ProwlarrInstance, DownloadClient, NotificationConfig, QualityProfile, MetadataProfile, CalibreImportProgress, CalibreSyncProgress, RootFolder, LogEntry, ImportList, HardcoverList, Author, Book } from '../api/client'
 import AuthSettings from '../settings/AuthSettings'
 import Pagination from '../components/Pagination'
+import ABSConflictPanel from '../components/ABSAuthorConflictsPanel'
 import { usePagination } from '../components/usePagination'
 import ThemeToggle from '../components/ThemeToggle'
 import LanguageSwitcher from '../components/LanguageSwitcher'
@@ -1164,8 +1165,9 @@ function AudiobookshelfSection() {
   const [config, setConfig] = useState<ABSConfig | null>(null)
   const [draft, setDraft] = useState({ baseUrl: '', apiKey: '', label: 'Audiobookshelf', enabled: false, libraryId: '', pathRemap: '' })
   const [libraries, setLibraries] = useState<ABSLibrary[]>([])
+  const [showAuthorConflicts, setShowAuthorConflicts] = useState(true)
   const [showReviewItems, setShowReviewItems] = useState(true)
-  const [showConflicts, setShowConflicts] = useState(true)
+  const [showBookConflicts, setShowBookConflicts] = useState(true)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -1194,6 +1196,7 @@ function AudiobookshelfSection() {
   const [bookSearchId, setBookSearchId] = useState<number | null>(null)
   const [conflictError, setConflictError] = useState<string | null>(null)
   const [resolvingConflictId, setResolvingConflictId] = useState<number | null>(null)
+  const [relinkingAuthorId, setRelinkingAuthorId] = useState<number | null>(null)
 
   const applyConfig = (next: ABSConfig) => {
     setConfig(next)
@@ -1388,6 +1391,23 @@ function AudiobookshelfSection() {
     }
   }
 
+  const relinkConflictAuthor = async (localId: number) => {
+    setRelinkingAuthorId(localId)
+    setConflictError(null)
+    try {
+      await api.relinkAuthorUpstream(localId)
+      await refreshConflicts()
+    } catch (err: unknown) {
+      setConflictError(err instanceof Error ? err.message : 'Failed to relink author')
+    } finally {
+      setRelinkingAuthorId(null)
+    }
+  }
+
+  const refreshConflictsQuietly = () => {
+    refreshConflicts().catch(() => {})
+  }
+
   const reviewReasonLabel = (reason: ABSReviewItem['reviewReason']) => {
     switch (reason) {
       case 'unmatched_author':
@@ -1505,19 +1525,6 @@ function AudiobookshelfSection() {
   const hasImportCredentials = Boolean(draft.apiKey.trim() || config?.apiKeyConfigured)
   const effectiveLibraryId = draft.libraryId || testResult?.defaultLibraryId || ''
   const canStartImport = !importProgress?.running && draft.enabled && hasImportCredentials && Boolean(draft.baseUrl.trim()) && Boolean(effectiveLibraryId)
-
-  const unresolvedConflicts = conflicts.filter(conflict => conflict.resolutionStatus === 'unresolved')
-  const resolvedConflicts = conflicts.filter(conflict => conflict.resolutionStatus === 'resolved')
-  const groupedUnresolved = unresolvedConflicts.reduce<Record<string, ABSMetadataConflict[]>>((acc, conflict) => {
-    const key = `${conflict.entityType}:${conflict.localId}`
-    acc[key] = acc[key] ? [...acc[key], conflict] : [conflict]
-    return acc
-  }, {})
-  const groupedResolved = resolvedConflicts.reduce<Record<string, ABSMetadataConflict[]>>((acc, conflict) => {
-    const key = `${conflict.entityType}:${conflict.localId}`
-    acc[key] = acc[key] ? [...acc[key], conflict] : [conflict]
-    return acc
-  }, {})
 
   return (
     <section>
@@ -1835,6 +1842,25 @@ function AudiobookshelfSection() {
           </div>
         </div>
 
+        <ABSConflictPanel
+          title="Author conflicts"
+          description="Review placeholder ABS authors here first. If Bindery can confidently relink one to upstream metadata, you can trigger that before working through book review items."
+          entityType="author"
+          conflicts={conflicts}
+          show={showAuthorConflicts}
+          emptyMessage="No author conflicts recorded yet."
+          resolvedHeading="Resolved author choices"
+          conflictError={conflictError}
+          resolvingConflictId={resolvingConflictId}
+          onToggle={() => setShowAuthorConflicts(prev => !prev)}
+          onRefresh={refreshConflictsQuietly}
+          onResolveConflict={resolveConflict}
+          relinkAction={{
+            loadingId: relinkingAuthorId,
+            onRelink: relinkConflictAuthor,
+          }}
+        />
+
         <div className="pt-3 border-t border-slate-200 dark:border-zinc-800 space-y-3">
           <div className="flex items-center justify-between gap-4">
             <button
@@ -1982,106 +2008,19 @@ function AudiobookshelfSection() {
           {reviewError && <div className="text-sm text-red-600 dark:text-red-400">{reviewError}</div>}
         </div>
 
-        <div className="pt-3 border-t border-slate-200 dark:border-zinc-800 space-y-3">
-          <div className="flex items-center justify-between gap-4">
-            <button
-              type="button"
-              onClick={() => setShowConflicts(prev => !prev)}
-              aria-expanded={showConflicts}
-              className="min-w-0 flex-1 text-left"
-            >
-              <div className="flex items-start gap-2">
-                <span className="text-sm text-slate-500 dark:text-zinc-500 mt-0.5" aria-hidden="true">
-                  {showConflicts ? '▾' : '▸'}
-                </span>
-                <div>
-                  <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200 cursor-pointer">Enrichment conflicts</label>
-                  <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">
-                    When ABS and upstream metadata disagree, Bindery keeps the upstream value temporarily and lets you confirm the winning source here.
-                  </p>
-                </div>
-              </div>
-            </button>
-            <button
-              onClick={() => refreshConflicts().catch(() => {})}
-              className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded text-sm font-medium flex-shrink-0"
-            >
-              Refresh
-            </button>
-          </div>
-
-          {showConflicts && (
-            <>
-              {Object.entries(groupedUnresolved).length === 0 && Object.entries(groupedResolved).length === 0 && (
-                <p className="text-sm text-slate-500 dark:text-zinc-500">No metadata conflicts recorded yet.</p>
-              )}
-
-              {Object.entries(groupedUnresolved).map(([key, group]) => (
-                <div key={key} className="rounded border border-amber-300 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/20 px-3 py-3 space-y-2 overflow-hidden">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-slate-800 dark:text-zinc-200">{group[0].entityName}</p>
-                      <p className="text-[11px] text-slate-500 dark:text-zinc-500 uppercase tracking-wide">{group[0].entityType}</p>
-                    </div>
-                    <span className="text-[11px] px-2 py-1 rounded bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300">Needs review</span>
-                  </div>
-                  {group.map(conflict => (
-                    <div key={conflict.id} className="rounded border border-amber-200 dark:border-amber-900/60 bg-white/70 dark:bg-zinc-950/30 px-3 py-2 space-y-2 overflow-hidden">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-xs font-medium text-slate-700 dark:text-zinc-300 min-w-0">{conflict.fieldLabel}</span>
-                        <span className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-zinc-500 text-right">Using {conflict.appliedSource || 'upstream'}</span>
-                      </div>
-                      <div className="grid min-w-0 gap-2 md:grid-cols-2 text-xs">
-                        <div className="min-w-0 rounded border border-slate-200 dark:border-zinc-800 px-2 py-2 bg-slate-50 dark:bg-zinc-950 overflow-hidden">
-                          <div className="font-medium text-slate-700 dark:text-zinc-300 mb-1">ABS</div>
-                          <div className="text-slate-600 dark:text-zinc-400 whitespace-pre-wrap break-all min-w-0">{conflict.absValue || 'Empty'}</div>
-                        </div>
-                        <div className="min-w-0 rounded border border-slate-200 dark:border-zinc-800 px-2 py-2 bg-slate-50 dark:bg-zinc-950 overflow-hidden">
-                          <div className="font-medium text-slate-700 dark:text-zinc-300 mb-1">Upstream</div>
-                          <div className="text-slate-600 dark:text-zinc-400 whitespace-pre-wrap break-all min-w-0">{conflict.upstreamValue || 'Empty'}</div>
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          onClick={() => resolveConflict(conflict.id, 'abs')}
-                          disabled={resolvingConflictId === conflict.id}
-                          className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-xs font-medium disabled:opacity-50"
-                        >
-                          Use ABS
-                        </button>
-                        <button
-                          onClick={() => resolveConflict(conflict.id, 'upstream')}
-                          disabled={resolvingConflictId === conflict.id}
-                          className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 rounded text-xs font-medium disabled:opacity-50"
-                        >
-                          Use upstream
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ))}
-
-              {Object.entries(groupedResolved).length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-zinc-500">Resolved choices</p>
-                  {Object.entries(groupedResolved).map(([key, group]) => (
-                    <div key={key} className="rounded border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 px-3 py-2 space-y-1">
-                      <p className="text-sm font-medium text-slate-800 dark:text-zinc-200">{group[0].entityName}</p>
-                      {group.map(conflict => (
-                        <div key={conflict.id} className="flex items-center justify-between gap-3 text-xs text-slate-600 dark:text-zinc-400">
-                          <span>{conflict.fieldLabel}</span>
-                          <span>Prefers {conflict.preferredSource || conflict.appliedSource}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-          {conflictError && <div className="text-sm text-red-600 dark:text-red-400">{conflictError}</div>}
-        </div>
+        <ABSConflictPanel
+          title="Book conflicts"
+          description="When ABS and upstream book metadata disagree, Bindery keeps the upstream value temporarily and lets you confirm the winning source here."
+          entityType="book"
+          conflicts={conflicts}
+          show={showBookConflicts}
+          emptyMessage="No book conflicts recorded yet."
+          resolvedHeading="Resolved book choices"
+          resolvingConflictId={resolvingConflictId}
+          onToggle={() => setShowBookConflicts(prev => !prev)}
+          onRefresh={refreshConflictsQuietly}
+          onResolveConflict={resolveConflict}
+        />
       </div>
     </section>
   )

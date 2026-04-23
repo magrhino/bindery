@@ -454,6 +454,7 @@ func main() {
 		r.Put("/author/{id}", authorHandler.Update)
 		r.Delete("/author/{id}", authorHandler.Delete)
 		r.Post("/author/{id}/refresh", authorHandler.Refresh)
+		r.Post("/author/{id}/relink-upstream", authorHandler.RelinkUpstream)
 		r.Get("/author/{id}/aliases", authorAliasHandler.List)
 		r.Post("/author/{id}/merge", authorAliasHandler.Merge)
 
