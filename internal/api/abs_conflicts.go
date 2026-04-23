@@ -21,22 +21,23 @@ type ABSConflictHandler struct {
 }
 
 type absConflictResponse struct {
-	ID               int64  `json:"id"`
-	SourceID         string `json:"sourceId"`
-	LibraryID        string `json:"libraryId"`
-	ItemID           string `json:"itemId"`
-	EntityType       string `json:"entityType"`
-	LocalID          int64  `json:"localId"`
-	EntityName       string `json:"entityName"`
-	FieldName        string `json:"fieldName"`
-	FieldLabel       string `json:"fieldLabel"`
-	ABSValue         string `json:"absValue"`
-	UpstreamValue    string `json:"upstreamValue"`
-	AppliedSource    string `json:"appliedSource"`
-	AppliedValue     string `json:"appliedValue"`
-	PreferredSource  string `json:"preferredSource"`
-	ResolutionStatus string `json:"resolutionStatus"`
-	UpdatedAt        string `json:"updatedAt"`
+	ID                   int64  `json:"id"`
+	SourceID             string `json:"sourceId"`
+	LibraryID            string `json:"libraryId"`
+	ItemID               string `json:"itemId"`
+	EntityType           string `json:"entityType"`
+	LocalID              int64  `json:"localId"`
+	EntityName           string `json:"entityName"`
+	FieldName            string `json:"fieldName"`
+	FieldLabel           string `json:"fieldLabel"`
+	ABSValue             string `json:"absValue"`
+	UpstreamValue        string `json:"upstreamValue"`
+	AppliedSource        string `json:"appliedSource"`
+	AppliedValue         string `json:"appliedValue"`
+	PreferredSource      string `json:"preferredSource"`
+	AuthorRelinkEligible bool   `json:"authorRelinkEligible"`
+	ResolutionStatus     string `json:"resolutionStatus"`
+	UpdatedAt            string `json:"updatedAt"`
 }
 
 func NewABSConflictHandler(conflicts *db.ABSMetadataConflictRepo, authors *db.AuthorRepo, books *db.BookRepo) *ABSConflictHandler {
@@ -187,6 +188,7 @@ func (h *ABSConflictHandler) decorateConflict(r *http.Request, conflict *models.
 		}
 		if author != nil {
 			resp.EntityName = author.Name
+			resp.AuthorRelinkEligible = canRelinkAuthorToUpstream(author)
 		}
 	case "book":
 		book, err := h.books.GetByID(r.Context(), conflict.LocalID)

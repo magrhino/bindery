@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/go-chi/chi/v5"
 
@@ -21,8 +22,9 @@ import (
 )
 
 var (
-	errNoMetadataAggregator = errors.New("metadata aggregator not configured")
-	errNoMetadataMatch      = errors.New("no exact-name match in metadata provider")
+	errNoMetadataAggregator   = errors.New("metadata aggregator not configured")
+	errNoMetadataMatch        = errors.New("no exact-name match in metadata provider")
+	errAmbiguousMetadataMatch = errors.New("multiple exact-name matches in metadata provider")
 )
 
 type AuthorHandler struct {
@@ -323,9 +325,13 @@ func (h *AuthorHandler) writeCanonicalAuthorConflict(w http.ResponseWriter, cano
 }
 
 func (h *AuthorHandler) findCanonicalAuthorMatch(ctx context.Context, names ...string) (*models.Author, bool, error) {
+	return h.findCanonicalAuthorMatchExcluding(ctx, 0, names...)
+}
+
+func (h *AuthorHandler) findCanonicalAuthorMatchExcluding(ctx context.Context, excludeID int64, names ...string) (*models.Author, bool, error) {
 	var resolved *models.Author
 	for _, name := range names {
-		match, ambiguous, err := h.findAuthorByNameOrAlias(ctx, name)
+		match, ambiguous, err := h.findAuthorByNameOrAliasExcluding(ctx, excludeID, name)
 		if err != nil {
 			return nil, false, err
 		}
@@ -344,6 +350,10 @@ func (h *AuthorHandler) findCanonicalAuthorMatch(ctx context.Context, names ...s
 }
 
 func (h *AuthorHandler) findAuthorByNameOrAlias(ctx context.Context, name string) (*models.Author, bool, error) {
+	return h.findAuthorByNameOrAliasExcluding(ctx, 0, name)
+}
+
+func (h *AuthorHandler) findAuthorByNameOrAliasExcluding(ctx context.Context, excludeID int64, name string) (*models.Author, bool, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, false, nil
@@ -363,6 +373,9 @@ func (h *AuthorHandler) findAuthorByNameOrAlias(ctx context.Context, name string
 	exact := make(map[int64]*models.Author)
 	needle := strings.ToLower(name)
 	for idx := range authors {
+		if authors[idx].ID == excludeID {
+			continue
+		}
 		if strings.ToLower(strings.TrimSpace(authors[idx].Name)) != needle {
 			continue
 		}
@@ -377,7 +390,7 @@ func (h *AuthorHandler) findAuthorByNameOrAlias(ctx context.Context, name string
 		if err != nil {
 			return nil, false, err
 		}
-		if author != nil {
+		if author != nil && author.ID != excludeID {
 			exact[author.ID] = author
 		}
 	}
@@ -396,6 +409,9 @@ func (h *AuthorHandler) findAuthorByNameOrAlias(ctx context.Context, name string
 	}
 	normalized := make(map[int64]*models.Author)
 	for idx := range authors {
+		if authors[idx].ID == excludeID {
+			continue
+		}
 		if textutil.NormalizeAuthorName(authors[idx].Name) != normNeedle {
 			continue
 		}
@@ -410,7 +426,7 @@ func (h *AuthorHandler) findAuthorByNameOrAlias(ctx context.Context, name string
 		if err != nil {
 			return nil, false, err
 		}
-		if author != nil {
+		if author != nil && author.ID != excludeID {
 			normalized[author.ID] = author
 		}
 	}
@@ -481,6 +497,76 @@ func (h *AuthorHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	writeJSON(w, http.StatusOK, author)
+}
+
+func (h *AuthorHandler) RelinkUpstream(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+
+	author, err := h.authors.GetByID(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if author == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "author not found"})
+		return
+	}
+	if !canRelinkAuthorToUpstream(author) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "author is already linked to upstream metadata"})
+		return
+	}
+
+	upstream, err := h.lookupUpstreamAuthorByName(r.Context(), author.Name)
+	switch {
+	case err == nil:
+	case errors.Is(err, errNoMetadataAggregator):
+		writeJSON(w, http.StatusFailedDependency, map[string]string{"error": err.Error()})
+		return
+	case errors.Is(err, errNoMetadataMatch):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "no confident upstream author match found"})
+		return
+	case errors.Is(err, errAmbiguousMetadataMatch):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "author name resolves ambiguously in upstream metadata"})
+		return
+	default:
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if upstream == nil || strings.TrimSpace(upstream.ForeignID) == "" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "no confident upstream author match found"})
+		return
+	}
+	if canonical, ambiguous, err := h.findCanonicalAuthorMatchExcluding(r.Context(), author.ID, author.Name, upstream.Name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	} else if ambiguous {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "author name resolves ambiguously — merge manually"})
+		return
+	} else if canonical != nil && canonical.ID != author.ID {
+		h.writeCanonicalAuthorConflict(w, canonical, "author name already resolves to an existing author — confirm merge")
+		return
+	}
+	if existing, err := h.authors.GetByForeignID(r.Context(), upstream.ForeignID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	} else if existing != nil && existing.ID != author.ID {
+		h.writeCanonicalAuthorConflict(w, existing, "upstream author already exists locally")
+		return
+	}
+
+	if err := h.relinkExistingAuthorToUpstream(r.Context(), author, upstream, author.Name, author.Monitored, author.QualityProfileID, author.MetadataProfileID, author.RootFolderID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	proxyAuthorImages(author)
+	cleanAuthorDescription(author)
 	writeJSON(w, http.StatusOK, author)
 }
 
@@ -804,6 +890,142 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool,
 		}
 	}
 	slog.Info("author books synced", "author", author.Name, "added", added, "skipped_language", skippedLang, "skipped_junk", skippedJunk, "total", len(books))
+}
+
+func (h *AuthorHandler) lookupUpstreamAuthorByName(ctx context.Context, name string) (*models.Author, error) {
+	if h.meta == nil {
+		return nil, errNoMetadataAggregator
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, errNoMetadataMatch
+	}
+	want := textutil.NormalizeAuthorName(name)
+	if want == "" {
+		return nil, errNoMetadataMatch
+	}
+
+	queries := authorSearchQueries(name)
+	var match *models.Author
+	matchedQuery := ""
+	for _, query := range queries {
+		results, err := h.meta.SearchAuthors(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		for idx := range results {
+			if textutil.NormalizeAuthorName(results[idx].Name) != want {
+				continue
+			}
+			if match != nil {
+				slog.Info("author relink match ambiguous", "author", name, "query", query)
+				return nil, errAmbiguousMetadataMatch
+			}
+			copy := results[idx]
+			match = &copy
+		}
+		if match != nil {
+			matchedQuery = query
+			break
+		}
+	}
+	if match == nil {
+		slog.Debug("author relink match not found", "author", name, "queries", queries)
+		return nil, errNoMetadataMatch
+	}
+
+	full, err := h.meta.GetAuthor(ctx, match.ForeignID)
+	if err != nil {
+		return nil, err
+	}
+	if full == nil {
+		return nil, errNoMetadataMatch
+	}
+	slog.Info("author relink candidate matched", "author", name, "query", matchedQuery, "foreignId", match.ForeignID)
+	return full, nil
+}
+
+func authorSearchQueries(name string) []string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	queries := []string{name}
+	if compact := compactInitialsAuthorQuery(name); compact != "" {
+		queries = append(queries, compact)
+	}
+	if norm := textutil.NormalizeAuthorName(name); norm != "" {
+		queries = append(queries, norm)
+		if surname := initialedSurnameFallback(norm); surname != "" {
+			queries = append(queries, surname)
+		}
+	}
+	return dedupeAuthorQueries(queries)
+}
+
+func compactInitialsAuthorQuery(name string) string {
+	fields := strings.Fields(name)
+	if len(fields) < 3 {
+		return ""
+	}
+	initials := make([]string, 0, len(fields)-1)
+	idx := 0
+	for idx < len(fields)-1 {
+		initial, ok := authorInitial(fields[idx])
+		if !ok {
+			break
+		}
+		initials = append(initials, strings.ToUpper(initial)+".")
+		idx++
+	}
+	if len(initials) < 2 || idx >= len(fields) {
+		return ""
+	}
+	return strings.Join(initials, "") + " " + strings.Join(fields[idx:], " ")
+}
+
+func authorInitial(token string) (string, bool) {
+	var letters []rune
+	for _, r := range token {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			letters = append(letters, unicode.ToLower(r))
+		}
+	}
+	if len(letters) != 1 {
+		return "", false
+	}
+	return string(letters[0]), true
+}
+
+func initialedSurnameFallback(normalized string) string {
+	fields := strings.Fields(normalized)
+	if len(fields) < 2 {
+		return ""
+	}
+	for _, field := range fields[:len(fields)-1] {
+		if len([]rune(field)) != 1 {
+			return ""
+		}
+	}
+	return fields[len(fields)-1]
+}
+
+func dedupeAuthorQueries(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 // AddBook adds a single book to the wanted list by its metadata foreign ID.
