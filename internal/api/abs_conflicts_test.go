@@ -106,3 +106,47 @@ func TestABSConflictHandler_ListAndResolveBookConflict(t *testing.T) {
 		t.Fatalf("stored conflict = %+v, want resolved ABS preference", stored)
 	}
 }
+
+func TestABSConflictHandler_ListMarksRelinkEligibleAuthors(t *testing.T) {
+	t.Parallel()
+
+	h, conflicts, authors, _ := absConflictFixture(t)
+	author := &models.Author{
+		ForeignID:        "abs:author:lib-books:author-tolkien",
+		Name:             "J. R. R. Tolkien",
+		SortName:         "Tolkien, J. R. R.",
+		MetadataProvider: "audiobookshelf",
+		Monitored:        true,
+	}
+	if err := authors.Create(context.Background(), author); err != nil {
+		t.Fatalf("Create author: %v", err)
+	}
+	conflict := &models.ABSMetadataConflict{
+		SourceID:         "default",
+		LibraryID:        "lib-books",
+		ItemID:           "li-hobbit",
+		EntityType:       "author",
+		LocalID:          author.ID,
+		FieldName:        "description",
+		ABSValue:         "",
+		UpstreamValue:    "Author of The Hobbit.",
+		AppliedSource:    abs.MetadataSourceUpstream,
+		ResolutionStatus: "unresolved",
+	}
+	if err := conflicts.Upsert(context.Background(), conflict); err != nil {
+		t.Fatalf("Upsert conflict: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/abs/conflicts", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("List status = %d", rec.Code)
+	}
+	var listed []absConflictResponse
+	if err := json.NewDecoder(rec.Body).Decode(&listed); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(listed) != 1 || !listed[0].AuthorRelinkEligible {
+		t.Fatalf("listed = %+v, want authorRelinkEligible=true", listed)
+	}
+}
