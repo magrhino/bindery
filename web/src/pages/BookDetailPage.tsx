@@ -224,7 +224,7 @@ export default function BookDetailPage() {
       label = book.mediaType === 'audiobook' ? 'the audiobook folder' : 'this file'
       pathSummary = book.filePath
     }
-    if (!window.confirm(`Permanently delete ${label} from disk?\n\n${pathSummary}\n\nThe book record stays; it will flip back to "wanted".`)) return
+    if (!window.confirm(`Permanently delete ${label} from disk?\n\n${pathSummary}\n\nAny sibling files with the same name (different format) will also be removed.\n\nThe book record stays; it will flip back to "wanted".`)) return
     setDeletingFile(true)
     setError(null)
     try {
@@ -242,12 +242,12 @@ export default function BookDetailPage() {
 
   const deleteBook = async () => {
     if (!book) return
-    const hasFiles = !!(book.filePath || book.ebookFilePath || book.audiobookFilePath)
+    const hasFiles = !!(book.filePath || book.ebookFilePath || book.audiobookFilePath || (book.bookFiles && book.bookFiles.length > 0))
     const fileSummary = book.bookFiles && book.bookFiles.length > 0
       ? book.bookFiles.map(f => f.path).join('\n')
       : [book.ebookFilePath, book.audiobookFilePath].filter(Boolean).join('\n') || book.filePath
     const msg = hasFiles
-      ? `Delete "${book.title}" AND its files on disk?\n\n${fileSummary}\n\nThis cannot be undone.`
+      ? `Delete "${book.title}" AND its files on disk?\n\n${fileSummary}\n\nSibling files with the same name (different format) will also be removed. Download history will be cleared.\n\nThis cannot be undone.`
       : `Delete "${book.title}"?\n\nThis cannot be undone.`
     if (!window.confirm(msg)) return
     setDeletingBook(true)

@@ -8,20 +8,23 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/importer"
 	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
 )
 
 type BookHandler struct {
-	books    *db.BookRepo
-	meta     *metadata.Aggregator
-	history  *db.HistoryRepo
-	searcher BookSearcher
-	settings *db.SettingsRepo
+	books     *db.BookRepo
+	meta      *metadata.Aggregator
+	history   *db.HistoryRepo
+	searcher  BookSearcher
+	settings  *db.SettingsRepo
+	downloads *db.DownloadRepo
 }
 
 func NewBookHandler(books *db.BookRepo, meta *metadata.Aggregator, history *db.HistoryRepo, searcher BookSearcher) *BookHandler {
@@ -32,6 +35,13 @@ func NewBookHandler(books *db.BookRepo, meta *metadata.Aggregator, history *db.H
 // global autoGrab.enabled kill-switch.
 func (h *BookHandler) WithSettings(settings *db.SettingsRepo) *BookHandler {
 	h.settings = settings
+	return h
+}
+
+// WithDownloads wires in the download repo so the book handler can clean up
+// download records when a book is deleted with ?deleteFiles=true.
+func (h *BookHandler) WithDownloads(d *db.DownloadRepo) *BookHandler {
+	h.downloads = d
 	return h
 }
 
@@ -247,6 +257,13 @@ func (h *BookHandler) Delete(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		// Clean up any pending/completed download records for this book so the
+		// queue does not show stale entries after a full book deletion.
+		if h.downloads != nil {
+			if err := h.downloads.DeleteByBook(r.Context(), id); err != nil {
+				slog.Warn("book delete: failed to clean download records", "id", id, "error", err)
+			}
+		}
 	}
 	if err := h.books.Delete(r.Context(), id); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -355,6 +372,9 @@ func (h *BookHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 
 // removeBookPath deletes a file or directory at p. Audiobooks are stored as
 // folders (multi-part mp3/m4b + cover + cue); ebooks are single files.
+// For single files it also sweeps any sibling files in the same directory
+// that share the same basename (stem) and have a recognised book extension —
+// this handles dual-format downloads where epub + mobi land in one folder.
 // Returns nil if the path no longer exists — the net state is the same.
 func removeBookPath(p string) error {
 	info, err := os.Stat(p)
@@ -367,14 +387,38 @@ func removeBookPath(p string) error {
 	if info.IsDir() {
 		return os.RemoveAll(p)
 	}
-	if err := os.Remove(p); err != nil { //nosec G304 -- p is a DB-stored path written by the import pipeline, not user input
-		return err
-	}
-	// After removing a file, clean up the parent directory if it is now empty.
-	// This handles multi-format NZBs where several formats share one folder.
+
+	// Sweep sibling book files with the same stem in the parent directory.
 	parent := filepath.Dir(p)
-	entries, err := os.ReadDir(parent)
-	if err == nil && len(entries) == 0 {
+	stem := strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
+	entries, readErr := os.ReadDir(parent)
+	if readErr == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			n := e.Name()
+			if !importer.IsBookFile(n) {
+				continue
+			}
+			s := strings.TrimSuffix(n, filepath.Ext(n))
+			if !strings.EqualFold(s, stem) {
+				continue
+			}
+			if rmErr := os.Remove(filepath.Join(parent, n)); rmErr != nil && !os.IsNotExist(rmErr) { //nosec G304 -- derived from DB-stored path
+				slog.Warn("book delete: failed to remove sibling file", "path", filepath.Join(parent, n), "error", rmErr)
+			}
+		}
+	} else {
+		// ReadDir failed — fall back to deleting only the target file.
+		if err := os.Remove(p); err != nil { //nosec G304 -- p is a DB-stored path written by the import pipeline, not user input
+			return err
+		}
+	}
+
+	// Clean up parent directory if it is now empty.
+	remaining, err := os.ReadDir(parent)
+	if err == nil && len(remaining) == 0 {
 		_ = os.Remove(parent) //nosec G304 -- derived from DB-stored path, not user input
 	}
 	return nil

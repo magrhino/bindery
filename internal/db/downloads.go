@@ -151,6 +151,11 @@ func (r *DownloadRepo) Delete(ctx context.Context, id int64) error {
 	return err
 }
 
+func (r *DownloadRepo) DeleteByBook(ctx context.Context, bookID int64) error {
+	_, err := r.db.ExecContext(ctx, "DELETE FROM downloads WHERE book_id=?", bookID)
+	return err
+}
+
 func (r *DownloadRepo) query(ctx context.Context, q string, args ...interface{}) ([]models.Download, error) {
 	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
