@@ -71,6 +71,39 @@ func prowlarrStub(t *testing.T, body string) *httptest.Server {
 	}))
 }
 
+func TestFilterCategoriesForMedia(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []int
+		want []int
+	}{
+		{"empty stays empty", []int{}, []int{}},
+		{"non-parent passes through", []int{7020, 2000, 5030}, []int{7020, 2000, 5030}},
+		{"only 7000 widens to 7020", []int{7000}, []int{7020}},
+		{"only 3000 widens to 3030", []int{3000}, []int{3030}},
+		{"both parents only widen both", []int{7000, 3000}, []int{7020, 3030}},
+		{"7000 with child drops parent", []int{7000, 7020}, []int{7020}},
+		{"3000 with child drops parent", []int{3000, 3010}, []int{3010}},
+		{"7000 with multiple children drops parent", []int{7000, 7020, 7030}, []int{7020, 7030}},
+		{"both parents with children drop both", []int{7000, 7020, 3000, 3010}, []int{7020, 3010}},
+		{"7000 with child and 3000 alone widen 3000", []int{7000, 7020, 3000}, []int{7020, 3030}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := filterCategoriesForMedia(tc.in)
+			if len(got) != len(tc.want) {
+				t.Errorf("filterCategoriesForMedia(%v) = %v, want %v", tc.in, got, tc.want)
+				return
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("filterCategoriesForMedia(%v)[%d] = %d, want %d", tc.in, i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestIndexerTypeForProtocol(t *testing.T) {
 	cases := []struct {
 		in, want string
@@ -142,6 +175,26 @@ func TestSyncer_CorrectsMisTypedExistingIndexer(t *testing.T) {
 	}
 	if store.updated[0].Type != "newznab" {
 		t.Errorf("Type = %q, want newznab", store.updated[0].Type)
+	}
+}
+
+func TestSyncer_WidensParentOnlyCategory(t *testing.T) {
+	// Prowlarr reports [7000] only — syncer must store [7020], not [7000] or [].
+	srv := prowlarrStub(t, `[{"id":9,"name":"GenericBooks","protocol":"torrent","supportsSearch":true,"categories":[{"id":7000}]}]`)
+	defer srv.Close()
+
+	store := &fakeIndexerStore{}
+	syncer := NewSyncer(New(srv.URL, "k"), store, fakeInstanceStore{})
+
+	if _, err := syncer.Sync(context.Background(), 1); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if len(store.created) != 1 {
+		t.Fatalf("created = %d, want 1", len(store.created))
+	}
+	cats := store.created[0].Categories
+	if len(cats) != 1 || cats[0] != 7020 {
+		t.Errorf("Categories = %v, want [7020] (7000 must be widened to 7020, never stored raw)", cats)
 	}
 }
 
