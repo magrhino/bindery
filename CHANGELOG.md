@@ -6,6 +6,26 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [v1.2.2] — 2026-04-23
+
+### Fixed
+
+- **Calibre "Push all to Calibre" button state now matches Test-connection result** (#342) — the button was enabled even when the last connectivity test failed, allowing pushes to silently no-op against an unreachable bridge. It now stays disabled until a successful test in the current session.
+- **Download client host field no longer double-schemes the URL** (#353) — if a user typed `https://` or `http://` in the Host field, the downloader prepended the scheme a second time, producing `https://https://…` and causing every connection attempt to fail. The host is now stripped of any leading scheme before the URL is assembled.
+- **CSP nonce now injected server-side** (#353) — the inline `<script>` tag in `index.html` used a static placeholder nonce that never matched the server-generated nonce, causing the theme-initialisation script to be blocked by Content-Security-Policy in strict environments. The nonce is now written by the Go server at request time.
+- **Docker image tags now include `v`-prefixed semver variants** (#353) — the CI metadata action was missing `type=semver,pattern=v{{version}}`, so only bare `1.2.x` tags were pushed to ghcr.io. Both `1.2.x` and `v1.2.x` are now available.
+- **Version string in footer links to the GitHub releases page** (#356) — clicking the version badge now opens the corresponding release regardless of whether the string is a semver, `v`-prefixed semver, or `dev-<sha>`.
+
+## [v1.2.1] — 2026-04-23
+
+### Fixed
+
+- **Prowlarr-synced indexers no longer send broad parent category 7000** (#344) — indexers synced from Prowlarr were always requesting category 7000 (Books parent), which caused many indexers to return results for every book-adjacent category including comics. Bindery now sends the appropriate child category (7020 Ebooks, 3030 Audiobooks) and drops the parent when children are present.
+- **qBittorrent "hash could not be determined" on category mismatch** (#363) — after adding a torrent, Bindery polled only the configured download category, so if qBittorrent placed the torrent in a different category the hash was never found and the download was marked as failed. Bindery now polls the full torrent list (unfiltered) and logs a detailed error with hash diagnostics if the 30-second window expires.
+- **Dual-format delete leaves orphan sibling files** (#343) — deleting one format of a dual-format book failed to remove sibling format files from disk. Sibling cleanup now runs regardless of whether the file being deleted still exists.
+- **Rescan misbinds books with similar titles** (#290) — the Jaro-Winkler similarity threshold for matching filenames to book records was too permissive. Threshold raised from 0.80 to 0.88.
+- **Interactive search mixes ebook and audiobook results** (#333) — results from all indexers were shown in a single unsorted list for dual-format books. Results are now split into labelled **Ebook results** and **Audiobook results** sections.
+
 ## [v1.2.0] — 2026-04-22
 
 ### Added
