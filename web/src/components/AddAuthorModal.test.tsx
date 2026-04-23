@@ -23,6 +23,7 @@ vi.mock('../api/client', () => ({
   api: {
     listMetadataProfiles: vi.fn().mockResolvedValue([]),
     listRootFolders: vi.fn().mockResolvedValue([]),
+    getSetting: vi.fn().mockResolvedValue({ key: 'default.media_type', value: 'ebook' }),
     searchAuthors: vi.fn(),
     addAuthor: vi.fn(),
   },

@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/indexer"
@@ -283,5 +285,105 @@ func TestSearchBook_DualFormat_MediaTypeTagging(t *testing.T) {
 	}
 	if byGUID["au1"] != "audiobook" {
 		t.Errorf("audiobook result: got mediaType=%q, want %q", byGUID["au1"], "audiobook")
+	}
+}
+
+// slowSearcher records peak concurrency to verify parallel dispatch.
+type slowSearcher struct {
+	mu            sync.Mutex
+	inFlight      int
+	peakFlight    int
+	delay         time.Duration
+	ebookResults  []newznab.SearchResult
+	audioResults  []newznab.SearchResult
+}
+
+func (s *slowSearcher) SearchBookWithDebug(_ context.Context, _ []models.Indexer, c indexer.MatchCriteria) ([]newznab.SearchResult, *indexer.SearchDebug) {
+	s.mu.Lock()
+	s.inFlight++
+	if s.inFlight > s.peakFlight {
+		s.peakFlight = s.inFlight
+	}
+	s.mu.Unlock()
+
+	time.Sleep(s.delay)
+
+	s.mu.Lock()
+	s.inFlight--
+	s.mu.Unlock()
+
+	switch c.MediaType {
+	case models.MediaTypeEbook:
+		return s.ebookResults, nil
+	case models.MediaTypeAudiobook:
+		return s.audioResults, nil
+	default:
+		return nil, nil
+	}
+}
+
+func (s *slowSearcher) SearchQuery(_ context.Context, _ []models.Indexer, _ string) []newznab.SearchResult {
+	return nil
+}
+
+// TestSearchBook_DualFormat_ParallelDispatch verifies that the two
+// per-format searches for a MediaTypeBoth book run concurrently rather
+// than sequentially. The slowSearcher records peak in-flight count:
+// parallel dispatch yields 2; sequential yields 1.
+func TestSearchBook_DualFormat_ParallelDispatch(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	ctx := context.Background()
+
+	authorRepo := db.NewAuthorRepo(database)
+	author := &models.Author{
+		ForeignID: "OL2A", Name: "Test Author", SortName: "Author, Test",
+		MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+
+	bookRepo := db.NewBookRepo(database)
+	book := &models.Book{
+		Title: "Parallel Book", ForeignID: "OL2M",
+		AuthorID: author.ID, MediaType: models.MediaTypeBoth, Monitored: true,
+	}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	slow := &slowSearcher{
+		delay:        30 * time.Millisecond,
+		ebookResults: []newznab.SearchResult{{GUID: "pe1", Title: "Parallel Ebook"}},
+		audioResults: []newznab.SearchResult{{GUID: "pa1", Title: "Parallel Audio"}},
+	}
+
+	h := NewIndexerHandler(
+		db.NewIndexerRepo(database),
+		bookRepo,
+		authorRepo,
+		db.NewMetadataProfileRepo(database),
+		slow,
+		db.NewSettingsRepo(database),
+		db.NewBlocklistRepo(database),
+	)
+
+	rec := httptest.NewRecorder()
+	req := withURLParam(
+		httptest.NewRequest(http.MethodGet, "/indexer/book/1/search", nil),
+		"id", strconv.FormatInt(book.ID, 10),
+	)
+	h.SearchBook(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if slow.peakFlight < 2 {
+		t.Errorf("dual-format search ran sequentially: peak concurrent calls = %d, want ≥ 2", slow.peakFlight)
 	}
 }

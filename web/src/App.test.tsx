@@ -38,6 +38,7 @@ vi.mock('react-i18next', () => ({
         'nav.authors': 'Authors', 'nav.books': 'Books', 'nav.wanted': 'Wanted',
         'nav.queue': 'Queue', 'nav.history': 'History', 'nav.series': 'Series',
         'nav.calendar': 'Calendar', 'nav.discover': 'Discover', 'nav.settings': 'Settings',
+        'nav.search': 'Search',
         'login.signOut': 'Sign out', 'login.signedInAs': 'Signed in as',
       }
       return m[key] ?? key
@@ -114,8 +115,9 @@ describe('Shell — mobile navigation', () => {
     const links = Array.from(mobileNav.querySelectorAll('a')).map(l => l.textContent)
     expect(links).toContain('Authors')
     expect(links).toContain('Discover')
+    expect(links).toContain('Search')
     expect(links).toContain('Settings')
-    expect(links.length).toBe(9) // 8 main + Settings
+    expect(links.length).toBe(10) // 8 main + Search + Settings
   })
 
   it('closes mobile menu when a nav link is clicked', () => {

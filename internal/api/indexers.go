@@ -263,14 +263,32 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 		ebookCrit.MediaType = models.MediaTypeEbook
 		audioCrit := crit
 		audioCrit.MediaType = models.MediaTypeAudiobook
-		ebookResults, ebookDbg := h.searcher.SearchBookWithDebug(r.Context(), idxs, ebookCrit)
-		for i := range ebookResults {
-			ebookResults[i].MediaType = "ebook"
+
+		type searchOut struct {
+			results []newznab.SearchResult
+			dbg     *indexer.SearchDebug
 		}
-		audioResults, audioDbg := h.searcher.SearchBookWithDebug(r.Context(), idxs, audioCrit)
-		for i := range audioResults {
-			audioResults[i].MediaType = "audiobook"
-		}
+		ctx := r.Context()
+		ebookCh := make(chan searchOut, 1)
+		audioCh := make(chan searchOut, 1)
+		go func() {
+			res, d := h.searcher.SearchBookWithDebug(ctx, idxs, ebookCrit)
+			for i := range res {
+				res[i].MediaType = "ebook"
+			}
+			ebookCh <- searchOut{res, d}
+		}()
+		go func() {
+			res, d := h.searcher.SearchBookWithDebug(ctx, idxs, audioCrit)
+			for i := range res {
+				res[i].MediaType = "audiobook"
+			}
+			audioCh <- searchOut{res, d}
+		}()
+		ebookOut := <-ebookCh
+		audioOut := <-audioCh
+		ebookResults, ebookDbg := ebookOut.results, ebookOut.dbg
+		audioResults, audioDbg := audioOut.results, audioOut.dbg
 		results = append(ebookResults, audioResults...)
 		results = indexer.DedupeResults(results)
 		// Merge debug info from both searches.
