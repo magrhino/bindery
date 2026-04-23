@@ -311,6 +311,7 @@ Otherwise the server responds with `401`. The API key lives in **Settings → Ge
 |-------|-------|
 | **Quickstart** — first author to first grab in 10 minutes | [Wiki](https://github.com/vavallee/bindery/wiki/Quickstart) |
 | **Deployment** — Docker, Compose, k8s/Helm, binary, UID/GID, upgrades | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
+| **ABS import** — setup, path remap, review queue, rollback, and matching behavior | [docs/abs_import.md](docs/abs_import.md) |
 | **Calibre plugin bridge** — cross-container Calibre integration via the Bindery Bridge plugin | [docs/CALIBRE-PLUGIN.md](docs/CALIBRE-PLUGIN.md) |
 | **Roadmap** — planned work, scope notes, and explicitly-out-of-scope items (Z-Library, OpenBooks, etc.) | [docs/ROADMAP.md](docs/ROADMAP.md) |
 | **Contributing & CI checks** — dev setup, full quality/security matrix, local check suite | [CONTRIBUTING.md](CONTRIBUTING.md) |

@@ -6,6 +6,14 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **Audiobookshelf (ABS) import workflow** — Bindery can now connect to one ABS source, validate an API key, discover visible libraries, and import ABS catalog metadata into shared authors, books, series, and ebook/audiobook editions. Imports support dry runs, persisted run history, rollback preview/rollback, low-confidence review queues, metadata conflict resolution, and path remaps when ABS and Bindery see the same files under different mount prefixes. Import quality is best when the ABS library already has strong metadata, especially ASIN coverage.
+
+### Docs
+
+- Added an ABS import guide and user-facing wiki documentation covering setup, required API-key access, path remaps, review flow, conflicts, rollback, and import-quality expectations.
+
 ## [v1.2.0] — 2026-04-22
 
 ### Added
