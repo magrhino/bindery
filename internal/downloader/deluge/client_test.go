@@ -3,13 +3,38 @@ package deluge_test
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/vavallee/bindery/internal/downloader/deluge"
 )
+
+// logCatcher captures slog records for test assertions.
+type logCatcher struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (lc *logCatcher) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (lc *logCatcher) Handle(_ context.Context, r slog.Record) error {
+	lc.mu.Lock()
+	lc.records = append(lc.records, r.Clone())
+	lc.mu.Unlock()
+	return nil
+}
+func (lc *logCatcher) WithAttrs(_ []slog.Attr) slog.Handler { return lc }
+func (lc *logCatcher) WithGroup(_ string) slog.Handler      { return lc }
+
+func (lc *logCatcher) Records() []slog.Record {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	return lc.records
+}
 
 // delugeServer is a minimal Deluge Web UI JSON-RPC stub.
 type delugeServer struct {
@@ -238,5 +263,81 @@ func TestGetTorrents_StalledState(t *testing.T) {
 	}
 	if strings.ToLower(torrents["errhash"].State) != "error" {
 		t.Error("expected Error state")
+	}
+}
+
+// TestAddTorrent_URL_HashLookupTimeout verifies that when the torrent URL path
+// never produces a new hash within the deadline, an ERROR is logged with
+// before/after hash lists and the appropriate error is returned.
+func TestAddTorrent_URL_HashLookupTimeout(t *testing.T) {
+	restore := deluge.SetHashPollTimeout(50 * time.Millisecond)
+	t.Cleanup(restore)
+
+	catcher := &logCatcher{}
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(catcher))
+	t.Cleanup(func() { slog.SetDefault(origLogger) })
+
+	// Build a minimal server that accepts the add flow but never exposes a
+	// new torrent in core.get_torrents_status, so the poll times out.
+	existing := map[string]deluge.TorrentStatus{
+		"existinghash": {Hash: "existinghash", State: "Seeding"},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/json" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		var req struct {
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+			ID     int64             `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		write := func(result any) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": result, "error": nil, "id": req.ID})
+		}
+		switch req.Method {
+		case "auth.login":
+			write(true)
+		case "web.download_torrent_from_url":
+			write("/tmp/test.torrent")
+		case "web.add_torrents":
+			// Accept the add but do NOT insert into existing — torrent never appears.
+			write([]bool{true})
+		case "core.get_torrents_status":
+			write(existing)
+		default:
+			write(nil)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := clientFromServer(srv, "pw")
+	_, err := c.AddTorrent(context.Background(), "http://example.com/book.torrent", "scifi")
+	if err == nil {
+		t.Fatal("expected error on timeout, got nil")
+	}
+	if !strings.Contains(err.Error(), "hash could not be determined") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	records := catcher.Records()
+	if len(records) == 0 {
+		t.Fatal("expected slog.Error to be called on timeout")
+	}
+	found := false
+	for _, r := range records {
+		if r.Level == slog.LevelError && strings.Contains(r.Message, "timed out") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected ERROR log with 'timed out' message, got %d records", len(records))
 	}
 }

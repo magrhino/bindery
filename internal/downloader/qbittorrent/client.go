@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -14,6 +15,10 @@ import (
 	"sync"
 	"time"
 )
+
+// hashPollTimeout is the maximum time to wait for a newly-added torrent's hash
+// to appear in the unfiltered torrent list.
+var hashPollTimeout = 30 * time.Second
 
 // Client interacts with the qBittorrent WebUI API v2.
 // Authentication is cookie-based: Login() obtains a SID cookie which is
@@ -95,10 +100,10 @@ func (c *Client) Test(ctx context.Context) error {
 // AddTorrent submits a magnet link or torrent URL to qBittorrent for download
 // and returns the torrent hash when it can be determined.
 func (c *Client) AddTorrent(ctx context.Context, magnetOrURL, category, savePath string) (string, error) {
-	// Snapshot existing hashes so we can detect newly-added items when the
-	// source URL is not a magnet with an explicit btih.
+	// Snapshot all existing hashes (unfiltered) so we can detect newly-added
+	// items regardless of which category qBittorrent assigns them initially.
 	beforeSet := map[string]struct{}{}
-	if before, err := c.GetTorrents(ctx, category); err == nil {
+	if before, err := c.GetTorrents(ctx, ""); err == nil {
 		for _, t := range before {
 			beforeSet[strings.ToLower(t.Hash)] = struct{}{}
 		}
@@ -144,15 +149,19 @@ func (c *Client) AddTorrent(ctx context.Context, magnetOrURL, category, savePath
 		return infoHash, nil
 	}
 
-	// Poll until the new torrent appears — qBittorrent must fetch and parse
-	// the .torrent file before the hash is visible, which can take a second
-	// or two for remote URLs (e.g. Prowlarr Torznab redirects).
-	deadline := time.Now().Add(10 * time.Second)
+	// Poll the unfiltered torrent list until the new torrent appears — qBittorrent
+	// must fetch and parse the .torrent file before the hash is visible, which can
+	// take a few seconds for remote URLs (e.g. Prowlarr Torznab redirects).
+	// We poll unfiltered so we find the torrent regardless of which category
+	// qBittorrent has assigned at the moment it first appears.
+	deadline := time.Now().Add(hashPollTimeout)
+	var lastAfter []Torrent
 	for {
-		after, err := c.GetTorrents(ctx, category)
+		after, err := c.GetTorrents(ctx, "")
 		if err != nil {
 			return "", fmt.Errorf("add torrent accepted but hash lookup failed: %w", err)
 		}
+		lastAfter = after
 		var newest *Torrent
 		for i := range after {
 			t := &after[i]
@@ -165,7 +174,11 @@ func (c *Client) AddTorrent(ctx context.Context, magnetOrURL, category, savePath
 			}
 		}
 		if newest != nil {
-			return strings.ToLower(newest.Hash), nil
+			hash := strings.ToLower(newest.Hash)
+			if category != "" {
+				_ = c.setCategory(ctx, hash, category)
+			}
+			return hash, nil
 		}
 		if time.Now().After(deadline) {
 			break
@@ -176,6 +189,19 @@ func (c *Client) AddTorrent(ctx context.Context, magnetOrURL, category, savePath
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+	beforeKeys := make([]string, 0, len(beforeSet))
+	for h := range beforeSet {
+		beforeKeys = append(beforeKeys, h)
+	}
+	afterKeys := make([]string, 0, len(lastAfter))
+	for i := range lastAfter {
+		afterKeys = append(afterKeys, strings.ToLower(lastAfter[i].Hash))
+	}
+	slog.Error("add torrent hash lookup timed out",
+		"category", category,
+		"before_hashes", beforeKeys,
+		"after_hashes", afterKeys,
+	)
 	return "", fmt.Errorf("add torrent accepted but hash could not be determined")
 }
 
@@ -248,6 +274,31 @@ func (c *Client) DeleteTorrent(ctx context.Context, hash string, deleteFiles boo
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("delete torrent HTTP %d", resp.StatusCode)
 	}
+	return nil
+}
+
+// setCategory assigns a category to a torrent by hash.
+func (c *Client) setCategory(ctx context.Context, hash, category string) error {
+	form := url.Values{
+		"hashes":   {hash},
+		"category": {category},
+	}
+	if err := c.ensureLoggedIn(ctx); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.baseURL+"/api/v2/torrents/setCategory",
+		strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("build setCategory request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("setCategory: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
 }
 

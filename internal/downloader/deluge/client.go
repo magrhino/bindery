@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"strings"
@@ -15,6 +16,10 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+// hashPollTimeout is the maximum time to wait for a newly-added torrent's hash
+// to appear in the torrent list.
+var hashPollTimeout = 30 * time.Second
 
 // Client interacts with the Deluge Web UI JSON-RPC API.
 // Authentication is cookie-based: Login() posts auth.login which sets a
@@ -101,7 +106,7 @@ func (c *Client) AddTorrent(ctx context.Context, magnetOrURL, label string) (str
 		}
 		hash = h
 	} else {
-		h, err := c.addTorrentURL(ctx, magnetOrURL)
+		h, err := c.addTorrentURL(ctx, magnetOrURL, label)
 		if err != nil {
 			return "", err
 		}
@@ -132,10 +137,10 @@ func (c *Client) addMagnet(ctx context.Context, magnet string) (string, error) {
 
 // addTorrentURL downloads the .torrent file via web.download_torrent_from_url
 // (which saves it to a temp path on the Deluge server), then adds it via
-// web.add_torrents. The hash is resolved by polling until the new torrent
-// appears in the status list.
-func (c *Client) addTorrentURL(ctx context.Context, torrentURL string) (string, error) {
-	// Snapshot existing hashes so we can identify the newly-added torrent.
+// web.add_torrents. The hash is resolved by polling the unfiltered torrent
+// list until a new hash (not in beforeSet) appears.
+func (c *Client) addTorrentURL(ctx context.Context, torrentURL, label string) (string, error) {
+	// Snapshot all existing hashes so we can identify the newly-added torrent.
 	beforeSet := map[string]struct{}{}
 	if before, err := c.GetTorrents(ctx); err == nil {
 		for h := range before {
@@ -159,14 +164,16 @@ func (c *Client) addTorrentURL(ctx context.Context, torrentURL string) (string, 
 		return "", fmt.Errorf("add torrents: %w", err)
 	}
 
-	// Poll until the new torrent appears — Deluge processes the file
-	// asynchronously and the hash may not be visible immediately.
-	deadline := time.Now().Add(10 * time.Second)
+	// Poll the unfiltered torrent list until the new torrent appears — Deluge
+	// processes the file asynchronously and the hash may not be visible immediately.
+	deadline := time.Now().Add(hashPollTimeout)
+	var lastStatuses map[string]TorrentStatus
 	for {
 		statuses, err := c.GetTorrents(ctx)
 		if err != nil {
 			return "", fmt.Errorf("add torrent accepted but hash lookup failed: %w", err)
 		}
+		lastStatuses = statuses
 		for h := range statuses {
 			lh := strings.ToLower(h)
 			if _, seen := beforeSet[lh]; !seen {
@@ -182,6 +189,19 @@ func (c *Client) addTorrentURL(ctx context.Context, torrentURL string) (string, 
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+	beforeKeys := make([]string, 0, len(beforeSet))
+	for h := range beforeSet {
+		beforeKeys = append(beforeKeys, h)
+	}
+	afterKeys := make([]string, 0, len(lastStatuses))
+	for h := range lastStatuses {
+		afterKeys = append(afterKeys, h)
+	}
+	slog.Error("add torrent hash lookup timed out",
+		"label", label,
+		"before_hashes", beforeKeys,
+		"after_hashes", afterKeys,
+	)
 	return "", fmt.Errorf("add torrent accepted but hash could not be determined")
 }
 

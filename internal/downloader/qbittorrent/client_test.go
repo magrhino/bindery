@@ -3,11 +3,36 @@ package qbittorrent
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
+
+// logCatcher captures slog records for test assertions.
+type logCatcher struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (lc *logCatcher) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (lc *logCatcher) Handle(_ context.Context, r slog.Record) error {
+	lc.mu.Lock()
+	lc.records = append(lc.records, r.Clone())
+	lc.mu.Unlock()
+	return nil
+}
+func (lc *logCatcher) WithAttrs(_ []slog.Attr) slog.Handler { return lc }
+func (lc *logCatcher) WithGroup(_ string) slog.Handler      { return lc }
+
+func (lc *logCatcher) Records() []slog.Record {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	return lc.records
+}
 
 // newTestClient creates a Client pointing at the given test server URL.
 func newTestClient(serverURL, username, password string) *Client {
@@ -427,5 +452,128 @@ func TestEnsureLoggedIn_NotLoggedIn(t *testing.T) {
 	}
 	if loginCount != 1 {
 		t.Errorf("Login should be called once when not logged in; called %d times", loginCount)
+	}
+}
+
+// TestAddTorrent_HashFoundUnderDifferentCategory verifies that the unfiltered
+// poll finds a torrent even when qBittorrent has initially placed it under a
+// different category than the one requested.
+func TestAddTorrent_HashFoundUnderDifferentCategory(t *testing.T) {
+	const wantHash = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+	var setCategoryHash, setCategoryValue string
+	var mu sync.Mutex
+	added := false // becomes true after /torrents/add is called
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/torrents/add":
+			mu.Lock()
+			added = true
+			mu.Unlock()
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/torrents/info":
+			mu.Lock()
+			isAdded := added
+			mu.Unlock()
+			if !isAdded {
+				// Before add: no torrents yet.
+				_, _ = w.Write([]byte("[]"))
+				return
+			}
+			// After add: torrent appears under "uncategorized" (different from requested "books").
+			torrents := []Torrent{{
+				Hash:     wantHash,
+				Name:     "Test Book",
+				Category: "uncategorized",
+				AddedOn:  1000,
+			}}
+			body, _ := json.Marshal(torrents)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(body)
+		case "/api/v2/torrents/setCategory":
+			_ = r.ParseForm()
+			mu.Lock()
+			setCategoryHash = r.FormValue("hashes")
+			setCategoryValue = r.FormValue("category")
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "admin", "pass")
+	hash, err := c.AddTorrent(context.Background(), "http://example.com/book.torrent", "books", "")
+	if err != nil {
+		t.Fatalf("AddTorrent: %v", err)
+	}
+	if hash != wantHash {
+		t.Errorf("hash: want %q, got %q", wantHash, hash)
+	}
+	mu.Lock()
+	gotSetCatHash := setCategoryHash
+	gotSetCatVal := setCategoryValue
+	mu.Unlock()
+	if gotSetCatHash != wantHash {
+		t.Errorf("setCategory hashes: want %q, got %q", wantHash, gotSetCatHash)
+	}
+	if gotSetCatVal != "books" {
+		t.Errorf("setCategory category: want %q, got %q", "books", gotSetCatVal)
+	}
+}
+
+// TestAddTorrent_HashLookupTimeout verifies that when the torrent never appears
+// within the deadline, an ERROR is logged with before/after hash lists and the
+// appropriate error is returned.
+func TestAddTorrent_HashLookupTimeout(t *testing.T) {
+	orig := hashPollTimeout
+	hashPollTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { hashPollTimeout = orig })
+
+	catcher := &logCatcher{}
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(catcher))
+	t.Cleanup(func() { slog.SetDefault(origLogger) })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/torrents/add":
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/torrents/info":
+			// Never return the new torrent — list stays empty.
+			_, _ = w.Write([]byte("[]"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "admin", "pass")
+	_, err := c.AddTorrent(context.Background(), "http://example.com/book.torrent", "books", "")
+	if err == nil {
+		t.Fatal("expected error on timeout, got nil")
+	}
+	if !strings.Contains(err.Error(), "hash could not be determined") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	records := catcher.Records()
+	if len(records) == 0 {
+		t.Fatal("expected slog.Error to be called on timeout")
+	}
+	found := false
+	for _, r := range records {
+		if r.Level == slog.LevelError && strings.Contains(r.Message, "timed out") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected ERROR log with 'timed out' message, got %d records", len(records))
 	}
 }
