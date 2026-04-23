@@ -1,0 +1,37 @@
+{
+  "id": "li_ebook_only",
+  "libraryId": "lib-books",
+  "folderId": "fol-books",
+  "path": "/audiobooks/T. Kingfisher/Nettle & Bone.epub",
+  "relPath": "T. Kingfisher/Nettle & Bone.epub",
+  "isFile": true,
+  "mediaType": "book",
+  "media": {
+    "libraryItemId": "li_ebook_only",
+    "metadata": {
+      "title": "Nettle & Bone",
+      "authors": [
+        {
+          "id": "au_t_kingfisher",
+          "name": "T. Kingfisher"
+        }
+      ],
+      "genres": [
+        "Fantasy"
+      ],
+      "publishedYear": "2022",
+      "publishedDate": "2022-04-26",
+      "publisher": "Tor Books",
+      "description": "An ebook-only fixture item for the ABS contract harness.",
+      "language": "en",
+      "isbn": "9781250244048"
+    },
+    "duration": 1,
+    "size": 654321,
+    "audioFiles": [],
+    "ebookFile": {
+      "path": "/audiobooks/T. Kingfisher/Nettle & Bone.epub",
+      "ino": "ino_ebook_only"
+    }
+  }
+}

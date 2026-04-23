@@ -1,0 +1,55 @@
+{
+  "baselineVersion": "2.33.2",
+  "scenarios": [
+    {
+      "id": "single-file-audiobook",
+      "seedPath": "seed/single-file-audiobook",
+      "expectedItemId": "li_single_file",
+      "expectedMediaType": "book",
+      "requiresDetail": false,
+      "accessibleToLimitedAccount": true
+    },
+    {
+      "id": "folder-multi-file-audiobook",
+      "seedPath": "seed/folder-multi-file-audiobook",
+      "expectedItemId": "li_folder_multi",
+      "expectedMediaType": "book",
+      "requiresDetail": true,
+      "accessibleToLimitedAccount": true,
+      "expectsSeries": true
+    },
+    {
+      "id": "ebook-only-item",
+      "seedPath": "seed/ebook-only-item",
+      "expectedItemId": "li_ebook_only",
+      "expectedMediaType": "book",
+      "requiresDetail": false,
+      "accessibleToLimitedAccount": true,
+      "expectsEbook": true
+    },
+    {
+      "id": "mixed-metadata-completeness",
+      "seedPath": "seed/mixed-metadata-completeness",
+      "expectedItemId": "li_missing_stats",
+      "expectedMediaType": "book",
+      "requiresDetail": true,
+      "accessibleToLimitedAccount": true
+    },
+    {
+      "id": "series-linked-item",
+      "seedPath": "seed/series-linked-item",
+      "expectedItemId": "li_series_linked",
+      "expectedMediaType": "book",
+      "requiresDetail": false,
+      "accessibleToLimitedAccount": true,
+      "expectsSeries": true
+    },
+    {
+      "id": "permission-limited-account",
+      "seedPath": "seed/permission-limited-account",
+      "expectedMediaType": "book",
+      "requiresDetail": false,
+      "accessibleToLimitedAccount": false
+    }
+  ]
+}
