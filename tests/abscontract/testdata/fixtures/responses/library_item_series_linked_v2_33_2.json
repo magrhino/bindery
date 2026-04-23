@@ -1,0 +1,53 @@
+{
+  "id": "li_series_linked",
+  "libraryId": "lib-books",
+  "folderId": "fol-books",
+  "path": "/audiobooks/Martha Wells/All Systems Red.m4b",
+  "relPath": "Martha Wells/All Systems Red.m4b",
+  "isFile": true,
+  "mediaType": "book",
+  "media": {
+    "libraryItemId": "li_series_linked",
+    "metadata": {
+      "title": "All Systems Red",
+      "authors": [
+        {
+          "id": "au_martha_wells",
+          "name": "Martha Wells"
+        }
+      ],
+      "series": [
+        {
+          "id": "series_murderbot",
+          "name": "The Murderbot Diaries",
+          "sequence": "1"
+        }
+      ],
+      "genres": [
+        "Science Fiction"
+      ],
+      "publishedYear": "2017",
+      "publishedDate": "2017-05-02",
+      "publisher": "Tor.com",
+      "description": "A series-linked audiobook fixture item for the ABS contract harness.",
+      "language": "en",
+      "isbn": "9780765397539",
+      "asin": "B01MYZ8V8C"
+    },
+    "duration": 11234,
+    "size": 345678901,
+    "audioFiles": [
+      {
+        "ino": "ino_series_linked",
+        "index": 1,
+        "path": "/audiobooks/Martha Wells/All Systems Red.m4b",
+        "duration": 11234,
+        "size": 345678901,
+        "metadata": {
+          "filename": "All Systems Red.m4b",
+          "ext": "m4b"
+        }
+      }
+    ]
+  }
+}
