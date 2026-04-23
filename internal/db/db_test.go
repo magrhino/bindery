@@ -80,6 +80,62 @@ func TestMigrateIdempotent(t *testing.T) {
 	db.Close()
 }
 
+func TestMigrate033ABSReviewResolutionIdempotent(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	defer database.Close()
+
+	for _, column := range []string{
+		"resolved_author_foreign_id",
+		"resolved_author_name",
+		"resolved_book_foreign_id",
+		"resolved_book_title",
+		"edited_title",
+	} {
+		var name string
+		if err := database.QueryRow(`SELECT name FROM pragma_table_info('abs_review_queue') WHERE name = ?`, column).Scan(&name); err != nil {
+			t.Fatalf("abs_review_queue column %q missing: %v", column, err)
+		}
+	}
+
+	_, err = database.Exec(`
+		INSERT INTO abs_review_queue (
+			source_id, library_id, item_id, title, primary_author, asin, media_type,
+			review_reason, payload_json, resolved_author_foreign_id, resolved_author_name,
+			resolved_book_foreign_id, resolved_book_title, edited_title, status, created_at, updated_at
+		)
+		VALUES (
+			'src', 'lib', 'item', 'Title', 'Author', 'ASIN', 'audiobook',
+			'review', '{}', 'author-1', 'Resolved Author', 'book-1',
+			'Resolved Book', 'Edited Title', 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+		)`)
+	if err != nil {
+		t.Fatalf("seed abs review queue row: %v", err)
+	}
+
+	if _, err := database.Exec(`DELETE FROM schema_migrations WHERE version = 33`); err != nil {
+		t.Fatalf("clear migration 033 marker: %v", err)
+	}
+	if err := migrate(database); err != nil {
+		t.Fatalf("rerun migration 033: %v", err)
+	}
+
+	var authorID, bookID, editedTitle string
+	err = database.QueryRow(`
+		SELECT resolved_author_foreign_id, resolved_book_foreign_id, edited_title
+		FROM abs_review_queue
+		WHERE source_id = 'src' AND library_id = 'lib' AND item_id = 'item'`,
+	).Scan(&authorID, &bookID, &editedTitle)
+	if err != nil {
+		t.Fatalf("reload abs review queue row: %v", err)
+	}
+	if authorID != "author-1" || bookID != "book-1" || editedTitle != "Edited Title" {
+		t.Fatalf("resolution fields changed after rerun: author=%q book=%q edited=%q", authorID, bookID, editedTitle)
+	}
+}
+
 // TestMigrate008_CalibreOnFreshDB verifies the v0.8.0 Calibre migration
 // lands the calibre_id column and seeds the three calibre.* settings rows
 // on a fresh install.
