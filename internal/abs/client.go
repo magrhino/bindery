@@ -1,3 +1,4 @@
+// Package abs provides Audiobookshelf client, normalization, and import logic.
 package abs
 
 import (
@@ -169,8 +170,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body io.Reader
 		}
 
 		if resp.StatusCode >= http.StatusInternalServerError && attempt < maxAttempts-1 {
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
+			drainAndClose(resp.Body)
 			sleepBackoff(ctx, attempt)
 			continue
 		}
@@ -228,7 +228,15 @@ func shouldRetry(err error) bool {
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
-		return netErr.Timeout() || netErr.Temporary()
+		return true
 	}
 	return true
+}
+
+func drainAndClose(rc io.ReadCloser) {
+	if rc == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, rc)
+	_ = rc.Close()
 }

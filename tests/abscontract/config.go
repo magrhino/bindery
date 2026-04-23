@@ -1,3 +1,4 @@
+// Package abscontract provides the pinned Audiobookshelf contract harness and fixtures.
 package abscontract
 
 import (
