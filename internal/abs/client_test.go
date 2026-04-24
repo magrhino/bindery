@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -31,9 +32,11 @@ func TestClientAuthorizeInjectsBearerHeader(t *testing.T) {
 
 	sawAuth := ""
 	sawAgent := ""
+	sawRawQuery := ""
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sawAuth = r.Header.Get("Authorization")
 		sawAgent = r.Header.Get("User-Agent")
+		sawRawQuery = r.URL.RawQuery
 		if r.URL.Path != "/api/authorize" {
 			t.Fatalf("path = %s, want /api/authorize", r.URL.Path)
 		}
@@ -56,8 +59,63 @@ func TestClientAuthorizeInjectsBearerHeader(t *testing.T) {
 	if sawAgent == "" {
 		t.Fatal("User-Agent header should be set")
 	}
+	if sawRawQuery != "" {
+		t.Fatalf("query = %q, want api key absent from URL query", sawRawQuery)
+	}
 	if resp.ServerSettings.Version != "2.33.1" {
 		t.Fatalf("version = %q", resp.ServerSettings.Version)
+	}
+}
+
+func TestClientAcceptsPrintableAPIKeyPunctuation(t *testing.T) {
+	t.Parallel()
+
+	key := "secret!#$%&'*+.^_`|~?=;:,/[]{}()"
+	sawAuth := ""
+	sawURL := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawAuth = r.Header.Get("Authorization")
+		sawURL = r.URL.String()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"user":{"id":"root","username":"root","type":"root","librariesAccessible":[],"permissions":{"accessAllLibraries":true}},"userDefaultLibraryId":"lib_main","serverSettings":{"version":"2.33.1"},"Source":"docker"}`))
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(srv.URL, " \t"+key+" \n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Authorize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sawAuth != "Bearer "+key {
+		t.Fatalf("Authorization header = %q", sawAuth)
+	}
+	if strings.Contains(sawURL, key) {
+		t.Fatalf("request URL leaked api key: %q", sawURL)
+	}
+}
+
+func TestClientRejectsAPIKeyControlCharacters(t *testing.T) {
+	t.Parallel()
+
+	tests := []string{
+		"bad\r\nX-Test: injected",
+		"bad\x00secret",
+		"bad\x7fsecret",
+	}
+
+	for _, key := range tests {
+		t.Run(fmt.Sprintf("%q", key), func(t *testing.T) {
+			t.Parallel()
+			_, err := NewClient("https://abs.example.com", key)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if strings.Contains(err.Error(), key) {
+				t.Fatalf("error leaked api key: %q", err.Error())
+			}
+		})
 	}
 }
 

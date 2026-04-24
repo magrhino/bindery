@@ -92,6 +92,9 @@ func (c ImportConfig) Validate() error {
 	if c.APIKey == "" {
 		return errors.New("abs api_key is empty")
 	}
+	if _, err := NormalizeAPIKey(c.APIKey); err != nil {
+		return err
+	}
 	if c.LibraryID == "" {
 		return errors.New("abs library_id is empty")
 	}
