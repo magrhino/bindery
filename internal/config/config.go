@@ -51,7 +51,7 @@ func Load() *Config {
 		DownloadDir:         envOr("BINDERY_DOWNLOAD_DIR", "/downloads"),
 		LibraryDir:          envOr("BINDERY_LIBRARY_DIR", "/books"),
 		AudiobookDir:        envOr("BINDERY_AUDIOBOOK_DIR", ""),
-		ABSFeatureEnabled:   envBool("BINDERY_ABS_ENABLED", true),
+		ABSFeatureEnabled:   envBool("BINDERY_ABS_ENABLED", false),
 		DownloadPathRemap:   envOr("BINDERY_DOWNLOAD_PATH_REMAP", ""),
 		ProxyAuthHeader:     envOr("BINDERY_PROXY_AUTH_HEADER", "X-Forwarded-User"),
 		ProxyAutoProvision:  envBool("BINDERY_PROXY_AUTO_PROVISION", true),
