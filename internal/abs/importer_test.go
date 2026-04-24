@@ -657,6 +657,88 @@ func TestImporter_FindAuthorByName_MatchingTiers(t *testing.T) {
 	}
 }
 
+func TestImporter_RunScopedAuthorMatcherSeesAliasCreatedEarlierInRun(t *testing.T) {
+	t.Parallel()
+
+	importer, authorRepo, _, _, _, _, _, _, _, _ := newABSImporterFixture(t)
+	ctx := context.Background()
+
+	first := sampleABSItem()
+	first.ItemID = "li-cache-first"
+	first.Title = "Cache First"
+	first.ASIN = "ASIN-CACHE-FIRST"
+	first.Authors = []NormalizedAuthor{
+		{ID: "author-cache-primary", Name: "Cache Primary"},
+		{ID: "author-cache-alias", Name: "Cache Pen Name"},
+	}
+	first.Series = nil
+	first.AudioFiles = []NormalizedAudioFile{{INO: "audio-cache-first", Path: "/abs/cache/first.m4b"}}
+	first.EbookPath = ""
+	first.EbookINO = ""
+
+	second := sampleABSItem()
+	second.ItemID = "li-cache-second"
+	second.Title = "Cache Second"
+	second.ASIN = "ASIN-CACHE-SECOND"
+	second.Authors = []NormalizedAuthor{{ID: "author-cache-second", Name: "Cache Pen Name"}}
+	second.Series = nil
+	second.AudioFiles = []NormalizedAudioFile{{INO: "audio-cache-second", Path: "/abs/cache/second.m4b"}}
+	second.EbookPath = ""
+	second.EbookINO = ""
+
+	items := []NormalizedLibraryItem{first, second}
+	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		for _, item := range items {
+			if err := fn(ctx, item); err != nil {
+				return EnumerationStats{}, err
+			}
+		}
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: len(items), ItemsNormalized: len(items)}, nil
+	}
+
+	stats, err := importer.Run(ctx, ImportConfig{
+		SourceID:  DefaultSourceID,
+		BaseURL:   "https://abs.example.com",
+		APIKey:    "secret",
+		LibraryID: first.LibraryID,
+		Label:     "Shelf",
+		Enabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if stats.AuthorsCreated != 1 || stats.AuthorsLinked != 1 {
+		t.Fatalf("stats = %+v, want one created author and one linked author", stats)
+	}
+
+	authors, err := authorRepo.List(ctx)
+	if err != nil {
+		t.Fatalf("List authors: %v", err)
+	}
+	if len(authors) != 1 || authors[0].Name != "Cache Primary" {
+		t.Fatalf("authors = %+v, want only Cache Primary", authors)
+	}
+	aliases, err := importer.aliases.ListByAuthor(ctx, authors[0].ID)
+	if err != nil {
+		t.Fatalf("ListByAuthor: %v", err)
+	}
+	foundAlias := false
+	for _, alias := range aliases {
+		if alias.Name == "Cache Pen Name" {
+			foundAlias = true
+			break
+		}
+	}
+	if !foundAlias {
+		t.Fatalf("aliases = %+v, want Cache Pen Name", aliases)
+	}
+
+	progress := importer.Progress()
+	if len(progress.Results) != 2 || progress.Results[1].MatchedBy != "alias" {
+		t.Fatalf("progress results = %+v, want second item matched by alias", progress.Results)
+	}
+}
+
 func TestImporter_ResolveAuthor_SafeVariantMatchRecordsAlias(t *testing.T) {
 	t.Parallel()
 
