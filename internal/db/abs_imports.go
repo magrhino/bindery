@@ -366,15 +366,39 @@ func (r *ABSReviewItemRepo) UpsertPending(ctx context.Context, item *models.ABSR
 }
 
 func (r *ABSReviewItemRepo) ListByStatus(ctx context.Context, status string) ([]models.ABSReviewItem, error) {
-	rows, err := r.db.QueryContext(ctx, `
+	items, _, err := r.ListByStatusPaginated(ctx, status, 0, 0)
+	return items, err
+}
+
+func (r *ABSReviewItemRepo) ListByStatusPaginated(ctx context.Context, status string, limit, offset int) ([]models.ABSReviewItem, int, error) {
+	status = strings.TrimSpace(status)
+	var total int
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM abs_review_queue
+		WHERE status = ?`, status).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count abs review items: %w", err)
+	}
+
+	query := `
 		SELECT id, source_id, library_id, item_id, title, primary_author, asin, media_type, review_reason, payload_json,
 		       resolved_author_foreign_id, resolved_author_name, resolved_book_foreign_id, resolved_book_title, edited_title,
 		       latest_run_id, status, created_at, updated_at
 		FROM abs_review_queue
 		WHERE status = ?
-		ORDER BY updated_at DESC, id DESC`, strings.TrimSpace(status))
+		ORDER BY updated_at DESC, id DESC`
+	args := []any{status}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+		if offset > 0 {
+			query += ` OFFSET ?`
+			args = append(args, offset)
+		}
+	}
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list abs review items: %w", err)
+		return nil, 0, fmt.Errorf("list abs review items: %w", err)
 	}
 	defer rows.Close()
 
@@ -382,11 +406,11 @@ func (r *ABSReviewItemRepo) ListByStatus(ctx context.Context, status string) ([]
 	for rows.Next() {
 		var item models.ABSReviewItem
 		if err := scanABSReviewItemRows(rows, &item); err != nil {
-			return nil, fmt.Errorf("scan abs review item: %w", err)
+			return nil, 0, fmt.Errorf("scan abs review item: %w", err)
 		}
 		out = append(out, item)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 func (r *ABSReviewItemRepo) GetByID(ctx context.Context, id int64) (*models.ABSReviewItem, error) {

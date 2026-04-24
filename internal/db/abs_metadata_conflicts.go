@@ -40,14 +40,36 @@ func (r *ABSMetadataConflictRepo) GetByEntityField(ctx context.Context, entityTy
 }
 
 func (r *ABSMetadataConflictRepo) List(ctx context.Context) ([]models.ABSMetadataConflict, error) {
-	rows, err := r.db.QueryContext(ctx, `
+	items, _, err := r.ListPaginated(ctx, 0, 0)
+	return items, err
+}
+
+func (r *ABSMetadataConflictRepo) ListPaginated(ctx context.Context, limit, offset int) ([]models.ABSMetadataConflict, int, error) {
+	var total int
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM abs_metadata_conflicts`).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count abs metadata conflicts: %w", err)
+	}
+
+	query := `
 		SELECT id, source_id, library_id, item_id, entity_type, local_id, field_name,
 		       abs_value, upstream_value, applied_source, preferred_source, resolution_status,
 		       created_at, updated_at
 		FROM abs_metadata_conflicts
-		ORDER BY CASE resolution_status WHEN 'unresolved' THEN 0 ELSE 1 END, updated_at DESC, id DESC`)
+		ORDER BY CASE resolution_status WHEN 'unresolved' THEN 0 ELSE 1 END, updated_at DESC, id DESC`
+	args := []any{}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+		if offset > 0 {
+			query += ` OFFSET ?`
+			args = append(args, offset)
+		}
+	}
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list abs metadata conflicts: %w", err)
+		return nil, 0, fmt.Errorf("list abs metadata conflicts: %w", err)
 	}
 	defer rows.Close()
 
@@ -55,13 +77,13 @@ func (r *ABSMetadataConflictRepo) List(ctx context.Context) ([]models.ABSMetadat
 	for rows.Next() {
 		item, err := scanABSMetadataConflict(rows, "scan abs metadata conflict")
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if item != nil {
 			out = append(out, *item)
 		}
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 func (r *ABSMetadataConflictRepo) Upsert(ctx context.Context, c *models.ABSMetadataConflict) error {

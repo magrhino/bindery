@@ -3,10 +3,14 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -28,6 +32,120 @@ func (s *stubABSReviewImporter) ImportReview(_ context.Context, cfg abs.ImportCo
 
 func (s *stubABSReviewImporter) ReviewFileMapping(context.Context, abs.ImportConfig, abs.NormalizedLibraryItem) abs.ReviewFileMapping {
 	return abs.ReviewFileMapping{}
+}
+
+func absReviewFixture(t *testing.T) (*sql.DB, *ABSReviewHandler, *db.ABSReviewItemRepo) {
+	t.Helper()
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	database.SetMaxOpenConns(1)
+	reviews := db.NewABSReviewItemRepo(database)
+	h := NewABSReviewHandler(reviews, &stubABSReviewImporter{}, func() ABSStoredConfig { return ABSStoredConfig{} })
+	return database, h, reviews
+}
+
+func seedABSReviewItems(t *testing.T, database *sql.DB, reviews *db.ABSReviewItemRepo, count int) {
+	t.Helper()
+	for i := 1; i <= count; i++ {
+		item := models.ABSReviewItem{
+			SourceID:      abs.DefaultSourceID,
+			LibraryID:     "lib-books",
+			ItemID:        "item-" + strconv.Itoa(i),
+			Title:         "Title " + strconv.Itoa(i),
+			PrimaryAuthor: "Author " + strconv.Itoa(i),
+			MediaType:     models.MediaTypeAudiobook,
+			ReviewReason:  "unmatched_book",
+			PayloadJSON:   `{"itemId":"item-` + strconv.Itoa(i) + `"}`,
+			Status:        "pending",
+		}
+		if err := reviews.UpsertPending(context.Background(), &item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ts := time.Date(2026, 4, 23, 12, 0, 0, 0, time.UTC)
+	if _, err := database.ExecContext(context.Background(), `UPDATE abs_review_queue SET updated_at = ?`, ts); err != nil {
+		t.Fatalf("normalize review timestamps: %v", err)
+	}
+}
+
+func TestABSReviewHandler_ListDefaultPagination(t *testing.T) {
+	database, h, reviews := absReviewFixture(t)
+	seedABSReviewItems(t, database, reviews, 2)
+
+	rec := httptest.NewRecorder()
+	h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/abs/review", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var out absReviewListResponse
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if out.Total != 2 || out.Limit != 50 || out.Offset != 0 || len(out.Items) != 2 {
+		t.Fatalf("out = %+v, want default pagination metadata and two items", out)
+	}
+}
+
+func TestABSReviewHandler_ListCustomLimitOffset(t *testing.T) {
+	database, h, reviews := absReviewFixture(t)
+	seedABSReviewItems(t, database, reviews, 3)
+
+	rec := httptest.NewRecorder()
+	h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/abs/review?limit=1&offset=1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var out absReviewListResponse
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if out.Total != 3 || out.Limit != 1 || out.Offset != 1 || len(out.Items) != 1 || out.Items[0].ItemID != "item-2" {
+		t.Fatalf("out = %+v, want second item in stable order", out)
+	}
+}
+
+func TestABSReviewHandler_ListMaxLimitClamping(t *testing.T) {
+	database, h, reviews := absReviewFixture(t)
+	seedABSReviewItems(t, database, reviews, 105)
+
+	rec := httptest.NewRecorder()
+	h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/abs/review?limit=1000", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var out absReviewListResponse
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if out.Total != 105 || out.Limit != 100 || out.Offset != 0 || len(out.Items) != 100 {
+		t.Fatalf("out = total %d limit %d offset %d len %d, want clamped page", out.Total, out.Limit, out.Offset, len(out.Items))
+	}
+}
+
+func TestABSReviewHandler_ListStableOrdering(t *testing.T) {
+	database, h, reviews := absReviewFixture(t)
+	seedABSReviewItems(t, database, reviews, 3)
+
+	rec := httptest.NewRecorder()
+	h.List(rec, httptest.NewRequest(http.MethodGet, "/api/v1/abs/review?limit=3", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var out absReviewListResponse
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	got := []string{}
+	for _, item := range out.Items {
+		got = append(got, item.ItemID)
+	}
+	want := []string{"item-3", "item-2", "item-1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
 }
 
 func TestABSReviewHandler_Approve(t *testing.T) {

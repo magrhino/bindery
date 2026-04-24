@@ -1214,7 +1214,8 @@ function AudiobookshelfSection() {
   const refreshConflicts = async () => {
     try {
       setConflictError(null)
-      setConflicts(await api.absConflicts())
+      const page = await api.absConflicts()
+      setConflicts(page.items)
     } catch (err: unknown) {
       setConflictError(err instanceof Error ? err.message : 'Failed to load enrichment conflicts')
     }
@@ -1223,7 +1224,8 @@ function AudiobookshelfSection() {
   const refreshReviewItems = async () => {
     try {
       setReviewError(null)
-      setReviewItems(await api.absReviewItems())
+      const page = await api.absReviewItems()
+      setReviewItems(page.items)
     } catch (err: unknown) {
       setReviewError(err instanceof Error ? err.message : 'Failed to load review items')
     }
