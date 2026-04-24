@@ -19,7 +19,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.25.9"
+          go-version: stable
           cache: true
       - uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7
         with:
@@ -46,7 +46,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.25.9"
+          go-version: stable
           cache: true
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
@@ -65,7 +65,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.25.9"
+          go-version: stable
           cache: true
       - run: go test -race -coverprofile=coverage.out -covermode=atomic ./cmd/... ./internal/...
       - uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5
@@ -92,7 +92,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.25.9"
+          go-version: stable
           cache: true
       - run: go test -coverprofile=coverage.out -covermode=atomic ./cmd/... ./internal/...
       - uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5
@@ -120,7 +120,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.25.9"
+          go-version: stable
           cache: true
       - run: go test -race ./cmd/... ./internal/...
 
@@ -244,7 +244,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.25.9"
+          go-version: stable
           cache: true
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
@@ -302,7 +302,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.25.9"
+          go-version: stable
       - name: Run ABS contract suite
         env:
           BINDERY_ABS_CONTRACT_BASE_URL: ${{ secrets.BINDERY_ABS_CONTRACT_BASE_URL }}
@@ -326,7 +326,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.25.9"
+          go-version: stable
           cache: true
       - name: Wait for ArgoCD dev to sync
         env:
