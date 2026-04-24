@@ -175,6 +175,9 @@ func hardFilter(candidates []models.RecommendationCandidate, p *UserProfile) []m
 		if c.RatingsCount >= 50 && c.Rating > 0 && c.Rating < 3.0 {
 			continue
 		}
+		if looksLikeCollection(c.Title) {
+			continue
+		}
 		// Deduplicate by foreign ID.
 		if seen[c.ForeignID] {
 			continue

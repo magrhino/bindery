@@ -294,6 +294,25 @@ func GenerateListCross(
 	return candidates
 }
 
+// looksLikeCollection returns true when the title appears to describe a box
+// set, omnibus, anthology, or other multi-work collection rather than a single
+// book. The check is intentionally broad: some false positives (e.g. "Complete
+// Guide to Go Programming") are acceptable to keep the logic simple.
+func looksLikeCollection(title string) bool {
+	lower := strings.ToLower(title)
+	keywords := []string{
+		"complete", "collected", "omnibus", "boxed set", "box set", "anthology",
+		"the best of", "stories of", "tales of", "(omnibus)", "(collection)",
+		"complete works", "complete collection",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 // genreToSubjectSlug converts a genre string (e.g. "Science Fiction") to an
 // OpenLibrary subject slug (e.g. "science_fiction").
 func genreToSubjectSlug(genre string) string {
