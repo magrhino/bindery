@@ -27,6 +27,7 @@ import (
 
 const (
 	DefaultSourceID             = "default"
+	importProgressResultsLimit  = 100
 	SettingABSLastImportAt      = "abs.last_import_at"
 	settingDefaultRootID        = "library.defaultRootFolderId"
 	runEntityMetadataKind       = "abs_run_entity_metadata"
@@ -334,7 +335,11 @@ func (i *Importer) WithStoragePaths(libraryDir, audiobookDir string, rootFolders
 func (i *Importer) Progress() ImportProgress {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	return i.progress
+	progress := i.progress
+	if len(progress.Results) > 0 {
+		progress.Results = append([]ImportItemResult(nil), progress.Results...)
+	}
+	return progress
 }
 
 func (i *Importer) Running() bool {
@@ -566,7 +571,7 @@ func (i *Importer) run(ctx context.Context, cfg ImportConfig) *ImportStats {
 		result := i.importOne(ctx, cfg, run.ID, item, stats, allowImmediateImport(item))
 		i.setProgress(func(p *ImportProgress) {
 			p.Processed++
-			p.Results = append(p.Results, result)
+			p.Results = appendImportProgressResult(p.Results, result)
 		})
 		return nil
 	})
@@ -3439,6 +3444,15 @@ func (i *Importer) setProgress(mutate func(*ImportProgress)) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	mutate(&i.progress)
+}
+
+func appendImportProgressResult(results []ImportItemResult, result ImportItemResult) []ImportItemResult {
+	if len(results) < importProgressResultsLimit {
+		return append(results, result)
+	}
+	copy(results, results[len(results)-importProgressResultsLimit+1:])
+	results[importProgressResultsLimit-1] = result
+	return results[:importProgressResultsLimit]
 }
 
 func authorExternalID(author NormalizedAuthor) string {
