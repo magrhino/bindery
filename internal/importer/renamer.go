@@ -41,17 +41,20 @@ func NewRenamerWithAudiobook(ebookTemplate, audiobookTemplate string) *Renamer {
 }
 
 // DestPath computes the destination path for an ebook file.
-func (r *Renamer) DestPath(rootFolder string, author *models.Author, book *models.Book, srcPath string) (string, error) {
+// series and seriesNumber are the book's primary series title and position
+// (empty strings for standalone books without a series).
+func (r *Renamer) DestPath(rootFolder string, author *models.Author, book *models.Book, series, seriesNumber, srcPath string) (string, error) {
 	ext := strings.TrimPrefix(filepath.Ext(srcPath), ".")
-	dest := filepath.Join(rootFolder, r.apply(r.template, author, book, ext))
+	dest := filepath.Join(rootFolder, r.apply(r.template, author, book, series, seriesNumber, ext))
 	return ensureContained(dest, rootFolder)
 }
 
 // AudiobookDestDir computes the destination directory into which an audiobook
 // download folder should be moved. The download's internal file structure is
 // preserved inside (multi-part m4b/mp3 + cover + cue sheet stay together).
-func (r *Renamer) AudiobookDestDir(rootFolder string, author *models.Author, book *models.Book) (string, error) {
-	dest := filepath.Join(rootFolder, r.apply(r.audiobookTemplate, author, book, ""))
+// series and seriesNumber are the book's primary series title and position.
+func (r *Renamer) AudiobookDestDir(rootFolder string, author *models.Author, book *models.Book, series, seriesNumber string) (string, error) {
+	dest := filepath.Join(rootFolder, r.apply(r.audiobookTemplate, author, book, series, seriesNumber, ""))
 	return ensureContained(dest, rootFolder)
 }
 
@@ -67,7 +70,7 @@ func ensureContained(dest, baseDir string) (string, error) {
 	return cleanDest, nil
 }
 
-func (r *Renamer) apply(template string, author *models.Author, book *models.Book, ext string) string {
+func (r *Renamer) apply(template string, author *models.Author, book *models.Book, series, seriesNumber, ext string) string {
 	year := ""
 	if book.ReleaseDate != nil {
 		year = fmt.Sprintf("%d", book.ReleaseDate.Year())
@@ -82,6 +85,8 @@ func (r *Renamer) apply(template string, author *models.Author, book *models.Boo
 	result = strings.ReplaceAll(result, "{Title}", sanitizePath(book.Title))
 	result = strings.ReplaceAll(result, "{Year}", year)
 	result = strings.ReplaceAll(result, "{ASIN}", sanitizePath(book.ASIN))
+	result = strings.ReplaceAll(result, "{Series}", sanitizePath(series))
+	result = strings.ReplaceAll(result, "{SeriesNumber}", sanitizePath(seriesNumber))
 	result = strings.ReplaceAll(result, "{ext}", ext)
 	return result
 }

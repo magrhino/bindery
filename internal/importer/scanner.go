@@ -38,6 +38,7 @@ type Scanner struct {
 	authors      *db.AuthorRepo
 	history      *db.HistoryRepo
 	rootFolders  *db.RootFolderRepo
+	series       *db.SeriesRepo
 	renamer      *Renamer
 	remapper     *Remapper
 	calibreAdder calibreAdder
@@ -75,6 +76,28 @@ func NewScanner(downloads *db.DownloadRepo, clients *db.DownloadClientRepo,
 func (s *Scanner) WithRootFolders(rf *db.RootFolderRepo) *Scanner {
 	s.rootFolders = rf
 	return s
+}
+
+// WithSeriesRepo attaches the series repo so the scanner can resolve series
+// name and position when building rename destination paths.
+func (s *Scanner) WithSeriesRepo(sr *db.SeriesRepo) *Scanner {
+	s.series = sr
+	return s
+}
+
+// primarySeriesFor returns the primary series title and position for the given
+// book. Returns empty strings when the series repo is not configured or the
+// book has no primary series.
+func (s *Scanner) primarySeriesFor(ctx context.Context, book *models.Book) (seriesTitle, seriesNumber string) {
+	if s.series == nil || book == nil {
+		return "", ""
+	}
+	title, pos, err := s.series.GetPrimarySeriesForBook(ctx, book.ID)
+	if err != nil {
+		slog.Warn("renamer: failed to load primary series", "bookID", book.ID, "error", err)
+		return "", ""
+	}
+	return title, pos
 }
 
 // effectiveLibraryDir returns the library root to use for the given author.
@@ -557,7 +580,8 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 		if effLib := s.effectiveLibraryDir(ctx, author); effLib != s.libraryDir {
 			audiobookRoot = effLib
 		}
-		audiobookDest, destErr := s.renamer.AudiobookDestDir(audiobookRoot, author, book)
+		seriesTitle, seriesNum := s.primarySeriesFor(ctx, book)
+		audiobookDest, destErr := s.renamer.AudiobookDestDir(audiobookRoot, author, book, seriesTitle, seriesNum)
 		if destErr != nil {
 			slog.Error("failed to compute audiobook destination", "src", downloadPath, "error", destErr)
 			s.failImport(ctx, dl, models.StateImportBlocked, fmt.Sprintf("audiobook destination invalid: %v", destErr))
@@ -639,7 +663,8 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 			continue
 		}
 
-		destPath, destErr := s.renamer.DestPath(s.effectiveLibraryDir(ctx, author), author, book, srcFile)
+		seriesTitle, seriesNum := s.primarySeriesFor(ctx, book)
+		destPath, destErr := s.renamer.DestPath(s.effectiveLibraryDir(ctx, author), author, book, seriesTitle, seriesNum, srcFile)
 		if destErr != nil {
 			slog.Error("failed to compute book destination", "src", srcFile, "error", destErr)
 			lastFileErr = destErr

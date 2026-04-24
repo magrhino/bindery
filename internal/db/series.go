@@ -195,3 +195,19 @@ func (r *SeriesRepo) Delete(ctx context.Context, id int64) error {
 	}
 	return nil
 }
+
+// GetPrimarySeriesForBook returns the title and position of the primary series
+// for the given book. Returns ("", "", nil) when the book has no primary series.
+func (r *SeriesRepo) GetPrimarySeriesForBook(ctx context.Context, bookID int64) (seriesTitle, position string, err error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT s.title, sb.position_in_series
+		FROM series_books sb
+		JOIN series s ON s.id = sb.series_id
+		WHERE sb.book_id = ? AND sb.primary_series = 1
+		LIMIT 1`, bookID)
+	err = row.Scan(&seriesTitle, &position)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", nil
+	}
+	return seriesTitle, position, err
+}
