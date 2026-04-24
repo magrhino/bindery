@@ -3,6 +3,7 @@ package abs
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,6 +110,70 @@ func runSingleABSImport(t *testing.T, importer *Importer, item NormalizedLibrary
 		t.Fatalf("RecentRuns = %d err=%v, want 1 run", len(runs), err)
 	}
 	return runs[0].ID
+}
+
+func TestImporter_ProgressResultsKeepsLatestHundredItems(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, _, _, _, _, _, _, _ := newABSImporterFixture(t)
+	const itemCount = 125
+	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		for idx := 0; idx < itemCount; idx++ {
+			item := sampleABSItem()
+			item.ItemID = fmt.Sprintf("li-progress-%03d", idx)
+			item.Title = fmt.Sprintf("Progress Book %03d", idx)
+			item.ASIN = fmt.Sprintf("ASIN-PROGRESS-%03d", idx)
+			item.Authors = []NormalizedAuthor{{
+				ID:   fmt.Sprintf("author-progress-%03d", idx),
+				Name: fmt.Sprintf("Progress Author %03d", idx),
+			}}
+			item.Series = nil
+			item.Path = ""
+			item.AudioFiles = nil
+			item.EbookPath = ""
+			item.EbookINO = ""
+			if err := fn(ctx, item); err != nil {
+				return EnumerationStats{}, err
+			}
+		}
+		return EnumerationStats{PagesScanned: 3, ItemsSeen: itemCount, ItemsNormalized: itemCount}, nil
+	}
+
+	stats, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:  DefaultSourceID,
+		BaseURL:   "https://abs.example.com",
+		APIKey:    "secret",
+		LibraryID: "lib-books",
+		Label:     "Shelf",
+		Enabled:   true,
+		DryRun:    true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if stats.BooksCreated != itemCount || stats.AuthorsCreated != itemCount {
+		t.Fatalf("stats = %+v, want %d created books and authors", stats, itemCount)
+	}
+
+	progress := importer.Progress()
+	if progress.Processed != itemCount {
+		t.Fatalf("processed = %d, want %d", progress.Processed, itemCount)
+	}
+	if progress.Stats == nil {
+		t.Fatal("progress stats = nil, want final stats")
+	}
+	if progress.Stats.ItemsSeen != itemCount || progress.Stats.BooksCreated != itemCount {
+		t.Fatalf("progress stats = %+v, want full-run counts", progress.Stats)
+	}
+	if len(progress.Results) != 100 {
+		t.Fatalf("results = %d, want 100", len(progress.Results))
+	}
+	for idx, result := range progress.Results {
+		wantItemID := fmt.Sprintf("li-progress-%03d", idx+25)
+		if result.ItemID != wantItemID {
+			t.Fatalf("results[%d].ItemID = %q, want %q", idx, result.ItemID, wantItemID)
+		}
+	}
 }
 
 func TestImporter_ResumeInterruptedStartsFromPersistedCheckpoint(t *testing.T) {
