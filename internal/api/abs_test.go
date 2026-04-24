@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/vavallee/bindery/internal/abs"
@@ -21,6 +22,11 @@ type stubABSClient struct {
 	libraryResp   *abs.Library
 	libraryErr    error
 	lastLibraryID string
+}
+
+type absClientFactoryCall struct {
+	baseURL string
+	apiKey  string
 }
 
 func (s *stubABSClient) Authorize(context.Context) (*abs.AuthorizeResponse, error) {
@@ -187,6 +193,160 @@ func TestABSTestMapsUnauthorizedTo502(t *testing.T) {
 	}
 }
 
+func TestABSTestUsesStoredBaseURLAndAllowsAPIKeyOverride(t *testing.T) {
+	client := &stubABSClient{
+		authorizeResp: &abs.AuthorizeResponse{
+			User: abs.User{Username: "root", Type: "root"},
+		},
+	}
+	h, repo, ctx := absFixture(t, client)
+	if err := repo.Set(ctx, SettingABSBaseURL, "https://stored.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Set(ctx, SettingABSAPIKey, "stored-secret"); err != nil {
+		t.Fatal(err)
+	}
+	var calls []absClientFactoryCall
+	h.newFn = func(baseURL, apiKey string) (absClient, error) {
+		calls = append(calls, absClientFactoryCall{baseURL: baseURL, apiKey: apiKey})
+		return client, nil
+	}
+
+	rec := httptest.NewRecorder()
+	body := bytes.NewBufferString(`{"baseUrl":"http://127.0.0.1:9","apiKey":"draft!#$%&'*+.^_|~?=;:,/[]{}()"}`)
+	h.Test(rec, httptest.NewRequest(http.MethodPost, "/api/v1/abs/test", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(calls) != 1 {
+		t.Fatalf("factory calls = %d, want 1", len(calls))
+	}
+	if calls[0].baseURL != "https://stored.example.com" {
+		t.Fatalf("baseURL = %q, want stored config value", calls[0].baseURL)
+	}
+	if calls[0].apiKey != "draft!#$%&'*+.^_|~?=;:,/[]{}()" {
+		t.Fatalf("apiKey = %q, want request override", calls[0].apiKey)
+	}
+}
+
+func TestABSProbeRejectsAPIKeyControlCharacters(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		leak string
+	}{
+		{
+			name: "crlf injection",
+			body: `{"apiKey":"bad\r\nX-Test: injected"}`,
+			leak: "X-Test: injected",
+		},
+		{
+			name: "nul",
+			body: `{"apiKey":"bad\u0000secret"}`,
+			leak: "bad\x00secret",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, repo, ctx := absFixture(t, &stubABSClient{})
+			if err := repo.Set(ctx, SettingABSBaseURL, "https://abs.example.com"); err != nil {
+				t.Fatal(err)
+			}
+			called := false
+			h.newFn = func(baseURL, apiKey string) (absClient, error) {
+				called = true
+				return &stubABSClient{}, nil
+			}
+
+			rec := httptest.NewRecorder()
+			h.Test(rec, httptest.NewRequest(http.MethodPost, "/api/v1/abs/test", bytes.NewBufferString(tt.body)))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "control characters") {
+				t.Fatalf("body = %s, want control character error", rec.Body.String())
+			}
+			if strings.Contains(rec.Body.String(), tt.leak) {
+				t.Fatalf("response leaked api key: %q", rec.Body.String())
+			}
+			if called {
+				t.Fatal("client factory was called with an invalid api key")
+			}
+		})
+	}
+}
+
+func TestABSProbeRejectsStoredAPIKeyControlCharacters(t *testing.T) {
+	h, repo, ctx := absFixture(t, &stubABSClient{})
+	if err := repo.Set(ctx, SettingABSBaseURL, "https://abs.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Set(ctx, SettingABSAPIKey, "stored\r\nX-Test: injected"); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	h.newFn = func(baseURL, apiKey string) (absClient, error) {
+		called = true
+		return &stubABSClient{}, nil
+	}
+
+	rec := httptest.NewRecorder()
+	h.Libraries(rec, httptest.NewRequest(http.MethodPost, "/api/v1/abs/libraries", bytes.NewBufferString(`{}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "X-Test: injected") {
+		t.Fatalf("response leaked api key: %q", rec.Body.String())
+	}
+	if called {
+		t.Fatal("client factory was called with an invalid stored api key")
+	}
+}
+
+func TestABSProbeRequiresSavedBaseURL(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*ABSHandler, http.ResponseWriter, *http.Request)
+		path string
+	}{
+		{
+			name: "test",
+			call: (*ABSHandler).Test,
+			path: "/api/v1/abs/test",
+		},
+		{
+			name: "libraries",
+			call: (*ABSHandler).Libraries,
+			path: "/api/v1/abs/libraries",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, _, _ := absFixture(t, &stubABSClient{})
+			called := false
+			h.newFn = func(baseURL, apiKey string) (absClient, error) {
+				called = true
+				return &stubABSClient{}, nil
+			}
+
+			rec := httptest.NewRecorder()
+			body := bytes.NewBufferString(`{"baseUrl":"http://127.0.0.1:9","apiKey":"draft-secret"}`)
+			tt.call(h, rec, httptest.NewRequest(http.MethodPost, tt.path, body))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "base URL must be saved") {
+				t.Fatalf("body = %s, want clear saved base URL error", rec.Body.String())
+			}
+			if called {
+				t.Fatal("client factory was called without a saved base URL")
+			}
+		})
+	}
+}
+
 func TestABSLibrariesFiltersToBookLibraries(t *testing.T) {
 	client := &stubABSClient{
 		librariesResp: []abs.Library{
@@ -201,11 +361,25 @@ func TestABSLibrariesFiltersToBookLibraries(t *testing.T) {
 	if err := repo.Set(ctx, SettingABSAPIKey, "secret"); err != nil {
 		t.Fatal(err)
 	}
+	var calls []absClientFactoryCall
+	h.newFn = func(baseURL, apiKey string) (absClient, error) {
+		calls = append(calls, absClientFactoryCall{baseURL: baseURL, apiKey: apiKey})
+		return client, nil
+	}
 
 	rec := httptest.NewRecorder()
-	h.Libraries(rec, httptest.NewRequest(http.MethodPost, "/api/v1/abs/libraries", bytes.NewBufferString(`{}`)))
+	h.Libraries(rec, httptest.NewRequest(http.MethodPost, "/api/v1/abs/libraries", bytes.NewBufferString(`{"baseUrl":"http://127.0.0.1:9"}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(calls) != 1 {
+		t.Fatalf("factory calls = %d, want 1", len(calls))
+	}
+	if calls[0].baseURL != "https://abs.example.com" {
+		t.Fatalf("baseURL = %q, want stored config value", calls[0].baseURL)
+	}
+	if calls[0].apiKey != "secret" {
+		t.Fatalf("apiKey = %q, want stored config value", calls[0].apiKey)
 	}
 	var got []map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {

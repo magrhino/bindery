@@ -57,6 +57,16 @@ func NormalizeBaseURL(raw string) (string, error) {
 	return u.String(), nil
 }
 
+func NormalizeAPIKey(raw string) (string, error) {
+	key := strings.TrimSpace(raw)
+	for _, r := range key {
+		if r < 0x20 || r == 0x7f {
+			return "", errors.New("api_key contains invalid control characters")
+		}
+	}
+	return key, nil
+}
+
 type Client struct {
 	baseURL    string
 	apiKey     string
@@ -69,12 +79,16 @@ func NewClient(baseURL, apiKey string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(apiKey) == "" {
+	normalizedKey, err := NormalizeAPIKey(apiKey)
+	if err != nil {
+		return nil, err
+	}
+	if normalizedKey == "" {
 		return nil, errors.New("api_key is required")
 	}
 	return &Client{
 		baseURL: normalized,
-		apiKey:  strings.TrimSpace(apiKey),
+		apiKey:  normalizedKey,
 		httpClient: &http.Client{
 			Timeout: defaultTimeout,
 		},

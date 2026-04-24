@@ -115,6 +115,12 @@ func (h *ABSHandler) SetConfig(w http.ResponseWriter, r *http.Request) {
 	apiKey := current.APIKey
 	if req.APIKey != nil {
 		apiKey = strings.TrimSpace(*req.APIKey)
+		if apiKey != "" {
+			if _, err := abs.NormalizeAPIKey(apiKey); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+		}
 	}
 	label := current.Label
 	if req.Label != nil {
@@ -174,7 +180,7 @@ func (h *ABSHandler) SetConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.APIKey != nil && strings.TrimSpace(*req.APIKey) != "" {
-		if err := h.settings.Set(r.Context(), SettingABSAPIKey, strings.TrimSpace(*req.APIKey)); err != nil {
+		if err := h.settings.Set(r.Context(), SettingABSAPIKey, apiKey); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -299,9 +305,9 @@ func (h *ABSHandler) clientFromProbe(r *http.Request) (absClient, error) {
 			return nil, errors.New("invalid request body")
 		}
 	}
-	baseURL := strings.TrimSpace(req.BaseURL)
+	baseURL := strings.TrimSpace(current.BaseURL)
 	if baseURL == "" {
-		baseURL = current.BaseURL
+		return nil, errors.New("ABS base URL must be saved before probing")
 	}
 	apiKey := strings.TrimSpace(req.APIKey)
 	if apiKey == "" {
@@ -314,7 +320,11 @@ func (h *ABSHandler) newConfiguredClient(baseURL, apiKey string) (absClient, err
 	if strings.TrimSpace(baseURL) == "" {
 		return nil, errors.New("base_url is required")
 	}
-	if strings.TrimSpace(apiKey) == "" {
+	apiKey, err := abs.NormalizeAPIKey(apiKey)
+	if err != nil {
+		return nil, err
+	}
+	if apiKey == "" {
 		return nil, errors.New("api_key is required")
 	}
 	return h.newFn(baseURL, apiKey)
