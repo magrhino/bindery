@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, ABSConfig, ABSImportProgress, ABSImportRun, ABSLibrary, ABSMetadataConflict, ABSReviewItem, ABSRollbackResult, ABSTestResult, AuthConfig, AuthStatus, BlocklistEntry, Indexer, IndexerTestResult, ProwlarrInstance, DownloadClient, NotificationConfig, QualityProfile, MetadataProfile, CalibreImportProgress, CalibreSyncProgress, RootFolder, LogEntry, ImportList, HardcoverList, Author, Book } from '../api/client'
+import { api, ABSConfig, ABSImportProgress, ABSImportRun, ABSLibrary, ABSMetadataConflict, ABSReviewItem, ABSRollbackAction, ABSRollbackResult, ABSTestResult, AuthConfig, AuthStatus, BlocklistEntry, Indexer, IndexerTestResult, ProwlarrInstance, DownloadClient, NotificationConfig, QualityProfile, MetadataProfile, CalibreImportProgress, CalibreSyncProgress, RootFolder, LogEntry, ImportList, HardcoverList, Author, Book } from '../api/client'
 import AuthSettings from '../settings/AuthSettings'
 import Pagination from '../components/Pagination'
 import ABSConflictPanel from '../components/ABSAuthorConflictsPanel'
@@ -1371,8 +1371,10 @@ function AudiobookshelfSection() {
     setRollbackApplyingRunId(runId)
     setRollbackError(null)
     try {
-      setRollbackResult(await api.absImportRollback(runId))
-      refreshRuns().catch(() => {})
+      const result = await api.absImportRollback(runId)
+      setRollbackResult(result)
+      setRuns(prev => prev.map(run => run.id === runId ? { ...run, status: result.status } : run))
+      await refreshRuns()
     } catch (err: unknown) {
       setRollbackError(err instanceof Error ? err.message : 'Failed to roll back import run')
     } finally {
@@ -1527,6 +1529,47 @@ function AudiobookshelfSection() {
   const hasImportCredentials = Boolean(draft.apiKey.trim() || config?.apiKeyConfigured)
   const effectiveLibraryId = draft.libraryId || testResult?.defaultLibraryId || ''
   const canStartImport = !importProgress?.running && draft.enabled && hasImportCredentials && Boolean(draft.baseUrl.trim()) && Boolean(effectiveLibraryId)
+  const absRunStatusLabel = (status: string) => {
+    switch (status) {
+      case 'rolled_back':
+        return 'rolled back'
+      case 'completed':
+      case 'failed':
+      case 'running':
+        return status
+      default:
+        return status.replace(/_/g, ' ')
+    }
+  }
+  const rollbackActionName = (action: ABSRollbackAction) => action.displayName?.trim() || action.externalId
+
+  const rollbackActionLabel = (action: ABSRollbackAction) => {
+    const name = rollbackActionName(action)
+    switch (action.action) {
+      case 'delete_author':
+        return `Delete author ${name}`
+      case 'delete_book':
+        return `Delete book ${name}`
+      case 'delete_edition':
+        return `Delete edition ${name}`
+      case 'delete_series':
+        return `Delete series ${name}`
+      case 'restore_book':
+        return `Restore book metadata ${name}`
+      case 'unlink_series':
+        return `Remove series link ${name}`
+      case 'unlink_provenance':
+        return `Remove ABS link ${name}`
+      case 'skip':
+        return `Retain ${action.entityType} ${name}`
+      default:
+        return `${action.action.replace(/_/g, ' ')} ${name}`
+    }
+  }
+  const rollbackActionDetail = (action: ABSRollbackAction) =>
+    action.reason || `${action.entityType}${action.localId ? ` #${action.localId}` : ''}`
+  const rollbackPreviewChanges = rollbackResult?.actions.filter(action => action.action !== 'skip') ?? []
+  const rollbackPreviewRetained = rollbackResult?.actions.filter(action => action.action === 'skip') ?? []
 
   return (
     <section>
@@ -1717,7 +1760,7 @@ function AudiobookshelfSection() {
                   <span>{importProgress.processed} processed</span>
                 </div>
               )}
-              {importProgress.resumedFromCheckpoint && importProgress.checkpoint && (
+              {importProgress.running && importProgress.resumedFromCheckpoint && importProgress.checkpoint && (
                 <p className="text-[11px] text-amber-700 dark:text-amber-300">
                   Resumed from page {importProgress.checkpoint.page}{importProgress.checkpoint.lastItemId ? ` after ${importProgress.checkpoint.lastItemId}` : ''}.
                 </p>
@@ -1778,12 +1821,14 @@ function AudiobookshelfSection() {
               <p className="text-sm text-slate-500 dark:text-zinc-500">No ABS import runs recorded yet.</p>
             )}
 
-            {runs.slice(0, 5).map(run => (
-              <div key={run.id} className="rounded border border-slate-200 dark:border-zinc-800 bg-white/70 dark:bg-zinc-950/40 px-3 py-3 space-y-2">
+            {runs.slice(0, 5).map(run => {
+              const rolledBack = run.status === 'rolled_back'
+              return (
+              <div key={run.id} className={`rounded border px-3 py-3 space-y-2 ${rolledBack ? 'border-slate-200 dark:border-zinc-800 bg-slate-100/70 dark:bg-zinc-900/50 opacity-75' : 'border-slate-200 dark:border-zinc-800 bg-white/70 dark:bg-zinc-950/40'}`}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-slate-800 dark:text-zinc-200 truncate">
-                      Run #{run.id} · {run.dryRun ? 'Dry-run' : 'Live import'} · {run.status}
+                      Run #{run.id} · {run.dryRun ? 'Dry-run' : 'Live import'} · {absRunStatusLabel(run.status)}
                     </p>
                     <p className="text-[11px] text-slate-500 dark:text-zinc-500">
                       {new Date(run.startedAt).toLocaleString()} · {run.source.label || run.sourceLabel}
@@ -1793,17 +1838,17 @@ function AudiobookshelfSection() {
                     <div className="flex gap-2">
                       <button
                         onClick={() => previewRollback(run.id)}
-                        disabled={rollbackPreviewingRunId === run.id || rollbackApplyingRunId === run.id}
+                        disabled={rolledBack || rollbackPreviewingRunId === run.id || rollbackApplyingRunId === run.id}
                         className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-xs font-medium disabled:opacity-50"
                       >
                         {rollbackPreviewingRunId === run.id ? 'Previewing…' : 'Preview rollback'}
                       </button>
                       <button
                         onClick={() => applyRollback(run.id)}
-                        disabled={rollbackApplyingRunId === run.id || rollbackPreviewingRunId === run.id}
-                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 rounded text-xs font-medium disabled:opacity-50"
+                        disabled={rolledBack || rollbackApplyingRunId === run.id || rollbackPreviewingRunId === run.id}
+                        className={`px-3 py-1.5 rounded text-xs font-medium disabled:opacity-50 ${rolledBack ? 'bg-slate-500 cursor-not-allowed' : 'bg-amber-600 hover:bg-amber-500'}`}
                       >
-                        {rollbackApplyingRunId === run.id ? 'Rolling back…' : 'Apply rollback'}
+                        {rolledBack ? 'Rolled back' : rollbackApplyingRunId === run.id ? 'Rolling back…' : 'Apply rollback'}
                       </button>
                     </div>
                   )}
@@ -1820,25 +1865,59 @@ function AudiobookshelfSection() {
                     Last checkpoint: page {run.checkpoint.page}{run.checkpoint.lastItemId ? ` after ${run.checkpoint.lastItemId}` : ''}.
                   </p>
                 )}
-              </div>
-            ))}
+                {rollbackResult?.runId === run.id && (
+                  <div className="rounded border border-amber-300 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/20 px-3 py-3 space-y-3">
+                    <div>
+                      <p className="text-sm font-medium text-slate-800 dark:text-zinc-200">
+                        {rollbackResult.preview ? 'Rollback preview' : 'Rollback result'}
+                      </p>
+                      <p className="text-xs text-slate-700 dark:text-zinc-300">
+                        {rollbackResult.stats.actionsPlanned} actions planned, {rollbackResult.stats.entitiesDeleted} entities deleted, {rollbackResult.stats.provenanceUnlinked} ABS links removed, {rollbackResult.stats.skipped} retained, {rollbackResult.stats.failed} failures.
+                      </p>
+                    </div>
 
-            {rollbackResult && (
-              <div className="rounded border border-amber-300 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/20 px-3 py-3 space-y-2">
-                <p className="text-sm font-medium text-slate-800 dark:text-zinc-200">
-                  {rollbackResult.preview ? 'Rollback preview' : 'Rollback result'} for run #{rollbackResult.runId}
-                </p>
-                <p className="text-xs text-slate-700 dark:text-zinc-300">
-                  {rollbackResult.stats.actionsPlanned} actions planned, {rollbackResult.stats.entitiesDeleted} entities deleted, {rollbackResult.stats.provenanceUnlinked} provenance links removed, {rollbackResult.stats.skipped} skipped, {rollbackResult.stats.failed} failures.
-                </p>
-                {rollbackResult.actions.slice(0, 6).map(action => (
-                  <div key={`${action.entityType}-${action.externalId}-${action.localId}`} className="flex justify-between gap-3 text-[11px] text-slate-600 dark:text-zinc-400">
-                    <span className="min-w-0 truncate">{action.entityType} · {action.externalId}</span>
-                    <span className="flex-shrink-0">{action.action}{action.reason ? ` (${action.reason})` : ''}</span>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-300">
+                          {rollbackResult.preview ? 'Would delete or change' : 'Deleted or changed'}
+                        </p>
+                        {rollbackPreviewChanges.length === 0 ? (
+                          <p className="text-[11px] text-slate-600 dark:text-zinc-400 mt-1">No entities would be deleted or changed.</p>
+                        ) : (
+                          <div className="mt-1 max-h-64 space-y-1 overflow-y-auto pr-1">
+                            {rollbackPreviewChanges.map(action => (
+                              <div key={`change-${action.entityType}-${action.externalId}-${action.localId}-${action.action}`} className="text-[11px] text-slate-700 dark:text-zinc-300">
+                                <span className="font-medium">{rollbackActionLabel(action)}</span>
+                                <span className="block text-slate-500 dark:text-zinc-500 truncate">{rollbackActionDetail(action)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-700 dark:text-zinc-300">
+                          {rollbackResult.preview ? 'Would be retained' : 'Retained'}
+                        </p>
+                        {rollbackPreviewRetained.length === 0 ? (
+                          <p className="text-[11px] text-slate-600 dark:text-zinc-400 mt-1">No retained entities reported.</p>
+                        ) : (
+                          <div className="mt-1 max-h-64 space-y-1 overflow-y-auto pr-1">
+                            {rollbackPreviewRetained.map(action => (
+                              <div key={`retain-${action.entityType}-${action.externalId}-${action.localId}-${action.action}`} className="text-[11px] text-slate-700 dark:text-zinc-300">
+                                <span className="font-medium">{rollbackActionLabel(action)}</span>
+                                <span className="block text-slate-500 dark:text-zinc-500 truncate">{rollbackActionDetail(action)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                ))}
+                )}
               </div>
-            )}
+              )
+            })}
 
             {rollbackError && <div className="text-sm text-red-600 dark:text-red-400">{rollbackError}</div>}
           </div>

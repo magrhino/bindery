@@ -2,10 +2,12 @@ package abs
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/metadata"
@@ -69,6 +71,163 @@ func sampleABSItem() NormalizedLibraryItem {
 		EbookPath:       "/abs/Project Hail Mary/book.epub",
 		EbookINO:        "ebook-1",
 		DurationSeconds: 57600,
+	}
+}
+
+func runSingleABSImport(t *testing.T, importer *Importer, item NormalizedLibraryItem) int64 {
+	t.Helper()
+	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		if err := fn(ctx, item); err != nil {
+			return EnumerationStats{}, err
+		}
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+	if _, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:  DefaultSourceID,
+		BaseURL:   "https://abs.example.com",
+		APIKey:    "secret",
+		LibraryID: item.LibraryID,
+		Label:     "Shelf",
+		Enabled:   true,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	runs, err := importer.RecentRuns(context.Background(), 1)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("RecentRuns = %d err=%v, want 1 run", len(runs), err)
+	}
+	return runs[0].ID
+}
+
+func TestImporter_ResumeInterruptedStartsFromPersistedCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, _, _, _, runRepo, _, _, _ := newABSImporterFixture(t)
+	checkpoint := ImportCheckpoint{
+		LibraryID:  "lib-books",
+		Page:       1,
+		LastItemID: "li-before-restart",
+		PageSize:   50,
+		UpdatedAt:  time.Now().UTC(),
+	}
+	run := &models.ABSImportRun{
+		SourceID:    DefaultSourceID,
+		SourceLabel: "Shelf",
+		BaseURL:     "https://abs.example.com",
+		LibraryID:   "lib-books",
+		Status:      runStatusRunning,
+		DryRun:      true,
+		SourceConfigJSON: mustJSON(sourceSnapshot(ImportConfig{
+			SourceID:  DefaultSourceID,
+			BaseURL:   "https://abs.example.com",
+			LibraryID: "lib-books",
+			Label:     "Shelf",
+			Enabled:   true,
+			DryRun:    true,
+		})),
+		CheckpointJSON: mustJSON(checkpoint),
+		SummaryJSON:    "{}",
+	}
+	if err := runRepo.Create(context.Background(), run); err != nil {
+		t.Fatalf("Create interrupted run: %v", err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		if libraryID != "lib-books" {
+			t.Errorf("libraryID = %q, want lib-books", libraryID)
+		}
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return EnumerationStats{}, ctx.Err()
+		}
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+
+	resumed, err := importer.ResumeInterrupted(context.Background(), ImportConfig{
+		SourceID:  DefaultSourceID,
+		APIKey:    "secret",
+		Enabled:   true,
+		BaseURL:   "https://current-settings.example.com",
+		LibraryID: "current-lib",
+		Label:     "Current Settings",
+	})
+	if err != nil {
+		t.Fatalf("ResumeInterrupted: %v", err)
+	}
+	if !resumed {
+		t.Fatal("ResumeInterrupted resumed = false, want true")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for resumed import to start")
+	}
+
+	progress := importer.Progress()
+	if !progress.Running || !progress.ResumedFromCheckpoint {
+		t.Fatalf("progress = %+v, want running resumed import", progress)
+	}
+	if progress.Checkpoint == nil || progress.Checkpoint.LastItemID != checkpoint.LastItemID {
+		t.Fatalf("checkpoint = %+v, want %s", progress.Checkpoint, checkpoint.LastItemID)
+	}
+	setting, err := importer.settings.Get(context.Background(), SettingABSImportCheckpoint)
+	if err != nil {
+		t.Fatalf("settings.Get checkpoint: %v", err)
+	}
+	if setting == nil || !strings.Contains(setting.Value, checkpoint.LastItemID) {
+		t.Fatalf("checkpoint setting = %+v, want restored checkpoint", setting)
+	}
+	staleRun, err := runRepo.GetByID(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("GetByID stale run: %v", err)
+	}
+	if staleRun == nil || staleRun.Status != runStatusFailed {
+		t.Fatalf("stale run = %+v, want failed status", staleRun)
+	}
+
+	close(release)
+	deadline := time.After(time.Second)
+	for importer.Running() {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for resumed import to finish")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
+func mustDate(t *testing.T, value string) *time.Time {
+	t.Helper()
+	parsed, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		t.Fatalf("parse date %q: %v", value, err)
+	}
+	utc := parsed.UTC()
+	return &utc
+}
+
+func rollbackActionSignatures(actions []RollbackAction) []string {
+	out := make([]string, 0, len(actions))
+	for _, action := range actions {
+		out = append(out, action.EntityType+":"+action.ExternalID+":"+action.Action)
+	}
+	return out
+}
+
+func requireStringSlicesEqual(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("actions = %v, want %v", got, want)
+	}
+	for idx := range got {
+		if got[idx] != want[idx] {
+			t.Fatalf("actions = %v, want %v", got, want)
+		}
 	}
 }
 
@@ -198,6 +357,160 @@ func TestImporter_NormalizedAuthorMatchLinksExistingAuthor(t *testing.T) {
 	}
 	if len(aliases) != 1 || aliases[0].Name != "J.K. Rowling" {
 		t.Fatalf("aliases = %+v, want J.K. Rowling alias", aliases)
+	}
+}
+
+func TestImporter_FindAuthorByName_MatchingTiers(t *testing.T) {
+	t.Parallel()
+
+	importer, authorRepo, _, _, _, _, _, _, _, _ := newABSImporterFixture(t)
+	ctx := context.Background()
+	for _, author := range []*models.Author{
+		{ForeignID: "OL-RR", Name: "R.R. Haywood", SortName: "Haywood, R.R.", Monitored: true},
+		{ForeignID: "OL-WEIR", Name: "Andy Weir", SortName: "Weir, Andy", Monitored: true},
+		{ForeignID: "OL-SMITH", Name: "John Smith", SortName: "Smith, John", Monitored: true},
+		{ForeignID: "OL-SANDERSON", Name: "Brandon Sanderson", SortName: "Sanderson, Brandon", Monitored: true},
+		{ForeignID: "OL-JAMES", Name: "Alice James", SortName: "James, Alice", Monitored: true},
+	} {
+		if err := authorRepo.Create(ctx, author); err != nil {
+			t.Fatalf("Create author %q: %v", author.Name, err)
+		}
+	}
+
+	cases := []struct {
+		name      string
+		query     string
+		wantID    string
+		wantMatch string
+	}{
+		{name: "exact normalized initials", query: "RR Haywood", wantID: "OL-RR", wantMatch: "normalized_name"},
+		{name: "spaced initials last first", query: "Haywood, R.R.", wantID: "OL-RR", wantMatch: "normalized_name"},
+		{name: "last first", query: "Weir, Andy", wantID: "OL-WEIR", wantMatch: "normalized_name"},
+		{name: "suffix stripped", query: "John Smith III", wantID: "OL-SMITH", wantMatch: "normalized_name"},
+		{name: "fuzzy auto", query: "Brandon Sandersen", wantID: "OL-SANDERSON", wantMatch: "fuzzy_name"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, matchedBy, ambiguous, err := importer.findAuthorByName(ctx, tc.query)
+			if err != nil {
+				t.Fatalf("findAuthorByName: %v", err)
+			}
+			if ambiguous {
+				t.Fatal("findAuthorByName returned ambiguous=true, want safe match")
+			}
+			if got == nil || got.ForeignID != tc.wantID || matchedBy != tc.wantMatch {
+				t.Fatalf("findAuthorByName(%q) = author=%+v matchedBy=%q, want %s/%s", tc.query, got, matchedBy, tc.wantID, tc.wantMatch)
+			}
+		})
+	}
+
+	got, matchedBy, ambiguous, err := importer.findAuthorByName(ctx, "Alice Jones")
+	if err != nil {
+		t.Fatalf("findAuthorByName ambiguous: %v", err)
+	}
+	if got != nil || matchedBy != "" || !ambiguous {
+		t.Fatalf("findAuthorByName ambiguous = author=%+v matchedBy=%q ambiguous=%v, want review path", got, matchedBy, ambiguous)
+	}
+}
+
+func TestImporter_ResolveAuthor_SafeVariantMatchRecordsAlias(t *testing.T) {
+	t.Parallel()
+
+	importer, authorRepo, _, _, _, _, _, _, _, _ := newABSImporterFixture(t)
+	ctx := context.Background()
+	existing := &models.Author{
+		ForeignID:        "OL-RR",
+		Name:             "R.R. Haywood",
+		SortName:         "Haywood, R.R.",
+		MetadataProvider: "openlibrary",
+		Monitored:        true,
+	}
+	if err := authorRepo.Create(ctx, existing); err != nil {
+		t.Fatalf("Create author: %v", err)
+	}
+
+	item := sampleABSItem()
+	item.ItemID = "li-rr-haywood"
+	item.Title = "The Undead"
+	item.Authors = []NormalizedAuthor{{ID: "author-rr-haywood", Name: "RR Haywood"}}
+	runSingleABSImport(t, importer, item)
+
+	aliases, err := importer.aliases.ListByAuthor(ctx, existing.ID)
+	if err != nil {
+		t.Fatalf("ListByAuthor: %v", err)
+	}
+	found := false
+	for _, alias := range aliases {
+		if alias.Name == "RR Haywood" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("aliases = %+v, want ABS variant alias", aliases)
+	}
+	authors, err := authorRepo.List(ctx)
+	if err != nil {
+		t.Fatalf("List authors: %v", err)
+	}
+	if len(authors) != 1 {
+		t.Fatalf("authors = %d, want existing canonical only", len(authors))
+	}
+}
+
+func TestImporter_ResolveAuthor_AmbiguousMatchQueuesReviewWithoutAlias(t *testing.T) {
+	t.Parallel()
+
+	importer, authorRepo, _, _, _, _, _, _, reviewRepo, _ := newABSImporterFixture(t)
+	ctx := context.Background()
+	existing := &models.Author{ForeignID: "OL-JAMES", Name: "Alice James", SortName: "James, Alice", Monitored: true}
+	if err := authorRepo.Create(ctx, existing); err != nil {
+		t.Fatalf("Create author: %v", err)
+	}
+
+	item := sampleABSItem()
+	item.ItemID = "li-alice-jones"
+	item.Title = "Ambiguous Author"
+	item.Authors = []NormalizedAuthor{{ID: "author-alice-jones", Name: "Alice Jones"}}
+	item.ASIN = ""
+	item.AudioFiles = nil
+	item.EbookPath = ""
+	item.EbookINO = ""
+	runSingleABSImport(t, importer, item)
+
+	reviews, err := reviewRepo.ListByStatus(ctx, "pending")
+	if err != nil {
+		t.Fatalf("ListByStatus: %v", err)
+	}
+	if len(reviews) != 1 || reviews[0].ReviewReason != reviewReasonAmbiguousAuthor {
+		t.Fatalf("reviews = %+v, want one ambiguous-author review", reviews)
+	}
+	aliases, err := importer.aliases.ListByAuthor(ctx, existing.ID)
+	if err != nil {
+		t.Fatalf("ListByAuthor: %v", err)
+	}
+	if len(aliases) != 0 {
+		t.Fatalf("aliases = %+v, want no alias for ambiguous match", aliases)
+	}
+}
+
+func TestImporter_LookupUpstreamAuthor_FuzzyCanonicalRelink(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, _, _, _, _, _, _, _ := newABSImporterFixture(t)
+	importer.WithMetadata(metadata.NewAggregator(&stubABSMetadataProvider{
+		searchAuthors: []models.Author{{ForeignID: "OL-RR", Name: "R.R. Haywood"}},
+		authors: map[string]*models.Author{
+			"OL-RR": {ForeignID: "OL-RR", Name: "R.R. Haywood", SortName: "Haywood, R.R.", MetadataProvider: "openlibrary"},
+		},
+	}))
+
+	got, ambiguous, err := importer.lookupUpstreamAuthor(context.Background(), "RR Haywood")
+	if err != nil {
+		t.Fatalf("lookupUpstreamAuthor: %v", err)
+	}
+	if ambiguous || got == nil || got.ForeignID != "OL-RR" {
+		t.Fatalf("lookupUpstreamAuthor = author=%+v ambiguous=%v, want canonical fuzzy/variant relink", got, ambiguous)
 	}
 }
 
@@ -1335,10 +1648,12 @@ func TestImporter_RollbackRemovesCreatedBatch(t *testing.T) {
 	if preview.Stats.ActionsPlanned == 0 {
 		t.Fatalf("preview = %+v, want planned actions", preview)
 	}
+	previewActions := rollbackActionSignatures(preview.Actions)
 	result, err := importer.Rollback(context.Background(), runs[0].ID)
 	if err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
+	requireStringSlicesEqual(t, rollbackActionSignatures(result.Actions), previewActions)
 	if result.Stats.EntitiesDeleted == 0 {
 		t.Fatalf("rollback result = %+v, want deletions", result)
 	}
@@ -1378,5 +1693,682 @@ func TestImporter_RollbackRemovesCreatedBatch(t *testing.T) {
 	}
 	if link != nil {
 		t.Fatalf("book provenance = %+v, want nil after rollback", link)
+	}
+}
+
+func TestImporter_RollbackDeletesCreatedEntitiesAfterSameRunRelink(t *testing.T) {
+	t.Parallel()
+
+	importer, authorRepo, bookRepo, _, _, provenanceRepo, _, runEntityRepo, _, _ := newABSImporterFixture(t)
+	ctx := context.Background()
+
+	first := sampleABSItem()
+	first.ItemID = "li-repeat-1"
+	first.Title = "Repeated Book"
+	first.ASIN = "ASIN-REPEAT-1"
+	first.Authors = []NormalizedAuthor{{ID: "author-repeat", Name: "Repeat Author"}}
+	first.Series = nil
+	first.AudioFiles = []NormalizedAudioFile{{INO: "audio-repeat-1", Path: "/abs/repeated/part1.m4b"}}
+	first.EbookPath = ""
+	first.EbookINO = ""
+
+	second := first
+	second.ItemID = "li-repeat-2"
+	second.ASIN = "ASIN-REPEAT-2"
+	second.AudioFiles = []NormalizedAudioFile{{INO: "audio-repeat-2", Path: "/abs/repeated/part2.m4b"}}
+	items := []NormalizedLibraryItem{first, second}
+
+	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		for _, item := range items {
+			if err := fn(ctx, item); err != nil {
+				return EnumerationStats{}, err
+			}
+		}
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: len(items), ItemsNormalized: len(items), ItemsDetailFetched: len(items)}, nil
+	}
+
+	stats, err := importer.Run(ctx, ImportConfig{
+		SourceID:  DefaultSourceID,
+		BaseURL:   "https://abs.example.com",
+		APIKey:    "secret",
+		LibraryID: first.LibraryID,
+		Label:     "Shelf",
+		Enabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if stats.AuthorsCreated != 1 || stats.AuthorsLinked != 1 || stats.BooksCreated != 1 || stats.BooksLinked != 1 {
+		t.Fatalf("stats = %+v, want one created and one linked author/book", stats)
+	}
+
+	runs, err := importer.RecentRuns(ctx, 1)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("RecentRuns = %d err=%v, want 1 run", len(runs), err)
+	}
+	runID := runs[0].ID
+	entities, err := runEntityRepo.ListByRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("ListByRun: %v", err)
+	}
+	var authorOutcome, firstBookOutcome, secondBookOutcome string
+	for _, entity := range entities {
+		switch {
+		case entity.EntityType == entityTypeAuthor && entity.ExternalID == "author-repeat":
+			authorOutcome = entity.Outcome
+		case entity.EntityType == entityTypeBook && entity.ExternalID == first.ItemID:
+			firstBookOutcome = entity.Outcome
+		case entity.EntityType == entityTypeBook && entity.ExternalID == second.ItemID:
+			secondBookOutcome = entity.Outcome
+		}
+	}
+	if authorOutcome != itemOutcomeCreated {
+		t.Fatalf("author run entity outcome = %q, want created", authorOutcome)
+	}
+	if firstBookOutcome != itemOutcomeCreated || secondBookOutcome != itemOutcomeLinked {
+		t.Fatalf("book run entity outcomes = first:%q second:%q, want created/linked", firstBookOutcome, secondBookOutcome)
+	}
+
+	authors, err := authorRepo.List(ctx)
+	if err != nil {
+		t.Fatalf("List authors: %v", err)
+	}
+	if len(authors) != 1 {
+		t.Fatalf("authors = %d, want 1 before rollback", len(authors))
+	}
+	books, err := bookRepo.ListIncludingExcluded(ctx)
+	if err != nil {
+		t.Fatalf("List books: %v", err)
+	}
+	if len(books) != 1 {
+		t.Fatalf("books = %d, want 1 before rollback", len(books))
+	}
+	authorID, bookID := authors[0].ID, books[0].ID
+	bookLinks, err := provenanceRepo.ListByLocal(ctx, entityTypeBook, bookID)
+	if err != nil {
+		t.Fatalf("ListByLocal book before rollback: %v", err)
+	}
+	if len(bookLinks) != 2 {
+		t.Fatalf("book provenance links = %+v, want both ABS items linked to the same local book", bookLinks)
+	}
+
+	result, err := importer.Rollback(ctx, runID)
+	if err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if result.Stats.Failed != 0 {
+		t.Fatalf("rollback result = %+v, want no failures", result)
+	}
+	authors, err = authorRepo.List(ctx)
+	if err != nil {
+		t.Fatalf("List authors after rollback: %v", err)
+	}
+	if len(authors) != 0 {
+		t.Fatalf("authors = %d, want 0 after rollback", len(authors))
+	}
+	books, err = bookRepo.ListIncludingExcluded(ctx)
+	if err != nil {
+		t.Fatalf("List books after rollback: %v", err)
+	}
+	if len(books) != 0 {
+		t.Fatalf("books = %d, want 0 after rollback", len(books))
+	}
+	authorLinks, err := provenanceRepo.ListByLocal(ctx, entityTypeAuthor, authorID)
+	if err != nil {
+		t.Fatalf("ListByLocal author after rollback: %v", err)
+	}
+	if len(authorLinks) != 0 {
+		t.Fatalf("author provenance links = %+v, want none after deleting created author", authorLinks)
+	}
+	bookLinks, err = provenanceRepo.ListByLocal(ctx, entityTypeBook, bookID)
+	if err != nil {
+		t.Fatalf("ListByLocal book after rollback: %v", err)
+	}
+	if len(bookLinks) != 0 {
+		t.Fatalf("book provenance links = %+v, want none after deleting created book", bookLinks)
+	}
+}
+
+func TestImporter_RollbackRestoresExistingBookMetadata(t *testing.T) {
+	t.Parallel()
+
+	importer, authorRepo, bookRepo, _, _, provenanceRepo, _, runEntityRepo, _, _ := newABSImporterFixture(t)
+	ctx := context.Background()
+	author := &models.Author{
+		ForeignID:        "OL-AUTHOR",
+		Name:             "Andy Weir",
+		SortName:         "Weir, Andy",
+		MetadataProvider: "openlibrary",
+		Monitored:        true,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatalf("Create author: %v", err)
+	}
+	selectedEditionID := int64(42)
+	book := &models.Book{
+		ForeignID:         "OL-LOCAL-BOOK",
+		AuthorID:          author.ID,
+		Title:             "Local Title",
+		SortTitle:         "Local Title",
+		OriginalTitle:     "Original Local Title",
+		Description:       "Local description.",
+		ImageURL:          "https://covers.example.com/local.jpg",
+		ReleaseDate:       mustDate(t, "1999-01-02"),
+		Genres:            []string{"local", "sci-fi"},
+		AverageRating:     4.2,
+		RatingsCount:      17,
+		Monitored:         false,
+		Status:            models.BookStatusSkipped,
+		AnyEditionOK:      false,
+		SelectedEditionID: &selectedEditionID,
+		Language:          "fre",
+		MediaType:         models.MediaTypeEbook,
+		Narrator:          "Local Narrator",
+		DurationSeconds:   12,
+		ASIN:              "LOCALASIN",
+		MetadataProvider:  "openlibrary",
+	}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatalf("Create book: %v", err)
+	}
+
+	item := sampleABSItem()
+	item.Title = "ABS Title"
+	item.Description = "ABS description."
+	item.Language = "eng"
+	item.PublishedDate = "2021-05-04"
+	item.Genres = []string{"imported", "space"}
+	item.Narrators = []string{"ABS Narrator"}
+	item.DurationSeconds = 3600
+	item.ASIN = "ABSASIN"
+	if err := provenanceRepo.Upsert(ctx, &models.ABSProvenance{
+		SourceID:   DefaultSourceID,
+		LibraryID:  item.LibraryID,
+		EntityType: entityTypeBook,
+		ExternalID: item.ItemID,
+		LocalID:    book.ID,
+		ItemID:     item.ItemID,
+	}); err != nil {
+		t.Fatalf("seed provenance: %v", err)
+	}
+
+	runID := runSingleABSImport(t, importer, item)
+	updated, err := bookRepo.GetByID(ctx, book.ID)
+	if err != nil {
+		t.Fatalf("GetByID after import: %v", err)
+	}
+	if updated.Title != "ABS Title" || updated.Description != "ABS description." || updated.ASIN != "ABSASIN" {
+		t.Fatalf("book after import = %+v, want ABS metadata", updated)
+	}
+	entities, err := runEntityRepo.ListByRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("ListByRun: %v", err)
+	}
+	foundSnapshot := false
+	for _, entity := range entities {
+		if entity.EntityType != entityTypeBook || entity.LocalID != book.ID {
+			continue
+		}
+		var envelope runEntityMetadataEnvelope
+		if err := json.Unmarshal([]byte(entity.MetadataJSON), &envelope); err != nil {
+			t.Fatalf("decode metadata envelope: %v", err)
+		}
+		foundSnapshot = envelope.Kind == runEntityMetadataKind && envelope.Snapshot != nil && envelope.Snapshot.Before != nil && envelope.Snapshot.After != nil
+	}
+	if !foundSnapshot {
+		t.Fatalf("run entities = %+v, want typed book before/after snapshot", entities)
+	}
+
+	result, err := importer.Rollback(ctx, runID)
+	if err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if result.Stats.ProvenanceUnlinked == 0 {
+		t.Fatalf("rollback result = %+v, want provenance unlink", result)
+	}
+	restored, err := bookRepo.GetByID(ctx, book.ID)
+	if err != nil {
+		t.Fatalf("GetByID after rollback: %v", err)
+	}
+	if restored.Title != "Local Title" ||
+		restored.SortTitle != "Local Title" ||
+		restored.OriginalTitle != "Original Local Title" ||
+		restored.Description != "Local description." ||
+		restored.ImageURL != "https://covers.example.com/local.jpg" ||
+		restored.Language != "fre" ||
+		restored.MediaType != models.MediaTypeEbook ||
+		restored.Narrator != "Local Narrator" ||
+		restored.DurationSeconds != 12 ||
+		restored.ASIN != "LOCALASIN" ||
+		restored.MetadataProvider != "openlibrary" ||
+		restored.Status != models.BookStatusSkipped ||
+		restored.Monitored ||
+		restored.AnyEditionOK {
+		t.Fatalf("restored book = %+v, want pre-import metadata", restored)
+	}
+	if restored.ReleaseDate == nil || !restored.ReleaseDate.Equal(*book.ReleaseDate) {
+		t.Fatalf("release date = %v, want %v", restored.ReleaseDate, book.ReleaseDate)
+	}
+	if strings.Join(restored.Genres, ",") != "local,sci-fi" {
+		t.Fatalf("genres = %+v, want local sci-fi", restored.Genres)
+	}
+	if restored.SelectedEditionID == nil || *restored.SelectedEditionID != selectedEditionID {
+		t.Fatalf("selected edition = %v, want %d", restored.SelectedEditionID, selectedEditionID)
+	}
+	link, err := provenanceRepo.GetByExternal(ctx, DefaultSourceID, item.LibraryID, entityTypeBook, item.ItemID)
+	if err != nil {
+		t.Fatalf("GetByExternal: %v", err)
+	}
+	if link != nil {
+		t.Fatalf("book provenance = %+v, want nil after rollback", link)
+	}
+}
+
+func TestImporter_RollbackPreservesPostImportBookEdits(t *testing.T) {
+	t.Parallel()
+
+	importer, authorRepo, bookRepo, _, _, provenanceRepo, _, _, _, _ := newABSImporterFixture(t)
+	ctx := context.Background()
+	author := &models.Author{Name: "Andy Weir", SortName: "Weir, Andy", Monitored: true}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatalf("Create author: %v", err)
+	}
+	book := &models.Book{
+		ForeignID:        "OL-LOCAL-BOOK",
+		AuthorID:         author.ID,
+		Title:            "Local Title",
+		SortTitle:        "Local Title",
+		Description:      "Local description.",
+		Genres:           []string{"local"},
+		Monitored:        true,
+		Status:           models.BookStatusWanted,
+		AnyEditionOK:     true,
+		Language:         "eng",
+		MediaType:        models.MediaTypeEbook,
+		ASIN:             "LOCALASIN",
+		MetadataProvider: "openlibrary",
+	}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatalf("Create book: %v", err)
+	}
+	item := sampleABSItem()
+	item.Title = "ABS Title"
+	item.Description = "ABS description."
+	item.ASIN = "ABSASIN"
+	if err := provenanceRepo.Upsert(ctx, &models.ABSProvenance{
+		SourceID:   DefaultSourceID,
+		LibraryID:  item.LibraryID,
+		EntityType: entityTypeBook,
+		ExternalID: item.ItemID,
+		LocalID:    book.ID,
+		ItemID:     item.ItemID,
+	}); err != nil {
+		t.Fatalf("seed provenance: %v", err)
+	}
+	runID := runSingleABSImport(t, importer, item)
+
+	edited, err := bookRepo.GetByID(ctx, book.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	edited.Description = "User edited after import."
+	edited.ASIN = "USERASIN"
+	if err := bookRepo.Update(ctx, edited); err != nil {
+		t.Fatalf("Update post-import edit: %v", err)
+	}
+
+	if _, err := importer.Rollback(ctx, runID); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	restored, err := bookRepo.GetByID(ctx, book.ID)
+	if err != nil {
+		t.Fatalf("GetByID after rollback: %v", err)
+	}
+	if restored.Description != "User edited after import." || restored.ASIN != "USERASIN" {
+		t.Fatalf("book = %+v, want post-import edits preserved", restored)
+	}
+	if restored.Title != "Local Title" {
+		t.Fatalf("title = %q, want untouched field restored to Local Title", restored.Title)
+	}
+}
+
+func TestImporter_RollbackExistingBookIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	importer, authorRepo, bookRepo, _, _, provenanceRepo, _, _, _, _ := newABSImporterFixture(t)
+	ctx := context.Background()
+	author := &models.Author{Name: "Andy Weir", SortName: "Weir, Andy", Monitored: true}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatalf("Create author: %v", err)
+	}
+	book := &models.Book{
+		ForeignID:        "OL-LOCAL-BOOK",
+		AuthorID:         author.ID,
+		Title:            "Local Title",
+		SortTitle:        "Local Title",
+		Description:      "Local description.",
+		Genres:           []string{"local"},
+		Monitored:        true,
+		Status:           models.BookStatusWanted,
+		AnyEditionOK:     true,
+		Language:         "eng",
+		MediaType:        models.MediaTypeEbook,
+		MetadataProvider: "openlibrary",
+	}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatalf("Create book: %v", err)
+	}
+	item := sampleABSItem()
+	item.Title = "ABS Title"
+	if err := provenanceRepo.Upsert(ctx, &models.ABSProvenance{
+		SourceID:   DefaultSourceID,
+		LibraryID:  item.LibraryID,
+		EntityType: entityTypeBook,
+		ExternalID: item.ItemID,
+		LocalID:    book.ID,
+		ItemID:     item.ItemID,
+	}); err != nil {
+		t.Fatalf("seed provenance: %v", err)
+	}
+	runID := runSingleABSImport(t, importer, item)
+
+	first, err := importer.Rollback(ctx, runID)
+	if err != nil {
+		t.Fatalf("first Rollback: %v", err)
+	}
+	if first.Stats.Failed != 0 || first.Stats.ProvenanceUnlinked == 0 {
+		t.Fatalf("first rollback = %+v, want successful unlink", first)
+	}
+	restored, err := bookRepo.GetByID(ctx, book.ID)
+	if err != nil {
+		t.Fatalf("GetByID after first rollback: %v", err)
+	}
+	second, err := importer.Rollback(ctx, runID)
+	if err != nil {
+		t.Fatalf("second Rollback: %v", err)
+	}
+	if second.Stats.Failed != 0 || second.Stats.Skipped == 0 {
+		t.Fatalf("second rollback = %+v, want skip-only safe result", second)
+	}
+	afterSecond, err := bookRepo.GetByID(ctx, book.ID)
+	if err != nil {
+		t.Fatalf("GetByID after second rollback: %v", err)
+	}
+	if afterSecond.Title != restored.Title || afterSecond.Description != restored.Description || afterSecond.MetadataProvider != restored.MetadataProvider {
+		t.Fatalf("book after second rollback = %+v, want unchanged from first rollback %+v", afterSecond, restored)
+	}
+}
+
+func TestImporter_RollbackRestoresAuthorMetadataAndPreservesAliases(t *testing.T) {
+	t.Parallel()
+
+	importer, authorRepo, _, _, _, provenanceRepo, _, runEntityRepo, _, _ := newABSImporterFixture(t)
+	ctx := context.Background()
+	existing := &models.Author{
+		ForeignID:        absForeignID("author", "lib-books", "author-andy-weir"),
+		Name:             "A. Weir",
+		SortName:         "Weir, A.",
+		Description:      "Local author description.",
+		ImageURL:         "https://img.example.com/local-author.jpg",
+		Disambiguation:   "local disambiguation",
+		MetadataProvider: providerAudiobookshelf,
+		Monitored:        true,
+	}
+	if err := authorRepo.Create(ctx, existing); err != nil {
+		t.Fatalf("Create author: %v", err)
+	}
+	if err := provenanceRepo.Upsert(ctx, &models.ABSProvenance{
+		SourceID:   DefaultSourceID,
+		LibraryID:  "lib-books",
+		EntityType: entityTypeAuthor,
+		ExternalID: "author-andy-weir",
+		LocalID:    existing.ID,
+		ItemID:     "li-project-hail-mary",
+	}); err != nil {
+		t.Fatalf("seed provenance: %v", err)
+	}
+	provider := &stubABSMetadataProvider{
+		searchAuthors: []models.Author{{ForeignID: "OL-ANDY", Name: "Andy Weir"}},
+		authors: map[string]*models.Author{
+			"OL-ANDY": {
+				ForeignID:        "OL-ANDY",
+				Name:             "Andy Weir",
+				SortName:         "Weir, Andy",
+				Description:      "Upstream author description.",
+				ImageURL:         "https://img.example.com/upstream-author.jpg",
+				Disambiguation:   "upstream disambiguation",
+				MetadataProvider: "openlibrary",
+			},
+		},
+	}
+	importer.WithMetadata(metadata.NewAggregator(provider))
+
+	item := sampleABSItem()
+	runID := runSingleABSImport(t, importer, item)
+
+	updated, err := authorRepo.GetByID(ctx, existing.ID)
+	if err != nil {
+		t.Fatalf("GetByID after import: %v", err)
+	}
+	if updated.ForeignID != "OL-ANDY" || updated.Name != "Andy Weir" || updated.Description != "Upstream author description." {
+		t.Fatalf("author after import = %+v, want upstream metadata", updated)
+	}
+	entities, err := runEntityRepo.ListByRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("ListByRun: %v", err)
+	}
+	foundSnapshot := false
+	for _, entity := range entities {
+		if entity.EntityType != entityTypeAuthor || entity.LocalID != existing.ID {
+			continue
+		}
+		before, after, ok := authorRollbackSnapshotFromMetadata(entity.MetadataJSON)
+		foundSnapshot = ok && before != nil && after != nil && before.Name == "A. Weir" && after.Name == "Andy Weir"
+	}
+	if !foundSnapshot {
+		t.Fatalf("run entities = %+v, want author before/after rollback snapshot", entities)
+	}
+
+	result, err := importer.Rollback(ctx, runID)
+	if err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if result.Stats.Failed != 0 || result.Stats.ProvenanceUnlinked == 0 {
+		t.Fatalf("rollback result = %+v, want clean author provenance unlink", result)
+	}
+	restored, err := authorRepo.GetByID(ctx, existing.ID)
+	if err != nil {
+		t.Fatalf("GetByID after rollback: %v", err)
+	}
+	if restored.ForeignID != existing.ForeignID ||
+		restored.Name != "A. Weir" ||
+		restored.SortName != "Weir, A." ||
+		restored.Description != "Local author description." ||
+		restored.ImageURL != "https://img.example.com/local-author.jpg" ||
+		restored.Disambiguation != "local disambiguation" ||
+		restored.MetadataProvider != providerAudiobookshelf {
+		t.Fatalf("restored author = %+v, want pre-import metadata", restored)
+	}
+	aliases, err := importer.aliases.ListByAuthor(ctx, existing.ID)
+	if err != nil {
+		t.Fatalf("ListByAuthor: %v", err)
+	}
+	foundAlias := false
+	for _, alias := range aliases {
+		if alias.Name == "A. Weir" {
+			foundAlias = true
+			break
+		}
+	}
+	if !foundAlias {
+		t.Fatalf("aliases = %+v, want rollback to preserve import-created alias", aliases)
+	}
+}
+
+func TestImporter_RollbackPreservesPostImportAuthorEdits(t *testing.T) {
+	t.Parallel()
+
+	importer, authorRepo, _, _, _, provenanceRepo, _, _, _, _ := newABSImporterFixture(t)
+	ctx := context.Background()
+	existing := &models.Author{
+		ForeignID:        absForeignID("author", "lib-books", "author-andy-weir"),
+		Name:             "A. Weir",
+		SortName:         "Weir, A.",
+		Description:      "Local author description.",
+		MetadataProvider: providerAudiobookshelf,
+		Monitored:        true,
+	}
+	if err := authorRepo.Create(ctx, existing); err != nil {
+		t.Fatalf("Create author: %v", err)
+	}
+	if err := provenanceRepo.Upsert(ctx, &models.ABSProvenance{
+		SourceID:   DefaultSourceID,
+		LibraryID:  "lib-books",
+		EntityType: entityTypeAuthor,
+		ExternalID: "author-andy-weir",
+		LocalID:    existing.ID,
+		ItemID:     "li-project-hail-mary",
+	}); err != nil {
+		t.Fatalf("seed provenance: %v", err)
+	}
+	importer.WithMetadata(metadata.NewAggregator(&stubABSMetadataProvider{
+		searchAuthors: []models.Author{{ForeignID: "OL-ANDY", Name: "Andy Weir"}},
+		authors: map[string]*models.Author{
+			"OL-ANDY": {
+				ForeignID:        "OL-ANDY",
+				Name:             "Andy Weir",
+				SortName:         "Weir, Andy",
+				Description:      "Upstream author description.",
+				MetadataProvider: "openlibrary",
+			},
+		},
+	}))
+
+	runID := runSingleABSImport(t, importer, sampleABSItem())
+	edited, err := authorRepo.GetByID(ctx, existing.ID)
+	if err != nil {
+		t.Fatalf("GetByID after import: %v", err)
+	}
+	edited.Description = "User edited after import."
+	if err := authorRepo.Update(ctx, edited); err != nil {
+		t.Fatalf("Update author post-import edit: %v", err)
+	}
+
+	if _, err := importer.Rollback(ctx, runID); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	restored, err := authorRepo.GetByID(ctx, existing.ID)
+	if err != nil {
+		t.Fatalf("GetByID after rollback: %v", err)
+	}
+	if restored.Description != "User edited after import." {
+		t.Fatalf("description = %q, want post-import edit preserved", restored.Description)
+	}
+	if restored.Name != "A. Weir" || restored.ForeignID != existing.ForeignID {
+		t.Fatalf("author = %+v, want untouched fields restored", restored)
+	}
+}
+
+func TestImporter_RollbackSkipsSnapshotWhenProvenanceLocalChanged(t *testing.T) {
+	t.Parallel()
+
+	importer, authorRepo, _, _, _, provenanceRepo, runRepo, runEntityRepo, _, _ := newABSImporterFixture(t)
+	ctx := context.Background()
+	stale := &models.Author{
+		ForeignID:        "OL-STALE-AFTER",
+		Name:             "Imported Name",
+		SortName:         "Name, Imported",
+		Description:      "Imported description.",
+		MetadataProvider: "openlibrary",
+		Monitored:        true,
+	}
+	current := &models.Author{
+		ForeignID:        "OL-CURRENT",
+		Name:             "Current Canonical",
+		SortName:         "Canonical, Current",
+		MetadataProvider: "openlibrary",
+		Monitored:        true,
+	}
+	if err := authorRepo.Create(ctx, stale); err != nil {
+		t.Fatalf("Create stale author: %v", err)
+	}
+	if err := authorRepo.Create(ctx, current); err != nil {
+		t.Fatalf("Create current author: %v", err)
+	}
+	run := &models.ABSImportRun{
+		SourceID:    DefaultSourceID,
+		SourceLabel: "Shelf",
+		BaseURL:     "https://abs.example.com",
+		LibraryID:   "lib-books",
+		Status:      runStatusCompleted,
+	}
+	if err := runRepo.Create(ctx, run); err != nil {
+		t.Fatalf("Create run: %v", err)
+	}
+	before := &authorRollbackSnapshot{
+		ForeignID:        "OL-STALE-BEFORE",
+		Name:             "Local Name",
+		SortName:         "Name, Local",
+		Description:      "Local description.",
+		MetadataProvider: providerAudiobookshelf,
+	}
+	after := authorSnapshot(stale)
+	if err := runEntityRepo.Record(ctx, &models.ABSImportRunEntity{
+		RunID:        run.ID,
+		SourceID:     DefaultSourceID,
+		LibraryID:    "lib-books",
+		ItemID:       "li-author",
+		EntityType:   entityTypeAuthor,
+		ExternalID:   "author-shared",
+		LocalID:      stale.ID,
+		Outcome:      itemOutcomeLinked,
+		MetadataJSON: mustJSON(authorSnapshotMetadata(nil, before, after)),
+	}); err != nil {
+		t.Fatalf("Record run entity: %v", err)
+	}
+	if err := provenanceRepo.Upsert(ctx, &models.ABSProvenance{
+		SourceID:    DefaultSourceID,
+		LibraryID:   "lib-books",
+		EntityType:  entityTypeAuthor,
+		ExternalID:  "author-shared",
+		LocalID:     current.ID,
+		ItemID:      "li-author",
+		ImportRunID: ptrInt64(run.ID),
+	}); err != nil {
+		t.Fatalf("seed moved provenance: %v", err)
+	}
+
+	result, err := importer.Rollback(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if result.Stats.Failed != 0 || result.Stats.Skipped == 0 {
+		t.Fatalf("rollback result = %+v, want skipped stale snapshot without failure", result)
+	}
+	got, err := authorRepo.GetByID(ctx, stale.ID)
+	if err != nil {
+		t.Fatalf("Get stale author: %v", err)
+	}
+	if got.Name != "Imported Name" || got.ForeignID != "OL-STALE-AFTER" {
+		t.Fatalf("stale author = %+v, want no restore after provenance moved", got)
+	}
+	link, err := provenanceRepo.GetByExternal(ctx, DefaultSourceID, "lib-books", entityTypeAuthor, "author-shared")
+	if err != nil {
+		t.Fatalf("GetByExternal: %v", err)
+	}
+	if link == nil || link.LocalID != current.ID {
+		t.Fatalf("provenance = %+v, want current canonical link preserved", link)
+	}
+}
+
+func TestImporter_Rollback_NilReposAreSafe(t *testing.T) {
+	t.Parallel()
+
+	importer := &Importer{}
+	if _, err := importer.Rollback(context.Background(), 1); err == nil {
+		t.Fatal("Rollback with nil repositories returned nil error, want unavailable error")
+	}
+	if _, err := importer.RollbackPreview(context.Background(), 1); err == nil {
+		t.Fatal("RollbackPreview with nil repositories returned nil error, want unavailable error")
 	}
 }

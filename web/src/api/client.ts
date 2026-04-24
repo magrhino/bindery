@@ -684,6 +684,7 @@ export interface ABSImportRun {
 export interface ABSRollbackAction {
   entityType: string
   externalId: string
+  displayName?: string
   localId: number
   outcome: string
   action: string
