@@ -6,8 +6,9 @@ services:
       - 8787:8787
     volumes:
       - ./config:/config
-      - /Volumes/media/books:/books:ro
-      - /Volumes/media/downloads:/downloads:ro
+      - /tmp/books/:/books
+      # - /Volumes/media/books:/books:ro
+      # - /Volumes/media/downloads:/downloads:ro
     environment:
       - BINDERY_LOG_LEVEL=info
     restart: unless-stopped

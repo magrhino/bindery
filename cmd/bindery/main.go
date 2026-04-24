@@ -220,6 +220,23 @@ func main() {
 	absImporter := abs.NewImporter(authorRepo, authorAliasRepo, bookRepo, editionRepo, seriesRepo, settingsRepo, absImportRunRepo, absImportRunEntityRepo, absProvenanceRepo, absReviewRepo, absConflictRepo).
 		WithStoragePaths(cfg.LibraryDir, cfg.AudiobookDir, rootFolderRepo).
 		WithMetadata(metaAgg)
+	if cfg.ABSFeatureEnabled {
+		storedABS := api.LoadABSConfig(settingsRepo)
+		resumeCfg := abs.ImportConfig{
+			SourceID:  abs.DefaultSourceID,
+			BaseURL:   storedABS.BaseURL,
+			APIKey:    storedABS.APIKey,
+			LibraryID: storedABS.LibraryID,
+			PathRemap: storedABS.PathRemap,
+			Label:     storedABS.Label,
+			Enabled:   storedABS.Enabled,
+		}
+		if resumed, err := absImporter.ResumeInterrupted(ctxBoot, resumeCfg); err != nil {
+			slog.Warn("abs interrupted import resume skipped", "error", err)
+		} else if resumed {
+			slog.Info("abs interrupted import resumed from checkpoint")
+		}
+	}
 	if syncOnStartup(settingsRepo) {
 		cfg := api.LoadCalibreConfig(settingsRepo)
 		if cfg.Enabled && cfg.LibraryPath != "" {

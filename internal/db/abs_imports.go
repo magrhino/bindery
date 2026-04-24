@@ -88,11 +88,18 @@ func (r *ABSImportRunRepo) UpdateStatus(ctx context.Context, id int64, status st
 	if id == 0 {
 		return nil
 	}
-	_, err := r.db.ExecContext(ctx, `
+	query := `
 		UPDATE abs_import_runs
 		SET status = ?
-		WHERE id = ?`,
-		status, id)
+		WHERE id = ?`
+	args := []any{status, id}
+	if status == "rolled_back" {
+		query = `
+		UPDATE abs_import_runs
+		SET status = ?, checkpoint_json = '{}'
+		WHERE id = ?`
+	}
+	_, err := r.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update abs import run status %d: %w", id, err)
 	}
@@ -134,6 +141,26 @@ func (r *ABSImportRunRepo) GetByID(ctx context.Context, id int64) (*models.ABSIm
 			return nil, nil
 		}
 		return nil, fmt.Errorf("get abs import run %d: %w", id, err)
+	}
+	run.DryRun = dryRun == 1
+	return &run, nil
+}
+
+func (r *ABSImportRunRepo) LatestRunningWithCheckpoint(ctx context.Context) (*models.ABSImportRun, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, source_id, source_label, base_url, library_id, status, dry_run, source_config_json, checkpoint_json, summary_json, started_at, finished_at
+		FROM abs_import_runs
+		WHERE status = 'running'
+		  AND TRIM(COALESCE(checkpoint_json, '')) NOT IN ('', '{}', 'null')
+		ORDER BY started_at DESC, id DESC
+		LIMIT 1`)
+	var run models.ABSImportRun
+	var dryRun int
+	if err := row.Scan(&run.ID, &run.SourceID, &run.SourceLabel, &run.BaseURL, &run.LibraryID, &run.Status, &dryRun, &run.SourceConfigJSON, &run.CheckpointJSON, &run.SummaryJSON, &run.StartedAt, &run.FinishedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get latest running abs import with checkpoint: %w", err)
 	}
 	run.DryRun = dryRun == 1
 	return &run, nil
@@ -250,6 +277,24 @@ func (r *ABSProvenanceRepo) DeleteByExternal(ctx context.Context, sourceID, libr
 	return nil
 }
 
+func (r *ABSProvenanceRepo) DeleteByLocal(ctx context.Context, entityType string, localID int64) (int64, error) {
+	if localID == 0 {
+		return 0, nil
+	}
+	result, err := r.db.ExecContext(ctx, `
+		DELETE FROM abs_provenance
+		WHERE entity_type = ? AND local_id = ?`,
+		entityType, localID)
+	if err != nil {
+		return 0, fmt.Errorf("delete abs provenance for %s %d: %w", entityType, localID, err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("count deleted abs provenance for %s %d: %w", entityType, localID, err)
+	}
+	return count, nil
+}
+
 type ABSImportRunEntityRepo struct {
 	db *sql.DB
 }
@@ -270,6 +315,18 @@ func (r *ABSImportRunEntityRepo) Record(ctx context.Context, entity *models.ABSI
 	if metadataJSON == "" {
 		metadataJSON = "{}"
 	}
+	outcome := entity.Outcome
+	var existingOutcome string
+	var existingMetadataJSON string
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT outcome, metadata_json
+		FROM abs_import_run_entities
+		WHERE run_id = ? AND entity_type = ? AND external_id = ? AND local_id = ?`,
+		entity.RunID, entity.EntityType, entity.ExternalID, entity.LocalID).Scan(&existingOutcome, &existingMetadataJSON); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("inspect abs import run entity %d/%s/%s: %w", entity.RunID, entity.EntityType, entity.ExternalID, err)
+	}
+	outcome = mergeABSRunEntityOutcome(existingOutcome, outcome)
+	metadataJSON = mergeABSRunEntityMetadata(existingMetadataJSON, metadataJSON)
 	result, err := r.db.ExecContext(ctx, `
 		INSERT INTO abs_import_run_entities (run_id, source_id, library_id, item_id, entity_type, external_id, local_id, outcome, metadata_json)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -277,7 +334,7 @@ func (r *ABSImportRunEntityRepo) Record(ctx context.Context, entity *models.ABSI
 			item_id = excluded.item_id,
 			outcome = excluded.outcome,
 			metadata_json = excluded.metadata_json`,
-		entity.RunID, sourceID, entity.LibraryID, entity.ItemID, entity.EntityType, entity.ExternalID, entity.LocalID, entity.Outcome, metadataJSON)
+		entity.RunID, sourceID, entity.LibraryID, entity.ItemID, entity.EntityType, entity.ExternalID, entity.LocalID, outcome, metadataJSON)
 	if err != nil {
 		return fmt.Errorf("record abs import run entity %d/%s/%s: %w", entity.RunID, entity.EntityType, entity.ExternalID, err)
 	}
@@ -287,8 +344,125 @@ func (r *ABSImportRunEntityRepo) Record(ctx context.Context, entity *models.ABSI
 		}
 	}
 	entity.SourceID = sourceID
+	entity.Outcome = outcome
 	entity.MetadataJSON = metadataJSON
 	return nil
+}
+
+func mergeABSRunEntityOutcome(existing, incoming string) string {
+	existing = strings.TrimSpace(existing)
+	incoming = strings.TrimSpace(incoming)
+	if existing == "" {
+		return incoming
+	}
+	if incoming == "" {
+		return existing
+	}
+	if existing == "created" || incoming == "created" {
+		return "created"
+	}
+	return incoming
+}
+
+func mergeABSRunEntityMetadata(existingJSON, incomingJSON string) string {
+	existing := decodeJSONMap(existingJSON)
+	incoming := decodeJSONMap(incomingJSON)
+	if len(existing) == 0 {
+		if len(incoming) == 0 {
+			return "{}"
+		}
+		return encodeJSONMap(incoming)
+	}
+	if len(incoming) == 0 {
+		return encodeJSONMap(existing)
+	}
+	merged := make(map[string]any, len(existing)+len(incoming))
+	for key, value := range existing {
+		merged[key] = value
+	}
+	for key, value := range incoming {
+		if key == "data" {
+			merged[key] = mergeJSONObjects(asJSONMap(merged[key]), asJSONMap(value))
+			continue
+		}
+		if key == "snapshot" {
+			merged[key] = mergeABSSnapshotMetadata(asJSONMap(merged[key]), asJSONMap(value))
+			continue
+		}
+		merged[key] = value
+	}
+	return encodeJSONMap(merged)
+}
+
+func mergeABSSnapshotMetadata(existing, incoming map[string]any) map[string]any {
+	if len(existing) == 0 {
+		return incoming
+	}
+	if len(incoming) == 0 {
+		return existing
+	}
+	merged := make(map[string]any, len(existing)+len(incoming))
+	for key, value := range existing {
+		merged[key] = value
+	}
+	for key, value := range incoming {
+		if key == "before" {
+			if _, ok := merged[key]; ok {
+				continue
+			}
+		}
+		merged[key] = value
+	}
+	return merged
+}
+
+func mergeJSONObjects(existing, incoming map[string]any) map[string]any {
+	if len(existing) == 0 {
+		return incoming
+	}
+	if len(incoming) == 0 {
+		return existing
+	}
+	merged := make(map[string]any, len(existing)+len(incoming))
+	for key, value := range existing {
+		merged[key] = value
+	}
+	for key, value := range incoming {
+		merged[key] = value
+	}
+	return merged
+}
+
+func decodeJSONMap(payload string) map[string]any {
+	if strings.TrimSpace(payload) == "" || strings.TrimSpace(payload) == "{}" {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(payload), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+func asJSONMap(value any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	if typed, ok := value.(map[string]any); ok {
+		return typed
+	}
+	return nil
+}
+
+func encodeJSONMap(value map[string]any) string {
+	if len(value) == 0 {
+		return "{}"
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
 }
 
 func (r *ABSImportRunEntityRepo) ListByRun(ctx context.Context, runID int64) ([]models.ABSImportRunEntity, error) {
@@ -438,6 +612,7 @@ func (r *ABSReviewItemRepo) ResolveAuthorForPrimary(ctx context.Context, sourceI
 	if foreignID == "" || name == "" {
 		return 0, errors.New("foreignAuthorId and authorName required")
 	}
+	primaryAuthor = strings.TrimSpace(primaryAuthor)
 	key := textutil.NormalizeAuthorName(primaryAuthor)
 	if key == "" {
 		return 0, errors.New("primary author is required")
@@ -462,6 +637,29 @@ func (r *ABSReviewItemRepo) ResolveAuthorForPrimary(ctx context.Context, sourceI
 			return updated, fmt.Errorf("resolve abs review author %d: %w", item.ID, err)
 		}
 		updated++
+	}
+	// When the reviewer resolves onto a canonical author that already exists
+	// locally, record the ABS-supplied primary author name as an alias so
+	// future imports of the same ABS name short-circuit the review queue.
+	// Skipping silently on sql.ErrNoRows covers the common case where the
+	// canonical author will be created later during review approval — the
+	// importer records the alias itself at creation time.
+	if updated > 0 && primaryAuthor != "" && textutil.NormalizeAuthorName(name) != key {
+		var canonicalID int64
+		err := r.db.QueryRowContext(ctx, "SELECT id FROM authors WHERE foreign_id = ?", foreignID).Scan(&canonicalID)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			// canonical author not yet created locally; alias will be added
+			// by the importer when it upserts this author.
+		case err != nil:
+			return updated, fmt.Errorf("lookup canonical author %q: %w", foreignID, err)
+		case canonicalID > 0:
+			if _, err := r.db.ExecContext(ctx, `
+				INSERT OR IGNORE INTO author_aliases (author_id, name, created_at)
+				VALUES (?, ?, ?)`, canonicalID, primaryAuthor, now); err != nil {
+				return updated, fmt.Errorf("record alias %q for author %d: %w", primaryAuthor, canonicalID, err)
+			}
+		}
 	}
 	return updated, nil
 }

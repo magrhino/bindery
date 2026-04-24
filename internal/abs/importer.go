@@ -29,11 +29,14 @@ const (
 	DefaultSourceID             = "default"
 	SettingABSLastImportAt      = "abs.last_import_at"
 	settingDefaultRootID        = "library.defaultRootFolderId"
+	runEntityMetadataKind       = "abs_run_entity_metadata"
+	runEntityMetadataVersion    = 1
 	entityTypeAuthor            = "author"
 	entityTypeBook              = "book"
 	entityTypeSeries            = "series"
 	entityTypeEdition           = "edition"
 	providerAudiobookshelf      = "audiobookshelf"
+	runStatusRunning            = "running"
 	runStatusCompleted          = "completed"
 	runStatusFailed             = "failed"
 	runStatusRolledBack         = "rolled_back"
@@ -192,6 +195,64 @@ type metadataMergeResult struct {
 	Messages     []string
 }
 
+type runEntityMetadataEnvelope struct {
+	Kind     string                     `json:"kind"`
+	Version  int                        `json:"version"`
+	Data     map[string]any             `json:"data,omitempty"`
+	Snapshot *runEntitySnapshotEnvelope `json:"snapshot,omitempty"`
+}
+
+// runEntitySnapshotEnvelope carries a before/after snapshot of a single entity
+// so rollback can restore field-level state. Before/After are encoded as raw
+// JSON with the shape indicated by EntityType; decoders should match on
+// EntityType before unmarshaling into a concrete snapshot struct.
+type runEntitySnapshotEnvelope struct {
+	EntityType string          `json:"entityType"`
+	Before     json.RawMessage `json:"before,omitempty"`
+	After      json.RawMessage `json:"after,omitempty"`
+}
+
+type bookRollbackSnapshot struct {
+	ForeignID             string     `json:"foreignId"`
+	AuthorID              int64      `json:"authorId"`
+	Title                 string     `json:"title"`
+	SortTitle             string     `json:"sortTitle"`
+	OriginalTitle         string     `json:"originalTitle"`
+	Description           string     `json:"description"`
+	ImageURL              string     `json:"imageUrl"`
+	ReleaseDate           *time.Time `json:"releaseDate,omitempty"`
+	Genres                []string   `json:"genres"`
+	AverageRating         float64    `json:"averageRating"`
+	RatingsCount          int        `json:"ratingsCount"`
+	Monitored             bool       `json:"monitored"`
+	Status                string     `json:"status"`
+	AnyEditionOK          bool       `json:"anyEditionOk"`
+	SelectedEditionID     *int64     `json:"selectedEditionId,omitempty"`
+	Language              string     `json:"language"`
+	MediaType             string     `json:"mediaType"`
+	Narrator              string     `json:"narrator"`
+	DurationSeconds       int        `json:"durationSeconds"`
+	ASIN                  string     `json:"asin"`
+	CalibreID             *int64     `json:"calibreId,omitempty"`
+	MetadataProvider      string     `json:"metadataProvider"`
+	LastMetadataRefreshAt *time.Time `json:"lastMetadataRefreshAt,omitempty"`
+}
+
+// authorRollbackSnapshot captures the subset of author fields the importer
+// mutates so rollback can restore prior state without trampling post-import
+// user edits. Fields omitted here (stats, profile FKs, Monitored) are not
+// touched by the ABS import path.
+type authorRollbackSnapshot struct {
+	ForeignID             string     `json:"foreignId"`
+	Name                  string     `json:"name"`
+	SortName              string     `json:"sortName"`
+	Description           string     `json:"description"`
+	ImageURL              string     `json:"imageUrl"`
+	Disambiguation        string     `json:"disambiguation"`
+	MetadataProvider      string     `json:"metadataProvider"`
+	LastMetadataRefreshAt *time.Time `json:"lastMetadataRefreshAt,omitempty"`
+}
+
 type Importer struct {
 	authors      *db.AuthorRepo
 	aliases      *db.AuthorAliasRepo
@@ -274,6 +335,48 @@ func (i *Importer) Running() bool {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	return i.running
+}
+
+func (i *Importer) ResumeInterrupted(ctx context.Context, fallback ImportConfig) (bool, error) {
+	if i.runs == nil {
+		return false, nil
+	}
+	run, err := i.runs.LatestRunningWithCheckpoint(ctx)
+	if err != nil {
+		return false, err
+	}
+	if run == nil {
+		return false, nil
+	}
+	checkpoint, err := decodeImportCheckpoint(run.CheckpointJSON)
+	if err != nil {
+		return true, fmt.Errorf("decode interrupted abs import checkpoint: %w", err)
+	}
+	if checkpoint == nil {
+		return false, nil
+	}
+	if i.settings != nil {
+		if err := i.settings.Set(ctx, SettingABSImportCheckpoint, strings.TrimSpace(run.CheckpointJSON)); err != nil {
+			return true, fmt.Errorf("restore abs import checkpoint: %w", err)
+		}
+	}
+
+	cfg := resumeConfigFromRun(*run, fallback)
+	if err := cfg.Validate(); err != nil {
+		return true, fmt.Errorf("resume abs import run %d: %w", run.ID, err)
+	}
+	if err := i.Start(context.WithoutCancel(ctx), cfg); err != nil {
+		return true, err
+	}
+	if err := i.runs.Finish(ctx, run.ID, runStatusFailed, ImportSummary{
+		DryRun:                run.DryRun,
+		ResumedFromCheckpoint: true,
+		Checkpoint:            checkpoint,
+		Error:                 "interrupted by process restart; resumed from checkpoint",
+	}); err != nil {
+		slog.Warn("abs import: failed to mark interrupted run failed", "runID", run.ID, "error", err)
+	}
+	return true, nil
 }
 
 type reviewRequiredError struct {
@@ -413,7 +516,7 @@ func (i *Importer) run(ctx context.Context, cfg ImportConfig) *ImportStats {
 		SourceLabel:      cfg.Label,
 		BaseURL:          cfg.BaseURL,
 		LibraryID:        cfg.LibraryID,
-		Status:           "running",
+		Status:           runStatusRunning,
 		DryRun:           cfg.DryRun,
 		SourceConfigJSON: mustJSON(sourceSnapshot(cfg)),
 		CheckpointJSON:   mustJSON(summary.Checkpoint),
@@ -498,6 +601,7 @@ func (i *Importer) run(ctx context.Context, cfg ImportConfig) *ImportStats {
 		"failed", stats.Failed)
 	i.setProgress(func(p *ImportProgress) {
 		p.Checkpoint = nil
+		p.ResumedFromCheckpoint = false
 		p.Message = importDoneMessage(cfg.DryRun)
 	})
 	return stats
@@ -642,6 +746,15 @@ func (i *Importer) importOne(ctx context.Context, cfg ImportConfig, runID int64,
 	}
 	if len(messages) > 0 {
 		result.Message = strings.Join(messages, "; ")
+	}
+	if !cfg.DryRun && !created {
+		data := map[string]any{}
+		if result.MatchedBy != "" {
+			data["matchedBy"] = result.MatchedBy
+		}
+		if err := i.recordBookAfterSnapshot(ctx, runID, cfg, item, bookResult.row.ID, result.Outcome, data); err != nil {
+			slog.Warn("abs import: persist book rollback snapshot failed", "bookID", bookResult.row.ID, "runID", runID, "error", err)
+		}
 	}
 
 	return result
@@ -930,11 +1043,17 @@ func (i *Importer) resolveAuthor(ctx context.Context, cfg ImportConfig, runID in
 						return nil, false, "", metadataMergeResult{}, err
 					}
 				}
-				_ = i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeAuthor, externalID, existing.ID, itemOutcomeLinked, nil)
 				if cfg.DryRun {
+					_ = i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeAuthor, externalID, existing.ID, itemOutcomeLinked, nil)
 					return existing, false, "provenance", metadataMergeResult{}, nil
 				}
+				if err := i.recordAuthorBeforeSnapshot(ctx, runID, cfg, item, externalID, existing, itemOutcomeLinked, nil); err != nil {
+					slog.Warn("abs import: persist author rollback snapshot failed", "authorID", existing.ID, "runID", runID, "error", err)
+				}
 				metaResult, err := i.enrichAuthor(ctx, cfg, item, existing)
+				if perr := i.recordAuthorAfterSnapshot(ctx, runID, cfg, item, externalID, existing.ID, itemOutcomeLinked, nil); perr != nil {
+					slog.Warn("abs import: persist author rollback snapshot failed", "authorID", existing.ID, "runID", runID, "error", perr)
+				}
 				return existing, false, "provenance", metaResult, err
 			}
 		}
@@ -955,15 +1074,21 @@ func (i *Importer) resolveAuthor(ctx context.Context, cfg ImportConfig, runID in
 			}); err != nil {
 				return nil, false, "", metadataMergeResult{}, err
 			}
-			if matchedBy == "normalized_name" {
+			if shouldRecordAuthorVariantAlias(matchedBy) {
 				i.recordAuthorVariantAlias(ctx, existing.ID, name)
 			}
 		}
-		_ = i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeAuthor, externalID, existing.ID, itemOutcomeLinked, nil)
 		if cfg.DryRun {
+			_ = i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeAuthor, externalID, existing.ID, itemOutcomeLinked, nil)
 			return existing, false, matchedBy, metadataMergeResult{}, nil
 		}
+		if err := i.recordAuthorBeforeSnapshot(ctx, runID, cfg, item, externalID, existing, itemOutcomeLinked, nil); err != nil {
+			slog.Warn("abs import: persist author rollback snapshot failed", "authorID", existing.ID, "runID", runID, "error", err)
+		}
 		metaResult, err := i.enrichAuthor(ctx, cfg, item, existing)
+		if perr := i.recordAuthorAfterSnapshot(ctx, runID, cfg, item, externalID, existing.ID, itemOutcomeLinked, nil); perr != nil {
+			slog.Warn("abs import: persist author rollback snapshot failed", "authorID", existing.ID, "runID", runID, "error", perr)
+		}
 		return existing, false, matchedBy, metaResult, err
 	} else if ambiguous && !allowCreate {
 		return nil, false, "", metadataMergeResult{}, reviewRequiredError{Reason: reviewReasonAmbiguousAuthor}
@@ -1048,32 +1173,40 @@ func (i *Importer) resolveManualAuthor(ctx context.Context, cfg ImportConfig, ru
 	} else if ambiguous {
 		return nil, false, "", metadataMergeResult{}, reviewRequiredError{Reason: reviewReasonAmbiguousAuthor}
 	} else if existing != nil {
-		if !cfg.DryRun {
-			if existing.ForeignID == "" || strings.HasPrefix(existing.ForeignID, "abs:") {
-				existing.ForeignID = foreignID
-				if existing.MetadataProvider == "" || existing.MetadataProvider == providerAudiobookshelf {
-					existing.MetadataProvider = "openlibrary"
-				}
-				if err := i.authors.Update(ctx, existing); err != nil {
-					return nil, false, "", metadataMergeResult{}, err
-				}
+		manualMeta := map[string]string{"matchedBy": "manual_author_name"}
+		if cfg.DryRun {
+			_ = i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeAuthor, absExternalID, existing.ID, itemOutcomeLinked, manualMeta)
+			return existing, false, "manual_author", metadataMergeResult{}, nil
+		}
+		if err := i.recordAuthorBeforeSnapshot(ctx, runID, cfg, item, absExternalID, existing, itemOutcomeLinked, map[string]any{"matchedBy": "manual_author_name"}); err != nil {
+			slog.Warn("abs import: persist author rollback snapshot failed", "authorID", existing.ID, "runID", runID, "error", err)
+		}
+		if existing.ForeignID == "" || strings.HasPrefix(existing.ForeignID, "abs:") {
+			existing.ForeignID = foreignID
+			if existing.MetadataProvider == "" || existing.MetadataProvider == providerAudiobookshelf {
+				existing.MetadataProvider = "openlibrary"
 			}
-			if err := i.upsertProvenance(ctx, &models.ABSProvenance{
-				SourceID:    cfg.SourceID,
-				LibraryID:   item.LibraryID,
-				EntityType:  entityTypeAuthor,
-				ExternalID:  absExternalID,
-				LocalID:     existing.ID,
-				ItemID:      item.ItemID,
-				ImportRunID: ptrInt64(runID),
-			}); err != nil {
+			if err := i.authors.Update(ctx, existing); err != nil {
 				return nil, false, "", metadataMergeResult{}, err
 			}
-			if normalizeAuthorName(absName) != normalizeAuthorName(existing.Name) {
-				i.recordAuthorVariantAlias(ctx, existing.ID, absName)
-			}
 		}
-		_ = i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeAuthor, absExternalID, existing.ID, itemOutcomeLinked, map[string]string{"matchedBy": "manual_author_name"})
+		if err := i.upsertProvenance(ctx, &models.ABSProvenance{
+			SourceID:    cfg.SourceID,
+			LibraryID:   item.LibraryID,
+			EntityType:  entityTypeAuthor,
+			ExternalID:  absExternalID,
+			LocalID:     existing.ID,
+			ItemID:      item.ItemID,
+			ImportRunID: ptrInt64(runID),
+		}); err != nil {
+			return nil, false, "", metadataMergeResult{}, err
+		}
+		if normalizeAuthorName(absName) != normalizeAuthorName(existing.Name) {
+			i.recordAuthorVariantAlias(ctx, existing.ID, absName)
+		}
+		if perr := i.recordAuthorAfterSnapshot(ctx, runID, cfg, item, absExternalID, existing.ID, itemOutcomeLinked, map[string]any{"matchedBy": "manual_author_name"}); perr != nil {
+			slog.Warn("abs import: persist author rollback snapshot failed", "authorID", existing.ID, "runID", runID, "error", perr)
+		}
 		return existing, false, "manual_author", metadataMergeResult{}, nil
 	}
 
@@ -1127,6 +1260,11 @@ func (i *Importer) resolveManualAuthor(ctx context.Context, cfg ImportConfig, ru
 	return author, true, "manual_author", metadataMergeResult{}, nil
 }
 
+// findAuthorByName looks up a local author whose name matches the supplied
+// name. Matching proceeds in tiers: exact lowercase (author name, then alias),
+// then exact via normalized variants (initials, suffixes, last-first swap),
+// then Jaro-Winkler fuzzy matching. The returned matchedBy string distinguishes
+// these tiers so callers can decide when to record a variant alias.
 func (i *Importer) findAuthorByName(ctx context.Context, name string) (*models.Author, string, bool, error) {
 	all, err := i.authors.List(ctx)
 	if err != nil {
@@ -1141,30 +1279,49 @@ func (i *Importer) findAuthorByName(ctx context.Context, name string) (*models.A
 		aliases = loaded
 	}
 
+	authorCache := make(map[int64]*models.Author)
+	getAuthor := func(id int64) (*models.Author, error) {
+		if a, ok := authorCache[id]; ok {
+			return a, nil
+		}
+		a, err := i.authors.GetByID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		authorCache[id] = a
+		return a, nil
+	}
+
+	// Tier 1: exact lowercase.
 	needle := strings.ToLower(strings.TrimSpace(name))
 	exact := make(map[int64]*models.Author)
+	viaAlias := make(map[int64]bool)
 	for idx := range all {
 		if strings.ToLower(strings.TrimSpace(all[idx].Name)) == needle {
-			copy := all[idx]
-			exact[copy.ID] = &copy
+			cp := all[idx]
+			exact[cp.ID] = &cp
 		}
 	}
 	for _, alias := range aliases {
 		if strings.ToLower(strings.TrimSpace(alias.Name)) != needle {
 			continue
 		}
-		author, err := i.authors.GetByID(ctx, alias.AuthorID)
+		author, err := getAuthor(alias.AuthorID)
 		if err != nil {
 			return nil, "", false, err
 		}
-		if author != nil {
-			exact[author.ID] = author
+		if author == nil {
+			continue
 		}
+		if _, already := exact[author.ID]; !already {
+			viaAlias[author.ID] = true
+		}
+		exact[author.ID] = author
 	}
 	if len(exact) == 1 {
-		for _, author := range exact {
+		for id, author := range exact {
 			matchedBy := "name"
-			if strings.ToLower(strings.TrimSpace(author.Name)) != needle {
+			if viaAlias[id] {
 				matchedBy = "alias"
 			}
 			return author, matchedBy, false, nil
@@ -1174,39 +1331,132 @@ func (i *Importer) findAuthorByName(ctx context.Context, name string) (*models.A
 		return nil, "", true, nil
 	}
 
-	normNeedle := normalizeAuthorName(name)
-	if normNeedle == "" {
-		return nil, "", false, nil
-	}
-	normalized := make(map[int64]*models.Author)
+	// Tier 2: exact via normalized variants.
+	normExact := make(map[int64]*models.Author)
+	normViaAlias := make(map[int64]bool)
 	for idx := range all {
-		if normalizeAuthorName(all[idx].Name) != normNeedle {
-			continue
+		if textutil.MatchAuthorName(name, all[idx].Name).Kind == textutil.AuthorMatchExact {
+			cp := all[idx]
+			normExact[cp.ID] = &cp
 		}
-		copy := all[idx]
-		normalized[copy.ID] = &copy
 	}
 	for _, alias := range aliases {
-		if normalizeAuthorName(alias.Name) != normNeedle {
+		if textutil.MatchAuthorName(name, alias.Name).Kind != textutil.AuthorMatchExact {
 			continue
 		}
-		author, err := i.authors.GetByID(ctx, alias.AuthorID)
+		author, err := getAuthor(alias.AuthorID)
 		if err != nil {
 			return nil, "", false, err
 		}
-		if author != nil {
-			normalized[author.ID] = author
+		if author == nil {
+			continue
+		}
+		if _, already := normExact[author.ID]; !already {
+			normViaAlias[author.ID] = true
+		}
+		normExact[author.ID] = author
+	}
+	if len(normExact) == 1 {
+		for id, author := range normExact {
+			matchedBy := "normalized_name"
+			if normViaAlias[id] {
+				matchedBy = "normalized_alias"
+			}
+			return author, matchedBy, false, nil
 		}
 	}
-	if len(normalized) == 1 {
-		for _, author := range normalized {
-			return author, "normalized_name", false, nil
-		}
-	}
-	if len(normalized) > 1 {
+	if len(normExact) > 1 {
 		return nil, "", true, nil
 	}
-	return nil, "", false, nil
+
+	// Tier 3: Jaro-Winkler fuzzy match. Collect the best score per author
+	// across both direct name and alias comparisons.
+	type scored struct {
+		author    *models.Author
+		score     float64
+		fromAlias bool
+	}
+	best := make(map[int64]*scored)
+	consider := func(a *models.Author, score float64, fromAlias bool) {
+		if a == nil {
+			return
+		}
+		existing, ok := best[a.ID]
+		if !ok || score > existing.score {
+			best[a.ID] = &scored{author: a, score: score, fromAlias: fromAlias}
+			return
+		}
+		if score == existing.score && existing.fromAlias && !fromAlias {
+			// Prefer a direct-name match over alias when scores tie.
+			existing.fromAlias = false
+		}
+	}
+	for idx := range all {
+		res := textutil.MatchAuthorName(name, all[idx].Name)
+		if res.Score < textutil.AuthorMatchAmbiguousMinimum {
+			continue
+		}
+		cp := all[idx]
+		consider(&cp, res.Score, false)
+	}
+	for _, alias := range aliases {
+		res := textutil.MatchAuthorName(name, alias.Name)
+		if res.Score < textutil.AuthorMatchAmbiguousMinimum {
+			continue
+		}
+		author, err := getAuthor(alias.AuthorID)
+		if err != nil {
+			return nil, "", false, err
+		}
+		if author == nil {
+			continue
+		}
+		consider(author, res.Score, true)
+	}
+	if len(best) == 0 {
+		return nil, "", false, nil
+	}
+
+	var top *scored
+	var second float64
+	for _, s := range best {
+		if top == nil || s.score > top.score {
+			if top != nil {
+				second = top.score
+			}
+			top = s
+		} else if s.score > second {
+			second = s.score
+		}
+	}
+	if top.score >= textutil.AuthorMatchAutoThreshold {
+		// Require a clear margin over any close runner-up before auto-matching.
+		const fuzzyTieMargin = 0.02
+		if len(best) > 1 && top.score-second < fuzzyTieMargin {
+			return nil, "", true, nil
+		}
+		matchedBy := "fuzzy_name"
+		if top.fromAlias {
+			matchedBy = "fuzzy_alias"
+		}
+		return top.author, matchedBy, false, nil
+	}
+	// Best score is in the ambiguous band (0.88 <= score < 0.94): surface as
+	// review rather than silently create or merge.
+	return nil, "", true, nil
+}
+
+// shouldRecordAuthorVariantAlias returns true when the matchedBy tier is one
+// that identifies the canonical author via a form different from the supplied
+// ABS name, so recording the ABS form as an alias is helpful. "alias" and
+// "name" are omitted because the ABS name already equals the alias/canonical
+// name and re-recording would be a no-op.
+func shouldRecordAuthorVariantAlias(matchedBy string) bool {
+	switch matchedBy {
+	case "normalized_name", "normalized_alias", "fuzzy_name", "fuzzy_alias":
+		return true
+	}
+	return false
 }
 
 func (i *Importer) recordSecondaryAuthors(ctx context.Context, canonicalID int64, extras []NormalizedAuthor) {
@@ -1316,39 +1566,83 @@ func (i *Importer) lookupUpstreamAuthor(ctx context.Context, name string) (*mode
 	if name == "" {
 		return nil, false, nil
 	}
-	want := normalizeAuthorName(name)
-	var match *models.Author
-	matchedQuery := ""
+	const (
+		exactScore     = 1.0
+		fuzzyTieMargin = 0.02
+	)
+	var (
+		best         *models.Author
+		bestScore    float64
+		secondScore  float64
+		matchedQuery string
+		sawAmbiguous bool
+		exactHits    = make(map[string]struct{})
+	)
 	for _, query := range authorSearchQueries(name) {
 		results, err := i.meta.SearchAuthors(ctx, query)
 		if err != nil {
 			return nil, false, err
 		}
 		for idx := range results {
-			if normalizeAuthorName(results[idx].Name) != want {
+			res := textutil.MatchAuthorName(name, results[idx].Name)
+			var score float64
+			switch res.Kind {
+			case textutil.AuthorMatchExact:
+				score = exactScore
+			case textutil.AuthorMatchFuzzyAuto:
+				score = res.Score
+			case textutil.AuthorMatchFuzzyAmbiguous:
+				sawAmbiguous = true
+				continue
+			default:
 				continue
 			}
-			if match != nil {
-				slog.Info("abs import: upstream author match ambiguous", "author", name, "query", query)
-				return nil, true, nil
+			cp := results[idx]
+			// Treat duplicates of the same upstream foreignID as the same
+			// candidate rather than an ambiguity signal.
+			if best != nil && best.ForeignID != "" && best.ForeignID == cp.ForeignID {
+				if score > bestScore {
+					bestScore = score
+				}
+				continue
 			}
-			copy := results[idx]
-			match = &copy
+			if score >= exactScore {
+				exactHits[cp.ForeignID] = struct{}{}
+			}
+			if best == nil || score > bestScore {
+				secondScore = bestScore
+				best = &cp
+				bestScore = score
+				matchedQuery = query
+			} else if score > secondScore {
+				secondScore = score
+			}
 		}
-		if match != nil {
-			matchedQuery = query
+		if best != nil && bestScore >= exactScore {
 			break
 		}
 	}
-	if match == nil {
+	if best == nil {
+		if sawAmbiguous {
+			slog.Info("abs import: upstream author match ambiguous band", "author", name)
+			return nil, true, nil
+		}
 		slog.Debug("abs import: upstream author match not found", "author", name, "queries", authorSearchQueries(name))
 		return nil, false, nil
 	}
-	full, err := i.meta.GetAuthor(ctx, match.ForeignID)
+	if len(exactHits) > 1 {
+		slog.Info("abs import: upstream author match ambiguous", "author", name, "hits", len(exactHits))
+		return nil, true, nil
+	}
+	if bestScore < exactScore && bestScore-secondScore < fuzzyTieMargin {
+		slog.Info("abs import: upstream author match ambiguous (tie)", "author", name, "best", bestScore, "second", secondScore)
+		return nil, true, nil
+	}
+	full, err := i.meta.GetAuthor(ctx, best.ForeignID)
 	if err != nil {
 		return nil, false, err
 	}
-	slog.Info("abs import: upstream author matched", "author", name, "query", matchedQuery, "foreignId", match.ForeignID)
+	slog.Info("abs import: upstream author matched", "author", name, "query", matchedQuery, "foreignId", best.ForeignID, "score", bestScore)
 	return full, false, nil
 }
 
@@ -1590,6 +1884,142 @@ func bookABSCandidateValue(book *models.Book, item NormalizedLibraryItem, field 
 	return SerializeBookConflictValue(book, field)
 }
 
+func bookSnapshot(book *models.Book) *bookRollbackSnapshot {
+	if book == nil {
+		return nil
+	}
+	return &bookRollbackSnapshot{
+		ForeignID:             book.ForeignID,
+		AuthorID:              book.AuthorID,
+		Title:                 book.Title,
+		SortTitle:             book.SortTitle,
+		OriginalTitle:         book.OriginalTitle,
+		Description:           book.Description,
+		ImageURL:              book.ImageURL,
+		ReleaseDate:           cloneTimePtr(book.ReleaseDate),
+		Genres:                append([]string(nil), book.Genres...),
+		AverageRating:         book.AverageRating,
+		RatingsCount:          book.RatingsCount,
+		Monitored:             book.Monitored,
+		Status:                book.Status,
+		AnyEditionOK:          book.AnyEditionOK,
+		SelectedEditionID:     cloneInt64Ptr(book.SelectedEditionID),
+		Language:              book.Language,
+		MediaType:             book.MediaType,
+		Narrator:              book.Narrator,
+		DurationSeconds:       book.DurationSeconds,
+		ASIN:                  book.ASIN,
+		CalibreID:             cloneInt64Ptr(book.CalibreID),
+		MetadataProvider:      book.MetadataProvider,
+		LastMetadataRefreshAt: cloneTimePtr(book.LastMetadataRefreshAt),
+	}
+}
+
+func bookSnapshotMetadata(data map[string]any, before, after *bookRollbackSnapshot) runEntityMetadataEnvelope {
+	return runEntityMetadataEnvelope{
+		Kind:    runEntityMetadataKind,
+		Version: runEntityMetadataVersion,
+		Data:    data,
+		Snapshot: &runEntitySnapshotEnvelope{
+			EntityType: entityTypeBook,
+			Before:     marshalSnapshotPayload(before),
+			After:      marshalSnapshotPayload(after),
+		},
+	}
+}
+
+func authorSnapshot(author *models.Author) *authorRollbackSnapshot {
+	if author == nil {
+		return nil
+	}
+	return &authorRollbackSnapshot{
+		ForeignID:             author.ForeignID,
+		Name:                  author.Name,
+		SortName:              author.SortName,
+		Description:           author.Description,
+		ImageURL:              author.ImageURL,
+		Disambiguation:        author.Disambiguation,
+		MetadataProvider:      author.MetadataProvider,
+		LastMetadataRefreshAt: cloneTimePtr(author.LastMetadataRefreshAt),
+	}
+}
+
+func authorSnapshotMetadata(data map[string]any, before, after *authorRollbackSnapshot) runEntityMetadataEnvelope {
+	return runEntityMetadataEnvelope{
+		Kind:    runEntityMetadataKind,
+		Version: runEntityMetadataVersion,
+		Data:    data,
+		Snapshot: &runEntitySnapshotEnvelope{
+			EntityType: entityTypeAuthor,
+			Before:     marshalSnapshotPayload(before),
+			After:      marshalSnapshotPayload(after),
+		},
+	}
+}
+
+// marshalSnapshotPayload encodes a concrete snapshot struct into the
+// envelope's RawMessage slot. A nil input returns a nil payload so the
+// omitempty tag drops the field entirely.
+func marshalSnapshotPayload(v any) json.RawMessage {
+	if v == nil {
+		return nil
+	}
+	// Guard against typed-nil pointers: json.Marshal on a (*T)(nil) encodes
+	// "null", which is indistinguishable from a genuinely absent snapshot
+	// and would defeat before/after gating.
+	switch t := v.(type) {
+	case *bookRollbackSnapshot:
+		if t == nil {
+			return nil
+		}
+	case *authorRollbackSnapshot:
+		if t == nil {
+			return nil
+		}
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+func (i *Importer) recordBookBeforeSnapshot(ctx context.Context, runID int64, cfg ImportConfig, item NormalizedLibraryItem, externalID string, book *models.Book, outcome string, data map[string]any) error {
+	if cfg.DryRun || book == nil {
+		return nil
+	}
+	return i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeBook, externalID, book.ID, outcome, bookSnapshotMetadata(data, bookSnapshot(book), nil))
+}
+
+func (i *Importer) recordBookAfterSnapshot(ctx context.Context, runID int64, cfg ImportConfig, item NormalizedLibraryItem, bookID int64, outcome string, data map[string]any) error {
+	if cfg.DryRun || bookID == 0 {
+		return nil
+	}
+	book, err := i.books.GetByID(ctx, bookID)
+	if err != nil || book == nil {
+		return err
+	}
+	return i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeBook, item.ItemID, book.ID, outcome, bookSnapshotMetadata(data, nil, bookSnapshot(book)))
+}
+
+func (i *Importer) recordAuthorBeforeSnapshot(ctx context.Context, runID int64, cfg ImportConfig, item NormalizedLibraryItem, externalID string, author *models.Author, outcome string, data map[string]any) error {
+	if cfg.DryRun || author == nil {
+		return nil
+	}
+	return i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeAuthor, externalID, author.ID, outcome, authorSnapshotMetadata(data, authorSnapshot(author), nil))
+}
+
+func (i *Importer) recordAuthorAfterSnapshot(ctx context.Context, runID int64, cfg ImportConfig, item NormalizedLibraryItem, externalID string, authorID int64, outcome string, data map[string]any) error {
+	if cfg.DryRun || authorID == 0 || i.authors == nil {
+		return nil
+	}
+	author, err := i.authors.GetByID(ctx, authorID)
+	if err != nil || author == nil {
+		return err
+	}
+	return i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeAuthor, externalID, author.ID, outcome, authorSnapshotMetadata(data, nil, authorSnapshot(author)))
+}
+
 func (i *Importer) upsertBook(ctx context.Context, cfg ImportConfig, runID int64, author *models.Author, item NormalizedLibraryItem, allowCreate bool) (*bookUpsertResult, bool, bool, metadataMergeResult, error) {
 	title := strings.TrimSpace(item.Title)
 	if title == "" {
@@ -1609,6 +2039,9 @@ func (i *Importer) upsertBook(ctx context.Context, cfg ImportConfig, runID int64
 			}
 			if existing != nil {
 				if !cfg.DryRun {
+					if err := i.recordBookBeforeSnapshot(ctx, runID, cfg, item, externalID, existing, itemOutcomeUpdated, nil); err != nil {
+						return nil, false, false, metadataMergeResult{}, err
+					}
 					if err := i.applyBookFields(ctx, existing, author.ID, item); err != nil {
 						return nil, false, false, metadataMergeResult{}, err
 					}
@@ -1631,6 +2064,9 @@ func (i *Importer) upsertBook(ctx context.Context, cfg ImportConfig, runID int64
 		return nil, false, false, metadataMergeResult{}, err
 	} else if existing != nil {
 		if !cfg.DryRun {
+			if err := i.recordBookBeforeSnapshot(ctx, runID, cfg, item, externalID, existing, itemOutcomeUpdated, nil); err != nil {
+				return nil, false, false, metadataMergeResult{}, err
+			}
 			if err := i.applyBookFields(ctx, existing, author.ID, item); err != nil {
 				return nil, false, false, metadataMergeResult{}, err
 			}
@@ -1656,6 +2092,9 @@ func (i *Importer) upsertBook(ctx context.Context, cfg ImportConfig, runID int64
 		}
 	} else if match != nil {
 		if !cfg.DryRun {
+			if err := i.recordBookBeforeSnapshot(ctx, runID, cfg, item, externalID, match, itemOutcomeLinked, nil); err != nil {
+				return nil, false, false, metadataMergeResult{}, err
+			}
 			if err := i.applyBookFields(ctx, match, author.ID, item); err != nil {
 				return nil, false, false, metadataMergeResult{}, err
 			}
@@ -1735,6 +2174,9 @@ func (i *Importer) upsertManualBook(ctx context.Context, cfg ImportConfig, runID
 		return nil, false, false, metadataMergeResult{}, err
 	} else if existing != nil {
 		if !cfg.DryRun {
+			if err := i.recordBookBeforeSnapshot(ctx, runID, cfg, item, item.ItemID, existing, itemOutcomeLinked, map[string]any{"matchedBy": "manual_book"}); err != nil {
+				return nil, false, false, metadataMergeResult{}, err
+			}
 			existing.AuthorID = author.ID
 			i.applyABSFormatFields(existing, item)
 			if err := i.books.Update(ctx, existing); err != nil {
@@ -2053,6 +2495,14 @@ func (i *Importer) upsertProvenance(ctx context.Context, p *models.ABSProvenance
 	return i.provenance.Upsert(ctx, p)
 }
 
+func (i *Importer) deleteProvenanceByLocal(ctx context.Context, entityType string, localID int64) (int, error) {
+	if i.provenance == nil || localID == 0 {
+		return 0, nil
+	}
+	count, err := i.provenance.DeleteByLocal(ctx, entityType, localID)
+	return int(count), err
+}
+
 type RollbackStats struct {
 	ActionsPlanned     int `json:"actionsPlanned"`
 	EntitiesDeleted    int `json:"entitiesDeleted"`
@@ -2062,12 +2512,13 @@ type RollbackStats struct {
 }
 
 type RollbackAction struct {
-	EntityType string `json:"entityType"`
-	ExternalID string `json:"externalId"`
-	LocalID    int64  `json:"localId"`
-	Outcome    string `json:"outcome"`
-	Action     string `json:"action"`
-	Reason     string `json:"reason,omitempty"`
+	EntityType  string `json:"entityType"`
+	ExternalID  string `json:"externalId"`
+	LocalID     int64  `json:"localId"`
+	DisplayName string `json:"displayName,omitempty"`
+	Outcome     string `json:"outcome"`
+	Action      string `json:"action"`
+	Reason      string `json:"reason,omitempty"`
 }
 
 type RollbackResult struct {
@@ -2141,6 +2592,12 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 	if i.runs == nil || i.runEntities == nil {
 		return nil, errors.New("abs rollback is unavailable")
 	}
+	// Nil-repo guards: every case below relies on at least one of these, and a
+	// silent nil-deref would turn "safe rollback" into a crash that leaves the
+	// run in an inconsistent half-rolled state.
+	if i.provenance == nil || i.books == nil || i.authors == nil || i.series == nil || i.editions == nil {
+		return nil, errors.New("abs rollback is unavailable: one or more repositories are not configured")
+	}
 	run, err := i.runs.GetByID(ctx, runID)
 	if err != nil {
 		return nil, err
@@ -2167,53 +2624,94 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 	})
 	type set map[int64]struct{}
 	deletedBooks := make(set)
+	createdBookEntities := make(map[int64]models.ABSImportRunEntity)
+	for _, entity := range entities {
+		if entity.EntityType == entityTypeBook && entity.Outcome == itemOutcomeCreated && entity.LocalID != 0 {
+			createdBookEntities[entity.LocalID] = entity
+		}
+	}
 	for _, entity := range entities {
 		current, err := i.provenance.GetByExternal(ctx, entity.SourceID, entity.LibraryID, entity.EntityType, entity.ExternalID)
 		if err != nil {
 			result.Stats.Failed++
 			result.Actions = append(result.Actions, RollbackAction{
-				EntityType: entity.EntityType,
-				ExternalID: entity.ExternalID,
-				LocalID:    entity.LocalID,
-				Outcome:    entity.Outcome,
-				Action:     "inspect",
-				Reason:     err.Error(),
+				EntityType:  entity.EntityType,
+				ExternalID:  entity.ExternalID,
+				LocalID:     entity.LocalID,
+				DisplayName: i.rollbackActionDisplayName(ctx, entity),
+				Outcome:     entity.Outcome,
+				Action:      "inspect",
+				Reason:      err.Error(),
 			})
 			continue
 		}
-		if current == nil || current.ImportRunID == nil || *current.ImportRunID != runID {
+		// NOTE: Intentionally no blanket "current owner must equal runID" gate
+		// here. A shared-entity restore (book/author snapshot) is safe to run
+		// field-by-field even if the provenance now points to another run —
+		// restoreFromSnapshot only reverts fields where current == after, so
+		// post-import edits or later re-imports stay intact. Destructive cases
+		// (delete_book, delete_edition, delete_author, unlink_provenance) still
+		// check ownership per-case below.
+		if current == nil {
 			result.Stats.Skipped++
 			result.Actions = append(result.Actions, RollbackAction{
-				EntityType: entity.EntityType,
-				ExternalID: entity.ExternalID,
-				LocalID:    entity.LocalID,
-				Outcome:    entity.Outcome,
-				Action:     "skip",
-				Reason:     "run is no longer the current provenance owner for this entity",
+				EntityType:  entity.EntityType,
+				ExternalID:  entity.ExternalID,
+				LocalID:     entity.LocalID,
+				DisplayName: i.rollbackActionDisplayName(ctx, entity),
+				Outcome:     entity.Outcome,
+				Action:      "skip",
+				Reason:      "already rolled back",
+			})
+			continue
+		}
+		currentMatchesEntity := current.LocalID == entity.LocalID
+		ownedByRun := currentMatchesEntity && current.ImportRunID != nil && *current.ImportRunID == runID
+		if !currentMatchesEntity {
+			result.Stats.Skipped++
+			result.Actions = append(result.Actions, RollbackAction{
+				EntityType:  entity.EntityType,
+				ExternalID:  entity.ExternalID,
+				LocalID:     entity.LocalID,
+				DisplayName: i.rollbackActionDisplayName(ctx, entity),
+				Outcome:     entity.Outcome,
+				Action:      "skip",
+				Reason:      "provenance now points to a different local entity",
 			})
 			continue
 		}
 
 		action := RollbackAction{
-			EntityType: entity.EntityType,
-			ExternalID: entity.ExternalID,
-			LocalID:    entity.LocalID,
-			Outcome:    entity.Outcome,
+			EntityType:  entity.EntityType,
+			ExternalID:  entity.ExternalID,
+			LocalID:     entity.LocalID,
+			DisplayName: i.rollbackActionDisplayName(ctx, entity),
+			Outcome:     entity.Outcome,
 		}
-		metadata := parseJSONObject(entity.MetadataJSON)
+		metadata := runEntityMetadataData(entity.MetadataJSON)
+		bookBefore, bookAfter, hasBookSnapshot := bookRollbackSnapshotFromMetadata(entity.MetadataJSON)
+		authorBefore, authorAfter, hasAuthorSnapshot := authorRollbackSnapshotFromMetadata(entity.MetadataJSON)
 		switch {
 		case entity.EntityType == entityTypeBook && entity.Outcome == itemOutcomeCreated:
+			if !ownedByRun {
+				action.Action = "skip"
+				action.Reason = "run is no longer the current provenance owner for this book"
+				result.Stats.Skipped++
+				result.Actions = append(result.Actions, action)
+				continue
+			}
 			action.Action = "delete_book"
 			result.Stats.ActionsPlanned++
 			if !preview {
-				if err := i.provenance.DeleteByExternal(ctx, entity.SourceID, entity.LibraryID, entity.EntityType, entity.ExternalID); err != nil {
+				if err := i.books.Delete(ctx, entity.LocalID); err != nil {
 					action.Action = "skip"
 					action.Reason = err.Error()
 					result.Stats.Failed++
 					result.Actions = append(result.Actions, action)
 					continue
 				}
-				if err := i.books.Delete(ctx, entity.LocalID); err != nil {
+				unlinked, err := i.deleteProvenanceByLocal(ctx, entity.EntityType, entity.LocalID)
+				if err != nil {
 					action.Action = "skip"
 					action.Reason = err.Error()
 					result.Stats.Failed++
@@ -2222,7 +2720,182 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 				}
 				deletedBooks[entity.LocalID] = struct{}{}
 				result.Stats.EntitiesDeleted++
-				result.Stats.ProvenanceUnlinked++
+				result.Stats.ProvenanceUnlinked += unlinked
+			}
+		case entity.EntityType == entityTypeBook && hasBookSnapshot:
+			// Snapshot restore is safe to attempt regardless of provenance
+			// ownership: restoreBookFromSnapshot only reverts fields where the
+			// current value still equals the post-import ("after") snapshot,
+			// so post-import user edits stay intact and a shared canonical book
+			// owned by another run isn't harmed.
+			action.Action = "restore_book"
+			result.Stats.ActionsPlanned++
+			if !preview {
+				book, err := i.books.GetByID(ctx, entity.LocalID)
+				if err != nil {
+					action.Action = "skip"
+					action.Reason = err.Error()
+					result.Stats.Failed++
+					result.Actions = append(result.Actions, action)
+					continue
+				}
+				if book == nil {
+					action.Action = "skip"
+					action.Reason = "book no longer exists"
+					result.Stats.Skipped++
+					result.Actions = append(result.Actions, action)
+					continue
+				}
+				if restoreBookFromSnapshot(book, bookBefore, bookAfter) {
+					if err := i.books.Update(ctx, book); err != nil {
+						action.Action = "skip"
+						action.Reason = err.Error()
+						result.Stats.Failed++
+						result.Actions = append(result.Actions, action)
+						continue
+					}
+				}
+				if ownedByRun {
+					if err := i.provenance.DeleteByExternal(ctx, entity.SourceID, entity.LibraryID, entity.EntityType, entity.ExternalID); err != nil {
+						action.Action = "skip"
+						action.Reason = err.Error()
+						result.Stats.Failed++
+						result.Actions = append(result.Actions, action)
+						continue
+					}
+					result.Stats.ProvenanceUnlinked++
+				}
+			}
+		case entity.EntityType == entityTypeAuthor && entity.Outcome == itemOutcomeCreated:
+			if !ownedByRun {
+				action.Action = "skip"
+				action.Reason = "run is no longer the current provenance owner for this author"
+				result.Stats.Skipped++
+				result.Actions = append(result.Actions, action)
+				continue
+			}
+			books, err := i.books.ListByAuthorIncludingExcluded(ctx, entity.LocalID)
+			if err != nil {
+				action.Action = "skip"
+				action.Reason = err.Error()
+				result.Stats.Failed++
+				result.Actions = append(result.Actions, action)
+				continue
+			}
+			remaining := 0
+			blocked := false
+			for _, book := range books {
+				if _, ok := deletedBooks[book.ID]; ok {
+					continue
+				}
+				if bookEntity, ok := createdBookEntities[book.ID]; ok {
+					bookCurrent, err := i.provenance.GetByExternal(ctx, bookEntity.SourceID, bookEntity.LibraryID, bookEntity.EntityType, bookEntity.ExternalID)
+					if err != nil {
+						action.Action = "skip"
+						action.Reason = err.Error()
+						result.Stats.Failed++
+						blocked = true
+						break
+					}
+					if bookCurrent != nil && bookCurrent.ImportRunID != nil && *bookCurrent.ImportRunID == runID {
+						if !preview {
+							if err := i.books.Delete(ctx, book.ID); err != nil {
+								action.Action = "skip"
+								action.Reason = err.Error()
+								result.Stats.Failed++
+								blocked = true
+								break
+							}
+							unlinked, err := i.deleteProvenanceByLocal(ctx, bookEntity.EntityType, book.ID)
+							if err != nil {
+								action.Action = "skip"
+								action.Reason = err.Error()
+								result.Stats.Failed++
+								blocked = true
+								break
+							}
+							deletedBooks[book.ID] = struct{}{}
+							result.Stats.EntitiesDeleted++
+							result.Stats.ProvenanceUnlinked += unlinked
+						}
+						continue
+					}
+				}
+				remaining++
+			}
+			if blocked {
+				result.Actions = append(result.Actions, action)
+				continue
+			}
+			if remaining > 0 {
+				action.Action = "skip"
+				action.Reason = "author still has linked books"
+				result.Stats.Skipped++
+				result.Actions = append(result.Actions, action)
+				continue
+			}
+			action.Action = "delete_author"
+			result.Stats.ActionsPlanned++
+			if !preview {
+				if err := i.authors.Delete(ctx, entity.LocalID); err != nil {
+					action.Action = "skip"
+					action.Reason = err.Error()
+					result.Stats.Failed++
+					result.Actions = append(result.Actions, action)
+					continue
+				}
+				unlinked, err := i.deleteProvenanceByLocal(ctx, entity.EntityType, entity.LocalID)
+				if err != nil {
+					action.Action = "skip"
+					action.Reason = err.Error()
+					result.Stats.Failed++
+					result.Actions = append(result.Actions, action)
+					continue
+				}
+				result.Stats.EntitiesDeleted++
+				result.Stats.ProvenanceUnlinked += unlinked
+			}
+		case entity.EntityType == entityTypeAuthor && hasAuthorSnapshot:
+			// Same safety argument as the book snapshot case: field-level
+			// restore preserves post-import author edits and won't trample
+			// canonical shared data owned by another run.
+			action.Action = "restore_author"
+			result.Stats.ActionsPlanned++
+			if !preview {
+				author, err := i.authors.GetByID(ctx, entity.LocalID)
+				if err != nil {
+					action.Action = "skip"
+					action.Reason = err.Error()
+					result.Stats.Failed++
+					result.Actions = append(result.Actions, action)
+					continue
+				}
+				if author == nil {
+					action.Action = "skip"
+					action.Reason = "author no longer exists"
+					result.Stats.Skipped++
+					result.Actions = append(result.Actions, action)
+					continue
+				}
+				if restoreAuthorFromSnapshot(author, authorBefore, authorAfter) {
+					if err := i.authors.Update(ctx, author); err != nil {
+						action.Action = "skip"
+						action.Reason = err.Error()
+						result.Stats.Failed++
+						result.Actions = append(result.Actions, action)
+						continue
+					}
+				}
+				if ownedByRun {
+					if err := i.provenance.DeleteByExternal(ctx, entity.SourceID, entity.LibraryID, entity.EntityType, entity.ExternalID); err != nil {
+						action.Action = "skip"
+						action.Reason = err.Error()
+						result.Stats.Failed++
+						result.Actions = append(result.Actions, action)
+						continue
+					}
+					result.Stats.ProvenanceUnlinked++
+				}
 			}
 		case entity.EntityType == entityTypeEdition && entity.Outcome == itemOutcomeCreated:
 			if bookID, _ := metadata["bookId"].(float64); int64(bookID) != 0 {
@@ -2234,16 +2907,16 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 					continue
 				}
 			}
+			if !ownedByRun {
+				action.Action = "skip"
+				action.Reason = "run is no longer the current provenance owner for this edition"
+				result.Stats.Skipped++
+				result.Actions = append(result.Actions, action)
+				continue
+			}
 			action.Action = "delete_edition"
 			result.Stats.ActionsPlanned++
 			if !preview {
-				if err := i.provenance.DeleteByExternal(ctx, entity.SourceID, entity.LibraryID, entity.EntityType, entity.ExternalID); err != nil {
-					action.Action = "skip"
-					action.Reason = err.Error()
-					result.Stats.Failed++
-					result.Actions = append(result.Actions, action)
-					continue
-				}
 				if err := i.editions.Delete(ctx, entity.LocalID); err != nil {
 					action.Action = "skip"
 					action.Reason = err.Error()
@@ -2251,10 +2924,25 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 					result.Actions = append(result.Actions, action)
 					continue
 				}
+				unlinked, err := i.deleteProvenanceByLocal(ctx, entity.EntityType, entity.LocalID)
+				if err != nil {
+					action.Action = "skip"
+					action.Reason = err.Error()
+					result.Stats.Failed++
+					result.Actions = append(result.Actions, action)
+					continue
+				}
 				result.Stats.EntitiesDeleted++
-				result.Stats.ProvenanceUnlinked++
+				result.Stats.ProvenanceUnlinked += unlinked
 			}
 		case entity.EntityType == entityTypeSeries:
+			if !ownedByRun {
+				action.Action = "skip"
+				action.Reason = "run is no longer the current provenance owner for this series"
+				result.Stats.Skipped++
+				result.Actions = append(result.Actions, action)
+				continue
+			}
 			bookID, _ := metadata["bookId"].(float64)
 			if bookID > 0 {
 				action.Action = "unlink_series"
@@ -2277,7 +2965,13 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 						}
 						if remaining <= 0 {
 							if !preview {
-								_ = i.series.Delete(ctx, entity.LocalID)
+								if err := i.series.Delete(ctx, entity.LocalID); err != nil {
+									action.Action = "skip"
+									action.Reason = err.Error()
+									result.Stats.Failed++
+									result.Actions = append(result.Actions, action)
+									continue
+								}
 								result.Stats.EntitiesDeleted++
 							}
 							action.Action = "delete_series"
@@ -2285,7 +2979,17 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 					}
 				}
 				if !preview {
-					if err := i.provenance.DeleteByExternal(ctx, entity.SourceID, entity.LibraryID, entity.EntityType, entity.ExternalID); err == nil {
+					if action.Action == "delete_series" {
+						unlinked, err := i.deleteProvenanceByLocal(ctx, entity.EntityType, entity.LocalID)
+						if err != nil {
+							action.Action = "skip"
+							action.Reason = err.Error()
+							result.Stats.Failed++
+							result.Actions = append(result.Actions, action)
+							continue
+						}
+						result.Stats.ProvenanceUnlinked += unlinked
+					} else if err := i.provenance.DeleteByExternal(ctx, entity.SourceID, entity.LibraryID, entity.EntityType, entity.ExternalID); err == nil {
 						result.Stats.ProvenanceUnlinked++
 					}
 				}
@@ -2303,50 +3007,14 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 					result.Stats.ProvenanceUnlinked++
 				}
 			}
-		case entity.EntityType == entityTypeAuthor && entity.Outcome == itemOutcomeCreated:
-			books, err := i.books.ListByAuthorIncludingExcluded(ctx, entity.LocalID)
-			if err != nil {
+		default:
+			if !ownedByRun {
 				action.Action = "skip"
-				action.Reason = err.Error()
-				result.Stats.Failed++
-				result.Actions = append(result.Actions, action)
-				continue
-			}
-			remaining := 0
-			for _, book := range books {
-				if _, ok := deletedBooks[book.ID]; ok {
-					continue
-				}
-				remaining++
-			}
-			if remaining > 0 {
-				action.Action = "skip"
-				action.Reason = "author still has linked books"
+				action.Reason = "run is no longer the current provenance owner for this entity"
 				result.Stats.Skipped++
 				result.Actions = append(result.Actions, action)
 				continue
 			}
-			action.Action = "delete_author"
-			result.Stats.ActionsPlanned++
-			if !preview {
-				if err := i.provenance.DeleteByExternal(ctx, entity.SourceID, entity.LibraryID, entity.EntityType, entity.ExternalID); err != nil {
-					action.Action = "skip"
-					action.Reason = err.Error()
-					result.Stats.Failed++
-					result.Actions = append(result.Actions, action)
-					continue
-				}
-				if err := i.authors.Delete(ctx, entity.LocalID); err != nil {
-					action.Action = "skip"
-					action.Reason = err.Error()
-					result.Stats.Failed++
-					result.Actions = append(result.Actions, action)
-					continue
-				}
-				result.Stats.EntitiesDeleted++
-				result.Stats.ProvenanceUnlinked++
-			}
-		default:
 			action.Action = "unlink_provenance"
 			result.Stats.ActionsPlanned++
 			if !preview {
@@ -2369,6 +3037,269 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 		result.Status = runStatusRolledBack
 	}
 	return result, nil
+}
+
+func runEntityMetadataData(raw string) map[string]any {
+	envelope, ok := parseRunEntityMetadata(raw)
+	if ok {
+		return envelope.Data
+	}
+	return parseJSONObject(raw)
+}
+
+func bookRollbackSnapshotFromMetadata(raw string) (*bookRollbackSnapshot, *bookRollbackSnapshot, bool) {
+	envelope, ok := parseRunEntityMetadata(raw)
+	if !ok || envelope.Snapshot == nil || envelope.Snapshot.EntityType != entityTypeBook {
+		return nil, nil, false
+	}
+	if len(envelope.Snapshot.Before) == 0 || len(envelope.Snapshot.After) == 0 {
+		return nil, nil, false
+	}
+	var before, after bookRollbackSnapshot
+	if err := json.Unmarshal(envelope.Snapshot.Before, &before); err != nil {
+		return nil, nil, false
+	}
+	if err := json.Unmarshal(envelope.Snapshot.After, &after); err != nil {
+		return nil, nil, false
+	}
+	return &before, &after, true
+}
+
+func authorRollbackSnapshotFromMetadata(raw string) (*authorRollbackSnapshot, *authorRollbackSnapshot, bool) {
+	envelope, ok := parseRunEntityMetadata(raw)
+	if !ok || envelope.Snapshot == nil || envelope.Snapshot.EntityType != entityTypeAuthor {
+		return nil, nil, false
+	}
+	if len(envelope.Snapshot.Before) == 0 || len(envelope.Snapshot.After) == 0 {
+		return nil, nil, false
+	}
+	var before, after authorRollbackSnapshot
+	if err := json.Unmarshal(envelope.Snapshot.Before, &before); err != nil {
+		return nil, nil, false
+	}
+	if err := json.Unmarshal(envelope.Snapshot.After, &after); err != nil {
+		return nil, nil, false
+	}
+	return &before, &after, true
+}
+
+func parseRunEntityMetadata(raw string) (runEntityMetadataEnvelope, bool) {
+	var envelope runEntityMetadataEnvelope
+	if strings.TrimSpace(raw) == "" {
+		return envelope, false
+	}
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+		return envelope, false
+	}
+	if envelope.Kind != runEntityMetadataKind || envelope.Version != runEntityMetadataVersion {
+		return envelope, false
+	}
+	if envelope.Data == nil {
+		envelope.Data = map[string]any{}
+	}
+	return envelope, true
+}
+
+func restoreBookFromSnapshot(book *models.Book, before, after *bookRollbackSnapshot) bool {
+	if book == nil || before == nil || after == nil {
+		return false
+	}
+	changed := false
+	restoreString(&book.ForeignID, before.ForeignID, after.ForeignID, &changed)
+	restoreInt64(&book.AuthorID, before.AuthorID, after.AuthorID, &changed)
+	restoreString(&book.Title, before.Title, after.Title, &changed)
+	restoreString(&book.SortTitle, before.SortTitle, after.SortTitle, &changed)
+	restoreString(&book.OriginalTitle, before.OriginalTitle, after.OriginalTitle, &changed)
+	restoreString(&book.Description, before.Description, after.Description, &changed)
+	restoreString(&book.ImageURL, before.ImageURL, after.ImageURL, &changed)
+	restoreTimePtr(&book.ReleaseDate, before.ReleaseDate, after.ReleaseDate, &changed)
+	restoreStrings(&book.Genres, before.Genres, after.Genres, &changed)
+	restoreFloat64(&book.AverageRating, before.AverageRating, after.AverageRating, &changed)
+	restoreInt(&book.RatingsCount, before.RatingsCount, after.RatingsCount, &changed)
+	restoreBool(&book.Monitored, before.Monitored, after.Monitored, &changed)
+	restoreString(&book.Status, before.Status, after.Status, &changed)
+	restoreBool(&book.AnyEditionOK, before.AnyEditionOK, after.AnyEditionOK, &changed)
+	restoreInt64Ptr(&book.SelectedEditionID, before.SelectedEditionID, after.SelectedEditionID, &changed)
+	restoreString(&book.Language, before.Language, after.Language, &changed)
+	restoreString(&book.MediaType, before.MediaType, after.MediaType, &changed)
+	restoreString(&book.Narrator, before.Narrator, after.Narrator, &changed)
+	restoreInt(&book.DurationSeconds, before.DurationSeconds, after.DurationSeconds, &changed)
+	restoreString(&book.ASIN, before.ASIN, after.ASIN, &changed)
+	restoreInt64Ptr(&book.CalibreID, before.CalibreID, after.CalibreID, &changed)
+	restoreString(&book.MetadataProvider, before.MetadataProvider, after.MetadataProvider, &changed)
+	restoreTimePtr(&book.LastMetadataRefreshAt, before.LastMetadataRefreshAt, after.LastMetadataRefreshAt, &changed)
+	return changed
+}
+
+// restoreAuthorFromSnapshot mirrors restoreBookFromSnapshot: it only touches
+// fields the importer writes, and only when the current value still matches
+// the post-import snapshot (so a post-import user edit stays intact).
+func restoreAuthorFromSnapshot(author *models.Author, before, after *authorRollbackSnapshot) bool {
+	if author == nil || before == nil || after == nil {
+		return false
+	}
+	changed := false
+	restoreString(&author.ForeignID, before.ForeignID, after.ForeignID, &changed)
+	restoreString(&author.Name, before.Name, after.Name, &changed)
+	restoreString(&author.SortName, before.SortName, after.SortName, &changed)
+	restoreString(&author.Description, before.Description, after.Description, &changed)
+	restoreString(&author.ImageURL, before.ImageURL, after.ImageURL, &changed)
+	restoreString(&author.Disambiguation, before.Disambiguation, after.Disambiguation, &changed)
+	restoreString(&author.MetadataProvider, before.MetadataProvider, after.MetadataProvider, &changed)
+	restoreTimePtr(&author.LastMetadataRefreshAt, before.LastMetadataRefreshAt, after.LastMetadataRefreshAt, &changed)
+	return changed
+}
+
+func restoreString(target *string, before, after string, changed *bool) {
+	if *target != after {
+		return
+	}
+	if *target != before {
+		*changed = true
+	}
+	*target = before
+}
+
+func restoreInt(target *int, before, after int, changed *bool) {
+	if *target != after {
+		return
+	}
+	if *target != before {
+		*changed = true
+	}
+	*target = before
+}
+
+func restoreInt64(target *int64, before, after int64, changed *bool) {
+	if *target != after {
+		return
+	}
+	if *target != before {
+		*changed = true
+	}
+	*target = before
+}
+
+func restoreFloat64(target *float64, before, after float64, changed *bool) {
+	if *target != after {
+		return
+	}
+	if *target != before {
+		*changed = true
+	}
+	*target = before
+}
+
+func restoreBool(target *bool, before, after bool, changed *bool) {
+	if *target != after {
+		return
+	}
+	if *target != before {
+		*changed = true
+	}
+	*target = before
+}
+
+func restoreStrings(target *[]string, before, after []string, changed *bool) {
+	if !equalStrings(*target, after) {
+		return
+	}
+	if !equalStrings(*target, before) {
+		*changed = true
+	}
+	*target = append([]string(nil), before...)
+}
+
+func restoreInt64Ptr(target **int64, before, after *int64, changed *bool) {
+	if !equalInt64Ptr(*target, after) {
+		return
+	}
+	if !equalInt64Ptr(*target, before) {
+		*changed = true
+	}
+	*target = cloneInt64Ptr(before)
+}
+
+func restoreTimePtr(target **time.Time, before, after *time.Time, changed *bool) {
+	if !equalTimePtr(*target, after) {
+		return
+	}
+	if !equalTimePtr(*target, before) {
+		*changed = true
+	}
+	*target = cloneTimePtr(before)
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for idx := range a {
+		if a[idx] != b[idx] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalInt64Ptr(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+func equalTimePtr(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
+}
+
+func (i *Importer) rollbackActionDisplayName(ctx context.Context, entity models.ABSImportRunEntity) string {
+	if entity.LocalID == 0 {
+		return ""
+	}
+	switch entity.EntityType {
+	case entityTypeBook:
+		if i.books == nil {
+			return ""
+		}
+		book, err := i.books.GetByID(ctx, entity.LocalID)
+		if err != nil || book == nil {
+			return ""
+		}
+		return strings.TrimSpace(book.Title)
+	case entityTypeAuthor:
+		if i.authors == nil {
+			return ""
+		}
+		author, err := i.authors.GetByID(ctx, entity.LocalID)
+		if err != nil || author == nil {
+			return ""
+		}
+		return strings.TrimSpace(author.Name)
+	case entityTypeSeries:
+		if i.series == nil {
+			return ""
+		}
+		series, err := i.series.GetByID(ctx, entity.LocalID)
+		if err != nil || series == nil {
+			return ""
+		}
+		return strings.TrimSpace(series.Title)
+	case entityTypeEdition:
+		if i.editions == nil {
+			return ""
+		}
+		edition, err := i.editions.GetByForeignID(ctx, absForeignID("edition", entity.LibraryID, entity.ExternalID))
+		if err != nil || edition == nil {
+			return ""
+		}
+		return strings.TrimSpace(edition.Title)
+	default:
+		return ""
+	}
 }
 
 func (i *Importer) recordRunEntity(ctx context.Context, runID int64, cfg ImportConfig, libraryID, itemID, entityType, externalID string, localID int64, outcome string, metadata any) error {
@@ -2690,11 +3621,45 @@ func loadImportCheckpoint(ctx context.Context, settings *db.SettingsRepo) (*Impo
 	if err != nil || setting == nil || strings.TrimSpace(setting.Value) == "" {
 		return nil, err
 	}
+	return decodeImportCheckpoint(setting.Value)
+}
+
+func decodeImportCheckpoint(raw string) (*ImportCheckpoint, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "{}" || raw == "null" {
+		return nil, nil
+	}
 	var checkpoint ImportCheckpoint
-	if err := json.Unmarshal([]byte(setting.Value), &checkpoint); err != nil {
+	if err := json.Unmarshal([]byte(raw), &checkpoint); err != nil {
 		return nil, err
 	}
 	return &checkpoint, nil
+}
+
+func resumeConfigFromRun(run models.ABSImportRun, fallback ImportConfig) ImportConfig {
+	cfg := fallback.normalized()
+	var source ImportSourceSnapshot
+	rawSource := strings.TrimSpace(run.SourceConfigJSON)
+	hasSource := rawSource != "" && rawSource != "{}" && rawSource != "null"
+	if hasSource {
+		if err := json.Unmarshal([]byte(rawSource), &source); err != nil {
+			hasSource = false
+		}
+	}
+	if hasSource {
+		cfg.SourceID = firstNonEmpty(source.SourceID, run.SourceID, cfg.SourceID)
+		cfg.BaseURL = firstNonEmpty(source.BaseURL, run.BaseURL, cfg.BaseURL)
+		cfg.LibraryID = firstNonEmpty(source.LibraryID, run.LibraryID, cfg.LibraryID)
+		cfg.Label = firstNonEmpty(source.Label, run.SourceLabel, cfg.Label)
+		cfg.PathRemap = source.PathRemap
+	} else {
+		cfg.SourceID = firstNonEmpty(run.SourceID, cfg.SourceID)
+		cfg.BaseURL = firstNonEmpty(run.BaseURL, cfg.BaseURL)
+		cfg.LibraryID = firstNonEmpty(run.LibraryID, cfg.LibraryID)
+		cfg.Label = firstNonEmpty(run.SourceLabel, cfg.Label)
+	}
+	cfg.DryRun = run.DryRun
+	return cfg.normalized()
 }
 
 func importStartMessage(dryRun bool) string {
@@ -2718,11 +3683,16 @@ func importDoneMessage(dryRun bool) string {
 	return "done"
 }
 
+// rollbackEntityRank orders entities for rollback so children (editions) are
+// unwound before parents (books, series, authors). Editions first avoids
+// leaving dangling edition→book FK references while we restore the book;
+// authors last so book-count preconditions have already been reduced by
+// prior book-delete steps.
 func rollbackEntityRank(entity models.ABSImportRunEntity) int {
 	switch entity.EntityType {
-	case entityTypeBook:
-		return 0
 	case entityTypeEdition:
+		return 0
+	case entityTypeBook:
 		return 1
 	case entityTypeSeries:
 		return 2
@@ -2768,6 +3738,22 @@ func ptrInt64(value int64) *int64 {
 		return nil
 	}
 	return &value
+}
+
+func cloneInt64Ptr(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func cloneTimePtr(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	copy := value.UTC()
+	return &copy
 }
 
 func isbn13Ptr(raw string) *string {
