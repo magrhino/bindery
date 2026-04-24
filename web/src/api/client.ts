@@ -331,14 +331,24 @@ export const api = {
   absImportRuns: () => request<ABSImportRun[]>('/abs/import/runs'),
   absImportRollbackPreview: (runId: number) => request<ABSRollbackResult>(`/abs/import/runs/${runId}/rollback/preview`, { method: 'POST' }),
   absImportRollback: (runId: number) => request<ABSRollbackResult>(`/abs/import/runs/${runId}/rollback`, { method: 'POST' }),
-  absReviewItems: () => request<ABSReviewItem[]>('/abs/review'),
+  absReviewItems: (params?: { limit?: number; offset?: number }) => {
+    const q = new URLSearchParams()
+    if (params?.limit) q.set('limit', String(params.limit))
+    if (params?.offset) q.set('offset', String(params.offset))
+    return request<PaginatedResponse<ABSReviewItem>>(`/abs/review${q.toString() ? `?${q.toString()}` : ''}`)
+  },
   approveAbsReviewItem: (id: number) => request<ABSReviewItem>(`/abs/review/${id}/approve`, { method: 'POST' }),
   resolveAbsReviewAuthor: (id: number, data: { foreignAuthorId: string; authorName: string; applyTo?: 'same_author' }) =>
     request<{ updated: number }>(`/abs/review/${id}/resolve-author`, { method: 'POST', body: JSON.stringify(data) }),
   resolveAbsReviewBook: (id: number, data: { foreignBookId: string; title: string; editedTitle?: string }) =>
     request<ABSReviewItem>(`/abs/review/${id}/resolve-book`, { method: 'POST', body: JSON.stringify(data) }),
   dismissAbsReviewItem: (id: number) => request<ABSReviewItem>(`/abs/review/${id}/dismiss`, { method: 'POST' }),
-  absConflicts: () => request<ABSMetadataConflict[]>('/abs/conflicts'),
+  absConflicts: (params?: { limit?: number; offset?: number }) => {
+    const q = new URLSearchParams()
+    if (params?.limit) q.set('limit', String(params.limit))
+    if (params?.offset) q.set('offset', String(params.offset))
+    return request<PaginatedResponse<ABSMetadataConflict>>(`/abs/conflicts${q.toString() ? `?${q.toString()}` : ''}`)
+  },
   resolveAbsConflict: (id: number, source: 'abs' | 'upstream') =>
     request<ABSMetadataConflict>(`/abs/conflicts/${id}/resolve`, { method: 'POST', body: JSON.stringify({ source }) }),
 
@@ -718,6 +728,13 @@ export interface ABSReviewItem {
   status: 'pending' | 'approved' | 'dismissed'
   createdAt: string
   updatedAt: string
+}
+
+export interface PaginatedResponse<T> {
+  items: T[]
+  total: number
+  limit: number
+  offset: number
 }
 
 export interface ABSMetadataConflict {

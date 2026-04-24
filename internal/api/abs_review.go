@@ -25,12 +25,20 @@ type ABSReviewHandler struct {
 	loadCfg  func() ABSStoredConfig
 }
 
+type absReviewListResponse struct {
+	Items  []models.ABSReviewItem `json:"items"`
+	Total  int                    `json:"total"`
+	Limit  int                    `json:"limit"`
+	Offset int                    `json:"offset"`
+}
+
 func NewABSReviewHandler(reviews *db.ABSReviewItemRepo, importer absReviewImporter, loadCfg func() ABSStoredConfig) *ABSReviewHandler {
 	return &ABSReviewHandler{reviews: reviews, importer: importer, loadCfg: loadCfg}
 }
 
 func (h *ABSReviewHandler) List(w http.ResponseWriter, r *http.Request) {
-	items, err := h.reviews.ListByStatus(r.Context(), "pending")
+	limit, offset := parseLimitOffset(r, 50, 100)
+	items, total, err := h.reviews.ListByStatusPaginated(r.Context(), "pending", limit, offset)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -57,7 +65,12 @@ func (h *ABSReviewHandler) List(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []models.ABSReviewItem{}
 	}
-	writeJSON(w, http.StatusOK, items)
+	writeJSON(w, http.StatusOK, absReviewListResponse{
+		Items:  items,
+		Total:  total,
+		Limit:  limit,
+		Offset: offset,
+	})
 }
 
 func (h *ABSReviewHandler) Approve(w http.ResponseWriter, r *http.Request) {

@@ -40,16 +40,29 @@ type absConflictResponse struct {
 	UpdatedAt            string `json:"updatedAt"`
 }
 
+type absConflictListResponse struct {
+	Items  []absConflictResponse `json:"items"`
+	Total  int                   `json:"total"`
+	Limit  int                   `json:"limit"`
+	Offset int                   `json:"offset"`
+}
+
 func NewABSConflictHandler(conflicts *db.ABSMetadataConflictRepo, authors *db.AuthorRepo, books *db.BookRepo) *ABSConflictHandler {
 	return &ABSConflictHandler{conflicts: conflicts, authors: authors, books: books}
 }
 
 func (h *ABSConflictHandler) List(w http.ResponseWriter, r *http.Request) {
+	limit, offset := parseLimitOffset(r, 50, 100)
 	if h.conflicts == nil {
-		writeJSON(w, http.StatusOK, []absConflictResponse{})
+		writeJSON(w, http.StatusOK, absConflictListResponse{
+			Items:  []absConflictResponse{},
+			Total:  0,
+			Limit:  limit,
+			Offset: offset,
+		})
 		return
 	}
-	conflicts, err := h.conflicts.List(r.Context())
+	conflicts, total, err := h.conflicts.ListPaginated(r.Context(), limit, offset)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -63,7 +76,12 @@ func (h *ABSConflictHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, item)
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, absConflictListResponse{
+		Items:  out,
+		Total:  total,
+		Limit:  limit,
+		Offset: offset,
+	})
 }
 
 func (h *ABSConflictHandler) Resolve(w http.ResponseWriter, r *http.Request) {
