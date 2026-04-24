@@ -366,39 +366,29 @@ jobs:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
           VERSION: ${{ github.ref_name }}
         run: |
-          python3 - <<'EOF'
-          import json, os, re, urllib.error, urllib.request
-
-          version = os.environ["VERSION"]
-          webhook = os.environ["DISCORD_WEBHOOK"]
-
-          with open("CHANGELOG.md") as f:
+          PAYLOAD=$(python3 -c "
+          import json, re, os, sys
+          version = os.environ['VERSION']
+          with open('CHANGELOG.md') as f:
               content = f.read()
-
-          # Extract the section for this version
-          pattern = rf"## \[{re.escape(version)}\][^\n]*\n(.*?)(?=\n## \[|\Z)"
+          pattern = r'## \[' + re.escape(version) + r'\][^\n]*\n(.*?)(?=\n## \[|\Z)'
           m = re.search(pattern, content, re.DOTALL)
-          notes = m.group(1).strip() if m else ""
-
-          # Trim to a readable length (Discord 2000-char limit)
+          notes = m.group(1).strip() if m else ''
           if len(notes) > 900:
-              notes = notes[:900].rsplit("\n", 1)[0] + "\n…"
-
-          body = f"**Bindery {version}** is out!"
+              notes = notes[:900].rsplit('\n', 1)[0] + '\n...'
+          body = '**Bindery ' + version + '** is out!'
           if notes:
-              body += f"\n\n{notes}"
-          body += f"\n\n<https://github.com/vavallee/bindery/releases/tag/{version}>"
-
-          payload = json.dumps({"content": body}).encode()
-          req = urllib.request.Request(
-              webhook, data=payload,
-              headers={"Content-Type": "application/json"},
-              method="POST",
-          )
-          try:
-              urllib.request.urlopen(req)
-              print(f"Discord notified for {version}")
-          except urllib.error.HTTPError as e:
-              print(f"::warning::Discord webhook returned {e.code} {e.reason} — check DISCORD_RELEASE_WEBHOOK secret")
-              raise SystemExit(1)
-          EOF
+              body += '\n\n' + notes
+          body += '\n\n<https://github.com/vavallee/bindery/releases/tag/' + version + '>'
+          print(json.dumps({'content': body}))
+          ")
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            -H "Content-Type: application/json" \
+            --data-binary "$PAYLOAD" \
+            "$DISCORD_WEBHOOK")
+          if [ "$HTTP" = "204" ]; then
+            echo "Discord notified for ${VERSION}"
+          else
+            echo "::warning::Discord webhook returned HTTP ${HTTP} — check DISCORD_RELEASE_WEBHOOK secret"
+            exit 1
+          fi
