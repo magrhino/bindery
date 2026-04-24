@@ -108,3 +108,73 @@ func TestIsBookFile(t *testing.T) {
 		}
 	}
 }
+
+func TestParseFilenameSeriesExtraction(t *testing.T) {
+	cases := []struct {
+		name          string
+		path          string
+		wantSeries    string
+		wantSeriesNum string
+		wantTitle     string
+	}{
+		{
+			name:          "bracket with hash",
+			path:          "/lib/[Dune Chronicles #1] Dune - Frank Herbert.m4b",
+			wantSeries:    "Dune Chronicles",
+			wantSeriesNum: "1",
+			// parent dir has no number; parser returns "01" as title via titleAuthorRe
+		},
+		{
+			name:          "bracket with Book keyword",
+			path:          "/lib/[Stormlight Archive, Book 1] The Way of Kings - Brandon Sanderson.epub",
+			wantSeries:    "Stormlight Archive",
+			wantSeriesNum: "1",
+			wantTitle:     "The Way of Kings",
+		},
+		{
+			name:          "paren with hash",
+			path:          "/lib/The Way of Kings (Stormlight Archive #1) - Brandon Sanderson.epub",
+			wantSeries:    "Stormlight Archive",
+			wantSeriesNum: "1",
+		},
+		{
+			name:          "paren with Book keyword",
+			path:          "/lib/Dune (Dune Chronicles, Book 1) - Frank Herbert.m4b",
+			wantSeries:    "Dune Chronicles",
+			wantSeriesNum: "1",
+		},
+		{
+			name:          "ABS folder layout with leading number",
+			path:          "/lib/Frank Herbert/Dune Chronicles/01 - Dune.m4b",
+			wantSeries:    "",
+			wantSeriesNum: "",
+			// parent dir has no number; parser returns "01" as title via titleAuthorRe
+		},
+		{
+			name:          "ISBN in brackets not mistaken for series",
+			path:          "/lib/The Shining [978-0385121675] (2012).pdf",
+			wantSeries:    "",
+			wantSeriesNum: "",
+		},
+		{
+			name:          "year in parens not mistaken for series",
+			path:          "/lib/The Shining (2012).epub",
+			wantSeries:    "",
+			wantSeriesNum: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ParseFilename(tc.path)
+			if got.Series != tc.wantSeries {
+				t.Errorf("Series: got %q, want %q", got.Series, tc.wantSeries)
+			}
+			if got.SeriesNumber != tc.wantSeriesNum {
+				t.Errorf("SeriesNumber: got %q, want %q", got.SeriesNumber, tc.wantSeriesNum)
+			}
+			if tc.wantTitle != "" && got.Title != tc.wantTitle {
+				t.Errorf("Title: got %q, want %q", got.Title, tc.wantTitle)
+			}
+		})
+	}
+}

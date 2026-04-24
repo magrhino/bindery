@@ -211,3 +211,62 @@ func (r *SeriesRepo) GetPrimarySeriesForBook(ctx context.Context, bookID int64) 
 	}
 	return seriesTitle, position, err
 }
+
+// GetBookBySeriesPosition finds the single "wanted" book at the given position
+// within any series whose title matches seriesTitle (case-insensitive, trimmed).
+// Returns nil when no match is found or when the result is ambiguous (more than
+// one book matches), to avoid false-positive reconciliation.
+func (r *SeriesRepo) GetBookBySeriesPosition(ctx context.Context, seriesTitle, position string) (*models.Book, error) {
+	rows, err := r.db.QueryContext(ctx,
+		"SELECT id FROM series WHERE lower(trim(title)) = lower(trim(?))", seriesTitle)
+	if err != nil {
+		return nil, fmt.Errorf("series title lookup: %w", err)
+	}
+	defer rows.Close()
+
+	var seriesIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		seriesIDs = append(seriesIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(seriesIDs) == 0 {
+		return nil, nil
+	}
+
+	var found []*models.Book
+	for _, sid := range seriesIDs {
+		row := r.db.QueryRowContext(ctx, `
+			SELECT b.id, b.foreign_id, b.author_id, b.title, b.sort_title, b.status,
+			       b.monitored, b.image_url, b.release_date, b.language, b.media_type,
+			       b.created_at, b.updated_at
+			FROM series_books sb
+			JOIN books b ON b.id = sb.book_id
+			WHERE sb.series_id = ? AND sb.position_in_series = ? AND b.status = 'wanted'`, sid, position)
+		var b models.Book
+		var monitored int
+		var releaseDate sql.NullTime
+		err := row.Scan(&b.ID, &b.ForeignID, &b.AuthorID, &b.Title, &b.SortTitle, &b.Status,
+			&monitored, &b.ImageURL, &releaseDate, &b.Language, &b.MediaType, &b.CreatedAt, &b.UpdatedAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("series book scan: %w", err)
+		}
+		b.Monitored = monitored == 1
+		if releaseDate.Valid {
+			b.ReleaseDate = &releaseDate.Time
+		}
+		found = append(found, &b)
+	}
+	if len(found) != 1 {
+		return nil, nil
+	}
+	return found[0], nil
+}

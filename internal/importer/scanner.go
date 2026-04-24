@@ -79,7 +79,8 @@ func (s *Scanner) WithRootFolders(rf *db.RootFolderRepo) *Scanner {
 }
 
 // WithSeriesRepo attaches the series repo so the scanner can resolve series
-// name and position when building rename destination paths.
+// name and position when building rename destination paths, and so ScanLibrary
+// can fall back to series+position matching for series-annotated filenames.
 func (s *Scanner) WithSeriesRepo(sr *db.SeriesRepo) *Scanner {
 	s.series = sr
 	return s
@@ -1171,6 +1172,28 @@ func (s *Scanner) ScanLibrary(ctx context.Context) {
 				reconciled++
 				matched = true
 				break
+			}
+		}
+
+		if !matched && s.series != nil && parsed.Series != "" && parsed.SeriesNumber != "" {
+			book, seriesErr := s.series.GetBookBySeriesPosition(ctx, parsed.Series, parsed.SeriesNumber)
+			if seriesErr != nil {
+				slog.Warn("library scan: series position lookup error",
+					"series", parsed.Series, "position", parsed.SeriesNumber, "error", seriesErr)
+			} else if book != nil && !reconciledBooks[book.ID] {
+				effDir := s.effectiveLibraryDir(ctx, authorMap[book.AuthorID])
+				if pathUnderDir(path, effDir) {
+					if err := s.books.AddBookFile(ctx, book.ID, detectedFmt, path); err != nil {
+						slog.Error("library scan: failed to update book via series match", "id", book.ID, "error", err)
+					} else {
+						slog.Info("library scan: reconciled book via series position",
+							"series", parsed.Series, "position", parsed.SeriesNumber, "title", book.Title, "path", path)
+						trackedPaths[cleanPath] = true
+						reconciledBooks[book.ID] = true
+						reconciled++
+						matched = true
+					}
+				}
 			}
 		}
 
