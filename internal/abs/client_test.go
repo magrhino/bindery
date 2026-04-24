@@ -231,9 +231,9 @@ func TestShouldRetry(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "net error temporary",
+			name: "temporary-only net error",
 			err:  retryNetError{temporary: true},
-			want: true,
+			want: false,
 		},
 		{
 			name: "generic permanent error",

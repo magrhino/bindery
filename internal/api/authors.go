@@ -354,10 +354,6 @@ func (h *AuthorHandler) findCanonicalAuthorMatchExcluding(ctx context.Context, e
 	return resolved, false, nil
 }
 
-func (h *AuthorHandler) findAuthorByNameOrAlias(ctx context.Context, name string) (*models.Author, bool, error) {
-	return h.findAuthorByNameOrAliasExcluding(ctx, 0, name)
-}
-
 func (h *AuthorHandler) findAuthorByNameOrAliasExcluding(ctx context.Context, excludeID int64, name string) (*models.Author, bool, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
