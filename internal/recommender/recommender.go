@@ -164,6 +164,9 @@ func hardFilter(candidates []models.RecommendationCandidate, p *UserProfile) []m
 		if c.AuthorName != "" && p.ExcludedAuthors[strings.ToLower(c.AuthorName)] {
 			continue
 		}
+		if p.PreferredLanguage != "" && c.Language != "" && c.Language != p.PreferredLanguage {
+			continue
+		}
 		// Deduplicate by foreign ID.
 		if seen[c.ForeignID] {
 			continue
