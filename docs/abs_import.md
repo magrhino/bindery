@@ -30,34 +30,34 @@ Import quality depends heavily on ABS metadata quality. The more books you alrea
 
 Backend:
 
-- [internal/abs/client.go](/Users/ryanjones/Documents/bindery/bindery/internal/abs/client.go): ABS HTTP client, auth, library and item fetches
-- [internal/abs/enumerator.go](/Users/ryanjones/Documents/bindery/bindery/internal/abs/enumerator.go): paged enumeration and checkpoint-aware traversal
-- [internal/abs/importer.go](/Users/ryanjones/Documents/bindery/bindery/internal/abs/importer.go): import orchestration, dry-run, rollback planning, mapping, progress
-- [internal/abs/types.go](/Users/ryanjones/Documents/bindery/bindery/internal/abs/types.go): ABS response and normalized item types
-- [internal/api/abs.go](/Users/ryanjones/Documents/bindery/bindery/internal/api/abs.go): config, connection test, library discovery
-- [internal/api/abs_import.go](/Users/ryanjones/Documents/bindery/bindery/internal/api/abs_import.go): start, status, recent runs, rollback endpoints
-- [internal/api/abs_review.go](/Users/ryanjones/Documents/bindery/bindery/internal/api/abs_review.go): review queue actions
-- [internal/api/abs_conflicts.go](/Users/ryanjones/Documents/bindery/bindery/internal/api/abs_conflicts.go): conflict listing and source resolution
+- [internal/abs/client.go](internal/abs/client.go): ABS HTTP client, auth, library and item fetches
+- [internal/abs/enumerator.go](internal/abs/enumerator.go): paged enumeration and checkpoint-aware traversal
+- [internal/abs/importer.go](internal/abs/importer.go): import orchestration, dry-run, rollback planning, mapping, progress
+- [internal/abs/types.go](internal/abs/types.go): ABS response and normalized item types
+- [internal/api/abs.go](internal/api/abs.go): config, connection test, library discovery
+- [internal/api/abs_import.go](internal/api/abs_import.go): start, status, recent runs, rollback endpoints
+- [internal/api/abs_review.go](internal/api/abs_review.go): review queue actions
+- [internal/api/abs_conflicts.go](internal/api/abs_conflicts.go): conflict listing and source resolution
 
 Persistence:
 
-- [internal/db/abs_imports.go](/Users/ryanjones/Documents/bindery/bindery/internal/db/abs_imports.go): run, provenance, run-entity, and review repositories
-- [internal/db/abs_metadata_conflicts.go](/Users/ryanjones/Documents/bindery/bindery/internal/db/abs_metadata_conflicts.go): conflict persistence
-- [internal/db/migrations/029_abs_imports.sql](/Users/ryanjones/Documents/bindery/bindery/internal/db/migrations/029_abs_imports.sql)
-- [internal/db/migrations/030_abs_metadata_conflicts.sql](/Users/ryanjones/Documents/bindery/bindery/internal/db/migrations/030_abs_metadata_conflicts.sql)
-- [internal/db/migrations/031_abs_import_run_tracking.sql](/Users/ryanjones/Documents/bindery/bindery/internal/db/migrations/031_abs_import_run_tracking.sql)
-- [internal/db/migrations/032_abs_review_queue.sql](/Users/ryanjones/Documents/bindery/bindery/internal/db/migrations/032_abs_review_queue.sql)
-- [internal/db/migrations/033_abs_review_resolution.sql](/Users/ryanjones/Documents/bindery/bindery/internal/db/migrations/033_abs_review_resolution.sql)
+- [internal/db/abs_imports.go](internal/db/abs_imports.go): run, provenance, run-entity, and review repositories
+- [internal/db/abs_metadata_conflicts.go](internal/db/abs_metadata_conflicts.go): conflict persistence
+- [internal/db/migrations/029_abs_imports.sql](internal/db/migrations/029_abs_imports.sql)
+- [internal/db/migrations/030_abs_metadata_conflicts.sql](internal/db/migrations/030_abs_metadata_conflicts.sql)
+- [internal/db/migrations/031_abs_import_run_tracking.sql](internal/db/migrations/031_abs_import_run_tracking.sql)
+- [internal/db/migrations/032_abs_review_queue.sql](internal/db/migrations/032_abs_review_queue.sql)
+- [internal/db/migrations/033_abs_review_resolution.sql](internal/db/migrations/033_abs_review_resolution.sql)
 
 Frontend:
 
-- [web/src/api/client.ts](/Users/ryanjones/Documents/bindery/bindery/web/src/api/client.ts): ABS API client types and methods
-- [web/src/pages/SettingsPage.tsx](/Users/ryanjones/Documents/bindery/bindery/web/src/pages/SettingsPage.tsx): ABS settings/import UI
-- [web/src/components/ABSAuthorConflictsPanel.tsx](/Users/ryanjones/Documents/bindery/bindery/web/src/components/ABSAuthorConflictsPanel.tsx): author conflict review panel
+- [web/src/api/client.ts](web/src/api/client.ts): ABS API client types and methods
+- [web/src/pages/SettingsPage.tsx](web/src/pages/SettingsPage.tsx): ABS settings/import UI
+- [web/src/components/ABSAuthorConflictsPanel.tsx](web/src/components/ABSAuthorConflictsPanel.tsx): author conflict review panel
 
 Bootstrap:
 
-- [cmd/bindery/main.go](/Users/ryanjones/Documents/bindery/bindery/cmd/bindery/main.go): repo wiring, importer construction, and route registration
+- [cmd/bindery/main.go](cmd/bindery/main.go): repo wiring, importer construction, and route registration
 
 ## Runtime Flow
 
@@ -201,15 +201,15 @@ Review and conflict handling:
 
 Unit and handler coverage lives in:
 
-- [internal/abs/client_test.go](/Users/ryanjones/Documents/bindery/bindery/internal/abs/client_test.go)
-- [internal/abs/contract_test.go](/Users/ryanjones/Documents/bindery/bindery/internal/abs/contract_test.go)
-- [internal/abs/enumerator_test.go](/Users/ryanjones/Documents/bindery/bindery/internal/abs/enumerator_test.go)
-- [internal/abs/importer_test.go](/Users/ryanjones/Documents/bindery/bindery/internal/abs/importer_test.go)
-- [internal/api/abs_import_test.go](/Users/ryanjones/Documents/bindery/bindery/internal/api/abs_import_test.go)
-- [internal/api/abs_review_test.go](/Users/ryanjones/Documents/bindery/bindery/internal/api/abs_review_test.go)
-- [internal/api/abs_conflicts_test.go](/Users/ryanjones/Documents/bindery/bindery/internal/api/abs_conflicts_test.go)
+- [internal/abs/client_test.go](internal/abs/client_test.go)
+- [internal/abs/contract_test.go](internal/abs/contract_test.go)
+- [internal/abs/enumerator_test.go](internal/abs/enumerator_test.go)
+- [internal/abs/importer_test.go](internal/abs/importer_test.go)
+- [internal/api/abs_import_test.go](internal/api/abs_import_test.go)
+- [internal/api/abs_review_test.go](internal/api/abs_review_test.go)
+- [internal/api/abs_conflicts_test.go](internal/api/abs_conflicts_test.go)
 
-Pinned contract coverage lives in [tests/abscontract](/Users/ryanjones/Documents/bindery/bindery/tests/abscontract) and is exposed through `make abs-contract`.
+Pinned contract coverage lives in [tests/abscontract](tests/abscontract) and is exposed through `make abs-contract`.
 
 Pinned baseline:
 
