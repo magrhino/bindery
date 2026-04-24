@@ -411,7 +411,16 @@ func (e reviewRequiredError) Error() string {
 
 func (i *Importer) ImportReview(ctx context.Context, cfg ImportConfig, item NormalizedLibraryItem) (ImportItemResult, error) {
 	stats := &ImportStats{}
-	result := i.importOne(ctx, cfg, 0, item, stats, true)
+	matcher, err := i.newAuthorMatcher(ctx)
+	if err != nil {
+		return ImportItemResult{
+			ItemID:  item.ItemID,
+			Title:   item.Title,
+			Outcome: itemOutcomeFailed,
+			Message: err.Error(),
+		}, err
+	}
+	result := i.importOne(ctx, cfg, 0, item, stats, true, matcher)
 	if result.Outcome == itemOutcomeFailed {
 		if result.Message == "" {
 			return result, errors.New("review import failed")
@@ -508,6 +517,12 @@ func (i *Importer) run(ctx context.Context, cfg ImportConfig) *ImportStats {
 		return stats
 	}
 
+	authorMatcher, err := i.newAuthorMatcher(ctx)
+	if err != nil {
+		i.fail(err)
+		return stats
+	}
+
 	if checkpoint, err := loadImportCheckpoint(ctx, i.settings); err == nil && checkpoint != nil && checkpoint.LibraryID == cfg.LibraryID {
 		i.setProgress(func(p *ImportProgress) {
 			p.ResumedFromCheckpoint = true
@@ -568,7 +583,7 @@ func (i *Importer) run(ctx context.Context, cfg ImportConfig) *ImportStats {
 		i.setProgress(func(p *ImportProgress) {
 			p.Message = importItemMessage(cfg.DryRun, firstNonEmpty(item.Title, item.ItemID))
 		})
-		result := i.importOne(ctx, cfg, run.ID, item, stats, allowImmediateImport(item))
+		result := i.importOne(ctx, cfg, run.ID, item, stats, allowImmediateImport(item), authorMatcher)
 		i.setProgress(func(p *ImportProgress) {
 			p.Processed++
 			p.Results = appendImportProgressResult(p.Results, result)
@@ -650,13 +665,13 @@ func (i *Importer) resolveEnumerator(cfg ImportConfig, runID int64) (enumerateFu
 	return enumerator.Enumerate, nil
 }
 
-func (i *Importer) importOne(ctx context.Context, cfg ImportConfig, runID int64, item NormalizedLibraryItem, stats *ImportStats, allowCreate bool) ImportItemResult {
+func (i *Importer) importOne(ctx context.Context, cfg ImportConfig, runID int64, item NormalizedLibraryItem, stats *ImportStats, allowCreate bool, matcher *authorMatcher) ImportItemResult {
 	result := ImportItemResult{
 		ItemID:  item.ItemID,
 		Title:   item.Title,
 		Outcome: itemOutcomeUpdated,
 	}
-	author, authorCreated, authorMatchedBy, authorMeta, err := i.resolveAuthor(ctx, cfg, runID, item, allowCreate)
+	author, authorCreated, authorMatchedBy, authorMeta, err := i.resolveAuthor(ctx, cfg, runID, item, allowCreate, matcher)
 	if err != nil {
 		var reviewErr reviewRequiredError
 		if errors.As(err, &reviewErr) {
@@ -689,7 +704,7 @@ func (i *Importer) importOne(ctx context.Context, cfg ImportConfig, runID int64,
 	result.MatchedBy = authorMatchedBy
 
 	if !cfg.DryRun {
-		i.recordSecondaryAuthors(ctx, author.ID, item.Authors[1:])
+		i.recordSecondaryAuthors(ctx, author.ID, item.Authors[1:], matcher)
 	}
 
 	bookResult, created, linked, bookMeta, err := i.upsertBook(ctx, cfg, runID, author, item, allowCreate)
@@ -1033,7 +1048,7 @@ type bookUpsertResult struct {
 	matchedBy string
 }
 
-func (i *Importer) resolveAuthor(ctx context.Context, cfg ImportConfig, runID int64, item NormalizedLibraryItem, allowCreate bool) (*models.Author, bool, string, metadataMergeResult, error) {
+func (i *Importer) resolveAuthor(ctx context.Context, cfg ImportConfig, runID int64, item NormalizedLibraryItem, allowCreate bool, matcher *authorMatcher) (*models.Author, bool, string, metadataMergeResult, error) {
 	if len(item.Authors) == 0 {
 		return nil, false, "", metadataMergeResult{}, errors.New("item has no authors")
 	}
@@ -1043,7 +1058,14 @@ func (i *Importer) resolveAuthor(ctx context.Context, cfg ImportConfig, runID in
 		return nil, false, "", metadataMergeResult{}, errors.New("primary author name is empty")
 	}
 	if strings.TrimSpace(item.ResolvedAuthorForeignID) != "" || strings.TrimSpace(item.ResolvedAuthorName) != "" {
-		return i.resolveManualAuthor(ctx, cfg, runID, item)
+		return i.resolveManualAuthor(ctx, cfg, runID, item, matcher)
+	}
+	if matcher == nil {
+		loaded, err := i.newAuthorMatcher(ctx)
+		if err != nil {
+			return nil, false, "", metadataMergeResult{}, err
+		}
+		matcher = loaded
 	}
 	externalID := authorExternalID(primary)
 	if i.provenance != nil {
@@ -1075,7 +1097,7 @@ func (i *Importer) resolveAuthor(ctx context.Context, cfg ImportConfig, runID in
 				if err := i.recordAuthorBeforeSnapshot(ctx, runID, cfg, item, externalID, existing, itemOutcomeLinked, nil); err != nil {
 					slog.Warn("abs import: persist author rollback snapshot failed", "authorID", existing.ID, "runID", runID, "error", err)
 				}
-				metaResult, err := i.enrichAuthor(ctx, cfg, item, existing)
+				metaResult, err := i.enrichAuthor(ctx, cfg, item, existing, matcher)
 				if perr := i.recordAuthorAfterSnapshot(ctx, runID, cfg, item, externalID, existing.ID, itemOutcomeLinked, nil); perr != nil {
 					slog.Warn("abs import: persist author rollback snapshot failed", "authorID", existing.ID, "runID", runID, "error", perr)
 				}
@@ -1084,7 +1106,7 @@ func (i *Importer) resolveAuthor(ctx context.Context, cfg ImportConfig, runID in
 		}
 	}
 
-	if existing, matchedBy, ambiguous, err := i.findAuthorByName(ctx, name); err != nil {
+	if existing, matchedBy, ambiguous, err := matcher.findAuthorByName(ctx, name); err != nil {
 		return nil, false, "", metadataMergeResult{}, err
 	} else if existing != nil {
 		if !cfg.DryRun {
@@ -1100,7 +1122,7 @@ func (i *Importer) resolveAuthor(ctx context.Context, cfg ImportConfig, runID in
 				return nil, false, "", metadataMergeResult{}, err
 			}
 			if shouldRecordAuthorVariantAlias(matchedBy) {
-				i.recordAuthorVariantAlias(ctx, existing.ID, name)
+				i.recordAuthorVariantAlias(ctx, existing.ID, name, matcher)
 			}
 		}
 		if cfg.DryRun {
@@ -1110,7 +1132,7 @@ func (i *Importer) resolveAuthor(ctx context.Context, cfg ImportConfig, runID in
 		if err := i.recordAuthorBeforeSnapshot(ctx, runID, cfg, item, externalID, existing, itemOutcomeLinked, nil); err != nil {
 			slog.Warn("abs import: persist author rollback snapshot failed", "authorID", existing.ID, "runID", runID, "error", err)
 		}
-		metaResult, err := i.enrichAuthor(ctx, cfg, item, existing)
+		metaResult, err := i.enrichAuthor(ctx, cfg, item, existing, matcher)
 		if perr := i.recordAuthorAfterSnapshot(ctx, runID, cfg, item, externalID, existing.ID, itemOutcomeLinked, nil); perr != nil {
 			slog.Warn("abs import: persist author rollback snapshot failed", "authorID", existing.ID, "runID", runID, "error", perr)
 		}
@@ -1144,6 +1166,7 @@ func (i *Importer) resolveAuthor(ctx context.Context, cfg ImportConfig, runID in
 	if err := i.authors.Create(ctx, author); err != nil {
 		return nil, false, "", metadataMergeResult{}, err
 	}
+	matcher.addAuthor(author)
 	if err := i.upsertProvenance(ctx, &models.ABSProvenance{
 		SourceID:    cfg.SourceID,
 		LibraryID:   item.LibraryID,
@@ -1156,11 +1179,11 @@ func (i *Importer) resolveAuthor(ctx context.Context, cfg ImportConfig, runID in
 		return nil, false, "", metadataMergeResult{}, err
 	}
 	_ = i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeAuthor, externalID, author.ID, itemOutcomeCreated, nil)
-	metaResult, err := i.enrichAuthor(ctx, cfg, item, author)
+	metaResult, err := i.enrichAuthor(ctx, cfg, item, author, matcher)
 	return author, true, "created", metaResult, err
 }
 
-func (i *Importer) resolveManualAuthor(ctx context.Context, cfg ImportConfig, runID int64, item NormalizedLibraryItem) (*models.Author, bool, string, metadataMergeResult, error) {
+func (i *Importer) resolveManualAuthor(ctx context.Context, cfg ImportConfig, runID int64, item NormalizedLibraryItem, matcher *authorMatcher) (*models.Author, bool, string, metadataMergeResult, error) {
 	primary := item.Authors[0]
 	absName := strings.TrimSpace(primary.Name)
 	absExternalID := authorExternalID(primary)
@@ -1168,6 +1191,13 @@ func (i *Importer) resolveManualAuthor(ctx context.Context, cfg ImportConfig, ru
 	name := strings.TrimSpace(item.ResolvedAuthorName)
 	if foreignID == "" || name == "" {
 		return nil, false, "", metadataMergeResult{}, errors.New("resolved author requires foreignAuthorId and authorName")
+	}
+	if matcher == nil {
+		loaded, err := i.newAuthorMatcher(ctx)
+		if err != nil {
+			return nil, false, "", metadataMergeResult{}, err
+		}
+		matcher = loaded
 	}
 
 	if existing, err := i.authors.GetByForeignID(ctx, foreignID); err != nil {
@@ -1186,14 +1216,14 @@ func (i *Importer) resolveManualAuthor(ctx context.Context, cfg ImportConfig, ru
 				return nil, false, "", metadataMergeResult{}, err
 			}
 			if normalizeAuthorName(absName) != normalizeAuthorName(existing.Name) {
-				i.recordAuthorVariantAlias(ctx, existing.ID, absName)
+				i.recordAuthorVariantAlias(ctx, existing.ID, absName, matcher)
 			}
 		}
 		_ = i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeAuthor, absExternalID, existing.ID, itemOutcomeLinked, map[string]string{"matchedBy": "manual_author"})
 		return existing, false, "manual_author", metadataMergeResult{}, nil
 	}
 
-	if existing, _, ambiguous, err := i.findAuthorByName(ctx, name); err != nil {
+	if existing, _, ambiguous, err := matcher.findAuthorByName(ctx, name); err != nil {
 		return nil, false, "", metadataMergeResult{}, err
 	} else if ambiguous {
 		return nil, false, "", metadataMergeResult{}, reviewRequiredError{Reason: reviewReasonAmbiguousAuthor}
@@ -1214,6 +1244,7 @@ func (i *Importer) resolveManualAuthor(ctx context.Context, cfg ImportConfig, ru
 			if err := i.authors.Update(ctx, existing); err != nil {
 				return nil, false, "", metadataMergeResult{}, err
 			}
+			matcher.addAuthor(existing)
 		}
 		if err := i.upsertProvenance(ctx, &models.ABSProvenance{
 			SourceID:    cfg.SourceID,
@@ -1227,7 +1258,7 @@ func (i *Importer) resolveManualAuthor(ctx context.Context, cfg ImportConfig, ru
 			return nil, false, "", metadataMergeResult{}, err
 		}
 		if normalizeAuthorName(absName) != normalizeAuthorName(existing.Name) {
-			i.recordAuthorVariantAlias(ctx, existing.ID, absName)
+			i.recordAuthorVariantAlias(ctx, existing.ID, absName, matcher)
 		}
 		if perr := i.recordAuthorAfterSnapshot(ctx, runID, cfg, item, absExternalID, existing.ID, itemOutcomeLinked, map[string]any{"matchedBy": "manual_author_name"}); perr != nil {
 			slog.Warn("abs import: persist author rollback snapshot failed", "authorID", existing.ID, "runID", runID, "error", perr)
@@ -1267,6 +1298,7 @@ func (i *Importer) resolveManualAuthor(ctx context.Context, cfg ImportConfig, ru
 	if err := i.authors.Create(ctx, author); err != nil {
 		return nil, false, "", metadataMergeResult{}, err
 	}
+	matcher.addAuthor(author)
 	if err := i.upsertProvenance(ctx, &models.ABSProvenance{
 		SourceID:    cfg.SourceID,
 		LibraryID:   item.LibraryID,
@@ -1279,10 +1311,97 @@ func (i *Importer) resolveManualAuthor(ctx context.Context, cfg ImportConfig, ru
 		return nil, false, "", metadataMergeResult{}, err
 	}
 	if normalizeAuthorName(absName) != normalizeAuthorName(author.Name) {
-		i.recordAuthorVariantAlias(ctx, author.ID, absName)
+		i.recordAuthorVariantAlias(ctx, author.ID, absName, matcher)
 	}
 	_ = i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeAuthor, absExternalID, author.ID, itemOutcomeCreated, map[string]string{"matchedBy": "manual_author"})
 	return author, true, "manual_author", metadataMergeResult{}, nil
+}
+
+type authorMatcher struct {
+	authors     *db.AuthorRepo
+	all         []*models.Author
+	byID        map[int64]*models.Author
+	aliases     []models.AuthorAlias
+	aliasLoaded map[authorAliasKey]struct{}
+}
+
+type authorAliasKey struct {
+	authorID int64
+	name     string
+}
+
+func (i *Importer) newAuthorMatcher(ctx context.Context) (*authorMatcher, error) {
+	all, err := i.authors.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	matcher := &authorMatcher{
+		authors:     i.authors,
+		byID:        make(map[int64]*models.Author, len(all)),
+		aliasLoaded: make(map[authorAliasKey]struct{}),
+	}
+	for idx := range all {
+		matcher.addAuthor(&all[idx])
+	}
+	if i.aliases != nil {
+		loaded, err := i.aliases.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, alias := range loaded {
+			matcher.addAlias(alias)
+		}
+	}
+	return matcher, nil
+}
+
+func (m *authorMatcher) addAuthor(author *models.Author) {
+	if m == nil || author == nil || author.ID == 0 {
+		return
+	}
+	cp := *author
+	if existing, ok := m.byID[cp.ID]; ok {
+		*existing = cp
+		return
+	}
+	m.byID[cp.ID] = &cp
+	m.all = append(m.all, &cp)
+}
+
+func (m *authorMatcher) addAlias(alias models.AuthorAlias) {
+	if m == nil || alias.AuthorID == 0 {
+		return
+	}
+	alias.Name = strings.TrimSpace(alias.Name)
+	if alias.Name == "" {
+		return
+	}
+	key := authorAliasKey{authorID: alias.AuthorID, name: strings.ToLower(alias.Name)}
+	if _, ok := m.aliasLoaded[key]; ok {
+		return
+	}
+	m.aliasLoaded[key] = struct{}{}
+	m.aliases = append(m.aliases, alias)
+}
+
+func (m *authorMatcher) getAuthor(ctx context.Context, id int64) (*models.Author, error) {
+	if m == nil {
+		return nil, nil
+	}
+	if a, ok := m.byID[id]; ok {
+		cp := *a
+		return &cp, nil
+	}
+	a, err := m.authors.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	m.addAuthor(a)
+	if a == nil {
+		return nil, nil
+	}
+	cp := *a
+	return &cp, nil
 }
 
 // findAuthorByName looks up a local author whose name matches the supplied
@@ -1291,47 +1410,29 @@ func (i *Importer) resolveManualAuthor(ctx context.Context, cfg ImportConfig, ru
 // then Jaro-Winkler fuzzy matching. The returned matchedBy string distinguishes
 // these tiers so callers can decide when to record a variant alias.
 func (i *Importer) findAuthorByName(ctx context.Context, name string) (*models.Author, string, bool, error) {
-	all, err := i.authors.List(ctx)
+	matcher, err := i.newAuthorMatcher(ctx)
 	if err != nil {
 		return nil, "", false, err
 	}
-	aliases := []models.AuthorAlias{}
-	if i.aliases != nil {
-		loaded, err := i.aliases.List(ctx)
-		if err != nil {
-			return nil, "", false, err
-		}
-		aliases = loaded
-	}
+	return matcher.findAuthorByName(ctx, name)
+}
 
-	authorCache := make(map[int64]*models.Author)
-	getAuthor := func(id int64) (*models.Author, error) {
-		if a, ok := authorCache[id]; ok {
-			return a, nil
-		}
-		a, err := i.authors.GetByID(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		authorCache[id] = a
-		return a, nil
-	}
-
+func (m *authorMatcher) findAuthorByName(ctx context.Context, name string) (*models.Author, string, bool, error) {
 	// Tier 1: exact lowercase.
 	needle := strings.ToLower(strings.TrimSpace(name))
 	exact := make(map[int64]*models.Author)
 	viaAlias := make(map[int64]bool)
-	for idx := range all {
-		if strings.ToLower(strings.TrimSpace(all[idx].Name)) == needle {
-			cp := all[idx]
+	for _, author := range m.all {
+		if strings.ToLower(strings.TrimSpace(author.Name)) == needle {
+			cp := *author
 			exact[cp.ID] = &cp
 		}
 	}
-	for _, alias := range aliases {
+	for _, alias := range m.aliases {
 		if strings.ToLower(strings.TrimSpace(alias.Name)) != needle {
 			continue
 		}
-		author, err := getAuthor(alias.AuthorID)
+		author, err := m.getAuthor(ctx, alias.AuthorID)
 		if err != nil {
 			return nil, "", false, err
 		}
@@ -1359,17 +1460,17 @@ func (i *Importer) findAuthorByName(ctx context.Context, name string) (*models.A
 	// Tier 2: exact via normalized variants.
 	normExact := make(map[int64]*models.Author)
 	normViaAlias := make(map[int64]bool)
-	for idx := range all {
-		if textutil.MatchAuthorName(name, all[idx].Name).Kind == textutil.AuthorMatchExact {
-			cp := all[idx]
+	for _, author := range m.all {
+		if textutil.MatchAuthorName(name, author.Name).Kind == textutil.AuthorMatchExact {
+			cp := *author
 			normExact[cp.ID] = &cp
 		}
 	}
-	for _, alias := range aliases {
+	for _, alias := range m.aliases {
 		if textutil.MatchAuthorName(name, alias.Name).Kind != textutil.AuthorMatchExact {
 			continue
 		}
-		author, err := getAuthor(alias.AuthorID)
+		author, err := m.getAuthor(ctx, alias.AuthorID)
 		if err != nil {
 			return nil, "", false, err
 		}
@@ -1416,20 +1517,20 @@ func (i *Importer) findAuthorByName(ctx context.Context, name string) (*models.A
 			existing.fromAlias = false
 		}
 	}
-	for idx := range all {
-		res := textutil.MatchAuthorName(name, all[idx].Name)
+	for _, author := range m.all {
+		res := textutil.MatchAuthorName(name, author.Name)
 		if res.Score < textutil.AuthorMatchAmbiguousMinimum {
 			continue
 		}
-		cp := all[idx]
+		cp := *author
 		consider(&cp, res.Score, false)
 	}
-	for _, alias := range aliases {
+	for _, alias := range m.aliases {
 		res := textutil.MatchAuthorName(name, alias.Name)
 		if res.Score < textutil.AuthorMatchAmbiguousMinimum {
 			continue
 		}
-		author, err := getAuthor(alias.AuthorID)
+		author, err := m.getAuthor(ctx, alias.AuthorID)
 		if err != nil {
 			return nil, "", false, err
 		}
@@ -1484,8 +1585,8 @@ func shouldRecordAuthorVariantAlias(matchedBy string) bool {
 	return false
 }
 
-func (i *Importer) recordSecondaryAuthors(ctx context.Context, canonicalID int64, extras []NormalizedAuthor) {
-	if canonicalID == 0 {
+func (i *Importer) recordSecondaryAuthors(ctx context.Context, canonicalID int64, extras []NormalizedAuthor, matcher *authorMatcher) {
+	if canonicalID == 0 || i.aliases == nil {
 		return
 	}
 	for _, author := range extras {
@@ -1493,13 +1594,16 @@ func (i *Importer) recordSecondaryAuthors(ctx context.Context, canonicalID int64
 		if name == "" {
 			continue
 		}
-		if err := i.aliases.Create(ctx, &models.AuthorAlias{AuthorID: canonicalID, Name: name}); err != nil {
+		alias := &models.AuthorAlias{AuthorID: canonicalID, Name: name}
+		if err := i.aliases.Create(ctx, alias); err != nil {
 			slog.Debug("abs import: alias record skipped", "name", name, "error", err)
+			continue
 		}
+		matcher.addAlias(*alias)
 	}
 }
 
-func (i *Importer) recordAuthorVariantAlias(ctx context.Context, canonicalID int64, name string) {
+func (i *Importer) recordAuthorVariantAlias(ctx context.Context, canonicalID int64, name string, matcher *authorMatcher) {
 	if canonicalID == 0 || i.aliases == nil {
 		return
 	}
@@ -1507,12 +1611,15 @@ func (i *Importer) recordAuthorVariantAlias(ctx context.Context, canonicalID int
 	if name == "" {
 		return
 	}
-	if err := i.aliases.Create(ctx, &models.AuthorAlias{AuthorID: canonicalID, Name: name}); err != nil {
+	alias := &models.AuthorAlias{AuthorID: canonicalID, Name: name}
+	if err := i.aliases.Create(ctx, alias); err != nil {
 		slog.Debug("abs import: author variant alias skipped", "name", name, "error", err)
+		return
 	}
+	matcher.addAlias(*alias)
 }
 
-func (i *Importer) enrichAuthor(ctx context.Context, cfg ImportConfig, item NormalizedLibraryItem, author *models.Author) (metadataMergeResult, error) {
+func (i *Importer) enrichAuthor(ctx context.Context, cfg ImportConfig, item NormalizedLibraryItem, author *models.Author, matcher *authorMatcher) (metadataMergeResult, error) {
 	if i.meta == nil || author == nil || len(item.Authors) == 0 {
 		return metadataMergeResult{}, nil
 	}
@@ -1538,7 +1645,7 @@ func (i *Importer) enrichAuthor(ctx context.Context, cfg ImportConfig, item Norm
 			author.SortName = full.SortName
 		}
 		if !cfg.DryRun {
-			i.recordAuthorVariantAlias(ctx, author.ID, oldName)
+			i.recordAuthorVariantAlias(ctx, author.ID, oldName, matcher)
 		}
 		changed = true
 	}
@@ -1583,6 +1690,7 @@ func (i *Importer) enrichAuthor(ctx context.Context, cfg ImportConfig, item Norm
 	if err := i.authors.Update(ctx, author); err != nil {
 		return metadataMergeResult{}, err
 	}
+	matcher.addAuthor(author)
 	return result, nil
 }
 
