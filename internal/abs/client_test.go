@@ -3,10 +3,28 @@ package abs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
+
+type retryNetError struct {
+	timeout   bool
+	temporary bool
+}
+
+func (e retryNetError) Error() string {
+	return fmt.Sprintf("timeout=%t temporary=%t", e.timeout, e.temporary)
+}
+
+func (e retryNetError) Timeout() bool {
+	return e.timeout
+}
+
+func (e retryNetError) Temporary() bool {
+	return e.temporary
+}
 
 func TestClientAuthorizeInjectsBearerHeader(t *testing.T) {
 	t.Parallel()
@@ -128,5 +146,56 @@ func TestClientGetLibraryItem_UsesExpandedAuthorsQuery(t *testing.T) {
 	}
 	if item.ID != "li_test" {
 		t.Fatalf("item = %+v", item)
+	}
+}
+
+func TestShouldRetry(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "context canceled",
+			err:  context.Canceled,
+			want: false,
+		},
+		{
+			name: "context deadline exceeded",
+			err:  context.DeadlineExceeded,
+			want: false,
+		},
+		{
+			name: "net error timeout",
+			err:  retryNetError{timeout: true},
+			want: true,
+		},
+		{
+			name: "net error temporary",
+			err:  retryNetError{temporary: true},
+			want: true,
+		},
+		{
+			name: "generic permanent error",
+			err:  errors.New("permanent"),
+			want: false,
+		},
+		{
+			name: "permanent net error",
+			err:  retryNetError{},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := shouldRetry(tt.err); got != tt.want {
+				t.Fatalf("shouldRetry(%v) = %t, want %t", tt.err, got, tt.want)
+			}
+		})
 	}
 }

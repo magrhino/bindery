@@ -228,9 +228,9 @@ func shouldRetry(err error) bool {
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
-		return true
+		return netErr.Timeout() || netErr.Temporary()
 	}
-	return true
+	return false
 }
 
 func drainAndClose(rc io.ReadCloser) {
