@@ -27,6 +27,10 @@ type Author struct {
 	Books      []Book        `json:"books,omitempty"`
 	Statistics *AuthorStats  `json:"statistics,omitempty"`
 	Aliases    []AuthorAlias `json:"aliases,omitempty"`
+
+	// Transient: populated from the metadata provider during add/refresh; not stored in DB.
+	// Used to seed author_aliases so non-latin primary names get latin-script alternates.
+	AlternateNames []string `json:"-"`
 }
 
 type AuthorStats struct {

@@ -66,6 +66,7 @@ type Scheduler struct {
 	blocklist     *db.BlocklistRepo
 	delayProfiles *db.DelayProfileRepo
 	pending       *db.PendingReleaseRepo
+	aliases       *db.AuthorAliasRepo  // optional; used for non-latin author matching
 	calibreSyncer CalibreSyncer        // optional; nil if Calibre is not configured
 	recommender   RecommendationEngine // optional; generates recommendations
 	hcSyncer      HCListSyncer         // optional; syncs Hardcover import lists
@@ -117,6 +118,12 @@ func (s *Scheduler) WithPendingReleases(pr *db.PendingReleaseRepo) {
 // Must be called before Start.
 func (s *Scheduler) WithHistory(h *db.HistoryRepo) {
 	s.history = h
+}
+
+// WithAliases attaches the author alias repo used to populate AuthorAliases
+// in MatchCriteria for non-latin author name matching. Must be called before Start.
+func (s *Scheduler) WithAliases(aliases *db.AuthorAliasRepo) {
+	s.aliases = aliases
 }
 
 // WithCalibreSyncer registers a CalibreSyncer that the scheduler will call
@@ -287,18 +294,27 @@ func (s *Scheduler) searchAndGrabFormat(ctx context.Context, book models.Book, m
 	}
 
 	authorName := ""
+	var authorAliases []string
 	if s.authors != nil {
 		if a, err := s.authors.GetByID(ctx, book.AuthorID); err != nil {
 			slog.Warn("failed to load author for search", "author_id", book.AuthorID, "error", err)
 		} else if a != nil {
 			authorName = a.Name
+			if s.aliases != nil {
+				if aliases, err := s.aliases.ListByAuthor(ctx, a.ID); err == nil {
+					for _, al := range aliases {
+						authorAliases = append(authorAliases, al.Name)
+					}
+				}
+			}
 		}
 	}
 	crit := indexer.MatchCriteria{
-		Title:     book.Title,
-		Author:    authorName,
-		MediaType: mediaType,
-		ASIN:      book.ASIN,
+		Title:         book.Title,
+		Author:        authorName,
+		MediaType:     mediaType,
+		ASIN:          book.ASIN,
+		AuthorAliases: authorAliases,
 	}
 	if book.ReleaseDate != nil {
 		crit.Year = book.ReleaseDate.Year()

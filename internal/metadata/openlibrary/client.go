@@ -139,6 +139,8 @@ func (c *Client) GetAuthor(ctx context.Context, foreignID string) (*models.Autho
 		a.ImageURL = fmt.Sprintf("%s/a/id/%d-L.jpg", coverURL, resp.Photos[0])
 	}
 
+	a.AlternateNames = resp.AlternateNames
+
 	return a, nil
 }
 

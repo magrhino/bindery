@@ -157,7 +157,7 @@ func (s *Searcher) SearchBookWithDebug(ctx context.Context, indexers []models.In
 	dbg.Filters = append(dbg.Filters, junkFilters...)
 	dbg.Pipeline.AfterUsenetJunk = len(results)
 
-	results, relFilters := filterRelevantDebug(results, c.Title, c.Author)
+	results, relFilters := filterRelevantDebug(results, c.Title, c.Author, c.AuthorAliases)
 	dbg.Filters = append(dbg.Filters, relFilters...)
 	dbg.Pipeline.AfterRelevance = len(results)
 
@@ -189,11 +189,29 @@ func filterUsenetJunkDebug(results []newznab.SearchResult) ([]newznab.SearchResu
 
 // filterRelevantDebug is filterRelevant instrumented to record each drop with
 // the keyword set that failed to match.
-func filterRelevantDebug(results []newznab.SearchResult, title, author string) ([]newznab.SearchResult, []FilterDebug) {
+func filterRelevantDebug(results []newznab.SearchResult, title, author string, aliases []string) ([]newznab.SearchResult, []FilterDebug) {
 	fullKws := sigWords(title)
 	primaryKws := sigWords(primaryTitle(title))
 	authorKws := sigWords(author)
 	surname := AuthorSurname(author)
+
+	surnames := []string{surname}
+	if !isAllASCIILower(surname) {
+		for _, alias := range aliases {
+			if s := AuthorSurname(alias); s != "" && isAllASCIILower(s) {
+				surnames = append(surnames, s)
+			}
+		}
+	}
+
+	tryMatch := func(n string, kws []string) bool {
+		for _, sn := range surnames {
+			if titleMatchesResult(n, kws, sn, true) {
+				return true
+			}
+		}
+		return false
+	}
 
 	if len(fullKws) == 0 && len(primaryKws) == 0 && len(authorKws) == 0 {
 		return results, nil
@@ -208,10 +226,10 @@ func filterRelevantDebug(results []newznab.SearchResult, title, author string) (
 	var dropped []FilterDebug
 	for i, r := range results {
 		n := normTitles[i]
-		fullOK := titleMatchesResult(n, fullKws, surname, true)
+		fullOK := tryMatch(n, fullKws)
 		primaryOK := false
 		if !fullOK && len(primaryKws) > 0 && !sameKws(primaryKws, fullKws) {
-			primaryOK = titleMatchesResult(n, primaryKws, surname, true)
+			primaryOK = tryMatch(n, primaryKws)
 		}
 		if fullOK || primaryOK {
 			filtered = append(filtered, r)

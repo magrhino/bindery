@@ -178,6 +178,11 @@ func (h *AuthorHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Persist any OL alternate names as alias rows so non-latin primary names
+	// (e.g. "村上春樹") get their latin-script alternates ("Haruki Murakami")
+	// indexed for release-name matching.
+	h.saveAlternateNames(r.Context(), author)
+
 	// Resolve effective media type for books created under this author:
 	// explicit request value wins, else the global default.media_type
 	// setting, else ebook (backwards compat).
@@ -654,6 +659,35 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, book)
+}
+
+// saveAlternateNames persists any latin-script OL alternate names from
+// author.AlternateNames into the author_aliases table. This lets non-latin
+// primary names (e.g. "村上春樹") be matched against latin-script release
+// names (e.g. "Murakami") during indexer searches.
+func (h *AuthorHandler) saveAlternateNames(ctx context.Context, author *models.Author) {
+	if h.aliases == nil || len(author.AlternateNames) == 0 {
+		return
+	}
+	for _, name := range author.AlternateNames {
+		if !isAllASCII(name) {
+			continue
+		}
+		alias := &models.AuthorAlias{AuthorID: author.ID, Name: name}
+		if err := h.aliases.Create(ctx, alias); err != nil {
+			slog.Debug("saveAlternateNames: could not save alias", "name", name, "authorId", author.ID, "error", err)
+		}
+	}
+}
+
+// isAllASCII returns true when every byte of s is a 7-bit ASCII character.
+func isAllASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] > 127 {
+			return false
+		}
+	}
+	return true
 }
 
 func (h *AuthorHandler) resolveAllowedLanguages(ctx context.Context, author *models.Author) ([]string, bool) {
