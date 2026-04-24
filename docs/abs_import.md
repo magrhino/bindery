@@ -165,7 +165,7 @@ Run and provenance persistence adds these tables:
 - `abs_import_runs`: batch envelope, status, config snapshot, checkpoint, summary
 - `abs_import_run_entities`: per-entity outcomes for rollback and inspection
 - `abs_provenance`: ABS-to-Bindery entity linkage
-- `abs_review_items`: deferred/manual review work
+- `abs_review_queue`: deferred/manual review work
 - `abs_metadata_conflicts`: source-choice conflicts between ABS and upstream metadata
 
 This gives the importer idempotent reruns, traceability, and rollback planning without overloading the generic settings store with run state.
