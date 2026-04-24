@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -349,7 +350,12 @@ func copyFileRooted(srcRoot, dstRoot *os.Root, rel string) error {
 	return out.Sync()
 }
 
-func copyFile(src, dst string) error {
+// copyFileCtx copies src to dst, returning ctx.Err() if the context is
+// cancelled before the copy completes. Closing the file descriptors on
+// cancellation encourages the blocking io.Copy goroutine to unblock on
+// Linux (including NFS); if it does not, the goroutine exits when the
+// process eventually closes those fds. Any partial dst is removed.
+func copyFileCtx(ctx context.Context, src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -362,10 +368,98 @@ func copyFile(src, dst string) error {
 	}
 	defer out.Close()
 
-	if _, err := io.Copy(out, in); err != nil {
-		return err
+	type result struct{ err error }
+	ch := make(chan result, 1)
+	go func() {
+		_, copyErr := io.Copy(out, in)
+		if copyErr == nil {
+			copyErr = out.Sync()
+		}
+		ch <- result{copyErr}
+	}()
+
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			_ = os.Remove(dst)
+		}
+		return r.err
+	case <-ctx.Done():
+		_ = in.Close()
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return ctx.Err()
 	}
-	return out.Sync()
+}
+
+func copyFile(src, dst string) error {
+	return copyFileCtx(context.Background(), src, dst)
+}
+
+// MoveFileCtx is like MoveFile but returns ctx.Err() if the context is
+// cancelled during the cross-filesystem copy phase.
+func MoveFileCtx(ctx context.Context, src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+		return fmt.Errorf("create dir: %w", err)
+	}
+
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+
+	if err := copyFileCtx(ctx, src, dst); err != nil {
+		return fmt.Errorf("copy file: %w", err)
+	}
+
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("stat source: %w", err)
+	}
+	dstInfo, err := os.Stat(dst)
+	if err != nil {
+		return fmt.Errorf("stat destination: %w", err)
+	}
+	if srcInfo.Size() != dstInfo.Size() {
+		_ = os.Remove(dst)
+		return fmt.Errorf("size mismatch: src=%d dst=%d", srcInfo.Size(), dstInfo.Size())
+	}
+
+	return os.Remove(src)
+}
+
+// CopyFileCtx is like CopyFile but returns ctx.Err() if the context is
+// cancelled during the copy.
+func CopyFileCtx(ctx context.Context, src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+		return fmt.Errorf("create dir: %w", err)
+	}
+	return copyFileCtx(ctx, src, dst)
+}
+
+// MoveDirCtx is like MoveDir but returns ctx.Err() if the context is
+// cancelled. The background goroutine may still be running on NFS after
+// cancellation but will complete or be cleaned up on process restart.
+func MoveDirCtx(ctx context.Context, src, dst string) error {
+	ch := make(chan error, 1)
+	go func() { ch <- MoveDir(src, dst) }()
+	select {
+	case err := <-ch:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// CopyDirCtx is like CopyDir but returns ctx.Err() if the context is cancelled.
+func CopyDirCtx(ctx context.Context, src, dst string) error {
+	ch := make(chan error, 1)
+	go func() { ch <- CopyDir(src, dst) }()
+	select {
+	case err := <-ch:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func sanitizePath(s string) string {

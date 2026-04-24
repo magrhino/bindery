@@ -519,6 +519,12 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 
 	s.updateDownloadStatus(ctx, dl.ID, models.StateImporting)
 
+	// Per-import timeout so a stalled NFS copy does not hold the download in
+	// StateImporting indefinitely. 30 minutes is generous for any realistic
+	// book file; the context-aware file operations return promptly when it fires.
+	importCtx, importCancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer importCancel()
+
 	// Resolve the book and author for naming. Lookup errors are not fatal -
 	// we fall through to the "unmatched import" log below.
 	var book *models.Book
@@ -575,9 +581,9 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 			case "hardlink":
 				dirErr = HardlinkDir(downloadPath, destDir)
 			case "copy":
-				dirErr = CopyDir(downloadPath, destDir)
+				dirErr = CopyDirCtx(importCtx, downloadPath, destDir)
 			default:
-				dirErr = MoveDir(downloadPath, destDir)
+				dirErr = MoveDirCtx(importCtx, downloadPath, destDir)
 			}
 		} else {
 			if err := os.MkdirAll(destDir, 0o750); err != nil {
@@ -588,9 +594,9 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 				case "hardlink":
 					dirErr = HardlinkFile(downloadPath, dstFile)
 				case "copy":
-					dirErr = CopyFile(downloadPath, dstFile)
+					dirErr = CopyFileCtx(importCtx, downloadPath, dstFile)
 				default:
-					dirErr = MoveFile(downloadPath, dstFile)
+					dirErr = MoveFileCtx(importCtx, downloadPath, dstFile)
 				}
 			}
 		}
@@ -648,9 +654,9 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 		case "hardlink":
 			fileErr = HardlinkFile(srcFile, destPath)
 		case "copy":
-			fileErr = CopyFile(srcFile, destPath)
+			fileErr = CopyFileCtx(importCtx, srcFile, destPath)
 		default:
-			fileErr = MoveFile(srcFile, destPath)
+			fileErr = MoveFileCtx(importCtx, srcFile, destPath)
 		}
 		if fileErr != nil {
 			slog.Error("failed to import", "src", srcFile, "mode", mode, "error", fileErr)
