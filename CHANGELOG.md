@@ -6,6 +6,20 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [v1.2.4] — 2026-04-24
+
+### Fixed
+
+- **Non-latin author names now match usenet releases** (#380) — authors whose names are written in a non-latin script (e.g. Japanese, Chinese, Arabic) have an ASCII surname of `""` after tokenisation, so every release was filtered out as irrelevant. Bindery now fetches the author's OpenLibrary `alternate_names` on first add, saves any ASCII-script aliases to `author_aliases`, and includes those aliases when building the surname candidate list for release matching.
+- **Import no longer stalls indefinitely on NFS timeouts** (#381) — the file-copy path used bare `io.Copy` with no cancellation. On an NFS stall the goroutine blocked forever and the download record stayed locked in `importing` state. Each import now runs under a 30-minute context timeout; copies run in a goroutine and respect cancellation, closing both file descriptors to help the kernel unblock the stalled call.
+- **Wanted filter no longer shows unmonitored books** (#382) — the Books page Wanted status filter matched `status === 'wanted'` without checking `monitored`, so books explicitly set to "don't monitor" appeared alongside genuinely wanted titles. The filter now requires `monitored === true` when the Wanted status is active.
+- **Recommender language filter applied to candidates** (#359) — `hardFilter` removed owned, dismissed, and excluded-author candidates but never checked language. Users with a preferred language set would receive foreign-language recommendations. Candidates whose `Language` field differs from `PreferredLanguage` are now filtered out; candidates with an empty language tag pass through so missing metadata doesn't silently hide results.
+- **Recommender recency score anchored to library median year** (#357) — `recencyScore` used `time.Now().Year()` as its reference point, penalising any book published before ~2005 regardless of the user's actual reading taste. The score is now relative to the median publication year of the user's library (computed in `BuildProfile`). Window widened from 20 → 30 years, floor lowered from 0.3 → 0.1, and `weightRecency` bumped from 0.10 → 0.15 to give the era-relative signal more influence.
+
+### Changed
+
+- **CI: parallel validate jobs and reduced friction** — the `validate` job split into `validate-go` (race-detector tests) and `validate-frontend` (npm build) running in parallel, cutting PR critical-path time from ~253 s to ~180 s. `golangci-lint` and `govulncheck` removed from the security workflow's `sast-go` job (both already run in `lint`). BuildKit GHA layer-cache added to container scans. Security workflow now skips doc-only changes via `paths-ignore`. Kubesec and Dockle removed (output was silently discarded). Discord release announcements now posted automatically on tag push.
+
 ## [v1.2.3] — 2026-04-23
 
 ### Fixed
