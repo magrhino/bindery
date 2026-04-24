@@ -124,6 +124,9 @@ type ImportStats struct {
 	MetadataAutoResolved int `json:"metadataAutoResolved"`
 	Skipped              int `json:"skipped"`
 	Failed               int `json:"failed"`
+
+	dryRunSeriesExternalIDs map[string]struct{}
+	dryRunSeriesTitles      map[string]struct{}
 }
 
 type ImportSourceSnapshot struct {
@@ -718,7 +721,7 @@ func (i *Importer) importOne(ctx context.Context, cfg ImportConfig, runID int64,
 
 	seriesCount := 0
 	for _, series := range item.Series {
-		created, matchedBy, err := i.upsertSeries(ctx, cfg, runID, bookResult.row.ID, series)
+		created, matchedBy, err := i.upsertSeries(ctx, cfg, runID, bookResult.row.ID, series, stats)
 		if err != nil {
 			slog.Warn("abs import: series upsert failed", "itemID", item.ItemID, "series", series.Name, "error", err)
 			continue
@@ -2334,7 +2337,7 @@ func (i *Importer) applyBookFields(ctx context.Context, book *models.Book, autho
 	return i.books.Update(ctx, book)
 }
 
-func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bookID int64, ref NormalizedSeries) (bool, string, error) {
+func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bookID int64, ref NormalizedSeries, stats *ImportStats) (bool, string, error) {
 	title := strings.TrimSpace(ref.Name)
 	if title == "" {
 		return false, "", nil
@@ -2367,6 +2370,9 @@ func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bo
 	}
 	created := false
 	if existing == nil {
+		if cfg.DryRun && stats != nil && stats.dryRunSeriesAlreadyPlanned(externalID, title) {
+			return i.recordPlannedSeries(ctx, cfg, runID, bookID, externalID, ref, false, "planned")
+		}
 		existing = &models.Series{
 			ForeignID:   absForeignID("series", cfg.LibraryID, externalID),
 			Title:       title,
@@ -2409,7 +2415,47 @@ func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bo
 		outcome = itemOutcomeCreated
 	}
 	_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, "", entityTypeSeries, externalID, localID, outcome, json.RawMessage(metadataJSON))
+	if cfg.DryRun && created && stats != nil {
+		stats.rememberDryRunSeries(externalID, title)
+	}
 	return created, matchedBy, nil
+}
+
+func (i *Importer) recordPlannedSeries(ctx context.Context, cfg ImportConfig, runID, bookID int64, externalID string, ref NormalizedSeries, created bool, matchedBy string) (bool, string, error) {
+	metadataJSON := mustJSON(map[string]any{
+		"bookId":   bookID,
+		"sequence": strings.TrimSpace(ref.Sequence),
+	})
+	outcome := itemOutcomeLinked
+	if created {
+		outcome = itemOutcomeCreated
+	}
+	_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, "", entityTypeSeries, externalID, 0, outcome, json.RawMessage(metadataJSON))
+	return created, matchedBy, nil
+}
+
+func (s *ImportStats) dryRunSeriesAlreadyPlanned(externalID, title string) bool {
+	if s == nil {
+		return false
+	}
+	if _, ok := s.dryRunSeriesExternalIDs[strings.TrimSpace(externalID)]; ok {
+		return true
+	}
+	if _, ok := s.dryRunSeriesTitles[normalizeTitle(title)]; ok {
+		return true
+	}
+	return false
+}
+
+func (s *ImportStats) rememberDryRunSeries(externalID, title string) {
+	if s.dryRunSeriesExternalIDs == nil {
+		s.dryRunSeriesExternalIDs = make(map[string]struct{})
+	}
+	if s.dryRunSeriesTitles == nil {
+		s.dryRunSeriesTitles = make(map[string]struct{})
+	}
+	s.dryRunSeriesExternalIDs[strings.TrimSpace(externalID)] = struct{}{}
+	s.dryRunSeriesTitles[normalizeTitle(title)] = struct{}{}
 }
 
 func (i *Importer) findSeriesByTitle(ctx context.Context, title string) (*models.Series, bool, error) {

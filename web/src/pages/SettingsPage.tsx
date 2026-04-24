@@ -1786,18 +1786,65 @@ function AudiobookshelfSection() {
                 </p>
               )}
               {importProgress.results && importProgress.results.length > 0 && (
-                <div className="space-y-1">
-                  {importProgress.results.slice(-5).reverse().map(result => (
-                    <div key={`${result.itemId}-${result.bookId ?? 0}`} className="flex justify-between gap-3 text-[11px] text-slate-600 dark:text-zinc-400">
-                      <span className="min-w-0 flex-1 overflow-hidden">
-                        <span className="block truncate">{result.title || result.itemId}</span>
-                        {result.message && (
-                          <span className="block truncate text-[10px] text-slate-500 dark:text-zinc-500">{result.message}</span>
-                        )}
-                      </span>
-                      <span className="flex-shrink-0 uppercase tracking-wide">{result.outcome}</span>
+                <div className="max-h-64 space-y-3 overflow-y-auto pr-1">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-700 dark:text-zinc-300">
+                      Books
+                    </p>
+                    <div className="mt-1 space-y-1">
+                      {[...importProgress.results].reverse().map(result => (
+                        <div key={`${result.itemId}-${result.bookId ?? 0}`} className="flex justify-between gap-3 text-[11px] text-slate-600 dark:text-zinc-400">
+                          <span className="min-w-0 flex-1 overflow-hidden">
+                            <span className="block truncate">{result.title || result.itemId}</span>
+                            {result.message && (
+                              <span className="block truncate text-[10px] text-slate-500 dark:text-zinc-500">{result.message}</span>
+                            )}
+                          </span>
+                          <span className="flex-shrink-0 uppercase tracking-wide">{result.outcome}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  </div>
+
+                  {importProgress.stats && (
+                    <>
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-700 dark:text-zinc-300">
+                          Authors
+                        </p>
+                        <p className="mt-1 text-[11px] text-slate-600 dark:text-zinc-400">
+                          {importProgress.stats.authorsCreated} created, {importProgress.stats.authorsLinked} linked.
+                        </p>
+                      </div>
+
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-700 dark:text-zinc-300">
+                          Series
+                        </p>
+                        <p className="mt-1 text-[11px] text-slate-600 dark:text-zinc-400">
+                          {importProgress.stats.seriesCreated} created, {importProgress.stats.seriesLinked} linked.
+                        </p>
+                      </div>
+
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-700 dark:text-zinc-300">
+                          Editions
+                        </p>
+                        <p className="mt-1 text-[11px] text-slate-600 dark:text-zinc-400">
+                          {importProgress.stats.editionsAdded} added, {importProgress.stats.ownedMarked} formats marked owned.
+                        </p>
+                      </div>
+
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-700 dark:text-zinc-300">
+                          Follow-up
+                        </p>
+                        <p className="mt-1 text-[11px] text-slate-600 dark:text-zinc-400">
+                          {importProgress.stats.reviewQueued} queued for review, {importProgress.stats.pendingManual} pending manual, {importProgress.stats.metadataConflicts} conflicts queued.
+                        </p>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>

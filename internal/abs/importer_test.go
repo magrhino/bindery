@@ -1614,6 +1614,44 @@ func TestImporter_DryRunDoesNotMutateCatalogButPersistsRunSummary(t *testing.T) 
 	}
 }
 
+func TestImporter_DryRunCountsPlannedSeriesOnce(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, _, _, _, _, _, _, _ := newABSImporterFixture(t)
+	first := sampleABSItem()
+	second := sampleABSItem()
+	second.ItemID = "li-artemis"
+	second.Title = "Artemis"
+	second.Series = []NormalizedSeries{
+		{ID: first.Series[0].ID, Name: first.Series[0].Name, Sequence: "2"},
+	}
+	items := []NormalizedLibraryItem{first, second}
+	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		for _, item := range items {
+			if err := fn(ctx, item); err != nil {
+				return EnumerationStats{}, err
+			}
+		}
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: len(items), ItemsNormalized: len(items)}, nil
+	}
+
+	stats, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:  DefaultSourceID,
+		BaseURL:   "https://abs.example.com",
+		APIKey:    "secret",
+		LibraryID: first.LibraryID,
+		Label:     "Shelf",
+		Enabled:   true,
+		DryRun:    true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if stats.SeriesCreated != 1 || stats.SeriesLinked != 1 {
+		t.Fatalf("dry-run series stats = %+v, want 1 created and 1 linked", stats)
+	}
+}
+
 func TestImporter_RollbackRemovesCreatedBatch(t *testing.T) {
 	t.Parallel()
 
