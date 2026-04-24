@@ -6,6 +6,20 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [v1.2.5] — 2026-04-24
+
+### Added
+
+- **`{Series}` and `{SeriesNumber}` naming tokens** (#389) — file renaming templates now support `{Series}` (primary series name) and `{SeriesNumber}` (position in series, e.g. `3` or `3.5`). Both are looked up at import time from the `series_books` join table; books with no series silently omit the path segment so existing templates are unaffected. The audiobook destination template exposes the same tokens. Default template is unchanged.
+- **Scanner series-position matching** (#390) — the library scanner now attempts a fourth matching tier: if a filename contains a series name and position number (e.g. `[Dune Chronicles, Book 2]` or `(Mistborn #1)`) and no title/author match was found, Bindery looks up the series in the database and reconciles the book if the match is unambiguous. Supports bracket and parenthesis notation, `book/vol/part` prefixes, and integer or decimal position numbers. ISBN-shaped numbers are excluded via a letter-start requirement on the series name.
+
+### Fixed
+
+- **Discover: unrated and low-popularity books suppressed** (#391, closes #360) — `hardFilter` now drops candidates with fewer than 50 ratings (obscure long-tail editions that have never been rated) and candidates with 50+ ratings but an average below 3.0 (objectively poor books). Candidates with no ratings data at all are not penalised so missing metadata doesn't hide results.
+- **Discover: box sets, omnibuses, and anthology contributions excluded** (#392, closes #361) — a new keyword scan in `hardFilter` drops titles matching "omnibus", "box set", "complete works", "complete collection", "anthology", "collected works", "the best of", and similar multi-volume markers. Users see individual titles on the Discover page rather than compilation volumes they may already own in parts.
+- **Download client forms: Use SSL toggle and URL Base field added** (#393, closes #364) — both "Add client" and "Edit client" forms now expose a **Use SSL** checkbox and a **URL Base** text field. Previously these settings existed in the Go model and DB schema but were invisible in the UI, so operators behind a reverse-proxy subpath or needing TLS had no way to configure them without raw DB edits. `urlBase` is also added to the TypeScript `DownloadClient` interface which was missing it.
+- **Download client URLs now respect `url_base`** (#375, closes #369) — all five downloader clients (qBittorrent, Transmission, Deluge, NZBGet, SABnzbd) built their connection URL from `host:port` only, ignoring the stored `url_base`. Operators running a client behind a reverse-proxy subpath (e.g. `/qbit`) would see Bindery connect to the wrong endpoint. A new `internal/downloader/urlbase.Normalize()` helper canonicalises the stored value — handles missing leading slash, trailing slashes, and pasted full URLs — and the result is threaded through every `New()` constructor.
+
 ## [v1.2.4] — 2026-04-24
 
 ### Fixed

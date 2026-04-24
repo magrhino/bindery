@@ -84,12 +84,12 @@
 - **Dual-format books** — Each book can hold an ebook *and* an audiobook simultaneously. The Book Detail page has separate format panels with independent status, file path, and grab buttons. The search pipeline uses Newznab category 7020 for ebooks and 3030 for audiobooks; the importer moves whole audiobook folders (multi-part `.m4b` / `.mp3`) as one unit into a separate audiobook library root; the Wanted page lists each missing format as a separate row.
 - **Series support** — Books grouped by series with position tracking and dedicated Series page
 - **Edition tracking** — Multiple editions per work, with format, ISBN, publisher, page count
-- **Library scan** — Walk `/books/` and reconcile existing files with wanted books in the database; trigger on-demand from **Settings → General → Scan Library**
+- **Library scan** — Walk `/books/` and reconcile existing files with wanted books in the database; trigger on-demand from **Settings → General → Scan Library**. Matching is four-tier: ASIN → title + author → series name + position number → fuzzy title. Files annotated with series info (e.g. `[Mistborn, Book 1]` or `(Dune Chronicles #2)`) are matched even when the title alone would be ambiguous.
 - **Author aliases** — Merge duplicate authors ("RR Haywood" / "R.R. Haywood" / "R R Haywood") into one canonical row from the Authors page; add-author flow detects aliases and prompts for merge instead of silently ingesting a duplicate
 
 ### Search & downloads
 - **Newznab + Torznab** — Query multiple Usenet and torrent indexers in parallel, deduplicated and ranked
-- **SABnzbd, qBittorrent, Transmission** — Full support for both Usenet and torrent download clients
+- **SABnzbd, NZBGet, qBittorrent, Transmission, Deluge** — Full support for both Usenet and torrent download clients. All clients support **Use SSL** and **URL Base** for connections through a reverse-proxy subpath (configure under **Settings → Download Clients**).
 - **Auto-grab** — Scheduler searches for wanted books every 12h and automatically grabs the best result. Adding a new author or flipping a book to `wanted` fires an immediate search — no waiting for the next scheduled pass. Toggle the global kill-switch at **Settings → General → Auto-grab** to pause all automatic grabbing without losing your monitored list.
 - **Interactive search** — Manual per-book search from the Wanted page with full result details; Grab button shows a spinner while in-flight and a ✓ on success
 - **Smart matching** — Four-tier query fallback (`t=book` → `surname+title` → `author+title` → title); word-boundary keyword matching; contiguous-phrase requirement for multi-word titles; dual-author-anchor for ambiguous short titles; subtitle-aware (`Title: Subtitle`)
@@ -104,7 +104,7 @@
 ### Import & organize
 - **Automatic import** — Completed downloads matched by NZO ID, placed in library with configurable naming template
 - **Import modes** — **Move** (default): source deleted after import. **Copy**: source kept so torrent clients continue seeding. **Hardlink**: zero extra disk, both paths share an inode (download dir and library must be on the same filesystem). Configurable under **Settings → General → Import Mode**.
-- **Naming tokens** — `{Author}`, `{SortAuthor}`, `{Title}`, `{Year}`, `{ext}` with sanitized path components
+- **Naming tokens** — `{Author}`, `{SortAuthor}`, `{Title}`, `{Year}`, `{Series}`, `{SeriesNumber}`, `{ext}` with sanitized path components. `{Series}` expands to the book's primary series name (e.g. `Mistborn`); `{SeriesNumber}` to its position (e.g. `1` or `3.5`). Both silently expand to nothing for books not in a series, so the path collapses cleanly.
 - **Cross-filesystem moves** — Atomic rename when possible, copy+verify+delete for NFS/separate volumes
 - **History** — Every grab, import, and failure recorded with full detail (shown inline on History page)
 - **Calibre library integration** — Three modes, all configurable under **Settings → Calibre**:
@@ -122,6 +122,12 @@
 - **Audible catalogue** — Direct author lookup against Audible's public catalogue endpoint. Supplements OpenLibrary/Hardcover during `FetchAuthorBooks` when the author's effective media type is `audiobook` or `both`. Pulled books carry the ASIN and flow through the same `allowed_languages` filter as the OpenLibrary path — prolific authors (Sanderson, King, Rowling) gain the ASINs that OL/Hardcover are missing, without letting foreign-language editions slip past the default profile.
 - **Cover image proxy** — Cover images are fetched and cached server-side under `<dataDir>/image-cache/` (30-day TTL). All `imageURL` fields in API responses are rewritten to `/api/v1/images?url=<encoded>` before leaving the server. The browser never contacts Goodreads, OpenLibrary, or Google Books directly — no IP leakage, no third-party tracking.
 - No Goodreads scraping. All sources use documented, stable public APIs.
+
+### Discover
+- **Recommendations engine** — The **Discover** page generates personalised book suggestions from multiple signals: next books in series you're reading, new releases from monitored authors, genre-similar titles (requires ≥ 20 books in library), OpenLibrary subject-based popular picks, and Hardcover.app wishlist cross-reference.
+- **Taste profile** — Built from your downloaded/imported books: preferred genres, era, language, authors, and series. Recency scoring is relative to the median publication year of your library rather than the current year, so backlist readers aren't penalised.
+- **Discover filters** — Candidates are hard-filtered: already-owned, dismissed, excluded-author, wrong-language, fewer-than-50-ratings, sub-3.0-rated, and collection/omnibus titles are all suppressed. Only individual, reasonably-rated books reach the page.
+- **Dismiss / exclude** — Mark a recommendation as "not interested" or exclude an author entirely from future suggestions. Dismissals persist across engine runs.
 
 ### Migration
 - **CSV import** — Upload a newline-separated list of author names (or a `name,monitored,searchOnAdd` CSV); each name is resolved against OpenLibrary.
@@ -238,8 +244,12 @@ No Goodreads scraping. All sources use documented, stable public APIs. Cover ima
 
 ### Download clients
 - **SABnzbd** — full support (NZB submission, queue/history polling, pause/resume/delete)
+- **NZBGet** — JSON-RPC v2 (NZB submission, queue/history polling, remove)
 - **qBittorrent** — WebUI API v2 with Username/Password auth (add magnet/URL, list/delete torrents)
-- **Transmission** - WebUI API with Username/Password auth (add magnet/URL, list/delete torrents)
+- **Transmission** — RPC API with Username/Password auth (add magnet/URL, list/delete torrents)
+- **Deluge** — JSON-RPC with cookie auth (add magnet/URL, list/delete torrents)
+
+All clients support **Use SSL** (HTTPS) and **URL Base** (reverse-proxy subpath). Configure both under **Settings → Download Clients**.
 
 ### Indexers
 - **Newznab** (Usenet) — NZBGeek, NZBFinder, NZBPlanet, DrunkenSlug, etc.
