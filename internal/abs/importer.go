@@ -368,19 +368,19 @@ func (i *Importer) ResumeInterrupted(ctx context.Context, fallback ImportConfig)
 	}
 
 	cfg := resumeConfigFromRun(*run, fallback)
-	if err := cfg.Validate(); err != nil {
-		return true, fmt.Errorf("resume abs import run %d: %w", run.ID, err)
-	}
-	if err := i.Start(context.WithoutCancel(ctx), cfg); err != nil {
-		return true, err
-	}
 	if err := i.runs.Finish(ctx, run.ID, runStatusFailed, ImportSummary{
 		DryRun:                run.DryRun,
 		ResumedFromCheckpoint: true,
 		Checkpoint:            checkpoint,
 		Error:                 "interrupted by process restart; resumed from checkpoint",
 	}); err != nil {
-		slog.Warn("abs import: failed to mark interrupted run failed", "runID", run.ID, "error", err)
+		return true, fmt.Errorf("mark interrupted abs import run %d failed: %w", run.ID, err)
+	}
+	if err := cfg.Validate(); err != nil {
+		return true, fmt.Errorf("resume abs import run %d: %w", run.ID, err)
+	}
+	if err := i.Start(context.WithoutCancel(ctx), cfg); err != nil {
+		return true, err
 	}
 	return true, nil
 }
@@ -517,6 +517,16 @@ func (i *Importer) run(ctx context.Context, cfg ImportConfig) *ImportStats {
 		summary.Checkpoint = checkpoint
 	}
 
+	sourceConfigJSON, err := encodeJSON(sourceSnapshot(cfg))
+	if err != nil {
+		i.fail(fmt.Errorf("encode abs import source config: %w", err))
+		return stats
+	}
+	checkpointJSON, err := encodeJSON(summary.Checkpoint)
+	if err != nil {
+		i.fail(fmt.Errorf("encode abs import checkpoint: %w", err))
+		return stats
+	}
 	run := &models.ABSImportRun{
 		SourceID:         cfg.SourceID,
 		SourceLabel:      cfg.Label,
@@ -524,8 +534,8 @@ func (i *Importer) run(ctx context.Context, cfg ImportConfig) *ImportStats {
 		LibraryID:        cfg.LibraryID,
 		Status:           runStatusRunning,
 		DryRun:           cfg.DryRun,
-		SourceConfigJSON: mustJSON(sourceSnapshot(cfg)),
-		CheckpointJSON:   mustJSON(summary.Checkpoint),
+		SourceConfigJSON: sourceConfigJSON,
+		CheckpointJSON:   checkpointJSON,
 		SummaryJSON:      "{}",
 	}
 	if i.runs != nil {
@@ -804,6 +814,10 @@ func (i *Importer) queueReviewItem(ctx context.Context, runID int64, cfg ImportC
 	if i.reviews == nil {
 		return reviewRequiredError{Reason: reason}
 	}
+	payloadJSON, err := encodeJSON(item)
+	if err != nil {
+		return fmt.Errorf("encode abs review payload: %w", err)
+	}
 	review := &models.ABSReviewItem{
 		SourceID:      cfg.SourceID,
 		LibraryID:     item.LibraryID,
@@ -813,7 +827,7 @@ func (i *Importer) queueReviewItem(ctx context.Context, runID int64, cfg ImportC
 		ASIN:          strings.TrimSpace(item.ASIN),
 		MediaType:     deriveMediaType(item),
 		ReviewReason:  reason,
-		PayloadJSON:   mustJSON(item),
+		PayloadJSON:   payloadJSON,
 		Status:        "pending",
 	}
 	if runID != 0 {
@@ -1921,17 +1935,25 @@ func bookSnapshot(book *models.Book) *bookRollbackSnapshot {
 	}
 }
 
-func bookSnapshotMetadata(data map[string]any, before, after *bookRollbackSnapshot) runEntityMetadataEnvelope {
+func bookSnapshotMetadata(data map[string]any, before, after *bookRollbackSnapshot) (runEntityMetadataEnvelope, error) {
+	beforePayload, err := marshalSnapshotPayload(before)
+	if err != nil {
+		return runEntityMetadataEnvelope{}, err
+	}
+	afterPayload, err := marshalSnapshotPayload(after)
+	if err != nil {
+		return runEntityMetadataEnvelope{}, err
+	}
 	return runEntityMetadataEnvelope{
 		Kind:    runEntityMetadataKind,
 		Version: runEntityMetadataVersion,
 		Data:    data,
 		Snapshot: &runEntitySnapshotEnvelope{
 			EntityType: entityTypeBook,
-			Before:     marshalSnapshotPayload(before),
-			After:      marshalSnapshotPayload(after),
+			Before:     beforePayload,
+			After:      afterPayload,
 		},
-	}
+	}, nil
 }
 
 func authorSnapshot(author *models.Author) *authorRollbackSnapshot {
@@ -1950,25 +1972,33 @@ func authorSnapshot(author *models.Author) *authorRollbackSnapshot {
 	}
 }
 
-func authorSnapshotMetadata(data map[string]any, before, after *authorRollbackSnapshot) runEntityMetadataEnvelope {
+func authorSnapshotMetadata(data map[string]any, before, after *authorRollbackSnapshot) (runEntityMetadataEnvelope, error) {
+	beforePayload, err := marshalSnapshotPayload(before)
+	if err != nil {
+		return runEntityMetadataEnvelope{}, err
+	}
+	afterPayload, err := marshalSnapshotPayload(after)
+	if err != nil {
+		return runEntityMetadataEnvelope{}, err
+	}
 	return runEntityMetadataEnvelope{
 		Kind:    runEntityMetadataKind,
 		Version: runEntityMetadataVersion,
 		Data:    data,
 		Snapshot: &runEntitySnapshotEnvelope{
 			EntityType: entityTypeAuthor,
-			Before:     marshalSnapshotPayload(before),
-			After:      marshalSnapshotPayload(after),
+			Before:     beforePayload,
+			After:      afterPayload,
 		},
-	}
+	}, nil
 }
 
 // marshalSnapshotPayload encodes a concrete snapshot struct into the
 // envelope's RawMessage slot. A nil input returns a nil payload so the
 // omitempty tag drops the field entirely.
-func marshalSnapshotPayload(v any) json.RawMessage {
+func marshalSnapshotPayload(v any) (json.RawMessage, error) {
 	if v == nil {
-		return nil
+		return nil, nil
 	}
 	// Guard against typed-nil pointers: json.Marshal on a (*T)(nil) encodes
 	// "null", which is indistinguishable from a genuinely absent snapshot
@@ -1976,25 +2006,29 @@ func marshalSnapshotPayload(v any) json.RawMessage {
 	switch t := v.(type) {
 	case *bookRollbackSnapshot:
 		if t == nil {
-			return nil
+			return nil, nil
 		}
 	case *authorRollbackSnapshot:
 		if t == nil {
-			return nil
+			return nil, nil
 		}
 	}
 	data, err := json.Marshal(v)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("encode abs rollback snapshot: %w", err)
 	}
-	return data
+	return data, nil
 }
 
 func (i *Importer) recordBookBeforeSnapshot(ctx context.Context, runID int64, cfg ImportConfig, item NormalizedLibraryItem, externalID string, book *models.Book, outcome string, data map[string]any) error {
 	if cfg.DryRun || book == nil {
 		return nil
 	}
-	return i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeBook, externalID, book.ID, outcome, bookSnapshotMetadata(data, bookSnapshot(book), nil))
+	metadata, err := bookSnapshotMetadata(data, bookSnapshot(book), nil)
+	if err != nil {
+		return err
+	}
+	return i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeBook, externalID, book.ID, outcome, metadata)
 }
 
 func (i *Importer) recordBookAfterSnapshot(ctx context.Context, runID int64, cfg ImportConfig, item NormalizedLibraryItem, bookID int64, outcome string, data map[string]any) error {
@@ -2005,14 +2039,22 @@ func (i *Importer) recordBookAfterSnapshot(ctx context.Context, runID int64, cfg
 	if err != nil || book == nil {
 		return err
 	}
-	return i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeBook, item.ItemID, book.ID, outcome, bookSnapshotMetadata(data, nil, bookSnapshot(book)))
+	metadata, err := bookSnapshotMetadata(data, nil, bookSnapshot(book))
+	if err != nil {
+		return err
+	}
+	return i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeBook, item.ItemID, book.ID, outcome, metadata)
 }
 
 func (i *Importer) recordAuthorBeforeSnapshot(ctx context.Context, runID int64, cfg ImportConfig, item NormalizedLibraryItem, externalID string, author *models.Author, outcome string, data map[string]any) error {
 	if cfg.DryRun || author == nil {
 		return nil
 	}
-	return i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeAuthor, externalID, author.ID, outcome, authorSnapshotMetadata(data, authorSnapshot(author), nil))
+	metadata, err := authorSnapshotMetadata(data, authorSnapshot(author), nil)
+	if err != nil {
+		return err
+	}
+	return i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeAuthor, externalID, author.ID, outcome, metadata)
 }
 
 func (i *Importer) recordAuthorAfterSnapshot(ctx context.Context, runID int64, cfg ImportConfig, item NormalizedLibraryItem, externalID string, authorID int64, outcome string, data map[string]any) error {
@@ -2023,7 +2065,11 @@ func (i *Importer) recordAuthorAfterSnapshot(ctx context.Context, runID int64, c
 	if err != nil || author == nil {
 		return err
 	}
-	return i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeAuthor, externalID, author.ID, outcome, authorSnapshotMetadata(data, nil, authorSnapshot(author)))
+	metadata, err := authorSnapshotMetadata(data, nil, authorSnapshot(author))
+	if err != nil {
+		return err
+	}
+	return i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeAuthor, externalID, author.ID, outcome, metadata)
 }
 
 func (i *Importer) upsertBook(ctx context.Context, cfg ImportConfig, runID int64, author *models.Author, item NormalizedLibraryItem, allowCreate bool) (*bookUpsertResult, bool, bool, metadataMergeResult, error) {
@@ -2386,10 +2432,10 @@ func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bo
 		created = true
 		matchedBy = "created"
 	}
-	metadataJSON := mustJSON(map[string]any{
+	metadata := map[string]any{
 		"bookId":   bookID,
 		"sequence": strings.TrimSpace(ref.Sequence),
-	})
+	}
 	if !cfg.DryRun {
 		if err := i.series.LinkBook(ctx, existing.ID, bookID, strings.TrimSpace(ref.Sequence), true); err != nil {
 			return false, "", err
@@ -2414,7 +2460,7 @@ func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bo
 	if created {
 		outcome = itemOutcomeCreated
 	}
-	_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, "", entityTypeSeries, externalID, localID, outcome, json.RawMessage(metadataJSON))
+	_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, "", entityTypeSeries, externalID, localID, outcome, metadata)
 	if cfg.DryRun && created && stats != nil {
 		stats.rememberDryRunSeries(externalID, title)
 	}
@@ -2422,15 +2468,15 @@ func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bo
 }
 
 func (i *Importer) recordPlannedSeries(ctx context.Context, cfg ImportConfig, runID, bookID int64, externalID string, ref NormalizedSeries, created bool, matchedBy string) (bool, string, error) {
-	metadataJSON := mustJSON(map[string]any{
+	metadata := map[string]any{
 		"bookId":   bookID,
 		"sequence": strings.TrimSpace(ref.Sequence),
-	})
+	}
 	outcome := itemOutcomeLinked
 	if created {
 		outcome = itemOutcomeCreated
 	}
-	_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, "", entityTypeSeries, externalID, 0, outcome, json.RawMessage(metadataJSON))
+	_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, "", entityTypeSeries, externalID, 0, outcome, metadata)
 	return created, matchedBy, nil
 }
 
@@ -3355,6 +3401,19 @@ func (i *Importer) recordRunEntity(ctx context.Context, runID int64, cfg ImportC
 	if runID == 0 || i.runEntities == nil {
 		return nil
 	}
+	metadataJSON, err := encodeJSON(metadata)
+	if err != nil {
+		err = fmt.Errorf("encode abs import run entity metadata: %w", err)
+		slog.Warn("abs import: encode run entity metadata failed",
+			"runID", runID,
+			"libraryID", libraryID,
+			"itemID", itemID,
+			"entityType", entityType,
+			"externalID", externalID,
+			"localID", localID,
+			"error", err)
+		return err
+	}
 	return i.runEntities.Record(ctx, &models.ABSImportRunEntity{
 		RunID:        runID,
 		SourceID:     cfg.SourceID,
@@ -3364,7 +3423,7 @@ func (i *Importer) recordRunEntity(ctx context.Context, runID int64, cfg ImportC
 		ExternalID:   externalID,
 		LocalID:      localID,
 		Outcome:      outcome,
-		MetadataJSON: mustJSON(metadata),
+		MetadataJSON: metadataJSON,
 	})
 }
 
@@ -3642,15 +3701,18 @@ func sourceSnapshot(cfg ImportConfig) ImportSourceSnapshot {
 	}
 }
 
-func mustJSON(value any) string {
+func encodeJSON(value any) (string, error) {
 	if value == nil {
-		return "{}"
+		return "{}", nil
 	}
 	data, err := json.Marshal(value)
-	if err != nil || len(data) == 0 {
-		return "{}"
+	if err != nil {
+		return "", err
 	}
-	return string(data)
+	if len(data) == 0 {
+		return "", errors.New("json marshal produced empty payload")
+	}
+	return string(data), nil
 }
 
 func parseJSONObject(raw string) map[string]any {
