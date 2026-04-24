@@ -189,16 +189,20 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body io.Reader
 			continue
 		}
 
-		defer resp.Body.Close()
 		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-			return decodeAPIError(resp)
+			err := decodeAPIError(resp)
+			_ = resp.Body.Close()
+			return err
 		}
 		if out == nil {
+			_ = resp.Body.Close()
 			return nil
 		}
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			_ = resp.Body.Close()
 			return fmt.Errorf("decode %s %s response: %w", method, path, err)
 		}
+		_ = resp.Body.Close()
 		return nil
 	}
 	return lastErr

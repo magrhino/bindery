@@ -74,6 +74,18 @@ func sampleABSItem() NormalizedLibraryItem {
 	}
 }
 
+func mustJSONForTest(t *testing.T, value any) string {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal json: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("marshal json produced empty payload")
+	}
+	return string(data)
+}
+
 func runSingleABSImport(t *testing.T, importer *Importer, item NormalizedLibraryItem) int64 {
 	t.Helper()
 	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
@@ -117,7 +129,7 @@ func TestImporter_ResumeInterruptedStartsFromPersistedCheckpoint(t *testing.T) {
 		LibraryID:   "lib-books",
 		Status:      runStatusRunning,
 		DryRun:      true,
-		SourceConfigJSON: mustJSON(sourceSnapshot(ImportConfig{
+		SourceConfigJSON: mustJSONForTest(t, sourceSnapshot(ImportConfig{
 			SourceID:  DefaultSourceID,
 			BaseURL:   "https://abs.example.com",
 			LibraryID: "lib-books",
@@ -125,7 +137,7 @@ func TestImporter_ResumeInterruptedStartsFromPersistedCheckpoint(t *testing.T) {
 			Enabled:   true,
 			DryRun:    true,
 		})),
-		CheckpointJSON: mustJSON(checkpoint),
+		CheckpointJSON: mustJSONForTest(t, checkpoint),
 		SummaryJSON:    "{}",
 	}
 	if err := runRepo.Create(context.Background(), run); err != nil {
@@ -133,10 +145,21 @@ func TestImporter_ResumeInterruptedStartsFromPersistedCheckpoint(t *testing.T) {
 	}
 
 	started := make(chan struct{})
+	statusAtStart := make(chan string, 1)
 	release := make(chan struct{})
 	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
 		if libraryID != "lib-books" {
 			t.Errorf("libraryID = %q, want lib-books", libraryID)
+		}
+		staleRun, err := runRepo.GetByID(ctx, run.ID)
+		if err != nil {
+			t.Errorf("GetByID stale run at start: %v", err)
+			statusAtStart <- ""
+		} else if staleRun == nil {
+			t.Errorf("stale run missing at resumed import start")
+			statusAtStart <- ""
+		} else {
+			statusAtStart <- staleRun.Status
 		}
 		close(started)
 		select {
@@ -165,6 +188,9 @@ func TestImporter_ResumeInterruptedStartsFromPersistedCheckpoint(t *testing.T) {
 	case <-started:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for resumed import to start")
+	}
+	if status := <-statusAtStart; status != runStatusFailed {
+		t.Fatalf("stale run status at resumed import start = %q, want failed", status)
 	}
 
 	progress := importer.Progress()
@@ -198,6 +224,159 @@ func TestImporter_ResumeInterruptedStartsFromPersistedCheckpoint(t *testing.T) {
 		default:
 			time.Sleep(10 * time.Millisecond)
 		}
+	}
+}
+
+func TestImporter_ResumeInterruptedDoesNotStartIfMarkingStaleRunFailedFails(t *testing.T) {
+	t.Parallel()
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	authorRepo := db.NewAuthorRepo(database)
+	importer := NewImporter(
+		authorRepo,
+		db.NewAuthorAliasRepo(database),
+		db.NewBookRepo(database),
+		db.NewEditionRepo(database),
+		db.NewSeriesRepo(database),
+		db.NewSettingsRepo(database),
+		db.NewABSImportRunRepo(database),
+		db.NewABSImportRunEntityRepo(database),
+		db.NewABSProvenanceRepo(database),
+		db.NewABSReviewItemRepo(database),
+		db.NewABSMetadataConflictRepo(database),
+	)
+	runRepo := db.NewABSImportRunRepo(database)
+	checkpoint := ImportCheckpoint{
+		LibraryID:  "lib-books",
+		Page:       1,
+		LastItemID: "li-before-restart",
+		PageSize:   50,
+		UpdatedAt:  time.Now().UTC(),
+	}
+	run := &models.ABSImportRun{
+		SourceID:    DefaultSourceID,
+		SourceLabel: "Shelf",
+		BaseURL:     "https://abs.example.com",
+		LibraryID:   "lib-books",
+		Status:      runStatusRunning,
+		DryRun:      true,
+		SourceConfigJSON: mustJSONForTest(t, sourceSnapshot(ImportConfig{
+			SourceID:  DefaultSourceID,
+			BaseURL:   "https://abs.example.com",
+			LibraryID: "lib-books",
+			Label:     "Shelf",
+			Enabled:   true,
+			DryRun:    true,
+		})),
+		CheckpointJSON: mustJSONForTest(t, checkpoint),
+		SummaryJSON:    "{}",
+	}
+	if err := runRepo.Create(context.Background(), run); err != nil {
+		t.Fatalf("Create interrupted run: %v", err)
+	}
+	if _, err := database.ExecContext(context.Background(), `
+		CREATE TRIGGER fail_abs_resume_finish
+		BEFORE UPDATE OF status ON abs_import_runs
+		WHEN NEW.status = 'failed'
+		BEGIN
+			SELECT RAISE(ABORT, 'blocked stale failure');
+		END`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	started := make(chan struct{})
+	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		close(started)
+		return EnumerationStats{}, nil
+	}
+	resumed, err := importer.ResumeInterrupted(context.Background(), ImportConfig{
+		SourceID:  DefaultSourceID,
+		APIKey:    "secret",
+		Enabled:   true,
+		BaseURL:   "https://current-settings.example.com",
+		LibraryID: "current-lib",
+		Label:     "Current Settings",
+	})
+	if err == nil || !strings.Contains(err.Error(), "blocked stale failure") {
+		t.Fatalf("ResumeInterrupted error = %v, want trigger failure", err)
+	}
+	if !resumed {
+		t.Fatal("ResumeInterrupted resumed = false, want true")
+	}
+	select {
+	case <-started:
+		t.Fatal("resumed import started after stale run failure was not persisted")
+	default:
+	}
+	if importer.Running() {
+		t.Fatal("importer is running after stale run failure was not persisted")
+	}
+	staleRun, err := runRepo.GetByID(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("GetByID stale run: %v", err)
+	}
+	if staleRun == nil || staleRun.Status != runStatusRunning {
+		t.Fatalf("stale run = %+v, want still running after failed status update", staleRun)
+	}
+	runs, err := runRepo.ListRecent(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListRecent: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("runs = %+v, want no replacement run", runs)
+	}
+}
+
+func TestImporter_RecordSnapshotReturnsRunEntityMetadataMarshalError(t *testing.T) {
+	t.Parallel()
+
+	importer, authorRepo, _, _, _, _, runRepo, runEntityRepo, _, _ := newABSImporterFixture(t)
+	ctx := context.Background()
+	run := &models.ABSImportRun{
+		SourceID:    DefaultSourceID,
+		SourceLabel: "Shelf",
+		BaseURL:     "https://abs.example.com",
+		LibraryID:   "lib-books",
+		Status:      runStatusRunning,
+	}
+	if err := runRepo.Create(ctx, run); err != nil {
+		t.Fatalf("Create run: %v", err)
+	}
+	author := &models.Author{
+		ForeignID:        "OL-BAD-META",
+		Name:             "Bad Metadata",
+		SortName:         "Metadata, Bad",
+		MetadataProvider: "openlibrary",
+		Monitored:        true,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatalf("Create author: %v", err)
+	}
+	item := sampleABSItem()
+	err := importer.recordAuthorBeforeSnapshot(ctx, run.ID, ImportConfig{
+		SourceID:  DefaultSourceID,
+		BaseURL:   "https://abs.example.com",
+		APIKey:    "secret",
+		LibraryID: item.LibraryID,
+		Label:     "Shelf",
+		Enabled:   true,
+	}, item, "author-bad-meta", author, itemOutcomeLinked, map[string]any{
+		"invalid": func() {},
+	})
+	if err == nil || !strings.Contains(err.Error(), "encode abs import run entity metadata") {
+		t.Fatalf("recordAuthorBeforeSnapshot error = %v, want metadata marshal error", err)
+	}
+	entities, err := runEntityRepo.ListByRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("ListByRun: %v", err)
+	}
+	if len(entities) != 0 {
+		t.Fatalf("entities = %+v, want invalid metadata not stored", entities)
 	}
 }
 
@@ -2351,6 +2530,10 @@ func TestImporter_RollbackSkipsSnapshotWhenProvenanceLocalChanged(t *testing.T) 
 		MetadataProvider: providerAudiobookshelf,
 	}
 	after := authorSnapshot(stale)
+	metadata, err := authorSnapshotMetadata(nil, before, after)
+	if err != nil {
+		t.Fatalf("authorSnapshotMetadata: %v", err)
+	}
 	if err := runEntityRepo.Record(ctx, &models.ABSImportRunEntity{
 		RunID:        run.ID,
 		SourceID:     DefaultSourceID,
@@ -2360,7 +2543,7 @@ func TestImporter_RollbackSkipsSnapshotWhenProvenanceLocalChanged(t *testing.T) 
 		ExternalID:   "author-shared",
 		LocalID:      stale.ID,
 		Outcome:      itemOutcomeLinked,
-		MetadataJSON: mustJSON(authorSnapshotMetadata(nil, before, after)),
+		MetadataJSON: mustJSONForTest(t, metadata),
 	}); err != nil {
 		t.Fatalf("Record run entity: %v", err)
 	}
