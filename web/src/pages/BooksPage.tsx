@@ -50,7 +50,7 @@ export default function BooksPage() {
 
   const filtered = useMemo(() => {
     let list = books
-    if (statusFilter) list = list.filter(b => b.status === statusFilter)
+    if (statusFilter) list = list.filter(b => b.status === statusFilter && (statusFilter !== 'wanted' || b.monitored))
     if (mediaFilter) {
       list = list.filter(b => {
         const mt = b.mediaType || 'ebook'
