@@ -6,6 +6,15 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [v1.2.6] — 2026-04-25
+
+### Fixed
+
+- **NZBGet grabs broken** (#396) — `GetFirstEnabledByProtocol` and `GetEnabledByProtocol` only queried `sabnzbd` for the usenet protocol; NZBGet was never returned, causing "no enabled download clients" on every grab attempt for users with only NZBGet configured.
+- **NZBGet credentials zeroed on read** (#396) — `hydrateClientCredentials` blanked `username`/`password` for all non-qBit/Transmission clients, silently wiping NZBGet HTTP Basic auth credentials before they reached the adapter.
+- **Deluge missing from torrent protocol selector** (#396) — both `GetFirstEnabledByProtocol` and `GetEnabledByProtocol` excluded Deluge from the torrent client `IN` list, causing "no enabled download clients" for Deluge-only setups.
+- **Imageproxy concurrent-write race** (#396) — concurrent requests for the same image URL all wrote to the shared `imgFile+".tmp"` path; a racing `O_TRUNC` open could zero the file while another goroutine renamed it into the cache, resulting in empty image responses. Each goroutine now uses `os.CreateTemp()` for an isolated temp file.
+
 ## [v1.2.5] — 2026-04-24
 
 ### Added
