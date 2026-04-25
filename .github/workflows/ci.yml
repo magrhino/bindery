@@ -243,7 +243,7 @@ jobs:
             --base development \
             --title "chore(deploy-dev): update to ${IMAGE_TAG}" \
             --body "Automated dev deploy: image tag \`${IMAGE_TAG}\`." 2>/dev/null || true
-          gh pr merge "${DEPLOY_BRANCH}" --base development --squash --admin --delete-branch
+          gh pr merge "${DEPLOY_BRANCH}" --squash --admin --delete-branch
           echo "bindery-dev image tag updated to ${IMAGE_TAG}"
 
       - name: Trigger ArgoCD dev refresh
@@ -405,7 +405,7 @@ jobs:
             --base main \
             --title "chore(deploy): promote bindery to ${GITHUB_REF_NAME}" \
             --body "Automated prod deploy: image tag \`${IMAGE_TAG}\`." 2>/dev/null || true
-          gh pr merge "${DEPLOY_BRANCH}" --base main --squash --admin --delete-branch
+          gh pr merge "${DEPLOY_BRANCH}" --squash --admin --delete-branch
           echo "bindery (prod) image tag updated to ${IMAGE_TAG}"
 
       - name: Trigger ArgoCD prod refresh
