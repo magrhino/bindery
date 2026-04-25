@@ -31,7 +31,7 @@ func newAuthFixture(t *testing.T) (*AuthHandler, *db.UserRepo, *db.SettingsRepo,
 	ctx := context.Background()
 	// Session secret must exist before any issueSession call — production
 	// seeds this at bootstrap, tests must do the same or verification fails.
-	if err := settings.Set(ctx, SettingAuthSessionSecret, "test-secret-32-bytes-long-enough"); err != nil {
+	if err := settings.Set(ctx, SettingAuthSessionSecret, "test-secret-32-bytes-long-enough"); err != nil { // gitleaks:allow
 		t.Fatal(err)
 	}
 	lim := auth.NewLoginLimiter(5, 15*time.Minute)

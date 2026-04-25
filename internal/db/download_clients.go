@@ -24,7 +24,8 @@ func isCredentialClient(clientType string) bool {
 }
 
 func hydrateClientCredentials(c *models.DownloadClient) {
-	if isCredentialClient(c.Type) {
+	switch c.Type {
+	case "qbittorrent", "transmission":
 		// Backward compatibility: older rows stored credentials in url_base/api_key.
 		if strings.TrimSpace(c.Username) == "" {
 			c.Username = strings.TrimSpace(c.URLBase)
@@ -32,11 +33,13 @@ func hydrateClientCredentials(c *models.DownloadClient) {
 		if c.Password == "" {
 			c.Password = c.APIKey
 		}
-		return
+	case "nzbget", "deluge":
+		// These clients use username/password directly — preserve as stored.
+	default:
+		// SABnzbd authenticates via api_key, not username/password.
+		c.Username = ""
+		c.Password = ""
 	}
-	// Non-credential clients should not expose username/password values.
-	c.Username = ""
-	c.Password = ""
 }
 
 func normalizeClientCredentialStorage(c *models.DownloadClient) {
@@ -131,19 +134,18 @@ func (r *DownloadClientRepo) GetFirstEnabled(ctx context.Context) (*models.Downl
 func (r *DownloadClientRepo) GetFirstEnabledByProtocol(ctx context.Context, protocol string) (*models.DownloadClient, error) {
 	var c models.DownloadClient
 	var enabled, useSSL int
-	query := `
-		SELECT ` + downloadClientSelectColumns + `
-		FROM download_clients WHERE enabled=1 AND type=? ORDER BY priority LIMIT 1`
 	var err error
 	if protocol == "torrent" {
 		err = r.db.QueryRowContext(ctx, `
 			SELECT `+downloadClientSelectColumns+`
-			FROM download_clients WHERE enabled=1 AND type IN (?, ?) ORDER BY priority LIMIT 1`, "qbittorrent", "transmission").
+			FROM download_clients WHERE enabled=1 AND type IN (?, ?, ?) ORDER BY priority LIMIT 1`, "qbittorrent", "transmission", "deluge").
 			Scan(&c.ID, &c.Name, &c.Type, &c.Host, &c.Port, &c.APIKey,
 				&useSSL, &c.URLBase, &c.Username, &c.Password, &c.Category, &c.Priority,
 				&enabled, &c.CreatedAt, &c.UpdatedAt)
 	} else {
-		err = r.db.QueryRowContext(ctx, query, "sabnzbd").
+		err = r.db.QueryRowContext(ctx, `
+			SELECT `+downloadClientSelectColumns+`
+			FROM download_clients WHERE enabled=1 AND type IN (?, ?) ORDER BY priority LIMIT 1`, "sabnzbd", "nzbget").
 			Scan(&c.ID, &c.Name, &c.Type, &c.Host, &c.Port, &c.APIKey,
 				&useSSL, &c.URLBase, &c.Username, &c.Password, &c.Category, &c.Priority,
 				&enabled, &c.CreatedAt, &c.UpdatedAt)
@@ -171,11 +173,11 @@ func (r *DownloadClientRepo) GetEnabledByProtocol(ctx context.Context, protocol 
 	if protocol == "torrent" {
 		rows, err = r.db.QueryContext(ctx, `
 			SELECT `+downloadClientSelectColumns+`
-			FROM download_clients WHERE enabled=1 AND type IN (?, ?) ORDER BY priority`, "qbittorrent", "transmission")
+			FROM download_clients WHERE enabled=1 AND type IN (?, ?, ?) ORDER BY priority`, "qbittorrent", "transmission", "deluge")
 	} else {
 		rows, err = r.db.QueryContext(ctx, `
 			SELECT `+downloadClientSelectColumns+`
-			FROM download_clients WHERE enabled=1 AND type=? ORDER BY priority`, "sabnzbd")
+			FROM download_clients WHERE enabled=1 AND type IN (?, ?) ORDER BY priority`, "sabnzbd", "nzbget")
 	}
 	if err != nil {
 		return nil, err

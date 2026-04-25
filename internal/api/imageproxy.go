@@ -132,15 +132,28 @@ func (h *ImageProxyHandler) Serve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write to cache (best-effort — a write failure is not fatal).
-	// Atomic: write to .tmp, then rename so readers never see partial files.
+	// Unique temp files prevent concurrent goroutines serving the same URL from
+	// clobbering each other mid-write before the atomic rename.
 	if mkErr := os.MkdirAll(filepath.Dir(imgFile), imageDirMode); mkErr == nil { // #nosec G301 G304 G703 -- path derived from sha256(url), not user input
-		tmp := imgFile + ".tmp"
-		if err := os.WriteFile(tmp, body, imageCacheMode); err == nil { // #nosec
-			_ = os.Rename(tmp, imgFile) // #nosec
+		if f, ferr := os.CreateTemp(filepath.Dir(imgFile), ".img-*"); ferr == nil { // #nosec G304
+			if _, werr := f.Write(body); werr == nil {
+				_ = f.Chmod(imageCacheMode)
+				f.Close()
+				_ = os.Rename(f.Name(), imgFile) // #nosec G304
+			} else {
+				f.Close()
+				_ = os.Remove(f.Name())
+			}
 		}
-		ctTmp := ctFile + ".tmp"
-		if err := os.WriteFile(ctTmp, []byte(ct), imageCacheMode); err == nil { // #nosec
-			_ = os.Rename(ctTmp, ctFile) // #nosec
+		if f, ferr := os.CreateTemp(filepath.Dir(imgFile), ".ct-*"); ferr == nil { // #nosec G304
+			if _, werr := f.Write([]byte(ct)); werr == nil {
+				_ = f.Chmod(imageCacheMode)
+				f.Close()
+				_ = os.Rename(f.Name(), ctFile) // #nosec G304
+			} else {
+				f.Close()
+				_ = os.Remove(f.Name())
+			}
 		}
 	}
 
