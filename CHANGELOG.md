@@ -14,6 +14,60 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 - Added an ABS import guide and user-facing wiki documentation covering setup, required API-key access, path remaps, review flow, conflicts, rollback, and import-quality expectations.
 
+## [v1.2.5] — 2026-04-24
+
+### Added
+
+- **`{Series}` and `{SeriesNumber}` naming tokens** (#389) — file renaming templates now support `{Series}` (primary series name) and `{SeriesNumber}` (position in series, e.g. `3` or `3.5`). Both are looked up at import time from the `series_books` join table; books with no series silently omit the path segment so existing templates are unaffected. The audiobook destination template exposes the same tokens. Default template is unchanged.
+- **Scanner series-position matching** (#390) — the library scanner now attempts a fourth matching tier: if a filename contains a series name and position number (e.g. `[Dune Chronicles, Book 2]` or `(Mistborn #1)`) and no title/author match was found, Bindery looks up the series in the database and reconciles the book if the match is unambiguous. Supports bracket and parenthesis notation, `book/vol/part` prefixes, and integer or decimal position numbers. ISBN-shaped numbers are excluded via a letter-start requirement on the series name.
+
+### Fixed
+
+- **Discover: unrated and low-popularity books suppressed** (#391, closes #360) — `hardFilter` now drops candidates with fewer than 50 ratings (obscure long-tail editions that have never been rated) and candidates with 50+ ratings but an average below 3.0 (objectively poor books). Candidates with no ratings data at all are not penalised so missing metadata doesn't hide results.
+- **Discover: box sets, omnibuses, and anthology contributions excluded** (#392, closes #361) — a new keyword scan in `hardFilter` drops titles matching "omnibus", "box set", "complete works", "complete collection", "anthology", "collected works", "the best of", and similar multi-volume markers. Users see individual titles on the Discover page rather than compilation volumes they may already own in parts.
+- **Download client forms: Use SSL toggle and URL Base field added** (#393, closes #364) — both "Add client" and "Edit client" forms now expose a **Use SSL** checkbox and a **URL Base** text field. Previously these settings existed in the Go model and DB schema but were invisible in the UI, so operators behind a reverse-proxy subpath or needing TLS had no way to configure them without raw DB edits. `urlBase` is also added to the TypeScript `DownloadClient` interface which was missing it.
+- **Download client URLs now respect `url_base`** (#375, closes #369) — all five downloader clients (qBittorrent, Transmission, Deluge, NZBGet, SABnzbd) built their connection URL from `host:port` only, ignoring the stored `url_base`. Operators running a client behind a reverse-proxy subpath (e.g. `/qbit`) would see Bindery connect to the wrong endpoint. A new `internal/downloader/urlbase.Normalize()` helper canonicalises the stored value — handles missing leading slash, trailing slashes, and pasted full URLs — and the result is threaded through every `New()` constructor.
+
+## [v1.2.4] — 2026-04-24
+
+### Fixed
+
+- **Non-latin author names now match usenet releases** (#380) — authors whose names are written in a non-latin script (e.g. Japanese, Chinese, Arabic) have an ASCII surname of `""` after tokenisation, so every release was filtered out as irrelevant. Bindery now fetches the author's OpenLibrary `alternate_names` on first add, saves any ASCII-script aliases to `author_aliases`, and includes those aliases when building the surname candidate list for release matching.
+- **Import no longer stalls indefinitely on NFS timeouts** (#381) — the file-copy path used bare `io.Copy` with no cancellation. On an NFS stall the goroutine blocked forever and the download record stayed locked in `importing` state. Each import now runs under a 30-minute context timeout; copies run in a goroutine and respect cancellation, closing both file descriptors to help the kernel unblock the stalled call.
+- **Wanted filter no longer shows unmonitored books** (#382) — the Books page Wanted status filter matched `status === 'wanted'` without checking `monitored`, so books explicitly set to "don't monitor" appeared alongside genuinely wanted titles. The filter now requires `monitored === true` when the Wanted status is active.
+- **Recommender language filter applied to candidates** (#359) — `hardFilter` removed owned, dismissed, and excluded-author candidates but never checked language. Users with a preferred language set would receive foreign-language recommendations. Candidates whose `Language` field differs from `PreferredLanguage` are now filtered out; candidates with an empty language tag pass through so missing metadata doesn't silently hide results.
+- **Recommender recency score anchored to library median year** (#357) — `recencyScore` used `time.Now().Year()` as its reference point, penalising any book published before ~2005 regardless of the user's actual reading taste. The score is now relative to the median publication year of the user's library (computed in `BuildProfile`). Window widened from 20 → 30 years, floor lowered from 0.3 → 0.1, and `weightRecency` bumped from 0.10 → 0.15 to give the era-relative signal more influence.
+
+### Changed
+
+- **CI: parallel validate jobs and reduced friction** — the `validate` job split into `validate-go` (race-detector tests) and `validate-frontend` (npm build) running in parallel, cutting PR critical-path time from ~253 s to ~180 s. `golangci-lint` and `govulncheck` removed from the security workflow's `sast-go` job (both already run in `lint`). BuildKit GHA layer-cache added to container scans. Security workflow now skips doc-only changes via `paths-ignore`. Kubesec and Dockle removed (output was silently discarded). Discord release announcements now posted automatically on tag push.
+
+## [v1.2.3] — 2026-04-23
+
+### Fixed
+
+- **Logs tab now displays entries** — `db.LogEntry` was missing `json:""` tags, causing Go to serialise field names as PascalCase (`ID`, `TS`, `Level`, `Component`, `Message`, `Fields`). The TypeScript interface expected camelCase, so every row rendered blank. (#376)
+
+## [v1.2.2] — 2026-04-23
+
+### Fixed
+
+- **Calibre "Push all to Calibre" button state now matches Test-connection result** (#342) — the button was enabled even when the last connectivity test failed, allowing pushes to silently no-op against an unreachable bridge. It now stays disabled until a successful test in the current session.
+- **Download client host field no longer double-schemes the URL** (#353) — if a user typed `https://` or `http://` in the Host field, the downloader prepended the scheme a second time, producing `https://https://…` and causing every connection attempt to fail. The host is now stripped of any leading scheme before the URL is assembled.
+- **CSP nonce now injected server-side** (#353) — the inline `<script>` tag in `index.html` used a static placeholder nonce that never matched the server-generated nonce, causing the theme-initialisation script to be blocked by Content-Security-Policy in strict environments. The nonce is now written by the Go server at request time.
+- **Docker image tags now include `v`-prefixed semver variants** (#353) — the CI metadata action was missing `type=semver,pattern=v{{version}}`, so only bare `1.2.x` tags were pushed to ghcr.io. Both `1.2.x` and `v1.2.x` are now available.
+- **Version string in footer links to the GitHub releases page** (#356) — clicking the version badge now opens the corresponding release regardless of whether the string is a semver, `v`-prefixed semver, or `dev-<sha>`.
+
+## [v1.2.1] — 2026-04-23
+
+### Fixed
+
+- **Prowlarr-synced indexers no longer send broad parent category 7000** (#344) — indexers synced from Prowlarr were always requesting category 7000 (Books parent), which caused many indexers to return results for every book-adjacent category including comics. Bindery now sends the appropriate child category (7020 Ebooks, 3030 Audiobooks) and drops the parent when children are present.
+- **qBittorrent "hash could not be determined" on category mismatch** (#363) — after adding a torrent, Bindery polled only the configured download category, so if qBittorrent placed the torrent in a different category the hash was never found and the download was marked as failed. Bindery now polls the full torrent list (unfiltered) and logs a detailed error with hash diagnostics if the 30-second window expires.
+- **Dual-format delete leaves orphan sibling files** (#343) — deleting one format of a dual-format book failed to remove sibling format files from disk. Sibling cleanup now runs regardless of whether the file being deleted still exists.
+- **Rescan misbinds books with similar titles** (#290) — the Jaro-Winkler similarity threshold for matching filenames to book records was too permissive. Threshold raised from 0.80 to 0.88.
+- **Interactive search mixes ebook and audiobook results** (#333) — results from all indexers were shown in a single unsorted list for dual-format books. Results are now split into labelled **Ebook results** and **Audiobook results** sections.
+
 ## [v1.2.0] — 2026-04-22
 
 ### Added
