@@ -81,6 +81,43 @@ func TestDownloadClientRepoPreservesRealURLBase(t *testing.T) {
 	}
 }
 
+func TestDownloadClientRepoPreservesBareURLBaseMatchingUsername(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	client := &models.DownloadClient{
+		Name:     "Proxied Transmission",
+		Type:     "transmission",
+		Host:     "10.10.10.10",
+		Port:     9091,
+		Username: "transmission",
+		Password: "secret",
+		URLBase:  "transmission",
+		Category: "books",
+		Enabled:  true,
+	}
+	if err := NewDownloadClientRepo(database).Create(context.Background(), client); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := NewDownloadClientRepo(database).GetByID(context.Background(), client.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("expected download client")
+	}
+	if got.URLBase != "transmission" {
+		t.Fatalf("urlBase = %q, want bare reverse-proxy path preserved", got.URLBase)
+	}
+	if got.Username != "transmission" || got.Password != "secret" {
+		t.Fatalf("credentials = %q/%q, want configured credentials", got.Username, got.Password)
+	}
+}
+
 func TestDownloadClientRepoPreservesNewBareURLBaseWithoutLegacyAPIKey(t *testing.T) {
 	database, err := OpenMemory()
 	if err != nil {

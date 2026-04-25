@@ -54,9 +54,6 @@ func legacyCredentialURLBase(c *models.DownloadClient) bool {
 	username := strings.TrimSpace(c.Username)
 	apiKey := strings.TrimSpace(c.APIKey)
 	password := strings.TrimSpace(c.Password)
-	if username != "" && username == urlBase {
-		return true
-	}
 	if apiKey == "" {
 		return false
 	}
@@ -69,7 +66,7 @@ func normalizeClientCredentialStorage(c *models.DownloadClient) {
 	}
 	// Backward compatibility: accept legacy payloads that sent credentials in
 	// urlBase/apiKey.
-	if strings.TrimSpace(c.Username) == "" {
+	if strings.TrimSpace(c.Username) == "" && c.APIKey != "" {
 		c.Username = strings.TrimSpace(c.URLBase)
 	}
 	if c.Password == "" && c.APIKey != "" {
