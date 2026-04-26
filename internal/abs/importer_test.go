@@ -2055,6 +2055,13 @@ func TestImporter_HardcoverSeriesMatchLinksItemWithoutABSSeries(t *testing.T) {
 	if series == nil {
 		t.Fatal("expected Hardcover series")
 	}
+	link, err := seriesRepo.GetHardcoverLink(context.Background(), series.ID)
+	if err != nil {
+		t.Fatalf("GetHardcoverLink: %v", err)
+	}
+	if link == nil || link.HardcoverSeriesID != "hc-series:100" || link.HardcoverBookCount != 1 {
+		t.Fatalf("hardcover link = %+v, want catalog link", link)
+	}
 	hydrated, err := seriesRepo.GetByID(context.Background(), series.ID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)

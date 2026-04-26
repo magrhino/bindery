@@ -168,3 +168,76 @@ func TestSeriesList(t *testing.T) {
 		t.Errorf("expected 2 series, got %d", len(list))
 	}
 }
+
+func TestSeriesHardcoverLinkCRUD(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	repo := NewSeriesRepo(database)
+	series := &models.Series{ForeignID: "ol-series:stormlight", Title: "Stormlight Archive"}
+	if err := repo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+
+	link := &models.SeriesHardcoverLink{
+		SeriesID:            series.ID,
+		HardcoverSeriesID:   "hc-series:1",
+		HardcoverProviderID: "1",
+		HardcoverTitle:      "The Stormlight Archive",
+		HardcoverAuthorName: "Brandon Sanderson",
+		HardcoverBookCount:  10,
+		Confidence:          0.82,
+		LinkedBy:            "auto",
+	}
+	if err := repo.UpsertHardcoverLink(ctx, link); err != nil {
+		t.Fatalf("upsert link: %v", err)
+	}
+	if link.ID == 0 {
+		t.Fatal("expected stored link id")
+	}
+
+	got, err := repo.GetHardcoverLink(ctx, series.ID)
+	if err != nil {
+		t.Fatalf("get link: %v", err)
+	}
+	if got == nil || got.HardcoverTitle != "The Stormlight Archive" || got.LinkedBy != "auto" {
+		t.Fatalf("unexpected link: %+v", got)
+	}
+
+	list, err := repo.List(ctx)
+	if err != nil {
+		t.Fatalf("list series: %v", err)
+	}
+	if list[0].HardcoverLink == nil || list[0].HardcoverLink.HardcoverSeriesID != "hc-series:1" {
+		t.Fatalf("expected hydrated link in list, got %+v", list[0].HardcoverLink)
+	}
+
+	link.HardcoverTitle = "Stormlight Archive"
+	link.LinkedBy = "manual"
+	link.Confidence = 1
+	if err := repo.UpsertHardcoverLink(ctx, link); err != nil {
+		t.Fatalf("update link: %v", err)
+	}
+	got, err = repo.GetHardcoverLink(ctx, series.ID)
+	if err != nil {
+		t.Fatalf("get updated link: %v", err)
+	}
+	if got.HardcoverTitle != "Stormlight Archive" || got.LinkedBy != "manual" || got.Confidence != 1 {
+		t.Fatalf("unexpected updated link: %+v", got)
+	}
+
+	if err := repo.DeleteHardcoverLink(ctx, series.ID); err != nil {
+		t.Fatalf("delete link: %v", err)
+	}
+	got, err = repo.GetHardcoverLink(ctx, series.ID)
+	if err != nil {
+		t.Fatalf("get deleted link: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected deleted link, got %+v", got)
+	}
+}

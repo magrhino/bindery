@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, Series } from '../api/client'
+import { api, Series, SeriesHardcoverDiff, SeriesHardcoverLink, SeriesHardcoverSearchResult } from '../api/client'
+import HardcoverSeriesLinkModal from '../components/HardcoverSeriesLinkModal'
 
 export default function SeriesPage() {
   const [seriesList, setSeriesList] = useState<Series[]>([])
@@ -8,6 +9,13 @@ export default function SeriesPage() {
   const [expanded, setExpanded] = useState<number | null>(null)
   const [filling, setFilling] = useState<number | null>(null)
   const [fillResult, setFillResult] = useState<Record<number, string>>({})
+  const [linking, setLinking] = useState<number | null>(null)
+  const [linkResult, setLinkResult] = useState<Record<number, string>>({})
+  const [linkModalSeries, setLinkModalSeries] = useState<Series | null>(null)
+  const [linkModalResults, setLinkModalResults] = useState<SeriesHardcoverSearchResult[]>([])
+  const [diffs, setDiffs] = useState<Record<number, SeriesHardcoverDiff>>({})
+  const [diffLoading, setDiffLoading] = useState<Record<number, boolean>>({})
+  const [diffErrors, setDiffErrors] = useState<Record<number, string>>({})
 
   useEffect(() => {
     api.listSeries().then(setSeriesList).catch(console.error).finally(() => setLoading(false))
@@ -18,8 +26,37 @@ export default function SeriesPage() {
     return () => { document.title = 'Bindery' }
   }, [])
 
-  const toggleExpanded = (id: number) => {
-    setExpanded(prev => (prev === id ? null : id))
+  const refreshSeriesList = async () => {
+    const list = await api.listSeries()
+    setSeriesList(list)
+    return list
+  }
+
+  const loadHardcoverDiff = async (series: Series, force = false) => {
+    if (!series.hardcoverLink) return
+    if (!force && (diffs[series.id] || diffLoading[series.id])) return
+    setDiffLoading(prev => ({ ...prev, [series.id]: true }))
+    setDiffErrors(prev => {
+      const next = { ...prev }
+      delete next[series.id]
+      return next
+    })
+    try {
+      const diff = await api.getSeriesHardcoverDiff(series.id)
+      setDiffs(prev => ({ ...prev, [series.id]: diff }))
+    } catch (err) {
+      setDiffErrors(prev => ({ ...prev, [series.id]: err instanceof Error ? err.message : 'Failed to load Hardcover diff' }))
+    } finally {
+      setDiffLoading(prev => ({ ...prev, [series.id]: false }))
+    }
+  }
+
+  const toggleExpanded = (series: Series) => {
+    const opening = expanded !== series.id
+    setExpanded(opening ? series.id : null)
+    if (opening) {
+      void loadHardcoverDiff(series)
+    }
   }
 
   const toggleMonitor = async (series: Series) => {
@@ -33,10 +70,64 @@ export default function SeriesPage() {
     try {
       const r = await api.fillSeries(series.id)
       setFillResult(prev => ({ ...prev, [series.id]: r.queued === 0 ? 'Nothing to fill' : `${r.queued} book${r.queued === 1 ? '' : 's'} queued` }))
+      const list = await refreshSeriesList()
+      const updated = list.find(s => s.id === series.id)
+      if (updated?.hardcoverLink) {
+        await loadHardcoverDiff(updated, true)
+      }
     } catch {
       setFillResult(prev => ({ ...prev, [series.id]: 'Failed' }))
     } finally {
       setFilling(null)
+    }
+  }
+
+  const openHardcoverLink = async (series: Series) => {
+    setLinkResult(prev => {
+      const next = { ...prev }
+      delete next[series.id]
+      return next
+    })
+    if (series.hardcoverLink) {
+      setLinkModalResults([])
+      setLinkModalSeries(series)
+      return
+    }
+
+    setLinking(series.id)
+    try {
+      const response = await api.autoLinkSeriesHardcover(series.id)
+      const modalSeries = response.link ? { ...series, hardcoverLink: response.link } : series
+      setLinkModalResults(response.candidates ?? [])
+      setLinkModalSeries(modalSeries)
+      if (response.link) {
+        const link = response.link
+        setSeriesList(prev => prev.map(s => s.id === series.id ? { ...s, hardcoverLink: link } : s))
+        await loadHardcoverDiff(modalSeries, true)
+      } else if (response.reason) {
+        const reason = response.reason
+        setLinkResult(prev => ({ ...prev, [series.id]: reason }))
+      }
+    } catch (err) {
+      setLinkResult(prev => ({ ...prev, [series.id]: err instanceof Error ? err.message : 'Failed to search Hardcover' }))
+    } finally {
+      setLinking(null)
+    }
+  }
+
+  const handleHardcoverLinked = (seriesId: number, link?: SeriesHardcoverLink) => {
+    setSeriesList(prev => prev.map(series => series.id === seriesId ? { ...series, hardcoverLink: link } : series))
+    if (!link) {
+      setDiffs(prev => {
+        const next = { ...prev }
+        delete next[seriesId]
+        return next
+      })
+      return
+    }
+    const series = seriesList.find(item => item.id === seriesId)
+    if (series) {
+      void loadHardcoverDiff({ ...series, hardcoverLink: link }, true)
     }
   }
 
@@ -60,6 +151,11 @@ export default function SeriesPage() {
             const books = series.books ?? []
             const bookCount = books.length
             const gapCount = books.filter(b => b.book && b.book.status !== 'imported').length
+            const diff = diffs[series.id]
+            const hardcoverMissingEstimate = Math.max(0, (series.hardcoverLink?.hardcoverBookCount ?? 0) - bookCount)
+            const hardcoverMissingCount = diff?.missingCount ?? hardcoverMissingEstimate
+            const displayMissingCount = Math.max(gapCount, hardcoverMissingCount)
+            const fillNeeded = gapCount > 0 || hardcoverMissingCount > 0
             const isOpen = expanded === series.id
             const sortedBooks = [...books].sort((a, b) => {
               const posA = parseFloat(a.positionInSeries) || 0
@@ -71,7 +167,7 @@ export default function SeriesPage() {
               <div key={series.id} className="border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 overflow-hidden">
                 <div
                   className="p-4 cursor-pointer hover:bg-slate-200/50 dark:hover:bg-zinc-800/50 transition-colors"
-                  onClick={() => toggleExpanded(series.id)}
+                  onClick={() => toggleExpanded(series)}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -81,9 +177,9 @@ export default function SeriesPage() {
                       )}
                     </div>
                     <div className="flex-shrink-0 flex items-center gap-2">
-                      {gapCount > 0 && (
+                      {displayMissingCount > 0 && (
                         <span className="text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full">
-                          {gapCount} missing
+                          {displayMissingCount} missing
                         </span>
                       )}
                       <span className="text-xs text-slate-600 dark:text-zinc-500 bg-slate-200 dark:bg-zinc-800 px-2 py-0.5 rounded-full">
@@ -106,7 +202,19 @@ export default function SeriesPage() {
                   <span className="text-xs text-slate-600 dark:text-zinc-400">
                     {series.monitored ? 'Monitored' : 'Not monitored'}
                   </span>
-                  {gapCount > 0 && (
+                  <button
+                    onClick={() => openHardcoverLink(series)}
+                    disabled={linking === series.id}
+                    className={`text-xs px-2.5 py-1 rounded font-medium border disabled:opacity-50 ${
+                      series.hardcoverLink
+                        ? 'border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+                        : 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                    }`}
+                    title={series.hardcoverLink ? `Linked to ${series.hardcoverLink.hardcoverTitle}` : 'Search Hardcover series'}
+                  >
+                    {linking === series.id ? 'Searching...' : series.hardcoverLink ? `${series.hardcoverLink.linkedBy === 'auto' ? 'Auto' : 'Manual'} link` : 'Auto'}
+                  </button>
+                  {fillNeeded && (
                     <button
                       onClick={() => fillGaps(series)}
                       disabled={filling === series.id}
@@ -117,6 +225,9 @@ export default function SeriesPage() {
                   )}
                   {fillResult[series.id] && (
                     <span className="ml-auto text-xs text-emerald-600 dark:text-emerald-400">{fillResult[series.id]}</span>
+                  )}
+                  {!fillResult[series.id] && linkResult[series.id] && (
+                    <span className="ml-auto text-xs text-slate-600 dark:text-zinc-400">{linkResult[series.id]}</span>
                   )}
                 </div>
 
@@ -171,10 +282,77 @@ export default function SeriesPage() {
                     No books in this series yet
                   </div>
                 )}
+
+                {isOpen && series.hardcoverLink && (
+                  <div className="border-t border-slate-200 dark:border-zinc-800 bg-slate-100/80 dark:bg-zinc-900/80">
+                    <div className="px-4 py-3 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">Hardcover: {series.hardcoverLink.hardcoverTitle}</p>
+                        <p className="text-xs text-slate-600 dark:text-zinc-500">
+                          {diff ? `${diff.presentCount} matched · ${diff.missingCount} missing` : 'Checking Hardcover catalog...'}
+                        </p>
+                      </div>
+                      {(diff?.missingCount ?? 0) > 0 && (
+                        <button
+                          onClick={() => fillGaps(series)}
+                          disabled={filling === series.id}
+                          className="text-xs px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded font-medium flex-shrink-0"
+                        >
+                          {filling === series.id ? 'Queuing...' : 'Fill gaps'}
+                        </button>
+                      )}
+                    </div>
+                    {diffLoading[series.id] && (
+                      <div className="px-4 pb-3 text-sm text-slate-600 dark:text-zinc-500">Loading Hardcover books...</div>
+                    )}
+                    {diffErrors[series.id] && (
+                      <div className="px-4 pb-3 text-sm text-rose-600 dark:text-rose-400">{diffErrors[series.id]}</div>
+                    )}
+                    {diff && diff.missing.length > 0 && (
+                      <div className="px-4 pb-4 space-y-2">
+                        {diff.missing.slice(0, 8).map(book => (
+                          <div key={`${book.foreignBookId}-${book.position}`} className="flex items-center gap-3 p-3 rounded-md bg-slate-200/50 dark:bg-zinc-800/50">
+                            <span className="text-xs text-slate-600 dark:text-zinc-500 w-10 flex-shrink-0 font-mono">
+                              #{book.position || '?'}
+                            </span>
+                            {book.imageUrl ? (
+                              <img src={book.imageUrl} alt={book.title} className="w-8 h-10 object-cover rounded flex-shrink-0" />
+                            ) : (
+                              <div className="w-8 h-10 bg-slate-200 dark:bg-zinc-800 rounded flex-shrink-0" />
+                            )}
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium truncate">{book.title}</p>
+                              {book.authorName && <p className="text-xs text-slate-600 dark:text-zinc-500 truncate">{book.authorName}</p>}
+                            </div>
+                            <button
+                              onClick={() => fillGaps(series)}
+                              disabled={filling === series.id}
+                              className="ml-auto text-xs px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded font-medium flex-shrink-0"
+                              title="Create missing Hardcover books and search indexers"
+                            >
+                              {filling === series.id ? '...' : 'Fill'}
+                            </button>
+                          </div>
+                        ))}
+                        {diff.missing.length > 8 && (
+                          <p className="text-xs text-slate-600 dark:text-zinc-500 px-1">{diff.missing.length - 8} more missing books</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )
           })}
         </div>
+      )}
+      {linkModalSeries && (
+        <HardcoverSeriesLinkModal
+          series={linkModalSeries}
+          initialResults={linkModalResults}
+          onClose={() => setLinkModalSeries(null)}
+          onLinked={handleHardcoverLinked}
+        />
       )}
     </div>
   )

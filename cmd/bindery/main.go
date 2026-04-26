@@ -352,7 +352,7 @@ func main() {
 	notificationHandler := api.NewNotificationHandler(notificationRepo, notif)
 	qualityProfileHandler := api.NewQualityProfileHandler(qualityProfileRepo)
 	settingsHandler := api.NewSettingsHandler(settingsRepo)
-	seriesHandler := api.NewSeriesHandler(seriesRepo, bookRepo, sched)
+	seriesHandler := api.NewSeriesHandler(seriesRepo, bookRepo, authorRepo, metaAgg, sched)
 	tagHandler := api.NewTagHandler(tagRepo)
 	importListHandler := api.NewImportListHandler(importListRepo)
 	metadataProfileHandler := api.NewMetadataProfileHandler(metadataProfileRepo)
@@ -592,9 +592,15 @@ func main() {
 
 		// Series
 		r.Get("/series", seriesHandler.List)
+		r.Get("/series/hardcover/search", seriesHandler.SearchHardcover)
 		r.Get("/series/{id}", seriesHandler.Get)
 		r.Patch("/series/{id}", seriesHandler.Monitor)
 		r.Post("/series/{id}/fill", seriesHandler.Fill)
+		r.Get("/series/{id}/hardcover-link", seriesHandler.GetHardcoverLink)
+		r.Post("/series/{id}/hardcover-link/auto", seriesHandler.AutoLinkHardcover)
+		r.Put("/series/{id}/hardcover-link", seriesHandler.PutHardcoverLink)
+		r.Delete("/series/{id}/hardcover-link", seriesHandler.DeleteHardcoverLink)
+		r.Get("/series/{id}/hardcover-diff", seriesHandler.HardcoverDiff)
 
 		// Recommendations
 		r.Get("/recommendations", recHandler.List)

@@ -14,6 +14,12 @@ vi.mock('../api/client', async importOriginal => {
       listSeries: vi.fn(),
       monitorSeries: vi.fn(),
       fillSeries: vi.fn(),
+      autoLinkSeriesHardcover: vi.fn(),
+      getSeriesHardcoverLink: vi.fn(),
+      searchHardcoverSeries: vi.fn(),
+      linkSeriesHardcover: vi.fn(),
+      unlinkSeriesHardcover: vi.fn(),
+      getSeriesHardcoverDiff: vi.fn(),
     },
   }
 })
@@ -30,6 +36,8 @@ function renderSeriesPage(series: Series[]) {
 describe('SeriesPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(api.getSeriesHardcoverLink).mockRejectedValue(new Error('not linked'))
+    vi.mocked(api.searchHardcoverSeries).mockResolvedValue([])
   })
 
   it('links expanded series book rows to their book pages', async () => {
@@ -71,5 +79,75 @@ describe('SeriesPage', () => {
 
     const bookLink = screen.getByRole('link', { name: /Defiance of the Fall 2/ })
     expect(bookLink).toHaveAttribute('href', '/book/102')
+  })
+
+  it('opens the Hardcover series link modal from the Auto control', async () => {
+    vi.mocked(api.autoLinkSeriesHardcover).mockResolvedValue({
+      linked: false,
+      reason: 'low confidence',
+      candidates: [
+        {
+          foreignId: 'hc-series:42',
+          providerId: '42',
+          title: 'The Stormlight Archive',
+          authorName: 'Brandon Sanderson',
+          bookCount: 10,
+          readersCount: 19323,
+          books: null as unknown as string[],
+          confidence: 0.7,
+        },
+      ],
+    })
+
+    renderSeriesPage([
+      {
+        id: 9,
+        foreignSeriesId: 'series-9',
+        title: 'Rhythm of War',
+        description: '',
+        monitored: true,
+        books: [],
+      },
+    ])
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Auto' }))
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByText('The Stormlight Archive')).toBeInTheDocument()
+    expect(screen.getByText('70% match')).toBeInTheDocument()
+  })
+
+  it('opens linked Hardcover series without auto-linking again', async () => {
+    renderSeriesPage([
+      {
+        id: 10,
+        foreignSeriesId: 'series-10',
+        title: 'The Stormlight Archive',
+        description: '',
+        monitored: true,
+        books: [],
+        hardcoverLink: {
+          id: 1,
+          seriesId: 10,
+          hardcoverSeriesId: 'hc-series:42',
+          hardcoverProviderId: '42',
+          hardcoverTitle: 'The Stormlight Archive',
+          hardcoverAuthorName: 'Brandon Sanderson',
+          hardcoverBookCount: 10,
+          confidence: 1,
+          linkedBy: 'manual',
+          linkedAt: '2026-01-01T00:00:00Z',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+      },
+    ])
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Manual link' }))
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByText('Currently linked')).toBeInTheDocument()
+    expect(screen.getByText('Brandon Sanderson')).toBeInTheDocument()
+    expect(api.autoLinkSeriesHardcover).not.toHaveBeenCalled()
   })
 })
