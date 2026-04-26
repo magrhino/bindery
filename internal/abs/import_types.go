@@ -24,6 +24,7 @@ const (
 	entityTypeSeries            = "series"
 	entityTypeEdition           = "edition"
 	providerAudiobookshelf      = "audiobookshelf"
+	providerHardcover           = "hardcover"
 	runStatusRunning            = "running"
 	runStatusCompleted          = "completed"
 	runStatusFailed             = "failed"

@@ -379,6 +379,13 @@ func (i *Importer) enrichBook(ctx context.Context, cfg ImportConfig, item Normal
 		return metadataMergeResult{}, nil
 	}
 
+	return i.mergeUpstreamBook(ctx, cfg, item, book, full, matchedBy)
+}
+
+func (i *Importer) mergeUpstreamBook(ctx context.Context, cfg ImportConfig, item NormalizedLibraryItem, book *models.Book, full *models.Book, matchedBy string) (metadataMergeResult, error) {
+	if book == nil || full == nil {
+		return metadataMergeResult{}, nil
+	}
 	result := metadataMergeResult{Matched: 1}
 	changed := false
 	if full.ForeignID != "" && book.ForeignID != full.ForeignID {

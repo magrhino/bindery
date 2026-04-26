@@ -170,7 +170,11 @@ func main() {
 		enrichers = append(enrichers, googlebooks.New(setting.Value))
 		slog.Info("google books enrichment enabled")
 	}
-	enrichers = append(enrichers, hardcover.New())
+	hcClient := hardcover.New()
+	if setting, _ := settingsRepo.Get(context.Background(), "hardcover.api_token"); setting != nil && setting.Value != "" {
+		hcClient = hcClient.WithToken(setting.Value)
+	}
+	enrichers = append(enrichers, hcClient)
 	slog.Info("hardcover enrichment enabled")
 	enrichers = append(enrichers, dnb.New())
 	slog.Info("dnb enrichment enabled")

@@ -430,12 +430,14 @@ type hcContribution struct {
 type hcBook struct {
 	ID            int              `json:"id"`
 	Title         string           `json:"title"`
+	Subtitle      string           `json:"subtitle"`
 	Slug          string           `json:"slug"`
 	Description   string           `json:"description"`
 	Image         *hcImage         `json:"image"`
 	ReleaseYear   *int             `json:"release_year"`
 	RatingsCount  int              `json:"ratings_count"`
 	Rating        float64          `json:"rating"`
+	UsersCount    int              `json:"users_count"`
 	Contributions []hcContribution `json:"contributions"`
 }
 

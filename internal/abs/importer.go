@@ -517,6 +517,12 @@ func (i *Importer) importOne(ctx context.Context, cfg ImportConfig, runID int64,
 			stats.SeriesLinked++
 		}
 	}
+	seriesMeta, hardcoverSeriesCount := i.matchHardcoverSeries(ctx, cfg, runID, author, bookResult.row, item, stats)
+	stats.MetadataMatched += seriesMeta.Matched
+	stats.MetadataRelinked += seriesMeta.Relinked
+	stats.MetadataConflicts += seriesMeta.Conflicts
+	stats.MetadataAutoResolved += seriesMeta.AutoResolved
+	seriesCount += hardcoverSeriesCount
 	result.SeriesCount = seriesCount
 
 	addedEditions, err := i.upsertEditions(ctx, cfg, runID, bookResult.row.ID, item)
@@ -531,6 +537,7 @@ func (i *Importer) importOne(ctx context.Context, cfg ImportConfig, runID int64,
 	stats.PendingManual += reconcile.PendingManual
 	messages := append([]string{}, authorMeta.Messages...)
 	messages = append(messages, bookMeta.Messages...)
+	messages = append(messages, seriesMeta.Messages...)
 	if reconcile.Message != "" {
 		messages = append(messages, reconcile.Message)
 	}
