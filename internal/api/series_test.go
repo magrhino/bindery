@@ -33,6 +33,8 @@ type stubSeriesProvider struct {
 	catalogs      map[string]*metadata.SeriesCatalog
 	searchErr     error
 	catalogErr    error
+	searchCalls   int
+	catalogCalls  int
 }
 
 func (s *stubSeriesProvider) Name() string { return "stub" }
@@ -62,10 +64,12 @@ func (s *stubSeriesProvider) GetBookByISBN(context.Context, string) (*models.Boo
 }
 
 func (s *stubSeriesProvider) SearchSeries(context.Context, string, int) ([]metadata.SeriesSearchResult, error) {
+	s.searchCalls++
 	return s.searchResults, s.searchErr
 }
 
 func (s *stubSeriesProvider) GetSeriesCatalog(_ context.Context, foreignID string) (*metadata.SeriesCatalog, error) {
+	s.catalogCalls++
 	if s.catalogErr != nil {
 		return nil, s.catalogErr
 	}
@@ -86,6 +90,25 @@ func seriesFixtureWithProvider(t *testing.T, provider *stubSeriesProvider, searc
 		searcher = &mockBookSearcher{}
 	}
 	return NewSeriesHandler(seriesRepo, bookRepo, authorRepo, metadata.NewAggregator(provider), searcher), seriesRepo, authorRepo, bookRepo
+}
+
+func seriesFixtureWithProviderAndSettings(t *testing.T, provider *stubSeriesProvider, searcher BookSearcher, envEnabled bool) (*SeriesHandler, *db.SeriesRepo, *db.AuthorRepo, *db.BookRepo, *db.SettingsRepo) {
+	t.Helper()
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	seriesRepo := db.NewSeriesRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	authorRepo := db.NewAuthorRepo(database)
+	settingsRepo := db.NewSettingsRepo(database)
+	if searcher == nil {
+		searcher = &mockBookSearcher{}
+	}
+	handler := NewSeriesHandler(seriesRepo, bookRepo, authorRepo, metadata.NewAggregator(provider), searcher).
+		WithHardcoverFeatureSettings(settingsRepo, envEnabled)
+	return handler, seriesRepo, authorRepo, bookRepo, settingsRepo
 }
 
 func TestSeriesList_Empty(t *testing.T) {
@@ -227,6 +250,20 @@ func TestSeriesHardcoverSearchNormalizesNilBooks(t *testing.T) {
 	}
 }
 
+func TestSeriesHardcoverSearchDisabledByFeatureState(t *testing.T) {
+	provider := &stubSeriesProvider{}
+	h, _, _, _, _ := seriesFixtureWithProviderAndSettings(t, provider, nil, false)
+
+	rec := httptest.NewRecorder()
+	h.SearchHardcover(rec, httptest.NewRequest(http.MethodGet, "/api/v1/series/hardcover/search?term=stormlight", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 when enhanced Hardcover API is disabled, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if provider.searchCalls != 0 {
+		t.Fatalf("provider should not be called when disabled, got %d calls", provider.searchCalls)
+	}
+}
+
 func TestSeriesAutoLinkHardcoverPersistsTopCandidate(t *testing.T) {
 	catalog := stormlightCatalog()
 	provider := &stubSeriesProvider{
@@ -310,6 +347,77 @@ func TestSeriesAutoLinkHardcoverAmbiguousNoop(t *testing.T) {
 	}
 	if link != nil {
 		t.Fatalf("expected no link, got %+v", link)
+	}
+}
+
+func TestSeriesFillSkipsHardcoverCatalogWhenFeatureDisabled(t *testing.T) {
+	catalog := stormlightCatalog()
+	provider := &stubSeriesProvider{
+		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+	}
+	searcher := newMockBookSearcher()
+	h, seriesRepo, authorRepo, bookRepo, settingsRepo := seriesFixtureWithProviderAndSettings(t, provider, searcher, false)
+	ctx := contextBackground()
+	series := &models.Series{ForeignID: "ol-series:stormlight", Title: "The Stormlight Archive"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+	link := &models.SeriesHardcoverLink{
+		SeriesID:            series.ID,
+		HardcoverSeriesID:   catalog.ForeignID,
+		HardcoverProviderID: catalog.ProviderID,
+		HardcoverTitle:      catalog.Title,
+		HardcoverAuthorName: catalog.AuthorName,
+		HardcoverBookCount:  catalog.BookCount,
+		Confidence:          1,
+		LinkedBy:            "manual",
+	}
+	if err := seriesRepo.UpsertHardcoverLink(ctx, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := settingsRepo.Set(ctx, SettingHardcoverAPIToken, "hc-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if err := settingsRepo.Set(ctx, SettingHardcoverEnhancedSeriesEnabled, "true"); err != nil {
+		t.Fatal(err)
+	}
+	author := &models.Author{
+		ForeignID:        "hc:brandon-sanderson",
+		Name:             "Brandon Sanderson",
+		SortName:         "Sanderson, Brandon",
+		MetadataProvider: "hardcover",
+		Monitored:        true,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	book := &models.Book{
+		ForeignID:        "hc:words-of-radiance",
+		AuthorID:         author.ID,
+		Title:            "Words of Radiance",
+		SortTitle:        "Words of Radiance",
+		Status:           models.BookStatusSkipped,
+		Genres:           []string{},
+		MetadataProvider: "hardcover",
+	}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seriesRepo.LinkBookIfMissing(ctx, series.ID, book.ID, "2", true); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Fill(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/fill", nil), "id", "1"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if provider.catalogCalls != 0 {
+		t.Fatalf("hardcover catalog should not be called while env disables enhanced API, got %d calls", provider.catalogCalls)
+	}
+	queued := searcher.waitForCall(t, time.Second)
+	if queued.ID != book.ID {
+		t.Fatalf("expected local linked book to be queued, got %+v", queued)
 	}
 }
 

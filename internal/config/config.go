@@ -21,7 +21,9 @@ type Config struct {
 	LibraryDir        string
 	AudiobookDir      string
 	ABSFeatureEnabled bool
-	DownloadPathRemap string
+	// Enhanced Hardcover series API (BINDERY_ENHANCED_HARDCOVER_API, default false).
+	EnhancedHardcoverAPI bool
+	DownloadPathRemap    string
 	// Proxy SSO settings (Phase 1).
 	ProxyAuthHeader    string // BINDERY_PROXY_AUTH_HEADER
 	ProxyAutoProvision bool   // BINDERY_PROXY_AUTO_PROVISION
@@ -57,6 +59,7 @@ func Load() *Config {
 		LibraryDir:             envOr("BINDERY_LIBRARY_DIR", "/books"),
 		AudiobookDir:           envOr("BINDERY_AUDIOBOOK_DIR", ""),
 		ABSFeatureEnabled:      envBool("BINDERY_ABS_ENABLED", false),
+		EnhancedHardcoverAPI:   envBool("BINDERY_ENHANCED_HARDCOVER_API", false),
 		DownloadPathRemap:      envOr("BINDERY_DOWNLOAD_PATH_REMAP", ""),
 		ProxyAuthHeader:        envOr("BINDERY_PROXY_AUTH_HEADER", "X-Forwarded-User"),
 		ProxyAutoProvision:     envBool("BINDERY_PROXY_AUTO_PROVISION", true),

@@ -23,8 +23,9 @@ const (
 // Client implements metadata.Provider for Hardcover.app using its public GraphQL API.
 // Set a Bearer token via WithToken or NewAuthenticated to enable authenticated queries.
 type Client struct {
-	http  *http.Client
-	token string // optional Bearer token; required for user-specific queries
+	http        *http.Client
+	token       string // optional Bearer token; required for user-specific queries
+	tokenSource func(context.Context) string
 }
 
 // New creates a new Hardcover client.
@@ -38,6 +39,13 @@ func New() *Client {
 // Required for authenticated queries such as GetUserWishlist.
 func (c *Client) WithToken(token string) *Client {
 	return &Client{http: c.http, token: token}
+}
+
+// WithTokenSource returns a copy of the client that resolves a Bearer token
+// for each request. It is used for UI-managed credentials that can change
+// while the process is running.
+func (c *Client) WithTokenSource(source func(context.Context) string) *Client {
+	return &Client{http: c.http, token: c.token, tokenSource: source}
 }
 
 // NewAuthenticated creates a new client that sends Authorization: Bearer <token>
@@ -387,8 +395,8 @@ func (c *Client) query(ctx context.Context, q string, vars map[string]any, out i
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Bindery/0.1 (https://github.com/vavallee/bindery)")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if token := c.bearerToken(ctx); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := c.http.Do(req)
@@ -403,6 +411,15 @@ func (c *Client) query(ctx context.Context, q string, vars map[string]any, out i
 	}
 
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func (c *Client) bearerToken(ctx context.Context) string {
+	if c.tokenSource != nil {
+		if token := strings.TrimSpace(c.tokenSource(ctx)); token != "" {
+			return token
+		}
+	}
+	return strings.TrimSpace(c.token)
 }
 
 // --- Internal types for JSON mapping ---

@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import SeriesPage from './SeriesPage'
 import { api } from '../api/client'
-import type { Series } from '../api/client'
+import type { Series, SystemStatus } from '../api/client'
 
 vi.mock('../api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('../api/client')>()
@@ -11,6 +11,7 @@ vi.mock('../api/client', async importOriginal => {
     ...actual,
     api: {
       ...actual.api,
+      status: vi.fn(),
       listSeries: vi.fn(),
       monitorSeries: vi.fn(),
       fillSeries: vi.fn(),
@@ -24,8 +25,9 @@ vi.mock('../api/client', async importOriginal => {
   }
 })
 
-function renderSeriesPage(series: Series[]) {
+function renderSeriesPage(series: Series[], status: SystemStatus = { version: 'dev', commit: 'unknown', buildDate: '', enhancedHardcoverApi: true, hardcoverTokenConfigured: true }) {
   vi.mocked(api.listSeries).mockResolvedValue(series)
+  vi.mocked(api.status).mockResolvedValue(status)
   return render(
     <MemoryRouter>
       <SeriesPage />
@@ -36,8 +38,43 @@ function renderSeriesPage(series: Series[]) {
 describe('SeriesPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(api.status).mockResolvedValue({ version: 'dev', commit: 'unknown', buildDate: '', enhancedHardcoverApi: true, hardcoverTokenConfigured: true })
     vi.mocked(api.getSeriesHardcoverLink).mockRejectedValue(new Error('not linked'))
     vi.mocked(api.searchHardcoverSeries).mockResolvedValue([])
+  })
+
+  it('hides Hardcover controls when enhanced Hardcover API is disabled', async () => {
+    renderSeriesPage([
+      {
+        id: 11,
+        foreignSeriesId: 'series-11',
+        title: 'The Stormlight Archive',
+        description: '',
+        monitored: true,
+        books: [],
+        hardcoverLink: {
+          id: 1,
+          seriesId: 11,
+          hardcoverSeriesId: 'hc-series:42',
+          hardcoverProviderId: '42',
+          hardcoverTitle: 'The Stormlight Archive',
+          hardcoverAuthorName: 'Brandon Sanderson',
+          hardcoverBookCount: 10,
+          confidence: 1,
+          linkedBy: 'manual',
+          linkedAt: '2026-01-01T00:00:00Z',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+      },
+    ], { version: 'dev', commit: 'unknown', buildDate: '', enhancedHardcoverApi: false, hardcoverTokenConfigured: true, enhancedHardcoverDisabledReason: 'env_disabled' })
+
+    expect(await screen.findByRole('heading', { name: 'The Stormlight Archive' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /link/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Auto' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('heading', { name: 'The Stormlight Archive' }))
+    expect(screen.queryByText(/Hardcover:/)).not.toBeInTheDocument()
+    expect(api.getSeriesHardcoverDiff).not.toHaveBeenCalled()
   })
 
   it('links expanded series book rows to their book pages', async () => {
