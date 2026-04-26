@@ -41,10 +41,14 @@ func NewSettingsHandler(settings *db.SettingsRepo) *SettingsHandler {
 // values are surfaced through the dedicated /auth/* endpoints instead.
 func isSecretSetting(key string) bool {
 	switch key {
-	case "auth.api_key", "auth.session_secret", "auth.mode", SettingABSAPIKey:
+	case "auth.api_key", "auth.session_secret", "auth.mode", SettingABSAPIKey, SettingHardcoverAPIToken:
 		return true
 	}
 	return false
+}
+
+func isWritableSecretSetting(key string) bool {
+	return key == SettingHardcoverAPIToken
 }
 
 func (h *SettingsHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +86,7 @@ func (h *SettingsHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 func (h *SettingsHandler) Set(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
-	if isSecretSetting(key) {
+	if isSecretSetting(key) && !isWritableSecretSetting(key) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "use /auth/* endpoints for auth settings"})
 		return
 	}
@@ -93,20 +97,32 @@ func (h *SettingsHandler) Set(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	if err := validateSettingValue(key, req.Value); err != nil {
+	value := normalizeSettingValue(key, req.Value)
+	if err := validateSettingValue(key, value); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := h.settings.Set(r.Context(), key, req.Value); err != nil {
+	if err := h.settings.Set(r.Context(), key, value); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if isSecretSetting(key) {
+		writeJSON(w, http.StatusOK, map[string]string{"key": key, "value": ""})
 		return
 	}
 	s, err := h.settings.Get(r.Context(), key)
 	if err != nil || s == nil {
-		writeJSON(w, http.StatusOK, map[string]string{"key": key, "value": req.Value})
+		writeJSON(w, http.StatusOK, map[string]string{"key": key, "value": value})
 		return
 	}
 	writeJSON(w, http.StatusOK, s)
+}
+
+func normalizeSettingValue(key, value string) string {
+	if key == SettingHardcoverAPIToken {
+		return strings.TrimSpace(value)
+	}
+	return value
 }
 
 // validateSettingValue enforces per-key invariants on writes. We run this
@@ -116,6 +132,19 @@ func (h *SettingsHandler) Set(w http.ResponseWriter, r *http.Request) {
 // unchanged — the settings table stays schema-less for anything else.
 func validateSettingValue(key, value string) error {
 	switch key {
+	case SettingHardcoverAPIToken:
+		for _, r := range value {
+			if r < 0x20 || r == 0x7f {
+				return fmt.Errorf("hardcover.api_token contains invalid control characters")
+			}
+		}
+	case SettingHardcoverEnhancedSeriesEnabled:
+		if value == "" {
+			return nil
+		}
+		if !strings.EqualFold(value, "true") && !strings.EqualFold(value, "false") {
+			return fmt.Errorf("hardcover.enhanced_series_enabled %q is not one of: true, false", value)
+		}
 	case SettingCalibreLibraryPath:
 		// Empty = disabled / unset; reject only when the caller provided
 		// a non-empty string that doesn't resolve to an existing dir.

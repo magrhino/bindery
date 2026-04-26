@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, ABSConfig, ABSImportProgress, ABSImportRun, ABSLibrary, ABSMetadataConflict, ABSReviewItem, ABSRollbackAction, ABSRollbackResult, ABSTestResult, AuthConfig, AuthStatus, BlocklistEntry, Indexer, IndexerTestResult, ProwlarrInstance, DownloadClient, NotificationConfig, QualityProfile, MetadataProfile, CalibreImportProgress, CalibreSyncProgress, RootFolder, LogEntry, ImportList, HardcoverList, Author, Book } from '../api/client'
+import { api, ABSConfig, ABSImportProgress, ABSImportRun, ABSLibrary, ABSMetadataConflict, ABSReviewItem, ABSRollbackAction, ABSRollbackResult, ABSTestResult, AuthConfig, AuthStatus, BlocklistEntry, Indexer, IndexerTestResult, ProwlarrInstance, DownloadClient, NotificationConfig, QualityProfile, MetadataProfile, CalibreImportProgress, CalibreSyncProgress, RootFolder, LogEntry, ImportList, HardcoverList, Author, Book, SystemStatus } from '../api/client'
 import AuthSettings from '../settings/AuthSettings'
 import Pagination from '../components/Pagination'
 import ABSConflictPanel from '../components/ABSAuthorConflictsPanel'
@@ -2333,6 +2333,8 @@ function GeneralTab() {
   const [scanMessage, setScanMessage] = useState<string | null>(null)
   const [lastScan, setLastScan] = useState<{ ran_at: string; files_found: number; reconciled: number; unmatched: number } | null>(null)
   const [storage, setStorage] = useState<{ downloadDir: string; libraryDir: string; audiobookDir: string } | null>(null)
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
+  const [hardcoverToken, setHardcoverToken] = useState('')
   const [rootFolders, setRootFolders] = useState<RootFolder[]>([])
   const [newDefaultFolderPath, setNewDefaultFolderPath] = useState('')
   const [newDefaultFolderError, setNewDefaultFolderError] = useState('')
@@ -2350,13 +2352,63 @@ function GeneralTab() {
     api.listBackups().then(setBackups).catch(console.error)
     api.libraryScanStatus().then(setLastScan).catch(() => {/* no prior scan — ignore 404 */})
     api.getStorage().then(setStorage).catch(console.error)
+    api.status().then(setSystemStatus).catch(console.error)
     api.listRootFolders().then(setRootFolders).catch(console.error)
   }, [])
+
+  const refreshSystemStatus = async () => {
+    try {
+      setSystemStatus(await api.status())
+    } catch (err) {
+      console.error(err)
+    }
+  }
 
   const saveSetting = async (key: string) => {
     setSaving(key)
     try {
       await api.setSetting(key, settings[key] ?? '')
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  const saveHardcoverToken = async () => {
+    setSaving('hardcover.api_token')
+    try {
+      await api.setSetting('hardcover.api_token', hardcoverToken.trim())
+      setHardcoverToken('')
+      await refreshSystemStatus()
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  const clearHardcoverToken = async () => {
+    setSaving('hardcover.api_token')
+    try {
+      await api.setSetting('hardcover.api_token', '')
+      setHardcoverToken('')
+      await refreshSystemStatus()
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  const toggleEnhancedHardcover = async () => {
+    const current = (settings['hardcover.enhanced_series_enabled'] ?? 'false').toLowerCase()
+    const next = current === 'true' ? 'false' : 'true'
+    setSettings(s => ({ ...s, 'hardcover.enhanced_series_enabled': next }))
+    setSaving('hardcover.enhanced_series_enabled')
+    try {
+      await api.setSetting('hardcover.enhanced_series_enabled', next)
+      await refreshSystemStatus()
     } catch (err) {
       console.error(err)
     } finally {
@@ -2416,6 +2468,18 @@ function GeneralTab() {
   }
 
   if (loading) return <div className="text-slate-600 dark:text-zinc-500">{t('common.loading')}</div>
+
+  const enhancedHardcoverAdminEnabled = (settings['hardcover.enhanced_series_enabled'] ?? 'false').toLowerCase() === 'true'
+  const hardcoverTokenConfigured = systemStatus?.hardcoverTokenConfigured ?? false
+  const enhancedHardcoverEnabled = systemStatus?.enhancedHardcoverApi ?? false
+  const enhancedHardcoverReason = systemStatus?.enhancedHardcoverDisabledReason
+  const enhancedHardcoverStatus = enhancedHardcoverEnabled
+    ? t('settings.general.enhancedHardcoverStatusEnabled', 'Enabled')
+    : enhancedHardcoverReason === 'env_disabled'
+      ? t('settings.general.enhancedHardcoverStatusEnvDisabled', 'Disabled by BINDERY_ENHANCED_HARDCOVER_API=false.')
+      : enhancedHardcoverReason === 'missing_token'
+        ? t('settings.general.enhancedHardcoverStatusMissingToken', 'Add a Hardcover API token to enable this feature.')
+        : t('settings.general.enhancedHardcoverStatusAdminDisabled', 'Turn this on to enable enhanced series features.')
 
   return (
     <div className="space-y-8">
@@ -2792,6 +2856,81 @@ function GeneralTab() {
                 className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
               >
                 {saving === 'googlebooks.apiKey' ? t('common.saving') : t('common.save')}
+              </button>
+            </div>
+          </div>
+
+          <div className="border-t border-slate-200 dark:border-zinc-800 pt-4 space-y-3">
+            <div>
+              <div className="flex items-center justify-between gap-3 mb-1">
+                <label className="block text-xs text-slate-600 dark:text-zinc-400">
+                  {t('settings.general.hardcoverApiToken', 'Hardcover API Token')}
+                </label>
+                <span className={`text-[11px] font-medium ${hardcoverTokenConfigured ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500 dark:text-zinc-500'}`}>
+                  {hardcoverTokenConfigured
+                    ? t('settings.general.hardcoverTokenConfigured', 'Token configured')
+                    : t('settings.general.hardcoverTokenNotConfigured', 'No token configured')}
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={hardcoverToken}
+                  onChange={e => setHardcoverToken(e.target.value)}
+                  placeholder={hardcoverTokenConfigured
+                    ? t('settings.general.hardcoverApiTokenConfiguredPlaceholder', 'Saved token is hidden. Enter a new token to rotate it.')
+                    : t('settings.general.hardcoverApiTokenPlaceholder', 'Paste a Hardcover API token')}
+                  type="password"
+                  className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
+                />
+                <button
+                  onClick={saveHardcoverToken}
+                  disabled={saving === 'hardcover.api_token' || !hardcoverToken.trim()}
+                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
+                  aria-label={t('settings.general.hardcoverSaveToken', 'Save Hardcover API token')}
+                >
+                  {saving === 'hardcover.api_token' ? t('common.saving') : t('common.save')}
+                </button>
+                {hardcoverTokenConfigured && (
+                  <button
+                    onClick={clearHardcoverToken}
+                    disabled={saving === 'hardcover.api_token'}
+                    className="px-3 py-2 bg-slate-300 dark:bg-zinc-700 hover:bg-slate-400 dark:hover:bg-zinc-600 rounded text-xs font-medium disabled:opacity-50"
+                    aria-label={t('settings.general.hardcoverClearToken', 'Clear Hardcover API token')}
+                  >
+                    {t('settings.general.hardcoverClearToken', 'Clear')}
+                  </button>
+                )}
+              </div>
+              <a
+                href="https://hardcover.app/account/api"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-block mt-1 text-xs text-emerald-600 dark:text-emerald-400 hover:underline"
+              >
+                {t('settings.general.hardcoverApiTokenLink', 'Create or copy a Hardcover API token')}
+              </a>
+            </div>
+
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">
+                  {t('settings.general.enhancedHardcoverSeries', 'Enhanced Hardcover series')}
+                </label>
+                <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">
+                  {t('settings.general.enhancedHardcoverSeriesHint', 'Use Hardcover-backed series matching, catalog diffs, and missing-book fill.')}
+                </p>
+                <p className={`text-xs mt-1 ${enhancedHardcoverEnabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-600 dark:text-zinc-500'}`}>
+                  {enhancedHardcoverStatus}
+                </p>
+              </div>
+              <button
+                onClick={toggleEnhancedHardcover}
+                disabled={saving === 'hardcover.enhanced_series_enabled'}
+                className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 disabled:opacity-50 ${enhancedHardcoverAdminEnabled ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
+                title={enhancedHardcoverAdminEnabled ? t('common.disable') : t('common.enable')}
+                aria-label={t('settings.general.enhancedHardcoverToggle', 'Toggle enhanced Hardcover series')}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${enhancedHardcoverAdminEnabled ? 'translate-x-4' : ''}`} />
               </button>
             </div>
           </div>

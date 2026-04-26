@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, Series, SeriesHardcoverDiff, SeriesHardcoverLink, SeriesHardcoverSearchResult } from '../api/client'
+import { api, Series, SeriesHardcoverDiff, SeriesHardcoverLink, SeriesHardcoverSearchResult, SystemStatus } from '../api/client'
 import HardcoverSeriesLinkModal from '../components/HardcoverSeriesLinkModal'
 
 export default function SeriesPage() {
@@ -16,9 +16,17 @@ export default function SeriesPage() {
   const [diffs, setDiffs] = useState<Record<number, SeriesHardcoverDiff>>({})
   const [diffLoading, setDiffLoading] = useState<Record<number, boolean>>({})
   const [diffErrors, setDiffErrors] = useState<Record<number, string>>({})
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
+  const enhancedHardcoverApi = systemStatus?.enhancedHardcoverApi ?? false
 
   useEffect(() => {
-    api.listSeries().then(setSeriesList).catch(console.error).finally(() => setLoading(false))
+    Promise.all([api.listSeries(), api.status()])
+      .then(([list, status]) => {
+        setSeriesList(list)
+        setSystemStatus(status)
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false))
   }, [])
 
   useEffect(() => {
@@ -33,6 +41,7 @@ export default function SeriesPage() {
   }
 
   const loadHardcoverDiff = async (series: Series, force = false) => {
+    if (!enhancedHardcoverApi) return
     if (!series.hardcoverLink) return
     if (!force && (diffs[series.id] || diffLoading[series.id])) return
     setDiffLoading(prev => ({ ...prev, [series.id]: true }))
@@ -72,7 +81,7 @@ export default function SeriesPage() {
       setFillResult(prev => ({ ...prev, [series.id]: r.queued === 0 ? 'Nothing to fill' : `${r.queued} book${r.queued === 1 ? '' : 's'} queued` }))
       const list = await refreshSeriesList()
       const updated = list.find(s => s.id === series.id)
-      if (updated?.hardcoverLink) {
+      if (enhancedHardcoverApi && updated?.hardcoverLink) {
         await loadHardcoverDiff(updated, true)
       }
     } catch {
@@ -83,6 +92,7 @@ export default function SeriesPage() {
   }
 
   const openHardcoverLink = async (series: Series) => {
+    if (!enhancedHardcoverApi) return
     setLinkResult(prev => {
       const next = { ...prev }
       delete next[series.id]
@@ -126,7 +136,7 @@ export default function SeriesPage() {
       return
     }
     const series = seriesList.find(item => item.id === seriesId)
-    if (series) {
+    if (enhancedHardcoverApi && series) {
       void loadHardcoverDiff({ ...series, hardcoverLink: link }, true)
     }
   }
@@ -152,8 +162,8 @@ export default function SeriesPage() {
             const bookCount = books.length
             const gapCount = books.filter(b => b.book && b.book.status !== 'imported').length
             const diff = diffs[series.id]
-            const hardcoverMissingEstimate = Math.max(0, (series.hardcoverLink?.hardcoverBookCount ?? 0) - bookCount)
-            const hardcoverMissingCount = diff?.missingCount ?? hardcoverMissingEstimate
+            const hardcoverMissingEstimate = enhancedHardcoverApi ? Math.max(0, (series.hardcoverLink?.hardcoverBookCount ?? 0) - bookCount) : 0
+            const hardcoverMissingCount = enhancedHardcoverApi ? (diff?.missingCount ?? hardcoverMissingEstimate) : 0
             const displayMissingCount = Math.max(gapCount, hardcoverMissingCount)
             const fillNeeded = gapCount > 0 || hardcoverMissingCount > 0
             const isOpen = expanded === series.id
@@ -202,18 +212,20 @@ export default function SeriesPage() {
                   <span className="text-xs text-slate-600 dark:text-zinc-400">
                     {series.monitored ? 'Monitored' : 'Not monitored'}
                   </span>
-                  <button
-                    onClick={() => openHardcoverLink(series)}
-                    disabled={linking === series.id}
-                    className={`text-xs px-2.5 py-1 rounded font-medium border disabled:opacity-50 ${
-                      series.hardcoverLink
-                        ? 'border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300'
-                        : 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'
-                    }`}
-                    title={series.hardcoverLink ? `Linked to ${series.hardcoverLink.hardcoverTitle}` : 'Search Hardcover series'}
-                  >
-                    {linking === series.id ? 'Searching...' : series.hardcoverLink ? `${series.hardcoverLink.linkedBy === 'auto' ? 'Auto' : 'Manual'} link` : 'Auto'}
-                  </button>
+                  {enhancedHardcoverApi && (
+                    <button
+                      onClick={() => openHardcoverLink(series)}
+                      disabled={linking === series.id}
+                      className={`text-xs px-2.5 py-1 rounded font-medium border disabled:opacity-50 ${
+                        series.hardcoverLink
+                          ? 'border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+                          : 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                      }`}
+                      title={series.hardcoverLink ? `Linked to ${series.hardcoverLink.hardcoverTitle}` : 'Search Hardcover series'}
+                    >
+                      {linking === series.id ? 'Searching...' : series.hardcoverLink ? `${series.hardcoverLink.linkedBy === 'auto' ? 'Auto' : 'Manual'} link` : 'Auto'}
+                    </button>
+                  )}
                   {fillNeeded && (
                     <button
                       onClick={() => fillGaps(series)}
@@ -283,7 +295,7 @@ export default function SeriesPage() {
                   </div>
                 )}
 
-                {isOpen && series.hardcoverLink && (
+                {isOpen && enhancedHardcoverApi && series.hardcoverLink && (
                   <div className="border-t border-slate-200 dark:border-zinc-800 bg-slate-100/80 dark:bg-zinc-900/80">
                     <div className="px-4 py-3 flex items-center justify-between gap-3">
                       <div className="min-w-0">
@@ -346,7 +358,7 @@ export default function SeriesPage() {
           })}
         </div>
       )}
-      {linkModalSeries && (
+      {enhancedHardcoverApi && linkModalSeries && (
         <HardcoverSeriesLinkModal
           series={linkModalSeries}
           initialResults={linkModalResults}

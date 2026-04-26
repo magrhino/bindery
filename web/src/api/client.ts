@@ -81,6 +81,16 @@ export interface ManagedUser {
   createdAt: string
 }
 
+export interface SystemStatus {
+  version: string
+  commit: string
+  buildDate: string
+  imageCacheBytes?: number
+  enhancedHardcoverApi: boolean
+  hardcoverTokenConfigured: boolean
+  enhancedHardcoverDisabledReason?: 'env_disabled' | 'missing_token' | 'admin_disabled' | string
+}
+
 export interface AuthConfig {
   mode: 'enabled' | 'local-only' | 'disabled'
   apiKey: string
@@ -104,7 +114,7 @@ export interface OidcProviderConfig {
 export const api = {
   // System
   health: () => request<{ status: string; version: string }>('/health'),
-  status: () => request<{ version: string; commit: string; buildDate: string }>('/system/status'),
+  status: () => request<SystemStatus>('/system/status'),
   getLogs: (params?: { level?: string; component?: string; from?: string; to?: string; q?: string; limit?: number; offset?: number }) => {
     const p: Record<string, string> = {}
     if (params?.level) p.level = params.level

@@ -21,15 +21,46 @@ import (
 )
 
 type SeriesHandler struct {
-	series   *db.SeriesRepo
-	books    *db.BookRepo
-	authors  *db.AuthorRepo
-	meta     *metadata.Aggregator
-	searcher BookSearcher
+	series                      *db.SeriesRepo
+	books                       *db.BookRepo
+	authors                     *db.AuthorRepo
+	meta                        *metadata.Aggregator
+	searcher                    BookSearcher
+	settings                    *db.SettingsRepo
+	enhancedHardcoverEnvEnabled bool
 }
 
 func NewSeriesHandler(series *db.SeriesRepo, books *db.BookRepo, authors *db.AuthorRepo, meta *metadata.Aggregator, searcher BookSearcher) *SeriesHandler {
 	return &SeriesHandler{series: series, books: books, authors: authors, meta: meta, searcher: searcher}
+}
+
+func (h *SeriesHandler) WithHardcoverFeatureSettings(settings *db.SettingsRepo, envEnabled bool) *SeriesHandler {
+	h.settings = settings
+	h.enhancedHardcoverEnvEnabled = envEnabled
+	return h
+}
+
+func (h *SeriesHandler) hardcoverFeatureState(ctx context.Context) HardcoverFeatureState {
+	if h.settings == nil {
+		return HardcoverFeatureState{EnhancedHardcoverAPI: true, HardcoverTokenConfigured: true}
+	}
+	return HardcoverFeatureStateFor(ctx, h.settings, h.enhancedHardcoverEnvEnabled)
+}
+
+func (h *SeriesHandler) enhancedHardcoverEnabled(ctx context.Context) bool {
+	return h.hardcoverFeatureState(ctx).EnhancedHardcoverAPI
+}
+
+func (h *SeriesHandler) requireEnhancedHardcoverAPI(w http.ResponseWriter, r *http.Request) bool {
+	state := h.hardcoverFeatureState(r.Context())
+	if state.EnhancedHardcoverAPI {
+		return true
+	}
+	writeJSON(w, http.StatusNotFound, map[string]string{
+		"error":  "enhanced hardcover api disabled",
+		"reason": state.EnhancedHardcoverDisabledReason,
+	})
+	return false
 }
 
 func (h *SeriesHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -97,12 +128,14 @@ func (h *SeriesHandler) Fill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.createMissingHardcoverBooks(r.Context(), id); err != nil {
-		if errors.Is(err, errSeriesMetadataProvider) {
-			slog.Warn("series fill: failed to expand Hardcover catalog; continuing with local books", "seriesID", id, "error", err)
-		} else {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
+	if h.enhancedHardcoverEnabled(r.Context()) {
+		if err := h.createMissingHardcoverBooks(r.Context(), id); err != nil {
+			if errors.Is(err, errSeriesMetadataProvider) {
+				slog.Warn("series fill: failed to expand Hardcover catalog; continuing with local books", "seriesID", id, "error", err)
+			} else {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
 		}
 	}
 
@@ -187,6 +220,9 @@ type seriesHardcoverDiffResponse struct {
 var errSeriesMetadataProvider = errors.New("series metadata provider")
 
 func (h *SeriesHandler) SearchHardcover(w http.ResponseWriter, r *http.Request) {
+	if !h.requireEnhancedHardcoverAPI(w, r) {
+		return
+	}
 	term := strings.TrimSpace(r.URL.Query().Get("term"))
 	if term == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "term parameter required"})
@@ -214,6 +250,9 @@ func (h *SeriesHandler) SearchHardcover(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *SeriesHandler) GetHardcoverLink(w http.ResponseWriter, r *http.Request) {
+	if !h.requireEnhancedHardcoverAPI(w, r) {
+		return
+	}
 	id, ok := parseID(w, r)
 	if !ok {
 		return
@@ -231,6 +270,9 @@ func (h *SeriesHandler) GetHardcoverLink(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *SeriesHandler) AutoLinkHardcover(w http.ResponseWriter, r *http.Request) {
+	if !h.requireEnhancedHardcoverAPI(w, r) {
+		return
+	}
 	id, ok := parseID(w, r)
 	if !ok {
 		return
@@ -288,6 +330,9 @@ func (h *SeriesHandler) AutoLinkHardcover(w http.ResponseWriter, r *http.Request
 }
 
 func (h *SeriesHandler) PutHardcoverLink(w http.ResponseWriter, r *http.Request) {
+	if !h.requireEnhancedHardcoverAPI(w, r) {
+		return
+	}
 	id, ok := parseID(w, r)
 	if !ok {
 		return
@@ -328,6 +373,9 @@ func (h *SeriesHandler) PutHardcoverLink(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *SeriesHandler) DeleteHardcoverLink(w http.ResponseWriter, r *http.Request) {
+	if !h.requireEnhancedHardcoverAPI(w, r) {
+		return
+	}
 	id, ok := parseID(w, r)
 	if !ok {
 		return
@@ -340,6 +388,9 @@ func (h *SeriesHandler) DeleteHardcoverLink(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *SeriesHandler) HardcoverDiff(w http.ResponseWriter, r *http.Request) {
+	if !h.requireEnhancedHardcoverAPI(w, r) {
+		return
+	}
 	id, ok := parseID(w, r)
 	if !ok {
 		return
@@ -643,6 +694,9 @@ func localDiffBook(local models.SeriesBook) seriesHardcoverDiffBook {
 }
 
 func (h *SeriesHandler) createMissingHardcoverBooks(ctx context.Context, seriesID int64) error {
+	if !h.enhancedHardcoverEnabled(ctx) {
+		return nil
+	}
 	if h.meta == nil || h.authors == nil {
 		return nil
 	}

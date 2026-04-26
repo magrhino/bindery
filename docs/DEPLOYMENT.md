@@ -212,6 +212,7 @@ Multiple remaps are separated by commas: `BINDERY_DOWNLOAD_PATH_REMAP=/sab/compl
 | `BINDERY_LIBRARY_DIR` | `/books` | Destination for imported ebook files |
 | `BINDERY_AUDIOBOOK_DIR` | falls back to `BINDERY_LIBRARY_DIR` | Destination for imported audiobook folders |
 | `BINDERY_ABS_ENABLED` | `false` | Set to `true` to expose and enable the Audiobookshelf (ABS) feature surface. |
+| `BINDERY_ENHANCED_HARDCOVER_API` | `false` | Set to `true` to allow token-backed Hardcover series search, linking, catalog diffs, and missing-book fill after an admin enables the feature in Settings. |
 | `BINDERY_DOWNLOAD_PATH_REMAP` | _(empty)_ | Comma-separated `from:to` pairs rewriting paths reported by the download client into paths Bindery can access. Required when SABnzbd and Bindery mount the same storage at different paths. Longest-prefix match wins. See [Path remapping](#path-remapping-multi-container--multi-pod-setups). |
 | `BINDERY_PUID` | _(unset)_ | Sanity check — see [Running as a specific UID/GID](#running-as-a-specific-uidgid) |
 | `BINDERY_PGID` | _(unset)_ | Sanity check — same as `BINDERY_PUID` for the primary GID |

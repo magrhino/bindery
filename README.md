@@ -222,6 +222,7 @@ Bindery is configured through the web UI under **Settings**. Core env vars:
 | `BINDERY_DOWNLOAD_DIR` | `/downloads` | Where the download client places completed downloads |
 | `BINDERY_LIBRARY_DIR` | `/books` | Destination for imported ebook files |
 | `BINDERY_AUDIOBOOK_DIR` | falls back to `BINDERY_LIBRARY_DIR` | Destination for imported audiobook folders |
+| `BINDERY_ENHANCED_HARDCOVER_API` | `false` | Enables Hardcover-token-backed series search, linking, catalog diffs, and missing-book fill when also enabled in Settings |
 
 The full variable reference (path remapping, API key seeding, `BINDERY_PUID` / `BINDERY_PGID` sanity checks) is in **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#environment-variables)**.
 
