@@ -21,11 +21,38 @@ const (
 )
 
 // Client implements metadata.Provider for Hardcover.app using its public GraphQL API.
-// Set a Bearer token via WithToken or NewAuthenticated to enable authenticated queries.
+// Set an API token via WithToken or NewAuthenticated to enable authenticated queries.
 type Client struct {
 	http        *http.Client
-	token       string // optional Bearer token; required for user-specific queries
+	token       string // optional API token; required for user-specific queries
 	tokenSource func(context.Context) string
+}
+
+// NormalizeAPIToken accepts either the raw token copied from Hardcover or an
+// Authorization-style value such as "Bearer <token>" and returns the raw token.
+func NormalizeAPIToken(value string) string {
+	token := strings.TrimSpace(value)
+	for {
+		token = strings.Trim(strings.TrimSpace(token), `"'`+"`")
+		lower := strings.ToLower(token)
+		switch {
+		case strings.HasPrefix(lower, "authorization:"):
+			token = strings.TrimSpace(token[len("authorization:"):])
+			continue
+		case strings.HasPrefix(lower, "authorization="):
+			token = strings.TrimSpace(token[len("authorization="):])
+			continue
+		}
+		if strings.EqualFold(token, "Bearer") {
+			return ""
+		}
+		fields := strings.Fields(token)
+		if len(fields) < 2 || !strings.EqualFold(fields[0], "Bearer") {
+			break
+		}
+		token = strings.TrimSpace(token[len(fields[0]):])
+	}
+	return token
 }
 
 // New creates a new Hardcover client.
@@ -35,13 +62,13 @@ func New() *Client {
 	}
 }
 
-// WithToken returns a copy of the client configured to use the given Bearer token.
+// WithToken returns a copy of the client configured to use the given API token.
 // Required for authenticated queries such as GetUserWishlist.
 func (c *Client) WithToken(token string) *Client {
 	return &Client{http: c.http, token: token}
 }
 
-// WithTokenSource returns a copy of the client that resolves a Bearer token
+// WithTokenSource returns a copy of the client that resolves an API token
 // for each request. It is used for UI-managed credentials that can change
 // while the process is running.
 func (c *Client) WithTokenSource(source func(context.Context) string) *Client {
@@ -221,7 +248,7 @@ func (c *Client) GetBookByISBN(ctx context.Context, isbn string) (*models.Book, 
 
 // GetUserWishlist fetches the authenticated user's "Want to Read" books.
 // Returns candidates suitable for list-cross recommendations.
-// Requires the client to have a Bearer token set via WithToken; returns nil if not configured.
+// Requires the client to have an API token set via WithToken; returns nil if not configured.
 func (c *Client) GetUserWishlist(ctx context.Context, limit int) ([]models.RecommendationCandidate, error) {
 	if c.token == "" {
 		return nil, nil
@@ -383,6 +410,11 @@ type gqlRequest struct {
 	Variables map[string]any `json:"variables,omitempty"`
 }
 
+type gqlError struct {
+	Message    string         `json:"message"`
+	Extensions map[string]any `json:"extensions,omitempty"`
+}
+
 func (c *Client) query(ctx context.Context, q string, vars map[string]any, out interface{}) error {
 	body, err := json.Marshal(gqlRequest{Query: q, Variables: vars})
 	if err != nil {
@@ -395,7 +427,7 @@ func (c *Client) query(ctx context.Context, q string, vars map[string]any, out i
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Bindery/0.1 (https://github.com/vavallee/bindery)")
-	if token := c.bearerToken(ctx); token != "" {
+	if token := c.authorizationToken(ctx); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
@@ -410,16 +442,47 @@ func (c *Client) query(ctx context.Context, q string, vars map[string]any, out i
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
 	}
 
-	return json.NewDecoder(resp.Body).Decode(out)
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	var envelope struct {
+		Errors []gqlError `json:"errors"`
+	}
+	if err := json.Unmarshal(b, &envelope); err == nil && len(envelope.Errors) > 0 {
+		return fmt.Errorf("GraphQL: %s", formatGraphQLErrors(envelope.Errors))
+	}
+	return json.Unmarshal(b, out)
 }
 
-func (c *Client) bearerToken(ctx context.Context) string {
+func (c *Client) authorizationToken(ctx context.Context) string {
 	if c.tokenSource != nil {
-		if token := strings.TrimSpace(c.tokenSource(ctx)); token != "" {
+		if token := NormalizeAPIToken(c.tokenSource(ctx)); token != "" {
 			return token
 		}
 	}
-	return strings.TrimSpace(c.token)
+	return NormalizeAPIToken(c.token)
+}
+
+func formatGraphQLErrors(errors []gqlError) string {
+	if len(errors) == 0 {
+		return "unknown error"
+	}
+	parts := make([]string, 0, min(len(errors), 3))
+	for _, gqlErr := range errors {
+		msg := strings.TrimSpace(gqlErr.Message)
+		if msg == "" {
+			msg = "unknown error"
+		}
+		if code, ok := gqlErr.Extensions["code"].(string); ok && code != "" {
+			msg += " (" + code + ")"
+		}
+		parts = append(parts, msg)
+		if len(parts) == 3 {
+			break
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 // --- Internal types for JSON mapping ---

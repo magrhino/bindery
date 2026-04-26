@@ -197,7 +197,7 @@ func TestSettings_GetABSSecretReturns404(t *testing.T) {
 
 func TestSettings_SetHardcoverTokenIsWriteOnly(t *testing.T) {
 	h, repo, ctx := settingsFixture(t)
-	req := withKey(httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+SettingHardcoverAPIToken, bytes.NewBufferString(`{"value":"  hc-secret  "}`)), SettingHardcoverAPIToken)
+	req := withKey(httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+SettingHardcoverAPIToken, bytes.NewBufferString(`{"value":"  Authorization: Bearer Bearer hc-secret  "}`)), SettingHardcoverAPIToken)
 	rec := httptest.NewRecorder()
 	h.Set(rec, req)
 	if rec.Code != http.StatusOK {
@@ -208,7 +208,7 @@ func TestSettings_SetHardcoverTokenIsWriteOnly(t *testing.T) {
 	}
 	got, _ := repo.Get(ctx, SettingHardcoverAPIToken)
 	if got == nil || got.Value != "hc-secret" {
-		t.Fatalf("expected trimmed token persisted, got %+v", got)
+		t.Fatalf("expected normalized token persisted, got %+v", got)
 	}
 
 	getReq := withKey(httptest.NewRequest(http.MethodGet, "/api/v1/settings/"+SettingHardcoverAPIToken, nil), SettingHardcoverAPIToken)
@@ -216,6 +216,32 @@ func TestSettings_SetHardcoverTokenIsWriteOnly(t *testing.T) {
 	h.Get(getRec, getReq)
 	if getRec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for Hardcover token Get, got %d", getRec.Code)
+	}
+}
+
+func TestGetHardcoverAPITokenNormalizesLegacyStoredValue(t *testing.T) {
+	_, repo, ctx := settingsFixture(t)
+	if err := repo.Set(ctx, SettingHardcoverAPIToken, "Authorization: Bearer hc-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if got := GetHardcoverAPIToken(ctx, repo); got != "hc-secret" {
+		t.Fatalf("GetHardcoverAPIToken = %q, want hc-secret", got)
+	}
+}
+
+func TestSettings_TestHardcoverReportsMissingToken(t *testing.T) {
+	h, _, _ := settingsFixture(t)
+	rec := httptest.NewRecorder()
+	h.TestHardcover(rec, httptest.NewRequest(http.MethodPost, "/api/v1/hardcover/test", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got HardcoverTestResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.OK || got.TokenConfigured || got.Error == "" {
+		t.Fatalf("unexpected response: %+v", got)
 	}
 }
 

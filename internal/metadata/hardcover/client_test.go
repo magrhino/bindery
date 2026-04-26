@@ -53,6 +53,62 @@ func TestName(t *testing.T) {
 	}
 }
 
+func TestNormalizeAPIToken(t *testing.T) {
+	cases := map[string]string{
+		"hc-secret":                         "hc-secret",
+		"Bearer hc-secret":                  "hc-secret",
+		"bearer hc-secret":                  "hc-secret",
+		"Bearer Bearer hc-secret":           "hc-secret",
+		" \n Bearer hc-secret \n\t":         "hc-secret",
+		`"Bearer hc-secret"`:                "hc-secret",
+		"Authorization: Bearer hc-secret":   "hc-secret",
+		"authorization: hc-secret":          "hc-secret",
+		"Authorization=Bearer Bearer token": "token",
+		"Bearer":                            "",
+		"Authorization: Bearer":             "",
+	}
+	for input, want := range cases {
+		if got := NormalizeAPIToken(input); got != want {
+			t.Errorf("NormalizeAPIToken(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestQuery_UsesNormalizedAuthorizationHeader(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		client *Client
+	}{
+		{name: "token", client: newMockClient(nil).WithToken("Bearer Bearer hc-secret")},
+		{name: "source", client: newMockClient(nil).WithTokenSource(func(context.Context) string { return "bearer hc-secret" })},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.client.http.Transport = &testTransport{handler: func(r *http.Request) (*http.Response, error) {
+				if got := r.Header.Get("Authorization"); got != "Bearer hc-secret" {
+					t.Fatalf("Authorization = %q, want Bearer hc-secret", got)
+				}
+				return gqlResponse(t, http.StatusOK, map[string]interface{}{"authors": []interface{}{}}), nil
+			}}
+			if _, err := tt.client.SearchAuthors(context.Background(), "nobody"); err != nil {
+				t.Fatalf("SearchAuthors: %v", err)
+			}
+		})
+	}
+}
+
+func TestQuery_GraphQLErrorsReturnError(t *testing.T) {
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		return gqlResponse(t, http.StatusOK, `{"errors":[{"message":"Malformed Authorization header","extensions":{"code":"invalid-headers"}}]}`), nil
+	})
+	_, err := c.SearchAuthors(context.Background(), "Sanderson")
+	if err == nil {
+		t.Fatal("expected GraphQL error")
+	}
+	if !strings.Contains(err.Error(), "Malformed Authorization header") || !strings.Contains(err.Error(), "invalid-headers") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestSearchAuthors_Success(t *testing.T) {
 	c := newMockClient(func(r *http.Request) (*http.Response, error) {
 		data := map[string]interface{}{
@@ -420,6 +476,7 @@ func TestSearchSeries_ParsesResults(t *testing.T) {
 		gotVars = req.Variables
 		data := map[string]interface{}{
 			"search": map[string]interface{}{
+				"ids": []interface{}{123},
 				"results": map[string]interface{}{
 					"found": 1,
 					"hits": []map[string]interface{}{
@@ -456,6 +513,29 @@ func TestSearchSeries_ParsesResults(t *testing.T) {
 	}
 	if got.Title != "Foundation" || got.AuthorName != "Isaac Asimov" || got.BookCount != 7 || got.ReadersCount != 1000 {
 		t.Fatalf("unexpected result: %+v", got)
+	}
+}
+
+func TestSearchSeries_ErrorsWhenMatchesCannotBeMapped(t *testing.T) {
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		return gqlResponse(t, http.StatusOK, map[string]interface{}{
+			"search": map[string]interface{}{
+				"ids": []interface{}{123},
+				"results": map[string]interface{}{
+					"found": 1,
+					"hits": []map[string]interface{}{
+						{"document": map[string]interface{}{"name": "Dune"}},
+					},
+				},
+			},
+		}), nil
+	})
+	_, err := c.SearchSeries(context.Background(), "Dune", 5)
+	if err == nil {
+		t.Fatal("expected unmappable search response error")
+	}
+	if !strings.Contains(err.Error(), "no mappable series documents") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
