@@ -24,7 +24,7 @@ func NewSeriesHandler(series *db.SeriesRepo, books *db.BookRepo, searcher BookSe
 }
 
 func (h *SeriesHandler) List(w http.ResponseWriter, r *http.Request) {
-	series, err := h.series.List(r.Context())
+	series, err := h.series.ListWithBooks(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
