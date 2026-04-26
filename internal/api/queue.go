@@ -186,13 +186,16 @@ func (h *QueueHandler) ListArrCompatible(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	records := make([]arrQueueRecord, len(enriched))
-	for i, item := range enriched {
+	records := make([]arrQueueRecord, 0, len(enriched))
+	for _, item := range enriched {
+		if !includeArrQueueItem(item) {
+			continue
+		}
 		bookID := int64(0)
 		if item.Download.BookID != nil {
 			bookID = *item.Download.BookID
 		}
-		records[i] = arrQueueRecord{
+		records = append(records, arrQueueRecord{
 			ID:                    item.Download.ID,
 			BookID:                bookID,
 			Title:                 item.Download.Title,
@@ -203,7 +206,7 @@ func (h *QueueHandler) ListArrCompatible(w http.ResponseWriter, r *http.Request)
 			DownloadClient:        item.ClientName,
 			DownloadID:            item.RemoteID,
 			Protocol:              item.Download.Protocol,
-		}
+		})
 	}
 
 	opts := parseArrQueueOptions(r)
@@ -317,6 +320,10 @@ func storedDownloadID(d models.Download) string {
 		return *d.SABnzbdNzoID
 	}
 	return ""
+}
+
+func includeArrQueueItem(item enrichedQueueItem) bool {
+	return item.Download.Status != models.StateImported
 }
 
 func trackedDownloadStatus(item enrichedQueueItem) string {

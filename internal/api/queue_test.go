@@ -597,6 +597,37 @@ func TestQueueListArrCompatibleLocalErrorOutranksPollFailure(t *testing.T) {
 	}
 }
 
+func TestQueueListArrCompatibleSkipsImportedDownloads(t *testing.T) {
+	h := newQueueTestHandler(t)
+	createTestDownload(t, h, &models.Download{
+		GUID: "guid-imported", Title: "Imported Book", Size: 20,
+		Status: models.StateImported, Protocol: "usenet",
+	})
+	createTestDownload(t, h, &models.Download{
+		GUID: "guid-active", Title: "Active Book", Size: 10,
+		Status: models.DownloadStatusDownloading, Protocol: "usenet",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/queue", nil)
+	rr := httptest.NewRecorder()
+	h.ListArrCompatible(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+
+	var resp arrQueueResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.TotalRecords != 1 || len(resp.Records) != 1 {
+		t.Fatalf("expected only active record, got %+v", resp)
+	}
+	if resp.Records[0].Title != "Active Book" {
+		t.Fatalf("expected active record, got %+v", resp.Records[0])
+	}
+}
+
 func TestQueueListArrCompatiblePaginationAndSort(t *testing.T) {
 	h := newQueueTestHandler(t)
 	createTestDownload(t, h, &models.Download{
