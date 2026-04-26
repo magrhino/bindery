@@ -3,24 +3,33 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
+	"github.com/vavallee/bindery/internal/seriesmatch"
 )
 
 type SeriesHandler struct {
 	series   *db.SeriesRepo
 	books    *db.BookRepo
+	authors  *db.AuthorRepo
+	meta     *metadata.Aggregator
 	searcher BookSearcher
 }
 
-func NewSeriesHandler(series *db.SeriesRepo, books *db.BookRepo, searcher BookSearcher) *SeriesHandler {
-	return &SeriesHandler{series: series, books: books, searcher: searcher}
+func NewSeriesHandler(series *db.SeriesRepo, books *db.BookRepo, authors *db.AuthorRepo, meta *metadata.Aggregator, searcher BookSearcher) *SeriesHandler {
+	return &SeriesHandler{series: series, books: books, authors: authors, meta: meta, searcher: searcher}
 }
 
 func (h *SeriesHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -88,6 +97,15 @@ func (h *SeriesHandler) Fill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := h.createMissingHardcoverBooks(r.Context(), id); err != nil {
+		if errors.Is(err, errSeriesMetadataProvider) {
+			slog.Warn("series fill: failed to expand Hardcover catalog; continuing with local books", "seriesID", id, "error", err)
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
 	books, err := h.series.ListBooksInSeries(r.Context(), id)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -101,7 +119,7 @@ func (h *SeriesHandler) Fill(w http.ResponseWriter, r *http.Request) {
 		}
 		b.Status = models.BookStatusWanted
 		b.Monitored = true
-		if err := h.books.Update(r.Context(), &b); err != nil {
+		if err := h.books.MarkWantedMonitored(r.Context(), b.ID); err != nil {
 			slog.Warn("series fill: failed to update book", "book", b.Title, "error", err)
 			continue
 		}
@@ -110,4 +128,665 @@ func (h *SeriesHandler) Fill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]int{"queued": queued})
+}
+
+type seriesHardcoverSearchResult struct {
+	ForeignID    string   `json:"foreignId"`
+	ProviderID   string   `json:"providerId"`
+	Title        string   `json:"title"`
+	AuthorName   string   `json:"authorName"`
+	BookCount    int      `json:"bookCount"`
+	ReadersCount int      `json:"readersCount"`
+	Books        []string `json:"books"`
+	Confidence   float64  `json:"confidence,omitempty"`
+}
+
+type seriesHardcoverLinkRequest struct {
+	ForeignID  string  `json:"foreignId"`
+	ProviderID string  `json:"providerId"`
+	Title      string  `json:"title"`
+	AuthorName string  `json:"authorName"`
+	BookCount  int     `json:"bookCount"`
+	Confidence float64 `json:"confidence"`
+}
+
+type seriesHardcoverAutoResponse struct {
+	Linked     bool                          `json:"linked"`
+	Link       *models.SeriesHardcoverLink   `json:"link,omitempty"`
+	Candidates []seriesHardcoverSearchResult `json:"candidates"`
+	Reason     string                        `json:"reason,omitempty"`
+}
+
+type seriesHardcoverDiffBook struct {
+	ForeignBookID   string     `json:"foreignBookId"`
+	ProviderID      string     `json:"providerId"`
+	Title           string     `json:"title"`
+	Subtitle        string     `json:"subtitle,omitempty"`
+	Position        string     `json:"position"`
+	ImageURL        string     `json:"imageUrl,omitempty"`
+	AuthorName      string     `json:"authorName,omitempty"`
+	ReleaseDate     *time.Time `json:"releaseDate,omitempty"`
+	UsersCount      int        `json:"usersCount,omitempty"`
+	LocalBookID     *int64     `json:"localBookId,omitempty"`
+	LocalTitle      string     `json:"localTitle,omitempty"`
+	LocalStatus     string     `json:"localStatus,omitempty"`
+	MatchConfidence float64    `json:"matchConfidence,omitempty"`
+}
+
+type seriesHardcoverDiffResponse struct {
+	SeriesID     int64                       `json:"seriesId"`
+	Link         *models.SeriesHardcoverLink `json:"link"`
+	Present      []seriesHardcoverDiffBook   `json:"present"`
+	Missing      []seriesHardcoverDiffBook   `json:"missing"`
+	LocalOnly    []seriesHardcoverDiffBook   `json:"localOnly"`
+	Uncertain    []seriesHardcoverDiffBook   `json:"uncertain"`
+	PresentCount int                         `json:"presentCount"`
+	MissingCount int                         `json:"missingCount"`
+}
+
+var errSeriesMetadataProvider = errors.New("series metadata provider")
+
+func (h *SeriesHandler) SearchHardcover(w http.ResponseWriter, r *http.Request) {
+	term := strings.TrimSpace(r.URL.Query().Get("term"))
+	if term == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "term parameter required"})
+		return
+	}
+	limit := 10
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid limit"})
+			return
+		}
+		limit = parsed
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
+	results, err := h.searchHardcoverSeries(r.Context(), term, limit)
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, results)
+}
+
+func (h *SeriesHandler) GetHardcoverLink(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	link, err := h.series.GetHardcoverLink(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if link == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "hardcover link not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, link)
+}
+
+func (h *SeriesHandler) AutoLinkHardcover(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	series, err := h.series.GetByID(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if series == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "series not found"})
+		return
+	}
+
+	results, err := h.searchHardcoverSeries(r.Context(), series.Title, 10)
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+	candidates, err := h.scoreHardcoverCandidates(r.Context(), series, results)
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+	if len(candidates) == 0 {
+		writeJSON(w, http.StatusOK, seriesHardcoverAutoResponse{Candidates: []seriesHardcoverSearchResult{}, Reason: "no candidates"})
+		return
+	}
+	top := candidates[0]
+	ambiguous := len(candidates) > 1 && top.Confidence-candidates[1].Confidence < 0.05
+	if top.Confidence < 0.70 || ambiguous {
+		reason := "low confidence"
+		if ambiguous {
+			reason = "ambiguous candidates"
+		}
+		writeJSON(w, http.StatusOK, seriesHardcoverAutoResponse{Candidates: candidates, Reason: reason})
+		return
+	}
+
+	link := &models.SeriesHardcoverLink{
+		SeriesID:            series.ID,
+		HardcoverSeriesID:   top.ForeignID,
+		HardcoverProviderID: top.ProviderID,
+		HardcoverTitle:      top.Title,
+		HardcoverAuthorName: top.AuthorName,
+		HardcoverBookCount:  top.BookCount,
+		Confidence:          top.Confidence,
+		LinkedBy:            "auto",
+	}
+	if err := h.series.UpsertHardcoverLink(r.Context(), link); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, seriesHardcoverAutoResponse{Linked: true, Link: link, Candidates: candidates})
+}
+
+func (h *SeriesHandler) PutHardcoverLink(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	if series, err := h.series.GetByID(r.Context(), id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	} else if series == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "series not found"})
+		return
+	}
+
+	var body seriesHardcoverLinkRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	body.ForeignID = strings.TrimSpace(body.ForeignID)
+	if body.ForeignID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreignId is required"})
+		return
+	}
+
+	link, err := h.linkFromRequest(r.Context(), id, body, "manual")
+	if err != nil {
+		if errors.Is(err, errSeriesMetadataProvider) {
+			writeUpstreamError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := h.series.UpsertHardcoverLink(r.Context(), link); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, link)
+}
+
+func (h *SeriesHandler) DeleteHardcoverLink(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	if err := h.series.DeleteHardcoverLink(r.Context(), id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+func (h *SeriesHandler) HardcoverDiff(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	series, err := h.series.GetByID(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if series == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "series not found"})
+		return
+	}
+	link := series.HardcoverLink
+	if link == nil {
+		link, err = h.series.GetHardcoverLink(r.Context(), id)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	if link == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "hardcover link not found"})
+		return
+	}
+	catalog, err := h.hardcoverCatalog(r.Context(), link.HardcoverSeriesID)
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+	diff := buildHardcoverDiff(series, link, catalog)
+	writeJSON(w, http.StatusOK, diff)
+}
+
+func (h *SeriesHandler) searchHardcoverSeries(ctx context.Context, term string, limit int) ([]seriesHardcoverSearchResult, error) {
+	if h.meta == nil {
+		return nil, errors.New("metadata aggregator is not configured")
+	}
+	results, err := h.meta.SearchSeries(ctx, term, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]seriesHardcoverSearchResult, 0, len(results))
+	for _, result := range results {
+		out = append(out, mapHardcoverSearchResult(result))
+	}
+	return out, nil
+}
+
+func mapHardcoverSearchResult(result metadata.SeriesSearchResult) seriesHardcoverSearchResult {
+	books := result.Books
+	if books == nil {
+		books = []string{}
+	}
+	return seriesHardcoverSearchResult{
+		ForeignID:    result.ForeignID,
+		ProviderID:   result.ProviderID,
+		Title:        result.Title,
+		AuthorName:   result.AuthorName,
+		BookCount:    result.BookCount,
+		ReadersCount: result.ReadersCount,
+		Books:        books,
+	}
+}
+
+func (h *SeriesHandler) scoreHardcoverCandidates(ctx context.Context, series *models.Series, results []seriesHardcoverSearchResult) ([]seriesHardcoverSearchResult, error) {
+	candidates := make([]seriesHardcoverSearchResult, 0, len(results))
+	for _, result := range results {
+		catalog, err := h.meta.GetSeriesCatalog(ctx, result.ForeignID)
+		if err != nil {
+			return nil, err
+		}
+		result.Confidence = scoreHardcoverCandidate(series, result, catalog)
+		if catalog != nil {
+			if result.Title == "" {
+				result.Title = catalog.Title
+			}
+			if result.AuthorName == "" {
+				result.AuthorName = catalog.AuthorName
+			}
+			if result.BookCount == 0 {
+				result.BookCount = catalog.BookCount
+			}
+		}
+		candidates = append(candidates, result)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].Confidence > candidates[j].Confidence
+	})
+	return candidates, nil
+}
+
+func scoreHardcoverCandidate(series *models.Series, result seriesHardcoverSearchResult, catalog *metadata.SeriesCatalog) float64 {
+	if series == nil {
+		return 0
+	}
+	candidateTitle := result.Title
+	if catalog != nil && strings.TrimSpace(catalog.Title) != "" {
+		candidateTitle = catalog.Title
+	}
+	seriesTitleScore := seriesmatch.TitleScore(series.Title, candidateTitle)
+	if seriesmatch.NormalizeSeriesName(series.Title) == seriesmatch.NormalizeSeriesName(candidateTitle) {
+		seriesTitleScore = 100
+	}
+
+	bookTitleScore := 0
+	for _, title := range result.Books {
+		bookTitleScore = max(bookTitleScore, seriesmatch.TitleScore(series.Title, title))
+	}
+	if catalog != nil {
+		for _, book := range catalog.Books {
+			bookTitleScore = max(bookTitleScore, seriesmatch.TitleScore(series.Title, firstNonEmpty(book.Title, book.Book.Title)))
+		}
+	}
+
+	score := float64(seriesTitleScore)
+	if seriesTitleScore < 92 && bookTitleScore >= 92 {
+		score = 70
+	} else if bookTitleScore > 0 {
+		score = 0.75*float64(seriesTitleScore) + 0.25*float64(bookTitleScore)
+	}
+
+	if catalog != nil && len(series.Books) > 0 {
+		matches := 0
+		checked := 0
+		for _, local := range series.Books {
+			if local.Book == nil {
+				continue
+			}
+			checked++
+			if bestCatalogMatch(local, catalog.Books).score >= 85 {
+				matches++
+			}
+		}
+		if checked > 0 {
+			overlapScore := 65 + 30*(float64(matches)/float64(checked))
+			score = maxFloat(score, overlapScore)
+		}
+	}
+
+	if score > 100 {
+		score = 100
+	}
+	return score / 100
+}
+
+func (h *SeriesHandler) linkFromRequest(ctx context.Context, seriesID int64, body seriesHardcoverLinkRequest, linkedBy string) (*models.SeriesHardcoverLink, error) {
+	confidence := body.Confidence
+	if confidence <= 0 {
+		confidence = 1
+	}
+	link := &models.SeriesHardcoverLink{
+		SeriesID:            seriesID,
+		HardcoverSeriesID:   body.ForeignID,
+		HardcoverProviderID: firstNonEmpty(body.ProviderID, strings.TrimPrefix(body.ForeignID, "hc-series:")),
+		HardcoverTitle:      body.Title,
+		HardcoverAuthorName: body.AuthorName,
+		HardcoverBookCount:  body.BookCount,
+		Confidence:          confidence,
+		LinkedBy:            linkedBy,
+	}
+	if h.meta == nil {
+		return link, nil
+	}
+	catalog, err := h.meta.GetSeriesCatalog(ctx, body.ForeignID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errSeriesMetadataProvider, err)
+	}
+	if catalog == nil {
+		return link, nil
+	}
+	link.HardcoverSeriesID = catalog.ForeignID
+	link.HardcoverProviderID = catalog.ProviderID
+	link.HardcoverTitle = catalog.Title
+	link.HardcoverAuthorName = catalog.AuthorName
+	link.HardcoverBookCount = catalog.BookCount
+	return link, nil
+}
+
+func (h *SeriesHandler) hardcoverCatalog(ctx context.Context, foreignID string) (*metadata.SeriesCatalog, error) {
+	if h.meta == nil {
+		return nil, errors.New("metadata aggregator is not configured")
+	}
+	catalog, err := h.meta.GetSeriesCatalog(ctx, foreignID)
+	if err != nil {
+		return nil, err
+	}
+	if catalog == nil {
+		return nil, fmt.Errorf("hardcover series %q not found", foreignID)
+	}
+	return catalog, nil
+}
+
+func buildHardcoverDiff(series *models.Series, link *models.SeriesHardcoverLink, catalog *metadata.SeriesCatalog) seriesHardcoverDiffResponse {
+	diff := seriesHardcoverDiffResponse{
+		SeriesID:  series.ID,
+		Link:      link,
+		Present:   []seriesHardcoverDiffBook{},
+		Missing:   []seriesHardcoverDiffBook{},
+		LocalOnly: []seriesHardcoverDiffBook{},
+		Uncertain: []seriesHardcoverDiffBook{},
+	}
+	matchedCatalog := make(map[int]struct{})
+	for _, local := range series.Books {
+		if local.Book == nil {
+			continue
+		}
+		match := bestCatalogMatch(local, catalog.Books)
+		localItem := localDiffBook(local)
+		if match.index < 0 {
+			diff.LocalOnly = append(diff.LocalOnly, localItem)
+			continue
+		}
+		item := catalogDiffBook(catalog.Books[match.index], catalog.AuthorName)
+		item.LocalBookID = &local.Book.ID
+		item.LocalTitle = local.Book.Title
+		item.LocalStatus = local.Book.Status
+		item.MatchConfidence = float64(match.score) / 100
+		if match.score >= 90 || match.foreignID {
+			diff.Present = append(diff.Present, item)
+			matchedCatalog[match.index] = struct{}{}
+		} else if match.score >= 70 {
+			diff.Uncertain = append(diff.Uncertain, item)
+			matchedCatalog[match.index] = struct{}{}
+		} else {
+			diff.LocalOnly = append(diff.LocalOnly, localItem)
+		}
+	}
+	for i, book := range catalog.Books {
+		if _, ok := matchedCatalog[i]; ok {
+			continue
+		}
+		diff.Missing = append(diff.Missing, catalogDiffBook(book, catalog.AuthorName))
+	}
+	diff.PresentCount = len(diff.Present)
+	diff.MissingCount = len(diff.Missing)
+	return diff
+}
+
+type catalogMatch struct {
+	index     int
+	score     int
+	foreignID bool
+}
+
+func bestCatalogMatch(local models.SeriesBook, books []metadata.SeriesCatalogBook) catalogMatch {
+	best := catalogMatch{index: -1}
+	if local.Book == nil {
+		return best
+	}
+	for i, candidate := range books {
+		foreignMatch := local.Book.ForeignID != "" && (local.Book.ForeignID == candidate.ForeignID || local.Book.ForeignID == candidate.Book.ForeignID)
+		score := 0
+		if foreignMatch {
+			score = 100
+		} else {
+			score = seriesmatch.TitleScore(local.Book.Title, firstNonEmpty(candidate.Title, candidate.Book.Title))
+			if seriesmatch.SamePosition(local.PositionInSeries, candidate.Position) && score >= 70 {
+				score = max(score, 90)
+			}
+		}
+		if score > best.score {
+			best = catalogMatch{index: i, score: score, foreignID: foreignMatch}
+		}
+	}
+	return best
+}
+
+func catalogDiffBook(book metadata.SeriesCatalogBook, fallbackAuthor string) seriesHardcoverDiffBook {
+	title := firstNonEmpty(book.Title, book.Book.Title)
+	author := fallbackAuthor
+	if book.Book.Author != nil && strings.TrimSpace(book.Book.Author.Name) != "" {
+		author = book.Book.Author.Name
+	}
+	return seriesHardcoverDiffBook{
+		ForeignBookID: firstNonEmpty(book.ForeignID, book.Book.ForeignID),
+		ProviderID:    book.ProviderID,
+		Title:         title,
+		Subtitle:      book.Subtitle,
+		Position:      book.Position,
+		ImageURL:      book.Book.ImageURL,
+		AuthorName:    author,
+		ReleaseDate:   book.Book.ReleaseDate,
+		UsersCount:    book.UsersCount,
+	}
+}
+
+func localDiffBook(local models.SeriesBook) seriesHardcoverDiffBook {
+	item := seriesHardcoverDiffBook{Position: local.PositionInSeries}
+	if local.Book == nil {
+		return item
+	}
+	item.ForeignBookID = local.Book.ForeignID
+	item.Title = local.Book.Title
+	item.ImageURL = local.Book.ImageURL
+	item.ReleaseDate = local.Book.ReleaseDate
+	item.LocalBookID = &local.Book.ID
+	item.LocalTitle = local.Book.Title
+	item.LocalStatus = local.Book.Status
+	return item
+}
+
+func (h *SeriesHandler) createMissingHardcoverBooks(ctx context.Context, seriesID int64) error {
+	if h.meta == nil || h.authors == nil {
+		return nil
+	}
+	series, err := h.series.GetByID(ctx, seriesID)
+	if err != nil {
+		return err
+	}
+	if series == nil || series.HardcoverLink == nil {
+		return nil
+	}
+	catalog, err := h.meta.GetSeriesCatalog(ctx, series.HardcoverLink.HardcoverSeriesID)
+	if err != nil {
+		return fmt.Errorf("%w: %v", errSeriesMetadataProvider, err)
+	}
+	if catalog == nil {
+		return nil
+	}
+	diff := buildHardcoverDiff(series, series.HardcoverLink, catalog)
+	for _, missing := range diff.Missing {
+		catalogBook, ok := findCatalogBook(catalog.Books, missing.ForeignBookID, missing.Position)
+		if !ok {
+			continue
+		}
+		if _, err := h.ensureHardcoverCatalogBook(ctx, series.ID, catalog.AuthorName, catalogBook); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func findCatalogBook(books []metadata.SeriesCatalogBook, foreignID, position string) (metadata.SeriesCatalogBook, bool) {
+	for _, book := range books {
+		if foreignID != "" && (foreignID == book.ForeignID || foreignID == book.Book.ForeignID) {
+			return book, true
+		}
+		if seriesmatch.SamePosition(position, book.Position) {
+			return book, true
+		}
+	}
+	return metadata.SeriesCatalogBook{}, false
+}
+
+func (h *SeriesHandler) ensureHardcoverCatalogBook(ctx context.Context, seriesID int64, fallbackAuthor string, catalogBook metadata.SeriesCatalogBook) (*models.Book, error) {
+	book := catalogBook.Book
+	book.ForeignID = firstNonEmpty(book.ForeignID, catalogBook.ForeignID)
+	if book.ForeignID == "" {
+		book.ForeignID = "hc:" + catalogBook.ProviderID
+	}
+	if existing, err := h.books.GetByForeignID(ctx, book.ForeignID); err != nil {
+		return nil, err
+	} else if existing != nil {
+		_, err := h.series.LinkBookIfMissing(ctx, seriesID, existing.ID, catalogBook.Position, true)
+		return existing, err
+	}
+
+	author := book.Author
+	if author == nil {
+		author = &models.Author{
+			ForeignID:        hardcoverAuthorFallbackID(fallbackAuthor),
+			Name:             fallbackAuthor,
+			SortName:         sortName(fallbackAuthor),
+			MetadataProvider: "hardcover",
+		}
+	}
+	if strings.TrimSpace(author.Name) == "" {
+		author.Name = "Unknown Author"
+	}
+	if strings.TrimSpace(author.SortName) == "" {
+		author.SortName = sortName(author.Name)
+	}
+	if strings.TrimSpace(author.ForeignID) == "" {
+		author.ForeignID = hardcoverAuthorFallbackID(author.Name)
+	}
+	if strings.TrimSpace(author.MetadataProvider) == "" {
+		author.MetadataProvider = "hardcover"
+	}
+	metadataProfileID := models.DefaultMetadataProfileID
+	author.MetadataProfileID = &metadataProfileID
+
+	storedAuthor, err := h.authors.GetByForeignID(ctx, author.ForeignID)
+	if err != nil {
+		return nil, err
+	}
+	if storedAuthor == nil {
+		if err := h.authors.Create(ctx, author); err != nil {
+			return nil, err
+		}
+		storedAuthor = author
+	}
+
+	existingByTitle, err := h.books.ListByAuthorIncludingExcluded(ctx, storedAuthor.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, existing := range existingByTitle {
+		if seriesmatch.TitleScore(existing.Title, firstNonEmpty(book.Title, catalogBook.Title)) >= 92 {
+			_, err := h.series.LinkBookIfMissing(ctx, seriesID, existing.ID, catalogBook.Position, true)
+			return &existing, err
+		}
+	}
+
+	book.AuthorID = storedAuthor.ID
+	book.Author = nil
+	book.Title = firstNonEmpty(book.Title, catalogBook.Title)
+	book.SortTitle = firstNonEmpty(book.SortTitle, book.Title)
+	book.Status = models.BookStatusWanted
+	book.Monitored = true
+	book.AnyEditionOK = true
+	book.MediaType = firstNonEmpty(book.MediaType, models.MediaTypeEbook)
+	book.Language = firstNonEmpty(book.Language, "eng")
+	book.MetadataProvider = firstNonEmpty(book.MetadataProvider, "hardcover")
+	if book.Genres == nil {
+		book.Genres = []string{}
+	}
+	if err := h.books.Create(ctx, &book); err != nil {
+		return nil, err
+	}
+	if _, err := h.series.LinkBookIfMissing(ctx, seriesID, book.ID, catalogBook.Position, true); err != nil {
+		return nil, err
+	}
+	return &book, nil
+}
+
+func hardcoverAuthorFallbackID(name string) string {
+	key := strings.ReplaceAll(seriesmatch.CleanTitle(name), " ", "-")
+	if key == "" {
+		key = "unknown"
+	}
+	return "hc-author:" + key
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func maxFloat(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
 }

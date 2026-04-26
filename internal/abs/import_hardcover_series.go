@@ -4,15 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
 	"sort"
-	"strconv"
 	"strings"
-	"unicode"
 
-	fuzzy "github.com/creditx/go-fuzzywuzzy"
 	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
+	"github.com/vavallee/bindery/internal/seriesmatch"
 	"github.com/vavallee/bindery/internal/textutil"
 )
 
@@ -300,6 +297,11 @@ func (i *Importer) upsertHardcoverSeries(ctx context.Context, cfg ImportConfig, 
 	if cfg.DryRun && created {
 		localID = 0
 	}
+	if !cfg.DryRun {
+		if err := i.ensureHardcoverSeriesLink(ctx, existing.ID, catalog); err != nil {
+			return false, "", err
+		}
+	}
 	metadata := map[string]any{
 		"bookId":          bookID,
 		"sequence":        strings.TrimSpace(matchedBook.Position),
@@ -336,6 +338,33 @@ func (i *Importer) upsertHardcoverSeries(ctx context.Context, cfg ImportConfig, 
 		_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, "", entityTypeSeries, linkExternalID, localID, outcome, metadata)
 	}
 	return created, matchedBy, nil
+}
+
+func (i *Importer) ensureHardcoverSeriesLink(ctx context.Context, seriesID int64, catalog *metadata.SeriesCatalog) error {
+	if i.series == nil || catalog == nil || seriesID == 0 {
+		return nil
+	}
+	existing, err := i.series.GetHardcoverLink(ctx, seriesID)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		return nil
+	}
+	bookCount := catalog.BookCount
+	if bookCount == 0 {
+		bookCount = len(catalog.Books)
+	}
+	return i.series.UpsertHardcoverLink(ctx, &models.SeriesHardcoverLink{
+		SeriesID:            seriesID,
+		HardcoverSeriesID:   catalog.ForeignID,
+		HardcoverProviderID: catalog.ProviderID,
+		HardcoverTitle:      strings.TrimSpace(catalog.Title),
+		HardcoverAuthorName: strings.TrimSpace(catalog.AuthorName),
+		HardcoverBookCount:  bookCount,
+		Confidence:          0.8,
+		LinkedBy:            "auto",
+	})
 }
 
 func (i *Importer) linkExistingHardcoverCatalogBooks(ctx context.Context, cfg ImportConfig, runID int64, author *models.Author, catalog *metadata.SeriesCatalog, importedBookID int64, createdSeries bool) (int, error) {
@@ -460,96 +489,17 @@ func hardcoverAuthorScore(absAuthor, hcAuthor string) int {
 }
 
 func sameSeriesPosition(a, b string) bool {
-	a = strings.TrimSpace(a)
-	b = strings.TrimSpace(b)
-	if a == "" || b == "" {
-		return false
-	}
-	if a == b {
-		return true
-	}
-	af, aerr := strconv.ParseFloat(a, 64)
-	bf, berr := strconv.ParseFloat(b, 64)
-	return aerr == nil && berr == nil && math.Abs(af-bf) < 0.001
+	return seriesmatch.SamePosition(a, b)
 }
 
 func normalizeSeriesName(name string) string {
-	normalized := normalizeTitle(name)
-	if normalized == "" {
-		return ""
-	}
-	suffixes := map[string]struct{}{
-		"series":     {},
-		"trilogy":    {},
-		"saga":       {},
-		"chronicles": {},
-		"cycle":      {},
-		"books":      {},
-		"novels":     {},
-	}
-	words := strings.Fields(normalized)
-	if len(words) > 1 {
-		if _, ok := suffixes[words[len(words)-1]]; ok {
-			words = words[:len(words)-1]
-		}
-	}
-	return strings.Join(words, " ")
+	return seriesmatch.NormalizeSeriesName(name)
 }
 
 func shelfarrTitleScore(a, b string) int {
-	cleanA := shelfarrCleanTitle(a)
-	cleanB := shelfarrCleanTitle(b)
-	if cleanA == "" || cleanB == "" {
-		return 0
-	}
-	return maxInt(
-		fuzzy.TokenSetRatio(cleanA, cleanB),
-		fuzzy.TokenSortRatio(cleanA, cleanB),
-		fuzzy.Ratio(cleanA, cleanB),
-		fuzzy.PartialRatio(cleanA, cleanB),
-	)
+	return seriesmatch.TitleScore(a, b)
 }
 
 func shelfarrCleanTitle(title string) string {
-	title = strings.ToLower(strings.TrimSpace(title))
-	if title == "" {
-		return ""
-	}
-	var b strings.Builder
-	for _, r := range title {
-		switch {
-		case unicode.IsLetter(r), unicode.IsDigit(r):
-			b.WriteRune(r)
-		case unicode.IsSpace(r):
-			b.WriteRune(' ')
-		default:
-			b.WriteRune(' ')
-		}
-	}
-	noise := map[string]struct{}{
-		"a":     {},
-		"an":    {},
-		"the":   {},
-		"novel": {},
-		"book":  {},
-	}
-	words := strings.Fields(b.String())
-	out := words[:0]
-	for _, word := range words {
-		if _, ok := noise[word]; ok {
-			continue
-		}
-		out = append(out, word)
-	}
-	return strings.Join(out, " ")
-}
-
-func maxInt(values ...int) int {
-	max := 0
-	for _, value := range values {
-		if value > max {
-			max = value
-		}
-	}
-	return max
+	return seriesmatch.CleanTitle(title)
 }

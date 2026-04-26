@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/vavallee/bindery/internal/models"
@@ -36,7 +37,13 @@ func (r *SeriesRepo) List(ctx context.Context) ([]models.Series, error) {
 		s.Monitored = monitored == 1
 		series = append(series, s)
 	}
-	return series, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := r.hydrateHardcoverLinks(ctx, series); err != nil {
+		return nil, err
+	}
+	return series, nil
 }
 
 // ListWithBooks returns all series rows with their linked books populated.
@@ -112,7 +119,54 @@ func (r *SeriesRepo) ListWithBooks(ctx context.Context) ([]models.Series, error)
 			Book:             &book,
 		})
 	}
-	return series, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := r.hydrateHardcoverLinks(ctx, series); err != nil {
+		return nil, err
+	}
+	return series, nil
+}
+
+func (r *SeriesRepo) hydrateHardcoverLinks(ctx context.Context, series []models.Series) error {
+	if len(series) == 0 {
+		return nil
+	}
+	placeholders := make([]string, 0, len(series))
+	args := make([]any, 0, len(series))
+	for _, s := range series {
+		placeholders = append(placeholders, "?")
+		args = append(args, s.ID)
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, series_id, hardcover_series_id, hardcover_provider_id, hardcover_title,
+		       hardcover_author_name, hardcover_book_count, link_confidence, linked_by,
+		       linked_at, created_at, updated_at
+		FROM series_hardcover_links
+		WHERE series_id IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	if err != nil {
+		return fmt.Errorf("list series hardcover links: %w", err)
+	}
+	defer rows.Close()
+
+	links := make(map[int64]models.SeriesHardcoverLink)
+	for rows.Next() {
+		link, err := scanSeriesHardcoverLink(rows)
+		if err != nil {
+			return err
+		}
+		links[link.SeriesID] = link
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range series {
+		if link, ok := links[series[i].ID]; ok {
+			linkCopy := link
+			series[i].HardcoverLink = &linkCopy
+		}
+	}
+	return nil
 }
 
 func (r *SeriesRepo) SetMonitored(ctx context.Context, id int64, monitored bool) error {
@@ -204,7 +258,125 @@ func (r *SeriesRepo) GetByID(ctx context.Context, id int64) (*models.Series, err
 		s.Books = append(s.Books, sb)
 	}
 
-	return &s, bookRows.Err()
+	if err := bookRows.Err(); err != nil {
+		return nil, err
+	}
+	link, err := r.GetHardcoverLink(ctx, s.ID)
+	if err != nil {
+		return nil, err
+	}
+	s.HardcoverLink = link
+	return &s, nil
+}
+
+type seriesHardcoverLinkScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanSeriesHardcoverLink(scanner seriesHardcoverLinkScanner) (models.SeriesHardcoverLink, error) {
+	var link models.SeriesHardcoverLink
+	err := scanner.Scan(
+		&link.ID,
+		&link.SeriesID,
+		&link.HardcoverSeriesID,
+		&link.HardcoverProviderID,
+		&link.HardcoverTitle,
+		&link.HardcoverAuthorName,
+		&link.HardcoverBookCount,
+		&link.Confidence,
+		&link.LinkedBy,
+		&link.LinkedAt,
+		&link.CreatedAt,
+		&link.UpdatedAt,
+	)
+	return link, err
+}
+
+func (r *SeriesRepo) GetHardcoverLink(ctx context.Context, seriesID int64) (*models.SeriesHardcoverLink, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, series_id, hardcover_series_id, hardcover_provider_id, hardcover_title,
+		       hardcover_author_name, hardcover_book_count, link_confidence, linked_by,
+		       linked_at, created_at, updated_at
+		FROM series_hardcover_links
+		WHERE series_id = ?`, seriesID)
+	link, err := scanSeriesHardcoverLink(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get series hardcover link %d: %w", seriesID, err)
+	}
+	return &link, nil
+}
+
+func (r *SeriesRepo) UpsertHardcoverLink(ctx context.Context, link *models.SeriesHardcoverLink) error {
+	if link == nil {
+		return nil
+	}
+	if link.SeriesID == 0 {
+		return errors.New("series id is required")
+	}
+	if strings.TrimSpace(link.HardcoverSeriesID) == "" {
+		return errors.New("hardcover series id is required")
+	}
+	now := time.Now().UTC()
+	if link.LinkedAt.IsZero() {
+		link.LinkedAt = now
+	}
+	if link.LinkedBy == "" {
+		link.LinkedBy = "manual"
+	}
+	if link.HardcoverProviderID == "" {
+		link.HardcoverProviderID = strings.TrimPrefix(link.HardcoverSeriesID, "hc-series:")
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO series_hardcover_links (
+			series_id, hardcover_series_id, hardcover_provider_id, hardcover_title,
+			hardcover_author_name, hardcover_book_count, link_confidence, linked_by,
+			linked_at, created_at, updated_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(series_id) DO UPDATE SET
+			hardcover_series_id = excluded.hardcover_series_id,
+			hardcover_provider_id = excluded.hardcover_provider_id,
+			hardcover_title = excluded.hardcover_title,
+			hardcover_author_name = excluded.hardcover_author_name,
+			hardcover_book_count = excluded.hardcover_book_count,
+			link_confidence = excluded.link_confidence,
+			linked_by = excluded.linked_by,
+			linked_at = excluded.linked_at,
+			updated_at = excluded.updated_at`,
+		link.SeriesID,
+		link.HardcoverSeriesID,
+		link.HardcoverProviderID,
+		link.HardcoverTitle,
+		link.HardcoverAuthorName,
+		link.HardcoverBookCount,
+		link.Confidence,
+		link.LinkedBy,
+		link.LinkedAt,
+		now,
+		now,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert series hardcover link: %w", err)
+	}
+	stored, err := r.GetHardcoverLink(ctx, link.SeriesID)
+	if err != nil {
+		return err
+	}
+	if stored != nil {
+		*link = *stored
+	}
+	return nil
+}
+
+func (r *SeriesRepo) DeleteHardcoverLink(ctx context.Context, seriesID int64) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM series_hardcover_links WHERE series_id = ?`, seriesID)
+	if err != nil {
+		return fmt.Errorf("delete series hardcover link %d: %w", seriesID, err)
+	}
+	return nil
 }
 
 func (r *SeriesRepo) GetByForeignID(ctx context.Context, foreignID string) (*models.Series, error) {
