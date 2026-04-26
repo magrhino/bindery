@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/coreos/go-oidc/v3 v3.18.0
+	github.com/creditx/go-fuzzywuzzy v0.0.0-20190710081230-e795b6c0d97a
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/robfig/cron/v3 v3.0.1

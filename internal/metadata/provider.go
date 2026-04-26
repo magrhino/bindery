@@ -29,3 +29,42 @@ type Provider interface {
 	// GetBookByISBN looks up a book by ISBN-13 or ISBN-10.
 	GetBookByISBN(ctx context.Context, isbn string) (*models.Book, error)
 }
+
+// SeriesSearchResult is a provider-neutral series discovery result.
+type SeriesSearchResult struct {
+	ForeignID    string
+	ProviderID   string
+	Title        string
+	AuthorName   string
+	BookCount    int
+	ReadersCount int
+	Books        []string
+}
+
+// SeriesCatalog is an ordered provider catalog for a single series.
+type SeriesCatalog struct {
+	ForeignID  string
+	ProviderID string
+	Title      string
+	AuthorName string
+	BookCount  int
+	Books      []SeriesCatalogBook
+}
+
+// SeriesCatalogBook is a provider book entry with its position in a series.
+type SeriesCatalogBook struct {
+	ForeignID  string
+	ProviderID string
+	Title      string
+	Subtitle   string
+	Position   string
+	UsersCount int
+	Book       models.Book
+}
+
+// SeriesCatalogProvider is an optional metadata provider capability used by
+// importers that can safely link provider series without widening Provider.
+type SeriesCatalogProvider interface {
+	SearchSeries(ctx context.Context, query string, limit int) ([]SeriesSearchResult, error)
+	GetSeriesCatalog(ctx context.Context, foreignID string) (*SeriesCatalog, error)
+}

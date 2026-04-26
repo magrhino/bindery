@@ -482,6 +482,8 @@ type stubABSMetadataProvider struct {
 	books                map[string]*models.Book
 	booksByISBN          map[string]*models.Book
 	works                map[string][]models.Book
+	series               map[string][]metadata.SeriesSearchResult
+	catalogs             map[string]*metadata.SeriesCatalog
 }
 
 func (p *stubABSMetadataProvider) Name() string { return "stub" }
@@ -520,6 +522,22 @@ func (p *stubABSMetadataProvider) GetAuthorWorks(_ context.Context, foreignID st
 		return nil, nil
 	}
 	return append([]models.Book(nil), p.works[foreignID]...), nil
+}
+func (p *stubABSMetadataProvider) SearchSeries(_ context.Context, query string, limit int) ([]metadata.SeriesSearchResult, error) {
+	if p.series == nil {
+		return nil, nil
+	}
+	results := append([]metadata.SeriesSearchResult(nil), p.series[query]...)
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
+	return results, nil
+}
+func (p *stubABSMetadataProvider) GetSeriesCatalog(_ context.Context, foreignID string) (*metadata.SeriesCatalog, error) {
+	if p.catalogs == nil {
+		return nil, nil
+	}
+	return p.catalogs[foreignID], nil
 }
 
 func TestImporter_NormalizedAuthorMatchLinksExistingAuthor(t *testing.T) {
@@ -1975,6 +1993,318 @@ func TestImporter_DryRunCountsPlannedSeriesOnce(t *testing.T) {
 	}
 	if stats.SeriesCreated != 1 || stats.SeriesLinked != 1 {
 		t.Fatalf("dry-run series stats = %+v, want 1 created and 1 linked", stats)
+	}
+}
+
+func hardcoverSeriesABSItem() NormalizedLibraryItem {
+	item := sampleABSItem()
+	item.ItemID = "li-different-seasons"
+	item.Title = "1982 - Different Seasons (4 novellas - read by Frank Muller)"
+	item.Authors = []NormalizedAuthor{{ID: "author-stephen-king", Name: "Stephen King"}}
+	item.Series = nil
+	return item
+}
+
+func hardcoverSeriesProvider(query string, result metadata.SeriesSearchResult, catalog *metadata.SeriesCatalog) *stubABSMetadataProvider {
+	return &stubABSMetadataProvider{
+		series: map[string][]metadata.SeriesSearchResult{
+			query: {result},
+		},
+		catalogs: map[string]*metadata.SeriesCatalog{
+			result.ForeignID: catalog,
+		},
+	}
+}
+
+func TestImporter_HardcoverSeriesMatchLinksItemWithoutABSSeries(t *testing.T) {
+	t.Parallel()
+
+	importer, _, bookRepo, seriesRepo, _, _, _, _, _, _ := newABSImporterFixture(t)
+	item := hardcoverSeriesABSItem()
+	catalog := &metadata.SeriesCatalog{
+		ForeignID:  "hc-series:100",
+		ProviderID: "100",
+		Title:      "Different Seasons",
+		AuthorName: "Stephen King",
+		Books: []metadata.SeriesCatalogBook{
+			{
+				ForeignID: "hc:different-seasons",
+				Title:     "Different Seasons",
+				Position:  "1",
+				Book: models.Book{
+					ForeignID:        "hc:different-seasons",
+					Title:            "Different Seasons",
+					MetadataProvider: providerHardcover,
+					Author:           &models.Author{Name: "Stephen King"},
+				},
+			},
+		},
+	}
+	importer.WithMetadata(metadata.NewAggregator(hardcoverSeriesProvider(item.Title, metadata.SeriesSearchResult{
+		ForeignID:  "hc-series:100",
+		ProviderID: "100",
+		Title:      "Different Seasons",
+		AuthorName: "Stephen King",
+	}, catalog)))
+	runSingleABSImport(t, importer, item)
+
+	series, err := seriesRepo.GetByForeignID(context.Background(), "hc-series:100")
+	if err != nil {
+		t.Fatalf("GetByForeignID: %v", err)
+	}
+	if series == nil {
+		t.Fatal("expected Hardcover series")
+	}
+	hydrated, err := seriesRepo.GetByID(context.Background(), series.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if len(hydrated.Books) != 1 || hydrated.Books[0].PositionInSeries != "1" {
+		t.Fatalf("series books = %+v, want one linked at position 1", hydrated.Books)
+	}
+	books, err := bookRepo.ListIncludingExcluded(context.Background())
+	if err != nil {
+		t.Fatalf("List books: %v", err)
+	}
+	if len(books) != 1 || books[0].ForeignID != "hc:different-seasons" {
+		t.Fatalf("book relink = %+v, want hc:different-seasons", books)
+	}
+}
+
+func TestImporter_HardcoverSeriesMatchPromotesExactABSSeries(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, seriesRepo, _, _, _, _, _, _ := newABSImporterFixture(t)
+	item := sampleABSItem()
+	item.ItemID = "li-all-systems-red"
+	item.Title = "All Systems Red"
+	item.Authors = []NormalizedAuthor{{ID: "author-martha-wells", Name: "Martha Wells"}}
+	item.Series = []NormalizedSeries{{Name: "The Murderbot Diaries", Sequence: "1"}}
+	catalog := &metadata.SeriesCatalog{
+		ForeignID:  "hc-series:200",
+		ProviderID: "200",
+		Title:      "The Murderbot Diaries",
+		AuthorName: "Martha Wells",
+		Books: []metadata.SeriesCatalogBook{{
+			ForeignID: "hc:all-systems-red",
+			Title:     "All Systems Red",
+			Position:  "1",
+			Book: models.Book{
+				ForeignID:        "hc:all-systems-red",
+				Title:            "All Systems Red",
+				MetadataProvider: providerHardcover,
+				Author:           &models.Author{Name: "Martha Wells"},
+			},
+		}},
+	}
+	importer.WithMetadata(metadata.NewAggregator(hardcoverSeriesProvider("The Murderbot Diaries", metadata.SeriesSearchResult{
+		ForeignID:  "hc-series:200",
+		ProviderID: "200",
+		Title:      "The Murderbot Diaries",
+		AuthorName: "Martha Wells",
+	}, catalog)))
+	runSingleABSImport(t, importer, item)
+
+	series, err := seriesRepo.GetByForeignID(context.Background(), "hc-series:200")
+	if err != nil {
+		t.Fatalf("GetByForeignID: %v", err)
+	}
+	if series == nil {
+		t.Fatal("expected promoted Hardcover series")
+	}
+	all, err := seriesRepo.List(context.Background())
+	if err != nil {
+		t.Fatalf("List series: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("series rows = %+v, want one promoted row", all)
+	}
+}
+
+func TestImporter_HardcoverSeriesAmbiguousCandidatesDoNotLink(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, seriesRepo, _, _, _, _, _, _ := newABSImporterFixture(t)
+	item := hardcoverSeriesABSItem()
+	resultA := metadata.SeriesSearchResult{ForeignID: "hc-series:301", ProviderID: "301", Title: "Different Seasons", AuthorName: "Stephen King"}
+	resultB := metadata.SeriesSearchResult{ForeignID: "hc-series:302", ProviderID: "302", Title: "Different Seasons", AuthorName: "Stephen King"}
+	catalog := func(id string) *metadata.SeriesCatalog {
+		return &metadata.SeriesCatalog{
+			ForeignID:  id,
+			Title:      "Different Seasons",
+			AuthorName: "Stephen King",
+			Books: []metadata.SeriesCatalogBook{{
+				ForeignID: "hc:different-seasons",
+				Title:     "Different Seasons",
+				Position:  "1",
+				Book:      models.Book{ForeignID: "hc:different-seasons", Title: "Different Seasons", Author: &models.Author{Name: "Stephen King"}},
+			}},
+		}
+	}
+	importer.WithMetadata(metadata.NewAggregator(&stubABSMetadataProvider{
+		series: map[string][]metadata.SeriesSearchResult{
+			item.Title: {resultA, resultB},
+		},
+		catalogs: map[string]*metadata.SeriesCatalog{
+			resultA.ForeignID: catalog(resultA.ForeignID),
+			resultB.ForeignID: catalog(resultB.ForeignID),
+		},
+	}))
+	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		if err := fn(ctx, item); err != nil {
+			return EnumerationStats{}, err
+		}
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+	stats, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:  DefaultSourceID,
+		BaseURL:   "https://abs.example.com",
+		APIKey:    "secret",
+		LibraryID: item.LibraryID,
+		Label:     "Shelf",
+		Enabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if stats.SeriesCreated != 0 || stats.SeriesLinked != 0 {
+		t.Fatalf("series stats = %+v, want no links", stats)
+	}
+	series, err := seriesRepo.List(context.Background())
+	if err != nil {
+		t.Fatalf("List series: %v", err)
+	}
+	if len(series) != 0 {
+		t.Fatalf("series = %+v, want none", series)
+	}
+}
+
+func TestImporter_HardcoverSeriesRerunIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, seriesRepo, _, _, _, _, _, _ := newABSImporterFixture(t)
+	item := hardcoverSeriesABSItem()
+	catalog := &metadata.SeriesCatalog{
+		ForeignID:  "hc-series:400",
+		Title:      "Different Seasons",
+		AuthorName: "Stephen King",
+		Books: []metadata.SeriesCatalogBook{{
+			ForeignID: "hc:different-seasons",
+			Title:     "Different Seasons",
+			Position:  "1",
+			Book:      models.Book{ForeignID: "hc:different-seasons", Title: "Different Seasons", Author: &models.Author{Name: "Stephen King"}},
+		}},
+	}
+	importer.WithMetadata(metadata.NewAggregator(hardcoverSeriesProvider(item.Title, metadata.SeriesSearchResult{
+		ForeignID: "hc-series:400", Title: "Different Seasons", AuthorName: "Stephen King",
+	}, catalog)))
+	runSingleABSImport(t, importer, item)
+	secondRunID := runSingleABSImport(t, importer, item)
+
+	series, err := seriesRepo.GetByForeignID(context.Background(), "hc-series:400")
+	if err != nil {
+		t.Fatalf("GetByForeignID: %v", err)
+	}
+	hydrated, err := seriesRepo.GetByID(context.Background(), series.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if len(hydrated.Books) != 1 {
+		t.Fatalf("series books = %+v, want one idempotent link", hydrated.Books)
+	}
+	if _, err := importer.Rollback(context.Background(), secondRunID); err != nil {
+		t.Fatalf("Rollback second run: %v", err)
+	}
+	hydrated, err = seriesRepo.GetByID(context.Background(), series.ID)
+	if err != nil {
+		t.Fatalf("GetByID after rollback: %v", err)
+	}
+	if hydrated == nil || len(hydrated.Books) != 1 {
+		t.Fatalf("series books after rollback = %+v, want original link preserved", hydrated)
+	}
+}
+
+func TestImporter_HardcoverSeriesDryRunPlansOnly(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, seriesRepo, _, _, _, _, _, _ := newABSImporterFixture(t)
+	item := hardcoverSeriesABSItem()
+	catalog := &metadata.SeriesCatalog{
+		ForeignID:  "hc-series:500",
+		Title:      "Different Seasons",
+		AuthorName: "Stephen King",
+		Books: []metadata.SeriesCatalogBook{{
+			ForeignID: "hc:different-seasons",
+			Title:     "Different Seasons",
+			Position:  "1",
+			Book:      models.Book{ForeignID: "hc:different-seasons", Title: "Different Seasons", Author: &models.Author{Name: "Stephen King"}},
+		}},
+	}
+	importer.WithMetadata(metadata.NewAggregator(hardcoverSeriesProvider(item.Title, metadata.SeriesSearchResult{
+		ForeignID: "hc-series:500", Title: "Different Seasons", AuthorName: "Stephen King",
+	}, catalog)))
+	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		if err := fn(ctx, item); err != nil {
+			return EnumerationStats{}, err
+		}
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+	stats, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:  DefaultSourceID,
+		BaseURL:   "https://abs.example.com",
+		APIKey:    "secret",
+		LibraryID: item.LibraryID,
+		Label:     "Shelf",
+		Enabled:   true,
+		DryRun:    true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if stats.SeriesCreated != 1 || stats.SeriesLinked != 0 {
+		t.Fatalf("dry-run series stats = %+v, want planned created link", stats)
+	}
+	series, err := seriesRepo.List(context.Background())
+	if err != nil {
+		t.Fatalf("List series: %v", err)
+	}
+	if len(series) != 0 {
+		t.Fatalf("series = %+v, want no mutation", series)
+	}
+}
+
+func TestImporter_HardcoverSeriesRollbackRemovesLinks(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, seriesRepo, _, _, _, _, _, _ := newABSImporterFixture(t)
+	item := hardcoverSeriesABSItem()
+	catalog := &metadata.SeriesCatalog{
+		ForeignID:  "hc-series:600",
+		Title:      "Different Seasons",
+		AuthorName: "Stephen King",
+		Books: []metadata.SeriesCatalogBook{{
+			ForeignID: "hc:different-seasons",
+			Title:     "Different Seasons",
+			Position:  "1",
+			Book:      models.Book{ForeignID: "hc:different-seasons", Title: "Different Seasons", Author: &models.Author{Name: "Stephen King"}},
+		}},
+	}
+	importer.WithMetadata(metadata.NewAggregator(hardcoverSeriesProvider(item.Title, metadata.SeriesSearchResult{
+		ForeignID: "hc-series:600", Title: "Different Seasons", AuthorName: "Stephen King",
+	}, catalog)))
+	runID := runSingleABSImport(t, importer, item)
+	if series, err := seriesRepo.GetByForeignID(context.Background(), "hc-series:600"); err != nil || series == nil {
+		t.Fatalf("series before rollback = %+v err=%v, want present", series, err)
+	}
+	if _, err := importer.Rollback(context.Background(), runID); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	series, err := seriesRepo.GetByForeignID(context.Background(), "hc-series:600")
+	if err != nil {
+		t.Fatalf("GetByForeignID after rollback: %v", err)
+	}
+	if series != nil {
+		t.Fatalf("series after rollback = %+v, want deleted", series)
 	}
 }
 

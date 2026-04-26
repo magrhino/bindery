@@ -411,6 +411,161 @@ func TestGetBookByISBN_HTTPError(t *testing.T) {
 	}
 }
 
+func TestSearchSeries_ParsesResults(t *testing.T) {
+	var gotVars map[string]any
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		body, _ := io.ReadAll(r.Body)
+		var req gqlRequest
+		_ = json.Unmarshal(body, &req)
+		gotVars = req.Variables
+		data := map[string]interface{}{
+			"search": map[string]interface{}{
+				"results": map[string]interface{}{
+					"found": 1,
+					"hits": []map[string]interface{}{
+						{
+							"document": map[string]interface{}{
+								"id":                  123,
+								"name":                "Foundation",
+								"author_name":         "Isaac Asimov",
+								"primary_books_count": 7,
+								"readers_count":       1000,
+								"books":               []string{"Foundation", "Foundation and Empire"},
+							},
+						},
+					},
+				},
+			},
+		}
+		return gqlResponse(t, http.StatusOK, data), nil
+	})
+
+	results, err := c.SearchSeries(context.Background(), "Foundation", 5)
+	if err != nil {
+		t.Fatalf("SearchSeries: %v", err)
+	}
+	if gotVars["queryType"] != "Series" {
+		t.Fatalf("queryType = %v, want Series", gotVars["queryType"])
+	}
+	if len(results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(results))
+	}
+	got := results[0]
+	if got.ForeignID != "hc-series:123" || got.ProviderID != "123" {
+		t.Fatalf("ids = %q/%q, want hc-series:123/123", got.ForeignID, got.ProviderID)
+	}
+	if got.Title != "Foundation" || got.AuthorName != "Isaac Asimov" || got.BookCount != 7 || got.ReadersCount != 1000 {
+		t.Fatalf("unexpected result: %+v", got)
+	}
+}
+
+func TestSearchSeries_ParsesStringResults(t *testing.T) {
+	encoded := `{"found":1,"hits":[{"document":{"id":"42","name":"Murderbot Diaries","books_count":6}}]}`
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		return gqlResponse(t, http.StatusOK, map[string]interface{}{
+			"search": map[string]interface{}{"results": encoded},
+		}), nil
+	})
+
+	results, err := c.SearchSeries(context.Background(), "Murderbot", 10)
+	if err != nil {
+		t.Fatalf("SearchSeries: %v", err)
+	}
+	if len(results) != 1 || results[0].ForeignID != "hc-series:42" || results[0].BookCount != 6 {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+}
+
+func TestSearchSeries_HTTPError(t *testing.T) {
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadGateway,
+			Body:       io.NopCloser(strings.NewReader("bad gateway")),
+			Header:     make(http.Header),
+		}, nil
+	})
+	if _, err := c.SearchSeries(context.Background(), "anything", 10); err == nil {
+		t.Fatal("expected error on 502")
+	}
+}
+
+func TestGetSeriesCatalog_ParsesAndDedupesBooks(t *testing.T) {
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		data := map[string]interface{}{
+			"series_by_pk": map[string]interface{}{
+				"id":          123,
+				"name":        "Foundation",
+				"books_count": 3,
+				"author":      map[string]interface{}{"name": "Isaac Asimov"},
+				"book_series": []map[string]interface{}{
+					{
+						"position": 2,
+						"book": map[string]interface{}{
+							"id":          202,
+							"title":       "Foundation",
+							"slug":        "foundation-later",
+							"users_count": 10,
+						},
+					},
+					{
+						"position": 1,
+						"book": map[string]interface{}{
+							"id":          201,
+							"title":       "Foundation",
+							"subtitle":    "The First Book",
+							"slug":        "foundation",
+							"users_count": 100,
+						},
+					},
+					{
+						"position": 2,
+						"book": map[string]interface{}{
+							"id":    203,
+							"title": "Foundation and Empire",
+							"slug":  "foundation-and-empire",
+						},
+					},
+				},
+			},
+		}
+		return gqlResponse(t, http.StatusOK, data), nil
+	})
+
+	catalog, err := c.GetSeriesCatalog(context.Background(), "hc-series:123")
+	if err != nil {
+		t.Fatalf("GetSeriesCatalog: %v", err)
+	}
+	if catalog == nil {
+		t.Fatal("expected catalog")
+	}
+	if catalog.ForeignID != "hc-series:123" || catalog.Title != "Foundation" || catalog.AuthorName != "Isaac Asimov" {
+		t.Fatalf("unexpected catalog: %+v", catalog)
+	}
+	if len(catalog.Books) != 2 {
+		t.Fatalf("books len = %d, want 2: %+v", len(catalog.Books), catalog.Books)
+	}
+	if catalog.Books[0].ForeignID != "hc:foundation" || catalog.Books[0].Position != "1" {
+		t.Fatalf("first book = %+v, want deduped lower position Foundation", catalog.Books[0])
+	}
+	if catalog.Books[1].ForeignID != "hc:foundation-and-empire" || catalog.Books[1].Position != "2" {
+		t.Fatalf("second book = %+v", catalog.Books[1])
+	}
+}
+
+func TestGetSeriesCatalog_NotFound(t *testing.T) {
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		return gqlResponse(t, http.StatusOK, map[string]interface{}{"series_by_pk": nil}), nil
+	})
+
+	catalog, err := c.GetSeriesCatalog(context.Background(), "hc-series:999")
+	if err != nil {
+		t.Fatalf("GetSeriesCatalog: %v", err)
+	}
+	if catalog != nil {
+		t.Fatalf("expected nil catalog, got %+v", catalog)
+	}
+}
+
 func TestToAuthor_NoSlug_UsesID(t *testing.T) {
 	c := New()
 	a := c.toAuthor(hcAuthor{ID: 42, Name: "Unknown Author", Slug: ""})

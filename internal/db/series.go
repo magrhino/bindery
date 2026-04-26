@@ -131,6 +131,33 @@ func (r *SeriesRepo) GetByID(ctx context.Context, id int64) (*models.Series, err
 	return &s, bookRows.Err()
 }
 
+func (r *SeriesRepo) GetByForeignID(ctx context.Context, foreignID string) (*models.Series, error) {
+	row := r.db.QueryRowContext(ctx,
+		"SELECT id, foreign_id, title, description, monitored, created_at FROM series WHERE foreign_id=?", foreignID)
+	var s models.Series
+	var monitored int
+	err := row.Scan(&s.ID, &s.ForeignID, &s.Title, &s.Description, &monitored, &s.CreatedAt)
+	s.Monitored = monitored == 1
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get series by foreign_id %s: %w", foreignID, err)
+	}
+	return &s, nil
+}
+
+func (r *SeriesRepo) UpdateForeignID(ctx context.Context, id int64, foreignID string) error {
+	if id == 0 {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, "UPDATE series SET foreign_id=? WHERE id=?", foreignID, id)
+	if err != nil {
+		return fmt.Errorf("update series %d foreign_id: %w", id, err)
+	}
+	return nil
+}
+
 func (r *SeriesRepo) Create(ctx context.Context, s *models.Series) error {
 	now := time.Now().UTC()
 	result, err := r.db.ExecContext(ctx,
@@ -174,18 +201,27 @@ func (r *SeriesRepo) CreateOrGet(ctx context.Context, s *models.Series) error {
 // INSERT OR IGNORE makes the call idempotent: a second call with the same
 // pair is a no-op, which is safe for re-runs (e.g. reconcile-series).
 func (r *SeriesRepo) LinkBook(ctx context.Context, seriesID, bookID int64, position string, primary bool) error {
+	_, err := r.LinkBookIfMissing(ctx, seriesID, bookID, position, primary)
+	return err
+}
+
+// LinkBookIfMissing inserts a series_books row and reports whether it created
+// the membership. Callers that record rollback ownership should only claim
+// ownership when this returns true.
+func (r *SeriesRepo) LinkBookIfMissing(ctx context.Context, seriesID, bookID int64, position string, primary bool) (bool, error) {
 	primaryInt := 0
 	if primary {
 		primaryInt = 1
 	}
-	_, err := r.db.ExecContext(ctx,
+	result, err := r.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO series_books (series_id, book_id, position_in_series, primary_series)
 		 VALUES (?, ?, ?, ?)`,
 		seriesID, bookID, position, primaryInt)
 	if err != nil {
-		return fmt.Errorf("link book %d to series %d: %w", bookID, seriesID, err)
+		return false, fmt.Errorf("link book %d to series %d: %w", bookID, seriesID, err)
 	}
-	return nil
+	affected, _ := result.RowsAffected()
+	return affected > 0, nil
 }
 
 func (r *SeriesRepo) UnlinkBook(ctx context.Context, seriesID, bookID int64) error {
