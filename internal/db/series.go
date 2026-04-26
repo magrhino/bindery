@@ -39,6 +39,82 @@ func (r *SeriesRepo) List(ctx context.Context) ([]models.Series, error) {
 	return series, rows.Err()
 }
 
+// ListWithBooks returns all series rows with their linked books populated.
+func (r *SeriesRepo) ListWithBooks(ctx context.Context) ([]models.Series, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT s.id, s.foreign_id, s.title, s.description, s.monitored, s.created_at,
+		       sb.series_id, sb.book_id, sb.position_in_series, sb.primary_series,
+		       b.id, b.foreign_id, b.author_id, b.title, b.sort_title, b.status,
+		       b.monitored, b.image_url, b.release_date, b.created_at, b.updated_at
+		FROM series s
+		LEFT JOIN series_books sb ON sb.series_id = s.id
+		LEFT JOIN books b ON b.id = sb.book_id
+		ORDER BY s.title, CAST(NULLIF(sb.position_in_series, '') AS REAL), sb.position_in_series, b.sort_title`)
+	if err != nil {
+		return nil, fmt.Errorf("list series with books: %w", err)
+	}
+	defer rows.Close()
+
+	series := make([]models.Series, 0)
+	byID := make(map[int64]int)
+	for rows.Next() {
+		var s models.Series
+		var monitored int
+		var sbSeriesID, sbBookID, bookID, authorID sql.NullInt64
+		var position sql.NullString
+		var primarySeries, bookMonitored sql.NullInt64
+		var foreignID, title, sortTitle, status, imageURL sql.NullString
+		var releaseDate, bookCreatedAt, bookUpdatedAt sql.NullTime
+		if err := rows.Scan(
+			&s.ID, &s.ForeignID, &s.Title, &s.Description, &monitored, &s.CreatedAt,
+			&sbSeriesID, &sbBookID, &position, &primarySeries,
+			&bookID, &foreignID, &authorID, &title, &sortTitle, &status,
+			&bookMonitored, &imageURL, &releaseDate, &bookCreatedAt, &bookUpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan series with books: %w", err)
+		}
+		s.Monitored = monitored == 1
+
+		idx, ok := byID[s.ID]
+		if !ok {
+			idx = len(series)
+			series = append(series, s)
+			byID[s.ID] = idx
+		}
+		if !sbBookID.Valid || !bookID.Valid {
+			continue
+		}
+
+		book := models.Book{
+			ID:        bookID.Int64,
+			ForeignID: foreignID.String,
+			AuthorID:  authorID.Int64,
+			Title:     title.String,
+			SortTitle: sortTitle.String,
+			Status:    status.String,
+			Monitored: bookMonitored.Int64 == 1,
+			ImageURL:  imageURL.String,
+		}
+		if releaseDate.Valid {
+			book.ReleaseDate = &releaseDate.Time
+		}
+		if bookCreatedAt.Valid {
+			book.CreatedAt = bookCreatedAt.Time
+		}
+		if bookUpdatedAt.Valid {
+			book.UpdatedAt = bookUpdatedAt.Time
+		}
+		series[idx].Books = append(series[idx].Books, models.SeriesBook{
+			SeriesID:         sbSeriesID.Int64,
+			BookID:           sbBookID.Int64,
+			PositionInSeries: position.String,
+			PrimarySeries:    primarySeries.Int64 == 1,
+			Book:             &book,
+		})
+	}
+	return series, rows.Err()
+}
+
 func (r *SeriesRepo) SetMonitored(ctx context.Context, id int64, monitored bool) error {
 	val := 0
 	if monitored {

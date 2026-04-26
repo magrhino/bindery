@@ -88,6 +88,9 @@ func TestSeriesListAndGet_WithData(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("expected 1 series, got %d", len(list))
 	}
+	if len(list[0].Books) != 1 || list[0].Books[0].BookID != book.ID {
+		t.Fatalf("expected linked book in series list, got %+v", list[0].Books)
+	}
 
 	// Get with books
 	rec = httptest.NewRecorder()
