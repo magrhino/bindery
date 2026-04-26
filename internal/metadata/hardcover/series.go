@@ -26,12 +26,14 @@ func (c *Client) SearchSeries(ctx context.Context, query string, limit int) ([]m
 	}
 	gql := `query SearchSeries($query: String!, $queryType: String!, $perPage: Int!) {
 		search(query: $query, query_type: $queryType, per_page: $perPage) {
+			ids
 			results
 		}
 	}`
 	var resp struct {
 		Data struct {
 			Search struct {
+				IDs     []any           `json:"ids"`
 				Results json.RawMessage `json:"results"`
 			} `json:"search"`
 		} `json:"data"`
@@ -43,7 +45,17 @@ func (c *Client) SearchSeries(ctx context.Context, query string, limit int) ([]m
 	}, &resp); err != nil {
 		return nil, fmt.Errorf("hardcover search series: %w", err)
 	}
-	return parseSeriesSearchResults(resp.Data.Search.Results), nil
+	results := parseSeriesSearchResults(resp.Data.Search.Results)
+	if len(results) == 0 {
+		found := seriesSearchFoundCount(resp.Data.Search.Results)
+		if found == 0 {
+			found = len(resp.Data.Search.IDs)
+		}
+		if found > 0 {
+			return nil, fmt.Errorf("hardcover search series: response contained %d matches but no mappable series documents", found)
+		}
+	}
+	return results, nil
 }
 
 // GetSeriesCatalog fetches the ordered books in a Hardcover series.
@@ -172,6 +184,18 @@ func normalizeRawSearchResults(raw json.RawMessage) json.RawMessage {
 		return json.RawMessage(encoded)
 	}
 	return raw
+}
+
+func seriesSearchFoundCount(raw json.RawMessage) int {
+	raw = normalizeRawSearchResults(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0
+	}
+	var envelope hcSeriesSearchEnvelope
+	if err := json.Unmarshal(raw, &envelope); err == nil {
+		return envelope.Found
+	}
+	return 0
 }
 
 func seriesSearchDocumentToResult(doc hcSeriesSearchDocument) metadata.SeriesSearchResult {

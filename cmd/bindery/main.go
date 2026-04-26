@@ -603,6 +603,7 @@ func main() {
 			r.Use(auth.RequireAdmin)
 			r.Put("/setting/{key}", settingsHandler.Set)
 			r.Delete("/setting/{key}", settingsHandler.Delete)
+			r.Post("/hardcover/test", settingsHandler.TestHardcover)
 			r.Get("/abs/config", absHandler.GetConfig)
 			if cfg.ABSFeatureEnabled {
 				r.Put("/abs/config", absHandler.SetConfig)

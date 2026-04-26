@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/metadata/hardcover"
 )
 
 const (
@@ -30,7 +31,7 @@ func GetHardcoverAPIToken(ctx context.Context, settings *db.SettingsRepo) string
 	if setting == nil {
 		return ""
 	}
-	return strings.TrimSpace(setting.Value)
+	return hardcover.NormalizeAPIToken(setting.Value)
 }
 
 func HardcoverFeatureStateFor(ctx context.Context, settings *db.SettingsRepo, envEnabled bool) HardcoverFeatureState {

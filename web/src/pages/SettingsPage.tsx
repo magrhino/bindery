@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, ABSConfig, ABSImportProgress, ABSImportRun, ABSLibrary, ABSMetadataConflict, ABSReviewItem, ABSRollbackAction, ABSRollbackResult, ABSTestResult, AuthConfig, AuthStatus, BlocklistEntry, Indexer, IndexerTestResult, ProwlarrInstance, DownloadClient, NotificationConfig, QualityProfile, MetadataProfile, CalibreImportProgress, CalibreSyncProgress, RootFolder, LogEntry, ImportList, HardcoverList, Author, Book, SystemStatus } from '../api/client'
+import { api, ABSConfig, ABSImportProgress, ABSImportRun, ABSLibrary, ABSMetadataConflict, ABSReviewItem, ABSRollbackAction, ABSRollbackResult, ABSTestResult, AuthConfig, AuthStatus, BlocklistEntry, Indexer, IndexerTestResult, ProwlarrInstance, DownloadClient, NotificationConfig, QualityProfile, MetadataProfile, CalibreImportProgress, CalibreSyncProgress, RootFolder, LogEntry, ImportList, HardcoverList, HardcoverTestResult, Author, Book, SystemStatus } from '../api/client'
 import AuthSettings from '../settings/AuthSettings'
 import Pagination from '../components/Pagination'
 import ABSConflictPanel from '../components/ABSAuthorConflictsPanel'
@@ -2335,6 +2335,7 @@ function GeneralTab() {
   const [storage, setStorage] = useState<{ downloadDir: string; libraryDir: string; audiobookDir: string } | null>(null)
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
   const [hardcoverToken, setHardcoverToken] = useState('')
+  const [hardcoverTestResult, setHardcoverTestResult] = useState<(HardcoverTestResult & { testing?: boolean }) | null>(null)
   const [rootFolders, setRootFolders] = useState<RootFolder[]>([])
   const [newDefaultFolderPath, setNewDefaultFolderPath] = useState('')
   const [newDefaultFolderError, setNewDefaultFolderError] = useState('')
@@ -2377,6 +2378,7 @@ function GeneralTab() {
 
   const saveHardcoverToken = async () => {
     setSaving('hardcover.api_token')
+    setHardcoverTestResult(null)
     try {
       await api.setSetting('hardcover.api_token', hardcoverToken.trim())
       setHardcoverToken('')
@@ -2390,6 +2392,7 @@ function GeneralTab() {
 
   const clearHardcoverToken = async () => {
     setSaving('hardcover.api_token')
+    setHardcoverTestResult(null)
     try {
       await api.setSetting('hardcover.api_token', '')
       setHardcoverToken('')
@@ -2398,6 +2401,28 @@ function GeneralTab() {
       console.error(err)
     } finally {
       setSaving(null)
+    }
+  }
+
+  const testHardcover = async () => {
+    setHardcoverTestResult({
+      ok: false,
+      tokenConfigured: hardcoverTokenConfigured,
+      searchResults: 0,
+      catalogOk: false,
+      testing: true,
+    })
+    try {
+      const result = await api.testHardcover()
+      setHardcoverTestResult(result)
+    } catch (err) {
+      setHardcoverTestResult({
+        ok: false,
+        tokenConfigured: hardcoverTokenConfigured,
+        searchResults: 0,
+        catalogOk: false,
+        error: err instanceof Error ? err.message : 'Hardcover API test failed',
+      })
     }
   }
 
@@ -2900,6 +2925,14 @@ function GeneralTab() {
                     {t('settings.general.hardcoverClearToken', 'Clear')}
                   </button>
                 )}
+                <button
+                  onClick={testHardcover}
+                  disabled={!hardcoverTokenConfigured || hardcoverTestResult?.testing || saving === 'hardcover.api_token'}
+                  className="px-3 py-2 bg-slate-300 dark:bg-zinc-700 hover:bg-slate-400 dark:hover:bg-zinc-600 rounded text-xs font-medium disabled:opacity-50"
+                  aria-label={t('settings.general.hardcoverTestApi', 'Test Hardcover API')}
+                >
+                  {hardcoverTestResult?.testing ? t('common.testing', 'Testing...') : t('common.test', 'Test')}
+                </button>
               </div>
               <a
                 href="https://hardcover.app/account/api"
@@ -2909,6 +2942,13 @@ function GeneralTab() {
               >
                 {t('settings.general.hardcoverApiTokenLink', 'Create or copy a Hardcover API token')}
               </a>
+              {hardcoverTestResult && !hardcoverTestResult.testing && (
+                <p className={`mt-1 text-xs ${hardcoverTestResult.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                  {hardcoverTestResult.ok
+                    ? (hardcoverTestResult.message || t('settings.general.hardcoverTestOk', 'Hardcover API connected.'))
+                    : (hardcoverTestResult.error || t('settings.general.hardcoverTestFailed', 'Hardcover API test failed.'))}
+                </p>
+              )}
             </div>
 
             <div className="flex items-center justify-between gap-4">

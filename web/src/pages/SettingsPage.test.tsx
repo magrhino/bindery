@@ -32,6 +32,7 @@ vi.mock('../api/client', async importOriginal => {
       listRootFolders: vi.fn(),
       status: vi.fn(),
       setSetting: vi.fn(),
+      testHardcover: vi.fn(),
       authConfig: vi.fn(),
     },
   }
@@ -58,6 +59,16 @@ describe('SettingsPage Hardcover API keys', () => {
       enhancedHardcoverDisabledReason: 'env_disabled',
     })
     vi.mocked(api.setSetting).mockResolvedValue(undefined)
+    vi.mocked(api.testHardcover).mockResolvedValue({
+      ok: true,
+      tokenConfigured: true,
+      searchResults: 2,
+      sampleSeriesId: 'hc-series:1150',
+      sampleTitle: 'Dune',
+      catalogOk: true,
+      catalogBookCount: 8,
+      message: 'Found 2 series; catalog "Dune" has 8 books',
+    })
     vi.mocked(api.authConfig).mockResolvedValue({ mode: 'disabled', apiKey: 'key', username: 'admin' })
   })
 
@@ -84,5 +95,25 @@ describe('SettingsPage Hardcover API keys', () => {
     await waitFor(() => {
       expect(api.setSetting).toHaveBeenCalledWith('hardcover.enhanced_series_enabled', 'true')
     })
+  })
+
+  it('tests the configured Hardcover token without exposing it', async () => {
+    vi.mocked(api.status).mockResolvedValue({
+      version: 'dev',
+      commit: 'unknown',
+      buildDate: '',
+      enhancedHardcoverApi: true,
+      hardcoverTokenConfigured: true,
+    })
+
+    render(<SettingsPage />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test Hardcover API' }))
+
+    await waitFor(() => {
+      expect(api.testHardcover).toHaveBeenCalled()
+    })
+    expect(await screen.findByText('Found 2 series; catalog "Dune" has 8 books')).toBeInTheDocument()
+    expect(screen.queryByText('hc-secret')).not.toBeInTheDocument()
   })
 })
