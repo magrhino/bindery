@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api, Series } from '../api/client'
 
 export default function SeriesPage() {
@@ -122,7 +123,11 @@ export default function SeriesPage() {
                 {isOpen && bookCount > 0 && (
                   <div className="border-t border-slate-200 dark:border-zinc-800 divide-y divide-slate-200/50 dark:divide-zinc-800/50">
                     {sortedBooks.map(entry => (
-                      <div key={entry.bookId} className="flex items-center gap-3 px-4 py-3 bg-slate-100/80 dark:bg-zinc-900/80">
+                      <Link
+                        key={entry.bookId}
+                        to={`/book/${entry.bookId}`}
+                        className="flex items-center gap-3 px-4 py-3 bg-slate-100/80 dark:bg-zinc-900/80 hover:bg-slate-200/50 dark:hover:bg-zinc-800/50 transition-colors"
+                      >
                         <span className="text-xs text-slate-600 dark:text-zinc-500 w-10 flex-shrink-0 font-mono">
                           #{entry.positionInSeries || '?'}
                         </span>
@@ -156,7 +161,7 @@ export default function SeriesPage() {
                             {entry.book.status}
                           </span>
                         )}
-                      </div>
+                      </Link>
                     ))}
                   </div>
                 )}
