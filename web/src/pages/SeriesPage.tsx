@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { api, Series, SeriesHardcoverDiff, SeriesHardcoverLink, SeriesHardcoverSearchResult, SystemStatus } from '../api/client'
+import AddSeriesBookModal from '../components/AddSeriesBookModal'
 import HardcoverSeriesLinkModal from '../components/HardcoverSeriesLinkModal'
+import SeriesNameModal from '../components/SeriesNameModal'
 
 export default function SeriesPage() {
+  const location = useLocation()
   const [seriesList, setSeriesList] = useState<Series[]>([])
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState<number | null>(null)
@@ -17,17 +20,24 @@ export default function SeriesPage() {
   const [diffLoading, setDiffLoading] = useState<Record<number, boolean>>({})
   const [diffErrors, setDiffErrors] = useState<Record<number, string>>({})
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
+  const [showAddSeries, setShowAddSeries] = useState(false)
+  const [editingSeries, setEditingSeries] = useState<Series | null>(null)
+  const [bookModalSeries, setBookModalSeries] = useState<Series | null>(null)
   const enhancedHardcoverApi = systemStatus?.enhancedHardcoverApi ?? false
 
   useEffect(() => {
+    const state = location.state as { seriesId?: number } | null
     Promise.all([api.listSeries(), api.status()])
       .then(([list, status]) => {
         setSeriesList(list)
         setSystemStatus(status)
+        if (state?.seriesId) {
+          setExpanded(state.seriesId)
+        }
       })
       .catch(console.error)
       .finally(() => setLoading(false))
-  }, [])
+  }, [location.state])
 
   useEffect(() => {
     document.title = 'Series · Bindery'
@@ -38,6 +48,42 @@ export default function SeriesPage() {
     const list = await api.listSeries()
     setSeriesList(list)
     return list
+  }
+
+  const handleCreateSeries = async (title: string) => {
+    const series = await api.createSeries({ title })
+    await refreshSeriesList()
+    setExpanded(series.id)
+    setShowAddSeries(false)
+  }
+
+  const handleRenameSeries = async (title: string) => {
+    if (!editingSeries) return
+    const updated = await api.updateSeries(editingSeries.id, { title })
+    setSeriesList(prev => prev.map(series => series.id === updated.id ? { ...series, ...updated } : series))
+    setEditingSeries(null)
+  }
+
+  const deleteSeries = async (series: Series) => {
+    if (!confirm(`Delete "${series.title}" from Series? Linked books will stay in your library.`)) return
+    await api.deleteSeries(series.id)
+    setSeriesList(prev => prev.filter(item => item.id !== series.id))
+    setDiffs(prev => {
+      const next = { ...prev }
+      delete next[series.id]
+      return next
+    })
+    if (expanded === series.id) {
+      setExpanded(null)
+    }
+  }
+
+  const handleBookLinked = (updated: Series) => {
+    setSeriesList(prev => prev.map(series => series.id === updated.id ? updated : series))
+    setExpanded(updated.id)
+    if (enhancedHardcoverApi && updated.hardcoverLink) {
+      void loadHardcoverDiff(updated, true)
+    }
   }
 
   const loadHardcoverDiff = async (series: Series, force = false) => {
@@ -143,9 +189,17 @@ export default function SeriesPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-6">
         <h2 className="text-2xl font-bold">Series</h2>
-        <span className="text-sm text-slate-600 dark:text-zinc-500">{seriesList.length} series</span>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-slate-600 dark:text-zinc-500">{seriesList.length} series</span>
+          <button
+            onClick={() => setShowAddSeries(true)}
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-md text-sm font-medium transition-colors"
+          >
+            Add Series
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -201,7 +255,7 @@ export default function SeriesPage() {
                 </div>
 
                 {/* Actions row */}
-                <div className="px-4 pb-3 flex items-center gap-3" onClick={e => e.stopPropagation()}>
+                <div className="px-4 pb-3 flex items-center gap-3 flex-wrap" onClick={e => e.stopPropagation()}>
                   <button
                     onClick={() => toggleMonitor(series)}
                     className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${series.monitored ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
@@ -223,9 +277,29 @@ export default function SeriesPage() {
                       }`}
                       title={series.hardcoverLink ? `Linked to ${series.hardcoverLink.hardcoverTitle}` : 'Search Hardcover series'}
                     >
-                      {linking === series.id ? 'Searching...' : series.hardcoverLink ? `${series.hardcoverLink.linkedBy === 'auto' ? 'Auto' : 'Manual'} link` : 'Auto'}
+                      {linking === series.id ? 'Searching...' : series.hardcoverLink ? `${series.hardcoverLink.linkedBy === 'auto' ? 'Auto' : 'Manual'} link` : 'Search'}
                     </button>
                   )}
+                  <button
+                    onClick={() => setEditingSeries(series)}
+                    className="text-xs px-2.5 py-1 rounded font-medium bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700"
+                  >
+                    Rename
+                  </button>
+                  {isOpen && (
+                    <button
+                      onClick={() => setBookModalSeries(series)}
+                      className="text-xs px-2.5 py-1 rounded font-medium bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700"
+                    >
+                      Add Book
+                    </button>
+                  )}
+                  <button
+                    onClick={() => deleteSeries(series)}
+                    className="text-xs px-2.5 py-1 rounded font-medium text-red-500 hover:text-red-400 hover:bg-red-500/10"
+                  >
+                    Delete
+                  </button>
                   {fillNeeded && (
                     <button
                       onClick={() => fillGaps(series)}
@@ -357,6 +431,30 @@ export default function SeriesPage() {
             )
           })}
         </div>
+      )}
+      {showAddSeries && (
+        <SeriesNameModal
+          title="Add Series"
+          submitLabel="Add Series"
+          onClose={() => setShowAddSeries(false)}
+          onSubmit={handleCreateSeries}
+        />
+      )}
+      {editingSeries && (
+        <SeriesNameModal
+          title="Rename Series"
+          initialName={editingSeries.title}
+          submitLabel="Save"
+          onClose={() => setEditingSeries(null)}
+          onSubmit={handleRenameSeries}
+        />
+      )}
+      {bookModalSeries && (
+        <AddSeriesBookModal
+          series={bookModalSeries}
+          onClose={() => setBookModalSeries(null)}
+          onLinked={handleBookLinked}
+        />
       )}
       {enhancedHardcoverApi && linkModalSeries && (
         <HardcoverSeriesLinkModal

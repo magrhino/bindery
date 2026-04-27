@@ -178,6 +178,26 @@ func (r *SeriesRepo) SetMonitored(ctx context.Context, id int64, monitored bool)
 	return err
 }
 
+func (r *SeriesRepo) CreateManual(ctx context.Context, title string) (*models.Series, error) {
+	s := &models.Series{
+		ForeignID:   fmt.Sprintf("manual:series:%d", time.Now().UTC().UnixNano()),
+		Title:       strings.TrimSpace(title),
+		Description: "",
+	}
+	if err := r.Create(ctx, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func (r *SeriesRepo) UpdateTitle(ctx context.Context, id int64, title string) error {
+	_, err := r.db.ExecContext(ctx, "UPDATE series SET title=? WHERE id=?", strings.TrimSpace(title), id)
+	if err != nil {
+		return fmt.Errorf("update series %d title: %w", id, err)
+	}
+	return nil
+}
+
 // ListBooksInSeries returns all books linked to the given series, with status.
 func (r *SeriesRepo) ListBooksInSeries(ctx context.Context, seriesID int64) ([]models.Book, error) {
 	rows, err := r.db.QueryContext(ctx, `
@@ -470,6 +490,24 @@ func (r *SeriesRepo) LinkBookIfMissing(ctx context.Context, seriesID, bookID int
 	}
 	affected, _ := result.RowsAffected()
 	return affected > 0, nil
+}
+
+func (r *SeriesRepo) UpsertBookLink(ctx context.Context, seriesID, bookID int64, position string, primary bool) error {
+	primaryInt := 0
+	if primary {
+		primaryInt = 1
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO series_books (series_id, book_id, position_in_series, primary_series)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(series_id, book_id) DO UPDATE SET
+			position_in_series = excluded.position_in_series,
+			primary_series = excluded.primary_series`,
+		seriesID, bookID, strings.TrimSpace(position), primaryInt)
+	if err != nil {
+		return fmt.Errorf("upsert book %d in series %d: %w", bookID, seriesID, err)
+	}
+	return nil
 }
 
 func (r *SeriesRepo) UnlinkBook(ctx context.Context, seriesID, bookID int64) error {

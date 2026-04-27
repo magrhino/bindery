@@ -97,6 +97,138 @@ func (h *SeriesHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s)
 }
 
+func (h *SeriesHandler) Create(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	title := strings.TrimSpace(body.Title)
+	if title == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "title is required"})
+		return
+	}
+	series, err := h.series.CreateManual(r.Context(), title)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, series)
+}
+
+func (h *SeriesHandler) Update(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	title := strings.TrimSpace(body.Title)
+	if title == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "title is required"})
+		return
+	}
+	existing, err := h.series.GetByID(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if existing == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "series not found"})
+		return
+	}
+	if err := h.series.UpdateTitle(r.Context(), id, title); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	updated, err := h.series.GetByID(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (h *SeriesHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	existing, err := h.series.GetByID(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if existing == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "series not found"})
+		return
+	}
+	if err := h.series.Delete(r.Context(), id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *SeriesHandler) AddBook(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		BookID           int64  `json:"bookId"`
+		PositionInSeries string `json:"positionInSeries"`
+		PrimarySeries    *bool  `json:"primarySeries"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if body.BookID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bookId is required"})
+		return
+	}
+	series, err := h.series.GetByID(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if series == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "series not found"})
+		return
+	}
+	book, err := h.books.GetByID(r.Context(), body.BookID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if book == nil || book.Excluded {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
+		return
+	}
+	primary := true
+	if body.PrimarySeries != nil {
+		primary = *body.PrimarySeries
+	}
+	if err := h.series.UpsertBookLink(r.Context(), id, body.BookID, body.PositionInSeries, primary); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	updated, err := h.series.GetByID(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
 // Monitor toggles the monitored flag on a series.
 func (h *SeriesHandler) Monitor(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
