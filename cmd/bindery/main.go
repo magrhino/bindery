@@ -626,9 +626,13 @@ func main() {
 
 		// Series
 		r.Get("/series", seriesHandler.List)
+		r.Post("/series", seriesHandler.Create)
 		r.Get("/series/hardcover/search", seriesHandler.SearchHardcover)
 		r.Get("/series/{id}", seriesHandler.Get)
+		r.Put("/series/{id}", seriesHandler.Update)
 		r.Patch("/series/{id}", seriesHandler.Monitor)
+		r.Delete("/series/{id}", seriesHandler.Delete)
+		r.Post("/series/{id}/books", seriesHandler.AddBook)
 		r.Post("/series/{id}/fill", seriesHandler.Fill)
 		r.Get("/series/{id}/hardcover-link", seriesHandler.GetHardcoverLink)
 		r.Post("/series/{id}/hardcover-link/auto", seriesHandler.AutoLinkHardcover)

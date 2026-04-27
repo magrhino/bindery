@@ -303,8 +303,13 @@ export const api = {
 
   // Series
   listSeries: () => request<Series[]>('/series'),
+  createSeries: (data: { title: string }) => request<Series>('/series', { method: 'POST', body: JSON.stringify(data) }),
   getSeries: (id: number) => request<Series>(`/series/${id}`),
+  updateSeries: (id: number, data: { title: string }) => request<Series>(`/series/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   monitorSeries: (id: number, monitored: boolean) => request<{ monitored: boolean }>(`/series/${id}`, { method: 'PATCH', body: JSON.stringify({ monitored }) }),
+  deleteSeries: (id: number) => request<void>(`/series/${id}`, { method: 'DELETE' }),
+  linkBookToSeries: (id: number, data: { bookId: number; positionInSeries: string; primarySeries: boolean }) =>
+    request<Series>(`/series/${id}/books`, { method: 'POST', body: JSON.stringify(data) }),
   fillSeries: (id: number) => request<{ queued: number }>(`/series/${id}/fill`, { method: 'POST' }),
   searchHardcoverSeries: (term: string, limit = 10) =>
     request<SeriesHardcoverSearchResult[]>(`/series/hardcover/search?term=${encodeURIComponent(term)}&limit=${limit}`),
@@ -1074,6 +1079,7 @@ export interface Series {
     seriesId: number
     bookId: number
     positionInSeries: string
+    primarySeries?: boolean
     book?: Book
   }>
   hardcoverLink?: SeriesHardcoverLink

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -190,6 +192,149 @@ func TestSeriesListAndGet_WithData(t *testing.T) {
 	json.NewDecoder(rec.Body).Decode(&got)
 	if len(got.Books) != 1 || got.Books[0].BookID != book.ID {
 		t.Errorf("expected linked book in series, got %+v", got.Books)
+	}
+}
+
+func TestSeriesCreateUpdateDeleteAndLink(t *testing.T) {
+	h, seriesRepo, authorRepo, bookRepo := seriesFixture(t)
+	ctx := contextBackground()
+
+	createBody := bytes.NewBufferString(`{"title":"  Dune Chronicles  "}`)
+	rec := httptest.NewRecorder()
+	h.Create(rec, httptest.NewRequest(http.MethodPost, "/api/v1/series", createBody))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var created models.Series
+	if err := json.NewDecoder(rec.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.ID == 0 || created.Title != "Dune Chronicles" || !strings.HasPrefix(created.ForeignID, "manual:series:") {
+		t.Fatalf("unexpected created series: %+v", created)
+	}
+
+	updateBody := bytes.NewBufferString(`{"title":"Dune Saga"}`)
+	rec = httptest.NewRecorder()
+	h.Update(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/api/v1/series/1", updateBody), "id", strconv.FormatInt(created.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var updated models.Series
+	if err := json.NewDecoder(rec.Body).Decode(&updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != "Dune Saga" {
+		t.Fatalf("updated title = %q, want Dune Saga", updated.Title)
+	}
+
+	author := &models.Author{ForeignID: "OL1A", Name: "Frank Herbert", SortName: "Herbert, Frank"}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	book := &models.Book{ForeignID: "OL1W", AuthorID: author.ID, Title: "Dune", SortTitle: "Dune", Status: models.BookStatusImported}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	linkBody := bytes.NewBufferString(`{"bookId":` + strconv.FormatInt(book.ID, 10) + `,"positionInSeries":"1","primarySeries":true}`)
+	rec = httptest.NewRecorder()
+	h.AddBook(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/books", linkBody), "id", strconv.FormatInt(created.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("link: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var linked models.Series
+	if err := json.NewDecoder(rec.Body).Decode(&linked); err != nil {
+		t.Fatal(err)
+	}
+	if len(linked.Books) != 1 || linked.Books[0].BookID != book.ID || linked.Books[0].PositionInSeries != "1" {
+		t.Fatalf("expected linked book, got %+v", linked.Books)
+	}
+
+	linkBody = bytes.NewBufferString(`{"bookId":` + strconv.FormatInt(book.ID, 10) + `,"positionInSeries":"1.5","primarySeries":false}`)
+	rec = httptest.NewRecorder()
+	h.AddBook(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/books", linkBody), "id", strconv.FormatInt(created.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("relink: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got, err := seriesRepo.GetByID(ctx, created.ID); err != nil || got == nil || len(got.Books) != 1 || got.Books[0].PositionInSeries != "1.5" || got.Books[0].PrimarySeries {
+		t.Fatalf("expected upserted link, got series=%+v err=%v", got, err)
+	}
+
+	rec = httptest.NewRecorder()
+	h.Delete(rec, withURLParam(httptest.NewRequest(http.MethodDelete, "/api/v1/series/1", nil), "id", strconv.FormatInt(created.ID, 10)))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got, err := bookRepo.GetByID(ctx, book.ID); err != nil || got == nil {
+		t.Fatalf("delete series should preserve linked book, got book=%+v err=%v", got, err)
+	}
+	deleted, err := seriesRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != nil {
+		t.Fatalf("expected series to be deleted, got %+v", deleted)
+	}
+}
+
+func TestSeriesManagementInvalidInput(t *testing.T) {
+	h, seriesRepo, _, _ := seriesFixture(t)
+	ctx := contextBackground()
+	series := &models.Series{ForeignID: "ol-series:dune", Title: "Dune Chronicles"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		run  func(*httptest.ResponseRecorder)
+		code int
+	}{
+		{
+			name: "create empty title",
+			run: func(rec *httptest.ResponseRecorder) {
+				h.Create(rec, httptest.NewRequest(http.MethodPost, "/api/v1/series", bytes.NewBufferString(`{"title":" "}`)))
+			},
+			code: http.StatusBadRequest,
+		},
+		{
+			name: "update missing series",
+			run: func(rec *httptest.ResponseRecorder) {
+				h.Update(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/api/v1/series/999", bytes.NewBufferString(`{"title":"New"}`)), "id", "999"))
+			},
+			code: http.StatusNotFound,
+		},
+		{
+			name: "delete missing series",
+			run: func(rec *httptest.ResponseRecorder) {
+				h.Delete(rec, withURLParam(httptest.NewRequest(http.MethodDelete, "/api/v1/series/999", nil), "id", "999"))
+			},
+			code: http.StatusNotFound,
+		},
+		{
+			name: "link missing book",
+			run: func(rec *httptest.ResponseRecorder) {
+				h.AddBook(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/books", bytes.NewBufferString(`{"bookId":999}`)), "id", strconv.FormatInt(series.ID, 10)))
+			},
+			code: http.StatusNotFound,
+		},
+		{
+			name: "link invalid book id",
+			run: func(rec *httptest.ResponseRecorder) {
+				h.AddBook(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/books", bytes.NewBufferString(`{"bookId":0}`)), "id", strconv.FormatInt(series.ID, 10)))
+			},
+			code: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			tt.run(rec)
+			if rec.Code != tt.code {
+				t.Fatalf("expected %d, got %d: %s", tt.code, rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 

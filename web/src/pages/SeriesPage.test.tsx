@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import SeriesPage from './SeriesPage'
 import { api } from '../api/client'
@@ -12,8 +12,14 @@ vi.mock('../api/client', async importOriginal => {
     api: {
       ...actual.api,
       status: vi.fn(),
+      listBooks: vi.fn(),
+      listAuthors: vi.fn(),
       listSeries: vi.fn(),
+      createSeries: vi.fn(),
+      updateSeries: vi.fn(),
+      deleteSeries: vi.fn(),
       monitorSeries: vi.fn(),
+      linkBookToSeries: vi.fn(),
       fillSeries: vi.fn(),
       autoLinkSeriesHardcover: vi.fn(),
       getSeriesHardcoverLink: vi.fn(),
@@ -39,6 +45,8 @@ describe('SeriesPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(api.status).mockResolvedValue({ version: 'dev', commit: 'unknown', buildDate: '', enhancedHardcoverApi: true, hardcoverTokenConfigured: true })
+    vi.mocked(api.listBooks).mockResolvedValue([])
+    vi.mocked(api.listAuthors).mockResolvedValue([])
     vi.mocked(api.getSeriesHardcoverLink).mockRejectedValue(new Error('not linked'))
     vi.mocked(api.searchHardcoverSeries).mockResolvedValue([])
   })
@@ -71,7 +79,7 @@ describe('SeriesPage', () => {
 
     expect(await screen.findByRole('heading', { name: 'The Stormlight Archive' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /link/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Auto' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('heading', { name: 'The Stormlight Archive' }))
     expect(screen.queryByText(/Hardcover:/)).not.toBeInTheDocument()
     expect(api.getSeriesHardcoverDiff).not.toHaveBeenCalled()
@@ -118,7 +126,7 @@ describe('SeriesPage', () => {
     expect(bookLink).toHaveAttribute('href', '/book/102')
   })
 
-  it('opens the Hardcover series link modal from the Auto control', async () => {
+  it('opens the Hardcover series link modal from the Search control', async () => {
     vi.mocked(api.autoLinkSeriesHardcover).mockResolvedValue({
       linked: false,
       reason: 'low confidence',
@@ -147,7 +155,7 @@ describe('SeriesPage', () => {
       },
     ])
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Auto' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Search' }))
 
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
     expect(screen.getByText('The Stormlight Archive')).toBeInTheDocument()
@@ -186,5 +194,146 @@ describe('SeriesPage', () => {
     expect(screen.getByText('Currently linked')).toBeInTheDocument()
     expect(screen.getByText('Brandon Sanderson')).toBeInTheDocument()
     expect(api.autoLinkSeriesHardcover).not.toHaveBeenCalled()
+  })
+
+  it('creates a manual series from the page header', async () => {
+    const created: Series = {
+      id: 15,
+      foreignSeriesId: 'manual:series:15',
+      title: 'Dune Chronicles',
+      description: '',
+      monitored: false,
+      books: [],
+    }
+    vi.mocked(api.listSeries).mockResolvedValueOnce([]).mockResolvedValueOnce([created])
+    vi.mocked(api.createSeries).mockResolvedValue(created)
+
+    renderSeriesPage([])
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add Series' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Add Series' })
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Dune Chronicles' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add Series' }))
+
+    await waitFor(() => expect(api.createSeries).toHaveBeenCalledWith({ title: 'Dune Chronicles' }))
+    expect(await screen.findByRole('heading', { name: 'Dune Chronicles' })).toBeInTheDocument()
+  })
+
+  it('renames and deletes a series without deleting books from the UI', async () => {
+    const initial: Series = {
+      id: 20,
+      foreignSeriesId: 'manual:series:20',
+      title: 'Old Series',
+      description: '',
+      monitored: false,
+      books: [],
+    }
+    const renamed: Series = { ...initial, title: 'New Series' }
+    vi.mocked(api.updateSeries).mockResolvedValue(renamed)
+    vi.mocked(api.deleteSeries).mockResolvedValue(undefined)
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    renderSeriesPage([initial])
+
+    expect(await screen.findByRole('heading', { name: 'Old Series' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Rename Series' })
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'New Series' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByRole('heading', { name: 'New Series' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => expect(api.deleteSeries).toHaveBeenCalledWith(20))
+    expect(screen.queryByRole('heading', { name: 'New Series' })).not.toBeInTheDocument()
+    confirmSpy.mockRestore()
+  })
+
+  it('links an existing library book to an expanded series', async () => {
+    const series: Series = {
+      id: 30,
+      foreignSeriesId: 'manual:series:30',
+      title: 'Dune Chronicles',
+      description: '',
+      monitored: false,
+      books: [
+        {
+          seriesId: 30,
+          bookId: 101,
+          positionInSeries: '1',
+          primarySeries: true,
+          book: {
+            id: 101,
+            foreignBookId: 'book-101',
+            authorId: 12,
+            title: 'Dune',
+            description: '',
+            imageUrl: '',
+            genres: [],
+            monitored: true,
+            status: 'imported',
+            filePath: '',
+            mediaType: 'ebook',
+            ebookFilePath: '',
+            audiobookFilePath: '',
+            excluded: false,
+          },
+        },
+      ],
+    }
+    const candidate = {
+      id: 102,
+      foreignBookId: 'book-102',
+      authorId: 12,
+      title: 'Dune Messiah',
+      description: '',
+      imageUrl: '',
+      genres: [],
+      monitored: true,
+      status: 'wanted',
+      filePath: '',
+      mediaType: 'ebook' as const,
+      ebookFilePath: '',
+      audiobookFilePath: '',
+      excluded: false,
+    }
+    const updated: Series = {
+      ...series,
+      books: [...(series.books ?? []), { seriesId: 30, bookId: 102, positionInSeries: '2', primarySeries: true, book: candidate }],
+    }
+    vi.mocked(api.listBooks).mockResolvedValue([series.books![0].book!, candidate])
+    vi.mocked(api.listAuthors).mockResolvedValue([
+      {
+        id: 12,
+        foreignAuthorId: 'author-12',
+        authorName: 'Frank Herbert',
+        sortName: 'Herbert, Frank',
+        description: '',
+        imageUrl: '',
+        disambiguation: '',
+        ratingsCount: 0,
+        averageRating: 0,
+        monitored: true,
+      },
+    ])
+    vi.mocked(api.linkBookToSeries).mockResolvedValue(updated)
+
+    renderSeriesPage([series])
+
+    fireEvent.click(await screen.findByRole('heading', { name: 'Dune Chronicles' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add Book' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Add book to Dune Chronicles' })
+
+    expect(within(dialog).queryByText('Dune')).not.toBeInTheDocument()
+    fireEvent.click(await within(dialog).findByLabelText(/Dune Messiah/))
+    fireEvent.change(within(dialog).getByLabelText('Position'), { target: { value: '2' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }))
+
+    await waitFor(() => expect(api.linkBookToSeries).toHaveBeenCalledWith(30, {
+      bookId: 102,
+      positionInSeries: '2',
+      primarySeries: true,
+    }))
+    expect(await screen.findByRole('link', { name: /Dune Messiah/ })).toHaveAttribute('href', '/book/102')
   })
 })
