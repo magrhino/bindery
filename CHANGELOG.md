@@ -9,10 +9,12 @@ All notable changes to Bindery are documented here. Format loosely follows
 ### Added
 
 - **Audiobookshelf (ABS) import workflow** — Bindery can now connect to one ABS source, validate an API key, discover visible libraries, and import ABS catalog metadata into shared authors, books, series, and ebook/audiobook editions. Imports support dry runs, persisted run history, rollback preview/rollback, low-confidence review queues, metadata conflict resolution, and path remaps when ABS and Bindery see the same files under different mount prefixes. Import quality is best when the ABS library already has strong metadata, especially ASIN coverage.
+- **Enhanced series data via Hardcover** — Series can now be managed manually, linked to Hardcover series, and compared against the Hardcover catalog. The Series page shows present, missing, local-only, and uncertain books; missing catalog entries can be filled all at once or one row at a time, creating wanted/monitored book rows and queuing searches. The enhanced controls are gated behind `BINDERY_ENHANCED_HARDCOVER_API`, a saved Hardcover API token, and the admin setting in **Settings -> General**.
 
 ### Docs
 
 - Added an ABS import guide and user-facing wiki documentation covering setup, required API-key access, path remaps, review flow, conflicts, rollback, and import-quality expectations.
+- Documented the enhanced Hardcover series data migration, feature flag, token requirement, admin toggle, and production network expectations in the deployment guide.
 
 ## [v1.2.6] — 2026-04-25
 

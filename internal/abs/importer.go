@@ -3083,20 +3083,6 @@ func shelfarrTitleScore(a, b string) int {
 	return seriesmatch.TitleScore(a, b)
 }
 
-func shelfarrCleanTitle(title string) string {
-	return seriesmatch.CleanTitle(title)
-}
-
-func maxInt(values ...int) int {
-	max := 0
-	for _, value := range values {
-		if value > max {
-			max = value
-		}
-	}
-	return max
-}
-
 func (i *Importer) recordPlannedSeries(ctx context.Context, cfg ImportConfig, runID, bookID int64, externalID string, ref NormalizedSeries, created bool, matchedBy string) (bool, string, error) {
 	metadata := map[string]any{
 		"bookId":   bookID,

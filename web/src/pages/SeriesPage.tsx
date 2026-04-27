@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { api, Series, SeriesHardcoverDiff, SeriesHardcoverLink, SeriesHardcoverSearchResult, SystemStatus } from '../api/client'
+import { api, Series, SeriesFillBookRequest, SeriesHardcoverDiff, SeriesHardcoverDiffBook, SeriesHardcoverLink, SeriesHardcoverSearchResult, SystemStatus } from '../api/client'
 import AddSeriesBookModal from '../components/AddSeriesBookModal'
 import HardcoverSeriesLinkModal from '../components/HardcoverSeriesLinkModal'
 import SeriesNameModal from '../components/SeriesNameModal'
@@ -120,10 +120,15 @@ export default function SeriesPage() {
     setSeriesList(prev => prev.map(s => s.id === series.id ? { ...s, monitored: next } : s))
   }
 
-  const fillGaps = async (series: Series) => {
+  const fillGaps = async (series: Series, book?: SeriesHardcoverDiffBook) => {
     setFilling(series.id)
     try {
-      const r = await api.fillSeries(series.id)
+      const request: SeriesFillBookRequest | undefined = book ? {
+        foreignBookId: book.foreignBookId,
+        providerId: book.providerId,
+        position: book.position,
+      } : undefined
+      const r = await api.fillSeries(series.id, request)
       setFillResult(prev => ({ ...prev, [series.id]: r.queued === 0 ? 'Nothing to fill' : `${r.queued} book${r.queued === 1 ? '' : 's'} queued` }))
       const list = await refreshSeriesList()
       const updated = list.find(s => s.id === series.id)
@@ -384,7 +389,7 @@ export default function SeriesPage() {
                           disabled={filling === series.id}
                           className="text-xs px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded font-medium flex-shrink-0"
                         >
-                          {filling === series.id ? 'Queuing...' : 'Fill gaps'}
+                          {filling === series.id ? 'Queuing...' : 'add all'}
                         </button>
                       )}
                     </div>
@@ -411,12 +416,12 @@ export default function SeriesPage() {
                               {book.authorName && <p className="text-xs text-slate-600 dark:text-zinc-500 truncate">{book.authorName}</p>}
                             </div>
                             <button
-                              onClick={() => fillGaps(series)}
+                              onClick={() => fillGaps(series, book)}
                               disabled={filling === series.id}
                               className="ml-auto text-xs px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded font-medium flex-shrink-0"
-                              title="Create missing Hardcover books and search indexers"
+                              title="Add this missing Hardcover book and search indexers"
                             >
-                              {filling === series.id ? '...' : 'Fill'}
+                              {filling === series.id ? '...' : 'add'}
                             </button>
                           </div>
                         ))}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -252,7 +253,46 @@ func (h *SeriesHandler) Monitor(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"monitored": body.Monitored})
 }
 
-// Fill marks all non-imported books in a series as wanted and kicks off searches.
+type seriesFillRequest struct {
+	ForeignBookID string `json:"foreignBookId"`
+	ProviderID    string `json:"providerId"`
+	Position      string `json:"position"`
+}
+
+func (r *seriesFillRequest) normalize() {
+	r.ForeignBookID = strings.TrimSpace(r.ForeignBookID)
+	r.ProviderID = strings.TrimSpace(r.ProviderID)
+	r.Position = strings.TrimSpace(r.Position)
+}
+
+func (r seriesFillRequest) hasBookSelector() bool {
+	return r.ForeignBookID != "" || r.ProviderID != "" || r.Position != ""
+}
+
+func (r seriesFillRequest) matchesDiffBook(book seriesHardcoverDiffBook) bool {
+	matched := false
+	if r.ForeignBookID != "" {
+		if r.ForeignBookID != book.ForeignBookID {
+			return false
+		}
+		matched = true
+	}
+	if r.ProviderID != "" {
+		if r.ProviderID != book.ProviderID {
+			return false
+		}
+		matched = true
+	}
+	if r.Position != "" {
+		if !seriesmatch.SamePosition(r.Position, book.Position) {
+			return false
+		}
+		matched = true
+	}
+	return matched
+}
+
+// Fill marks non-imported books in a series as wanted and kicks off searches.
 func (h *SeriesHandler) Fill(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -260,14 +300,59 @@ func (h *SeriesHandler) Fill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.enhancedHardcoverEnabled(r.Context()) {
-		if err := h.createMissingHardcoverBooks(r.Context(), id); err != nil {
+	var body seriesFillRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+	}
+	body.normalize()
+
+	if body.hasBookSelector() {
+		if !h.requireEnhancedHardcoverAPI(w, r) {
+			return
+		}
+		book, err := h.createMissingHardcoverBook(r.Context(), id, body)
+		if err != nil {
+			if errors.Is(err, errSeriesNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "series not found"})
+				return
+			}
+			if errors.Is(err, errSeriesCatalogBookNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "hardcover book not found in missing catalog"})
+				return
+			}
 			if errors.Is(err, errSeriesMetadataProvider) {
-				slog.Warn("series fill: failed to expand Hardcover catalog; continuing with local books", "seriesID", id, "error", err)
-			} else {
+				writeUpstreamError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+
+		queued := 0
+		if book != nil {
+			didQueue, err := h.queueSeriesBook(r.Context(), *book)
+			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
 			}
+			if didQueue {
+				queued = 1
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]int{"queued": queued})
+		return
+	}
+
+	if h.enhancedHardcoverEnabled(r.Context()) {
+		if err := h.createMissingHardcoverBooks(r.Context(), id); err != nil {
+			if !errors.Is(err, errSeriesMetadataProvider) {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			slog.Warn("series fill: failed to expand Hardcover catalog; continuing with local books", "seriesID", id, "error", err)
 		}
 	}
 
@@ -279,20 +364,30 @@ func (h *SeriesHandler) Fill(w http.ResponseWriter, r *http.Request) {
 
 	queued := 0
 	for _, b := range books {
-		if b.Status == models.BookStatusImported {
-			continue
-		}
-		b.Status = models.BookStatusWanted
-		b.Monitored = true
-		if err := h.books.MarkWantedMonitored(r.Context(), b.ID); err != nil {
+		didQueue, err := h.queueSeriesBook(r.Context(), b)
+		if err != nil {
 			slog.Warn("series fill: failed to update book", "book", b.Title, "error", err)
 			continue
 		}
-		queued++
-		go h.searcher.SearchAndGrabBook(context.WithoutCancel(r.Context()), b)
+		if didQueue {
+			queued++
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]int{"queued": queued})
+}
+
+func (h *SeriesHandler) queueSeriesBook(ctx context.Context, b models.Book) (bool, error) {
+	if b.Status == models.BookStatusImported {
+		return false, nil
+	}
+	if err := h.books.MarkWantedMonitored(ctx, b.ID); err != nil {
+		return false, err
+	}
+	b.Status = models.BookStatusWanted
+	b.Monitored = true
+	go h.searcher.SearchAndGrabBook(context.WithoutCancel(ctx), b)
+	return true, nil
 }
 
 type seriesHardcoverSearchResult struct {
@@ -349,7 +444,11 @@ type seriesHardcoverDiffResponse struct {
 	MissingCount int                         `json:"missingCount"`
 }
 
-var errSeriesMetadataProvider = errors.New("series metadata provider")
+var (
+	errSeriesMetadataProvider    = errors.New("series metadata provider")
+	errSeriesNotFound            = errors.New("series not found")
+	errSeriesCatalogBookNotFound = errors.New("series catalog book not found")
+)
 
 func (h *SeriesHandler) SearchHardcover(w http.ResponseWriter, r *http.Request) {
 	if !h.requireEnhancedHardcoverAPI(w, r) {
@@ -689,7 +788,7 @@ func (h *SeriesHandler) linkFromRequest(ctx context.Context, seriesID int64, bod
 	}
 	catalog, err := h.meta.GetSeriesCatalog(ctx, body.ForeignID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", errSeriesMetadataProvider, err)
+		return nil, fmt.Errorf("%w: %w", errSeriesMetadataProvider, err)
 	}
 	if catalog == nil {
 		return link, nil
@@ -841,7 +940,7 @@ func (h *SeriesHandler) createMissingHardcoverBooks(ctx context.Context, seriesI
 	}
 	catalog, err := h.meta.GetSeriesCatalog(ctx, series.HardcoverLink.HardcoverSeriesID)
 	if err != nil {
-		return fmt.Errorf("%w: %v", errSeriesMetadataProvider, err)
+		return fmt.Errorf("%w: %w", errSeriesMetadataProvider, err)
 	}
 	if catalog == nil {
 		return nil
@@ -857,6 +956,44 @@ func (h *SeriesHandler) createMissingHardcoverBooks(ctx context.Context, seriesI
 		}
 	}
 	return nil
+}
+
+func (h *SeriesHandler) createMissingHardcoverBook(ctx context.Context, seriesID int64, selector seriesFillRequest) (*models.Book, error) {
+	if h.meta == nil {
+		return nil, errors.New("metadata aggregator is not configured")
+	}
+	if h.authors == nil {
+		return nil, errors.New("author repository is not configured")
+	}
+	series, err := h.series.GetByID(ctx, seriesID)
+	if err != nil {
+		return nil, err
+	}
+	if series == nil {
+		return nil, errSeriesNotFound
+	}
+	if series.HardcoverLink == nil {
+		return nil, errSeriesCatalogBookNotFound
+	}
+	catalog, err := h.meta.GetSeriesCatalog(ctx, series.HardcoverLink.HardcoverSeriesID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errSeriesMetadataProvider, err)
+	}
+	if catalog == nil {
+		return nil, errSeriesCatalogBookNotFound
+	}
+	diff := buildHardcoverDiff(series, series.HardcoverLink, catalog)
+	for _, missing := range diff.Missing {
+		if !selector.matchesDiffBook(missing) {
+			continue
+		}
+		catalogBook, ok := findCatalogBook(catalog.Books, missing.ForeignBookID, missing.Position)
+		if !ok {
+			return nil, errSeriesCatalogBookNotFound
+		}
+		return h.ensureHardcoverCatalogBook(ctx, series.ID, catalog.AuthorName, catalogBook)
+	}
+	return nil, errSeriesCatalogBookNotFound
 }
 
 func findCatalogBook(books []metadata.SeriesCatalogBook, foreignID, position string) (metadata.SeriesCatalogBook, bool) {
