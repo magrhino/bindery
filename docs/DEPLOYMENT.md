@@ -244,6 +244,14 @@ On first launch Bindery bootstraps itself — **no environment variables are req
 
 **Outbound ABS requests:** ABS probes and imports send `User-Agent: bindery/<version>` to the configured ABS server. Development or unversioned builds use `bindery/dev`.
 
+### Enhanced Hardcover series data deployment note
+
+**Schema:** enhanced series data uses migration `035`, which creates `series_hardcover_links` and backfills links for existing series whose foreign ID already points at Hardcover. Take a normal SQLite backup before upgrading, then let Bindery apply the migration on startup.
+
+**Feature flag:** token-backed Hardcover series search, manual/automatic series linking, catalog diffs, and missing-book fill are disabled by default. Set `BINDERY_ENHANCED_HARDCOVER_API=true`, save a Hardcover API token in **Settings -> General**, then enable enhanced Hardcover series data in the same settings section. If any of those three requirements is missing, the enhanced endpoints return `404` and the UI hides the controls; existing local series data keeps working.
+
+**Operational note:** the enhanced fill action can create wanted/monitored book rows from the linked Hardcover catalog and immediately queue indexer searches. Make sure outbound HTTPS to Hardcover and your configured indexers is allowed before enabling it for production users.
+
 ### From v0.11.x to v0.12.0 (security posture)
 
 **Schema:** no changes. Drop-in binary or image replacement is safe.

@@ -499,7 +499,3 @@ func normalizeSeriesName(name string) string {
 func shelfarrTitleScore(a, b string) int {
 	return seriesmatch.TitleScore(a, b)
 }
-
-func shelfarrCleanTitle(title string) string {
-	return seriesmatch.CleanTitle(title)
-}

@@ -310,7 +310,11 @@ export const api = {
   deleteSeries: (id: number) => request<void>(`/series/${id}`, { method: 'DELETE' }),
   linkBookToSeries: (id: number, data: { bookId: number; positionInSeries: string; primarySeries: boolean }) =>
     request<Series>(`/series/${id}/books`, { method: 'POST', body: JSON.stringify(data) }),
-  fillSeries: (id: number) => request<{ queued: number }>(`/series/${id}/fill`, { method: 'POST' }),
+  fillSeries: (id: number, book?: SeriesFillBookRequest) =>
+    request<{ queued: number }>(`/series/${id}/fill`, {
+      method: 'POST',
+      ...(book ? { body: JSON.stringify(book) } : {}),
+    }),
   searchHardcoverSeries: (term: string, limit = 10) =>
     request<SeriesHardcoverSearchResult[]>(`/series/hardcover/search?term=${encodeURIComponent(term)}&limit=${limit}`),
   getSeriesHardcoverLink: (id: number) => request<SeriesHardcoverLink>(`/series/${id}/hardcover-link`),
@@ -1040,6 +1044,12 @@ export interface SeriesHardcoverAutoResponse {
   link?: SeriesHardcoverLink
   candidates: SeriesHardcoverSearchResult[]
   reason?: string
+}
+
+export interface SeriesFillBookRequest {
+  foreignBookId?: string
+  providerId?: string
+  position?: string
 }
 
 export interface SeriesHardcoverDiffBook {

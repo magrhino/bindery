@@ -628,6 +628,86 @@ func TestSeriesFillCreatesMissingHardcoverBook(t *testing.T) {
 	}
 }
 
+func TestSeriesFillCreatesOnlyRequestedHardcoverBook(t *testing.T) {
+	catalog := stormlightCatalog()
+	catalog.Books = append(catalog.Books, metadata.SeriesCatalogBook{
+		ForeignID:  "hc:words-of-radiance",
+		ProviderID: "102",
+		Title:      "Words of Radiance",
+		Position:   "2",
+		UsersCount: 456,
+		Book: models.Book{
+			ForeignID:        "hc:words-of-radiance",
+			Title:            "Words of Radiance",
+			SortTitle:        "Words of Radiance",
+			MetadataProvider: "hardcover",
+			Author:           catalog.Books[0].Book.Author,
+		},
+	})
+	catalog.BookCount = len(catalog.Books)
+	searcher := newMockBookSearcher()
+	h, seriesRepo, _, bookRepo := seriesFixtureWithProvider(t, &stubSeriesProvider{
+		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+	}, searcher)
+	series := &models.Series{ForeignID: "ol-series:stormlight", Title: "The Stormlight Archive"}
+	if err := seriesRepo.Create(contextBackground(), series); err != nil {
+		t.Fatal(err)
+	}
+	link := &models.SeriesHardcoverLink{
+		SeriesID:            series.ID,
+		HardcoverSeriesID:   catalog.ForeignID,
+		HardcoverProviderID: catalog.ProviderID,
+		HardcoverTitle:      catalog.Title,
+		HardcoverAuthorName: catalog.AuthorName,
+		HardcoverBookCount:  catalog.BookCount,
+		Confidence:          1,
+		LinkedBy:            "manual",
+	}
+	if err := seriesRepo.UpsertHardcoverLink(contextBackground(), link); err != nil {
+		t.Fatal(err)
+	}
+
+	body := bytes.NewBufferString(`{"foreignBookId":"hc:words-of-radiance","providerId":"102","position":"2"}`)
+	rec := httptest.NewRecorder()
+	h.Fill(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/fill", body), "id", "1"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var response map[string]int
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["queued"] != 1 {
+		t.Fatalf("expected one queued book, got %+v", response)
+	}
+	queued := searcher.waitForCall(t, time.Second)
+	if queued.Title != "Words of Radiance" {
+		t.Fatalf("unexpected queued book: %+v", queued)
+	}
+	searcher.assertNoCall(t, 50*time.Millisecond)
+	created, err := bookRepo.GetByForeignID(contextBackground(), "hc:words-of-radiance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created == nil {
+		t.Fatal("expected requested Hardcover book to be created")
+	}
+	notCreated, err := bookRepo.GetByForeignID(contextBackground(), "hc:the-way-of-kings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if notCreated != nil {
+		t.Fatalf("expected unrequested Hardcover book to remain missing, got %+v", notCreated)
+	}
+	books, err := seriesRepo.ListBooksInSeries(contextBackground(), series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(books) != 1 || books[0].ForeignID != "hc:words-of-radiance" {
+		t.Fatalf("expected only requested book linked to series, got %+v", books)
+	}
+}
+
 func TestSeriesFillQueuesLocalBooksWhenHardcoverCatalogFails(t *testing.T) {
 	catalog := stormlightCatalog()
 	searcher := newMockBookSearcher()
