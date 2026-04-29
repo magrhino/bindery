@@ -240,6 +240,87 @@ func TestSearchBooks_HTTPError(t *testing.T) {
 	}
 }
 
+func TestGetAuthorWorksByName_WithToken(t *testing.T) {
+	var gotVars map[string]any
+	var gotAuth string
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		gotAuth = r.Header.Get("Authorization")
+		body, _ := io.ReadAll(r.Body)
+		var req gqlRequest
+		_ = json.Unmarshal(body, &req)
+		gotVars = req.Variables
+		data := map[string]interface{}{
+			"books": []map[string]interface{}{
+				{
+					"id":            10,
+					"title":         "Dune",
+					"slug":          "dune",
+					"description":   "A desert planet.",
+					"image":         map[string]interface{}{"url": "https://img/dune.jpg"},
+					"release_year":  1965,
+					"ratings_count": 1000,
+					"rating":        4.5,
+					"users_count":   2000,
+					"genres":        []string{"Science Fiction"},
+					"has_audiobook": true,
+					"has_ebook":     false,
+					"audio_seconds": 7200,
+					"contributions": []map[string]interface{}{
+						{"author": map[string]interface{}{"id": 1, "name": "Frank Herbert", "slug": "frank-herbert"}},
+					},
+				},
+			},
+		}
+		return gqlResponse(t, http.StatusOK, data), nil
+	}).WithToken("hc-secret")
+
+	books, err := c.GetAuthorWorksByName(context.Background(), "Frank Herbert")
+	if err != nil {
+		t.Fatalf("GetAuthorWorksByName: %v", err)
+	}
+	if gotAuth != "Bearer hc-secret" {
+		t.Fatalf("Authorization = %q, want Bearer token", gotAuth)
+	}
+	if gotVars["author"] != "Frank Herbert" {
+		t.Fatalf("author variable = %v", gotVars["author"])
+	}
+	if len(books) != 1 {
+		t.Fatalf("books len = %d, want 1", len(books))
+	}
+	book := books[0]
+	if book.ForeignID != "hc:dune" || book.Title != "Dune" || book.ImageURL == "" {
+		t.Fatalf("unexpected book: %+v", book)
+	}
+	if book.DurationSeconds != 7200 {
+		t.Fatalf("DurationSeconds = %d, want 7200", book.DurationSeconds)
+	}
+	if len(book.Genres) != 1 || book.Genres[0] != "Science Fiction" {
+		t.Fatalf("Genres = %+v", book.Genres)
+	}
+	if book.MediaType != "" {
+		t.Fatalf("MediaType = %q, want empty author import default", book.MediaType)
+	}
+}
+
+func TestGetAuthorWorksByName_NoTokenSkipsRequest(t *testing.T) {
+	called := false
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		called = true
+		return gqlResponse(t, http.StatusOK, map[string]interface{}{}), nil
+	})
+
+	books, err := c.GetAuthorWorksByName(context.Background(), "Frank Herbert")
+	if err != nil {
+		t.Fatalf("GetAuthorWorksByName: %v", err)
+	}
+	if called {
+		t.Fatal("expected no HTTP request without token")
+	}
+	if books != nil {
+		t.Fatalf("books = %+v, want nil", books)
+	}
+}
+
 func TestGetAuthor_Found(t *testing.T) {
 	c := newMockClient(func(r *http.Request) (*http.Response, error) {
 		data := map[string]interface{}{

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -73,6 +74,8 @@ type Scheduler struct {
 	logs          *db.LogRepo          // optional; enables periodic log retention trim
 	logRetainDays int                  // 0 = use default (14)
 }
+
+const scheduledWantedSearchConcurrency = 2
 
 // New creates a new scheduler.
 func New(
@@ -520,12 +523,44 @@ func (s *Scheduler) searchWanted() {
 		return
 	}
 
+	searchQueue := make([]models.Book, 0, len(wanted))
 	for _, book := range wanted {
 		if book.Excluded {
 			continue
 		}
-		s.SearchAndGrabBook(ctx, book)
+		searchQueue = append(searchQueue, book)
 	}
+	runBoundedBookTasks(ctx, searchQueue, scheduledWantedSearchConcurrency, func(ctx context.Context, book models.Book) {
+		s.SearchAndGrabBook(ctx, book)
+	})
+}
+
+func runBoundedBookTasks(ctx context.Context, books []models.Book, concurrency int, fn func(context.Context, models.Book)) {
+	if fn == nil || len(books) == 0 {
+		return
+	}
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for _, book := range books {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			wg.Wait()
+			return
+		}
+		book := book
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			fn(ctx, book)
+		}()
+	}
+	wg.Wait()
 }
 
 func (s *Scheduler) refreshMetadata() {

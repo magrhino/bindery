@@ -58,6 +58,18 @@ func (m *mockWorksProvider) GetAuthorWorks(_ context.Context, _ string) ([]model
 	return m.authorWorks, m.authorWorksErr
 }
 
+type mockAuthorWorksByNameProvider struct {
+	mockProvider
+	authorWorksByName    []models.Book
+	authorWorksByNameErr error
+	gotAuthorName        string
+}
+
+func (m *mockAuthorWorksByNameProvider) GetAuthorWorksByName(_ context.Context, authorName string) ([]models.Book, error) {
+	m.gotAuthorName = authorName
+	return m.authorWorksByName, m.authorWorksByNameErr
+}
+
 func TestAggregator_SearchAuthors(t *testing.T) {
 	want := []models.Author{{Name: "Frank Herbert", ForeignID: "OL123A"}}
 	primary := &mockProvider{name: "ol", searchAuthors: want}
@@ -386,6 +398,115 @@ func TestAggregator_GetAuthorWorks_Cached(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Title != "Ender's Game" {
 		t.Errorf("cached works mismatch: %+v", got)
+	}
+}
+
+func TestAggregator_GetAuthorWorksForAuthor_MergesSupplementalByTitle(t *testing.T) {
+	primary := &mockWorksProvider{
+		mockProvider: mockProvider{name: "ol", authorWorks: []models.Book{
+			{ForeignID: "OL1W", Title: "Dune", MetadataProvider: "openlibrary"},
+		}},
+	}
+	hardcover := &mockAuthorWorksByNameProvider{
+		mockProvider: mockProvider{name: "hardcover"},
+		authorWorksByName: []models.Book{
+			{
+				ForeignID:        "hc:dune",
+				Title:            "Dune",
+				Description:      "A desert planet.",
+				ImageURL:         "https://img/dune.jpg",
+				AverageRating:    4.5,
+				RatingsCount:     1000,
+				MetadataProvider: "hardcover",
+			},
+			{ForeignID: "hc:children-of-dune", Title: "Children of Dune", MetadataProvider: "hardcover"},
+		},
+	}
+	agg := &Aggregator{
+		primary:   primary,
+		enrichers: []Provider{hardcover},
+		cache:     newTTLCache(time.Minute),
+	}
+
+	got, err := agg.GetAuthorWorksForAuthor(context.Background(), models.Author{ForeignID: "OL123A", Name: "Frank Herbert"})
+	if err != nil {
+		t.Fatalf("GetAuthorWorksForAuthor: %v", err)
+	}
+	if hardcover.gotAuthorName != "Frank Herbert" {
+		t.Fatalf("supplemental author name = %q", hardcover.gotAuthorName)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 merged works, got %d: %+v", len(got), got)
+	}
+	if got[0].ForeignID != "OL1W" || got[0].MetadataProvider != "openlibrary" {
+		t.Fatalf("primary identity should win duplicate title: %+v", got[0])
+	}
+	if got[0].ImageURL != "https://img/dune.jpg" || got[0].AverageRating != 4.5 || got[0].Description == "" {
+		t.Fatalf("supplemental metadata was not merged: %+v", got[0])
+	}
+	if got[1].ForeignID != "hc:children-of-dune" {
+		t.Fatalf("supplemental-only book missing: %+v", got[1])
+	}
+}
+
+func TestAggregator_GetAuthorWorksForAuthor_EnrichesMissingCoversAfterSupplement(t *testing.T) {
+	primary := &mockWorksProvider{
+		mockProvider: mockProvider{name: "ol", authorWorks: []models.Book{
+			{ForeignID: "OL1W", Title: "Dune", MetadataProvider: "openlibrary"},
+			{ForeignID: "OL2W", Title: "Heretics of Dune", MetadataProvider: "openlibrary"},
+		}},
+	}
+	hardcover := &mockAuthorWorksByNameProvider{
+		mockProvider: mockProvider{name: "hardcover"},
+		authorWorksByName: []models.Book{
+			{ForeignID: "hc:dune", Title: "Dune", ImageURL: "https://img/dune.jpg", MetadataProvider: "hardcover"},
+		},
+	}
+	google := &mockProvider{
+		name:        "googlebooks",
+		searchBooks: []models.Book{{ImageURL: "https://books.google.com/heretics.jpg"}},
+	}
+	agg := &Aggregator{
+		primary:   primary,
+		enrichers: []Provider{hardcover, google},
+		cache:     newTTLCache(time.Minute),
+	}
+
+	got, err := agg.GetAuthorWorksForAuthor(context.Background(), models.Author{ForeignID: "OL123A", Name: "Frank Herbert"})
+	if err != nil {
+		t.Fatalf("GetAuthorWorksForAuthor: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 works, got %d: %+v", len(got), got)
+	}
+	if got[0].ImageURL != "https://img/dune.jpg" {
+		t.Fatalf("matched supplemental cover was not merged: %+v", got[0])
+	}
+	if got[1].ImageURL != "https://books.google.com/heretics.jpg" {
+		t.Fatalf("missing cover was not enriched after supplement: %+v", got[1])
+	}
+}
+
+func TestAggregator_GetAuthorWorksForAuthor_ContinuesWhenSupplementFails(t *testing.T) {
+	primary := &mockWorksProvider{
+		mockProvider: mockProvider{name: "ol", authorWorks: []models.Book{{ForeignID: "OL1W", Title: "Dune", ImageURL: "cover"}}},
+	}
+	hardcover := &mockAuthorWorksByNameProvider{
+		mockProvider:         mockProvider{name: "hardcover"},
+		authorWorksByNameErr: errors.New("hardcover unavailable"),
+	}
+	agg := &Aggregator{
+		primary:   primary,
+		enrichers: []Provider{hardcover},
+		cache:     newTTLCache(time.Minute),
+	}
+
+	got, err := agg.GetAuthorWorksForAuthor(context.Background(), models.Author{ForeignID: "OL123A", Name: "Frank Herbert"})
+	if err != nil {
+		t.Fatalf("GetAuthorWorksForAuthor: %v", err)
+	}
+	if len(got) != 1 || got[0].ForeignID != "OL1W" {
+		t.Fatalf("expected primary result after supplement failure, got %+v", got)
 	}
 }
 
