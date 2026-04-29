@@ -3,10 +3,13 @@ package hardcover
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/vavallee/bindery/internal/metadata"
 )
 
 // testTransport routes all HTTP calls through a handler function.
@@ -310,8 +313,8 @@ func TestGetAuthorWorksByName_NoTokenSkipsRequest(t *testing.T) {
 	})
 
 	books, err := c.GetAuthorWorksByName(context.Background(), "Frank Herbert")
-	if err != nil {
-		t.Fatalf("GetAuthorWorksByName: %v", err)
+	if !errors.Is(err, metadata.ErrProviderNotConfigured) {
+		t.Fatalf("GetAuthorWorksByName error = %v, want ErrProviderNotConfigured", err)
 	}
 	if called {
 		t.Fatal("expected no HTTP request without token")

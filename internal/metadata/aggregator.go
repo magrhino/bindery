@@ -4,6 +4,7 @@ package metadata
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -167,10 +168,15 @@ func (a *Aggregator) GetAuthorWorksForAuthor(ctx context.Context, author models.
 	}
 
 	authorName := strings.TrimSpace(author.Name)
+	supplementsComplete := true
 	if authorName != "" {
 		for _, provider := range a.authorWorksByNameProviders() {
 			supplemental, err := provider.GetAuthorWorksByName(ctx, authorName)
 			if err != nil {
+				supplementsComplete = false
+				if errors.Is(err, ErrProviderNotConfigured) {
+					continue
+				}
 				slog.Warn("author works supplement failed", "provider", provider.Name(), "author", authorName, "error", err)
 				continue
 			}
@@ -182,7 +188,9 @@ func (a *Aggregator) GetAuthorWorksForAuthor(ctx context.Context, author models.
 	}
 
 	a.enrichMissingAuthorWorkCovers(ctx, books)
-	a.cache.set(key, books)
+	if supplementsComplete {
+		a.cache.set(key, books)
+	}
 	return books, nil
 }
 
