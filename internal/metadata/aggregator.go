@@ -220,7 +220,9 @@ func mergeAuthorWorks(primary, supplemental []models.Book) []models.Book {
 	for _, book := range primary {
 		key := authorWorkMergeKey(book.Title)
 		if key != "" {
-			index[key] = len(books)
+			if _, exists := index[key]; !exists {
+				index[key] = len(books)
+			}
 		}
 		books = append(books, book)
 	}
