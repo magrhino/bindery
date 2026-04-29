@@ -449,6 +449,46 @@ func TestAggregator_GetAuthorWorksForAuthor_MergesSupplementalByTitle(t *testing
 	}
 }
 
+func TestAggregator_GetAuthorWorksForAuthor_MergesSupplementalIntoFirstDuplicateTitle(t *testing.T) {
+	primary := &mockWorksProvider{
+		mockProvider: mockProvider{name: "ol", authorWorks: []models.Book{
+			{ForeignID: "OL1W", Title: "Dune", MetadataProvider: "openlibrary"},
+			{ForeignID: "OL2W", Title: "Dune", MetadataProvider: "openlibrary"},
+		}},
+	}
+	hardcover := &mockAuthorWorksByNameProvider{
+		mockProvider: mockProvider{name: "hardcover"},
+		authorWorksByName: []models.Book{
+			{
+				ForeignID:        "hc:dune",
+				Title:            "Dune",
+				ImageURL:         "https://img/dune.jpg",
+				AverageRating:    4.5,
+				MetadataProvider: "hardcover",
+			},
+		},
+	}
+	agg := &Aggregator{
+		primary:   primary,
+		enrichers: []Provider{hardcover},
+		cache:     newTTLCache(time.Minute),
+	}
+
+	got, err := agg.GetAuthorWorksForAuthor(context.Background(), models.Author{ForeignID: "OL123A", Name: "Frank Herbert"})
+	if err != nil {
+		t.Fatalf("GetAuthorWorksForAuthor: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected duplicate primary works to remain for downstream dedup, got %d: %+v", len(got), got)
+	}
+	if got[0].ImageURL != "https://img/dune.jpg" || got[0].AverageRating != 4.5 {
+		t.Fatalf("first duplicate did not receive supplemental metadata: %+v", got[0])
+	}
+	if got[1].ImageURL != "" || got[1].AverageRating != 0 {
+		t.Fatalf("supplemental metadata merged into later duplicate: %+v", got[1])
+	}
+}
+
 func TestAggregator_GetAuthorWorksForAuthor_EnrichesMissingCoversAfterSupplement(t *testing.T) {
 	primary := &mockWorksProvider{
 		mockProvider: mockProvider{name: "ol", authorWorks: []models.Book{
