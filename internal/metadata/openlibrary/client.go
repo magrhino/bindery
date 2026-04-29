@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vavallee/bindery/internal/models"
@@ -204,11 +205,28 @@ func (c *Client) GetBook(ctx context.Context, foreignID string) (*models.Book, e
 // Both upstream calls are best-effort: as long as one returns, we proceed —
 // the other's failure is logged.
 func (c *Client) GetAuthorWorks(ctx context.Context, authorForeignID string) ([]models.Book, error) {
-	primary, primaryErr := c.searchAuthorWorks(ctx, authorForeignID)
+	var (
+		primary     []models.Book
+		primaryErr  error
+		backfill    []authorWorkEntry
+		backfillErr error
+		wg          sync.WaitGroup
+	)
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		primary, primaryErr = c.searchAuthorWorks(ctx, authorForeignID)
+	}()
+	go func() {
+		defer wg.Done()
+		backfill, backfillErr = c.authorWorksBackfill(ctx, authorForeignID)
+	}()
+	wg.Wait()
+
 	if primaryErr != nil {
 		slog.Warn("openlibrary: author search failed, falling back to works endpoint", "author", authorForeignID, "error", primaryErr)
 	}
-	backfill, backfillErr := c.authorWorksBackfill(ctx, authorForeignID)
 	if backfillErr != nil {
 		slog.Debug("openlibrary: author works backfill failed", "author", authorForeignID, "error", backfillErr)
 	}
