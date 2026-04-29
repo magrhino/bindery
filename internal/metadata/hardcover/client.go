@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
 )
 
@@ -151,8 +152,11 @@ func (c *Client) SearchBooks(ctx context.Context, query string) ([]models.Book, 
 // returns no supplemental results.
 func (c *Client) GetAuthorWorksByName(ctx context.Context, authorName string) ([]models.Book, error) {
 	authorName = strings.TrimSpace(authorName)
-	if authorName == "" || c.authorizationToken(ctx) == "" {
+	if authorName == "" {
 		return nil, nil
+	}
+	if c.authorizationToken(ctx) == "" {
+		return nil, metadata.ErrProviderNotConfigured
 	}
 
 	gql := `query GetAuthorWorksByName($author: String!, $limit: Int!, $offset: Int!) {

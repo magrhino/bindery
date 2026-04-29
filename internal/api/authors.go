@@ -162,7 +162,7 @@ func (h *AuthorHandler) Create(w http.ResponseWriter, r *http.Request) {
 			if mediaType == "" {
 				mediaType = h.resolveDefaultMediaType(r.Context())
 			}
-			go h.FetchAuthorBooks(canonical, req.SearchOnAdd, mediaType)
+			h.fetchAuthorBooksAsync(canonical, req.SearchOnAdd, mediaType)
 			cleanAuthorDescription(canonical)
 			writeJSON(w, http.StatusOK, canonical)
 			return
@@ -198,7 +198,7 @@ func (h *AuthorHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch and store books for this author. Always populate the catalogue;
 	// pass searchOnAdd so FetchAuthorBooks knows whether to also queue grabs.
-	go h.FetchAuthorBooks(author, req.SearchOnAdd, mediaType)
+	h.fetchAuthorBooksAsync(author, req.SearchOnAdd, mediaType)
 
 	cleanAuthorDescription(author)
 	writeJSON(w, http.StatusCreated, author)
@@ -208,6 +208,14 @@ func cleanAuthorDescription(author *models.Author) {
 	if author != nil {
 		author.Description = textutil.CleanDescription(author.Description)
 	}
+}
+
+func (h *AuthorHandler) fetchAuthorBooksAsync(author *models.Author, autoSearch bool, mediaType string) {
+	if author == nil {
+		return
+	}
+	snapshot := *author
+	go h.FetchAuthorBooks(&snapshot, autoSearch, mediaType)
 }
 
 func (h *AuthorHandler) fetchAuthorForCreate(ctx context.Context, foreignID, fallbackName string) (*models.Author, error) {
@@ -631,7 +639,7 @@ func (h *AuthorHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	// the user triggered it to refresh metadata, not to queue downloads.
 	// Newly-discovered books inherit the global default media type; rows
 	// that already exist keep whatever value they were created with.
-	go h.FetchAuthorBooks(author, false, h.resolveDefaultMediaType(r.Context()))
+	h.fetchAuthorBooksAsync(author, false, h.resolveDefaultMediaType(r.Context()))
 	writeJSON(w, http.StatusAccepted, map[string]string{"message": "refresh started"})
 }
 
@@ -1115,7 +1123,7 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 			author, _ = h.authors.GetByForeignID(ctx, req.ForeignAuthorID)
 		} else {
 			author = fetched
-			go h.FetchAuthorBooks(author, false, h.resolveDefaultMediaType(ctx))
+			h.fetchAuthorBooksAsync(author, false, h.resolveDefaultMediaType(ctx))
 		}
 	}
 	if author == nil {
