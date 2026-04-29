@@ -6,6 +6,10 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **Author detail search-all-wanted action** (#410) — the Author Detail page now has a **Search all wanted** button that queues searches for that author's monitored wanted books, disables itself when there is nothing searchable, and surfaces bulk-search errors inline. Author bulk search now also skips unmonitored wanted books so explicit per-book unmonitor decisions are respected.
+
 ## [v1.2.6] — 2026-04-25
 
 ### Fixed
