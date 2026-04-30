@@ -377,6 +377,54 @@ func TestDeleteTorrent_HTTPError(t *testing.T) {
 	}
 }
 
+func TestSetCategory(t *testing.T) {
+	var gotHash, gotCategory string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/torrents/setCategory":
+			_ = r.ParseForm()
+			gotHash = r.FormValue("hashes")
+			gotCategory = r.FormValue("category")
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "admin", "pass")
+	if err := c.SetCategory(context.Background(), "abc123", "imported"); err != nil {
+		t.Fatalf("SetCategory: %v", err)
+	}
+	if gotHash != "abc123" {
+		t.Errorf("hashes: want abc123, got %q", gotHash)
+	}
+	if gotCategory != "imported" {
+		t.Errorf("category: want imported, got %q", gotCategory)
+	}
+}
+
+func TestSetCategoryHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/torrents/setCategory":
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "admin", "pass")
+	if err := c.SetCategory(context.Background(), "abc123", ""); err == nil {
+		t.Fatal("expected error on 500")
+	}
+}
+
 // TestGet_403Retry verifies that a 403 triggers re-login and a single retry.
 func TestGet_403Retry(t *testing.T) {
 	loginCount := 0

@@ -455,21 +455,42 @@ func (s *Scanner) checkQbittorrentDownloads(ctx context.Context, client *models.
 		isFailed := strings.Contains(state, "error")
 
 		if isComplete && (dl.Status == models.StateDownloading || dl.Status == models.StateGrabbed) {
-			downloadPath := torrent.SavePath
-			candidate := filepath.Join(torrent.SavePath, torrent.Name)
-			if _, err := os.Stat(candidate); err == nil {
-				downloadPath = candidate
+			downloadPath := resolveQbittorrentDownloadPath(torrent, s.remapper)
+			if downloadPath == "" {
+				slog.Warn("qBittorrent completed download without a usable path", "title", dl.Title, "hash", torrent.Hash)
+				s.updateDownloadStatus(ctx, dl.ID, models.StateCompleted)
+				s.failImport(ctx, &dl, models.StateImportFailed, "qBittorrent did not report a download path")
+				continue
 			}
-			downloadPath = s.remapper.Apply(downloadPath)
 
 			slog.Info("download completed", "title", dl.Title, "path", downloadPath)
 			s.updateDownloadStatus(ctx, dl.ID, models.StateCompleted)
-			s.tryImportQbittorrent(ctx, &dl, downloadPath)
+			s.tryImportQbittorrent(ctx, qb, &dl, downloadPath, client.PostImportCategory)
 		} else if isFailed && dl.Status != models.StateFailed {
 			slog.Warn("download failed", "title", dl.Title, "state", torrent.State)
 			s.markDownloadFailed(ctx, &dl, "Torrent failed in qBittorrent")
 		}
 	}
+}
+
+func resolveQbittorrentDownloadPath(torrent qbittorrent.Torrent, remapper *Remapper) string {
+	candidates := torrent.PathCandidates()
+	for _, candidate := range candidates {
+		localPath := candidate
+		if remapper != nil {
+			localPath = remapper.Apply(candidate)
+		}
+		if _, err := os.Stat(localPath); err == nil {
+			return localPath
+		}
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	if remapper != nil {
+		return remapper.Apply(candidates[0])
+	}
+	return candidates[0]
 }
 
 // tryImportSABnzbd attempts to import a completed SABnzbd download into the library.
@@ -487,8 +508,16 @@ func (s *Scanner) tryImportTransmission(ctx context.Context, dl *models.Download
 	s.tryImportInternal(ctx, dl, downloadPath, "transmission", safeRemoteID(dl.TorrentID), nil)
 }
 
-func (s *Scanner) tryImportQbittorrent(ctx context.Context, dl *models.Download, downloadPath string) {
-	s.tryImportInternal(ctx, dl, downloadPath, "qbittorrent", safeRemoteID(dl.TorrentID), nil)
+func (s *Scanner) tryImportQbittorrent(ctx context.Context, qb *qbittorrent.Client, dl *models.Download, downloadPath string, postImportCategory *string) {
+	var cleanup func() error
+	if qb != nil && postImportCategory != nil && safeRemoteID(dl.TorrentID) != "" {
+		hash := safeRemoteID(dl.TorrentID)
+		category := *postImportCategory
+		cleanup = func() error {
+			return qb.SetCategory(ctx, hash, category)
+		}
+	}
+	s.tryImportInternal(ctx, dl, downloadPath, "qbittorrent", safeRemoteID(dl.TorrentID), cleanup)
 }
 
 // tryImportInternal is the common import logic shared by SABnzbd and Transmission.

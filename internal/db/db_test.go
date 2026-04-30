@@ -570,14 +570,16 @@ func TestDownloadClientRepoCredentialFields(t *testing.T) {
 	repo := NewDownloadClientRepo(database)
 
 	// qBittorrent: Username/Password should round-trip through dedicated fields.
+	postImportCategory := "imported"
 	qbt := &models.DownloadClient{
-		Name:     "My qBittorrent",
-		Type:     "qbittorrent",
-		Host:     "localhost",
-		Port:     8080,
-		Username: "admin",
-		Password: "secret",
-		Enabled:  true,
+		Name:               "My qBittorrent",
+		Type:               "qbittorrent",
+		Host:               "localhost",
+		Port:               8080,
+		Username:           "admin",
+		Password:           "secret",
+		PostImportCategory: &postImportCategory,
+		Enabled:            true,
 	}
 	if err := repo.Create(ctx, qbt); err != nil {
 		t.Fatalf("create: %v", err)
@@ -598,6 +600,34 @@ func TestDownloadClientRepoCredentialFields(t *testing.T) {
 	}
 	if got.APIKey != "" {
 		t.Errorf("APIKey: want empty for credential client, got %q", got.APIKey)
+	}
+	if got.PostImportCategory == nil || *got.PostImportCategory != "imported" {
+		t.Fatalf("PostImportCategory: want imported, got %v", got.PostImportCategory)
+	}
+
+	clearCategory := ""
+	got.PostImportCategory = &clearCategory
+	if err := repo.Update(ctx, got); err != nil {
+		t.Fatalf("update clear post-import category: %v", err)
+	}
+	got, err = repo.GetByID(ctx, qbt.ID)
+	if err != nil {
+		t.Fatalf("get after clear update: %v", err)
+	}
+	if got.PostImportCategory == nil || *got.PostImportCategory != "" {
+		t.Fatalf("PostImportCategory: want empty string, got %v", got.PostImportCategory)
+	}
+
+	got.PostImportCategory = nil
+	if err := repo.Update(ctx, got); err != nil {
+		t.Fatalf("update nil post-import category: %v", err)
+	}
+	got, err = repo.GetByID(ctx, qbt.ID)
+	if err != nil {
+		t.Fatalf("get after nil update: %v", err)
+	}
+	if got.PostImportCategory != nil {
+		t.Fatalf("PostImportCategory: want nil, got %v", got.PostImportCategory)
 	}
 
 	// sabnzbd: APIKey should survive as-is; Username/Password stay empty

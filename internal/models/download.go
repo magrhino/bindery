@@ -3,19 +3,20 @@ package models
 import "time"
 
 type DownloadClient struct {
-	ID        int64     `json:"id"`
-	Name      string    `json:"name"`
-	Type      string    `json:"type"`
-	Host      string    `json:"host"`
-	Port      int       `json:"port"`
-	APIKey    string    `json:"apiKey"`
-	UseSSL    bool      `json:"useSsl"`
-	URLBase   string    `json:"urlBase"`
-	Category  string    `json:"category"`
-	Priority  int       `json:"priority"`
-	Enabled   bool      `json:"enabled"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID                 int64     `json:"id"`
+	Name               string    `json:"name"`
+	Type               string    `json:"type"`
+	Host               string    `json:"host"`
+	Port               int       `json:"port"`
+	APIKey             string    `json:"apiKey"`
+	UseSSL             bool      `json:"useSsl"`
+	URLBase            string    `json:"urlBase"`
+	Category           string    `json:"category"`
+	PostImportCategory *string   `json:"postImportCategory,omitempty"`
+	Priority           int       `json:"priority"`
+	Enabled            bool      `json:"enabled"`
+	CreatedAt          time.Time `json:"createdAt"`
+	UpdatedAt          time.Time `json:"updatedAt"`
 
 	// Username and Password are used by download clients that authenticate with
 	// credentials rather than an API key (e.g. qBittorrent, Transmission).

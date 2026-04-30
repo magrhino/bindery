@@ -573,6 +573,7 @@ export interface DownloadClient {
   useSsl: boolean
   urlBase: string
   category: string
+  postImportCategory?: string | null
   enabled: boolean
 }
 
@@ -589,6 +590,8 @@ export interface Download {
 export interface QueueItem extends Download {
   percentage?: string
   timeLeft?: string
+  speed?: string
+  pathWarning?: string
 }
 
 export interface SearchResult {

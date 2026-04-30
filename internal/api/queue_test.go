@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"testing"
 
@@ -333,15 +334,17 @@ func TestQueueListLiveOverlayTransmission(t *testing.T) {
 }
 
 func TestQueueListLiveOverlayQbittorrent(t *testing.T) {
+	missingPath := filepath.Join(t.TempDir(), "missing")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v2/auth/login":
 			_, _ = w.Write([]byte("Ok."))
 		case "/api/v2/torrents/info":
 			_ = json.NewEncoder(w).Encode([]map[string]any{{
-				"hash":     "ABCDEF",
-				"progress": 0.9,
-				"eta":      300,
+				"hash":         "ABCDEF",
+				"progress":     0.9,
+				"eta":          300,
+				"content_path": missingPath,
 			}})
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -390,6 +393,9 @@ func TestQueueListLiveOverlayQbittorrent(t *testing.T) {
 	}
 	if items[0].TimeLeft == "" {
 		t.Fatalf("expected timeLeft, got %+v", items[0])
+	}
+	if items[0].PathWarning == "" {
+		t.Fatalf("expected qBittorrent path warning, got %+v", items[0])
 	}
 }
 

@@ -5,10 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/vavallee/bindery/internal/calibre"
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/downloader/qbittorrent"
 	"github.com/vavallee/bindery/internal/models"
 )
 
@@ -56,6 +59,66 @@ func TestTitleMatch(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("titleMatch(%q, %q) = %v, want %v", tt.bookTitle, tt.parsedTitle, got, tt.want)
 		}
+	}
+}
+
+func TestResolveQbittorrentDownloadPathPrefersContentPath(t *testing.T) {
+	root := t.TempDir()
+	savePath := filepath.Join(root, "save")
+	legacyPath := filepath.Join(savePath, "Release")
+	contentPath := filepath.Join(root, "content")
+	if err := os.MkdirAll(legacyPath, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(contentPath, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	got := resolveQbittorrentDownloadPath(qbittorrent.Torrent{
+		ContentPath: contentPath,
+		SavePath:    savePath,
+		Name:        "Release",
+	}, nil)
+
+	if got != contentPath {
+		t.Fatalf("path = %q, want content path %q", got, contentPath)
+	}
+}
+
+func TestResolveQbittorrentDownloadPathFallsBackToSavePathName(t *testing.T) {
+	root := t.TempDir()
+	savePath := filepath.Join(root, "save")
+	legacyPath := filepath.Join(savePath, "Release")
+	if err := os.MkdirAll(legacyPath, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	got := resolveQbittorrentDownloadPath(qbittorrent.Torrent{
+		ContentPath: filepath.Join(root, "missing"),
+		SavePath:    savePath,
+		Name:        "Release",
+	}, nil)
+
+	if got != legacyPath {
+		t.Fatalf("path = %q, want fallback %q", got, legacyPath)
+	}
+}
+
+func TestResolveQbittorrentDownloadPathAppliesRemap(t *testing.T) {
+	localRoot := t.TempDir()
+	localPath := filepath.Join(localRoot, "Book")
+	if err := os.MkdirAll(localPath, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	remotePath := "/remote/downloads/Book"
+	remapper := ParseRemap("/remote/downloads:" + localRoot)
+
+	got := resolveQbittorrentDownloadPath(qbittorrent.Torrent{
+		ContentPath: remotePath,
+	}, remapper)
+
+	if got != localPath {
+		t.Fatalf("path = %q, want remapped path %q", got, localPath)
 	}
 }
 

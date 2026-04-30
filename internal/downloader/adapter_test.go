@@ -6,9 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/vavallee/bindery/internal/downloader/qbittorrent"
 	"github.com/vavallee/bindery/internal/models"
 )
 
@@ -134,15 +137,17 @@ func TestGetLiveStatusesTransmission(t *testing.T) {
 }
 
 func TestGetLiveStatusesQbittorrent(t *testing.T) {
+	visiblePath := t.TempDir()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v2/auth/login":
 			_, _ = w.Write([]byte("Ok."))
 		case "/api/v2/torrents/info":
 			_ = json.NewEncoder(w).Encode([]map[string]any{{
-				"hash":     "ABCDEF",
-				"progress": 0.9,
-				"eta":      300,
+				"hash":         "ABCDEF",
+				"progress":     0.9,
+				"eta":          300,
+				"content_path": visiblePath,
 			}})
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -169,6 +174,53 @@ func TestGetLiveStatusesQbittorrent(t *testing.T) {
 	}
 	if status.TimeLeft == "" {
 		t.Fatalf("expected non-empty timeLeft")
+	}
+	if status.PathWarning != "" {
+		t.Fatalf("expected no path warning, got %q", status.PathWarning)
+	}
+}
+
+func TestGetLiveStatusesQbittorrentPathWarning(t *testing.T) {
+	missingPath := filepath.Join(t.TempDir(), "missing")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/torrents/info":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"hash":         "ABCDEF",
+				"progress":     1.0,
+				"content_path": missingPath,
+			}})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	host, port := serverHostPort(t, srv.URL)
+	client := &models.DownloadClient{Type: "qbittorrent", Host: host, Port: port, Username: "u", Password: "p"}
+
+	statusByID, _, err := GetLiveStatuses(context.Background(), client)
+	if err != nil {
+		t.Fatalf("GetLiveStatuses: %v", err)
+	}
+	warning := statusByID["abcdef"].PathWarning
+	if !strings.Contains(warning, missingPath) {
+		t.Fatalf("path warning = %q, want it to include %q", warning, missingPath)
+	}
+}
+
+func TestQbittorrentPathWarningUsesResolver(t *testing.T) {
+	visiblePath := t.TempDir()
+	warning := qbittorrentPathWarning(qbittorrent.Torrent{
+		ContentPath: "/remote/downloads/Book",
+	}, func(string) string {
+		return visiblePath
+	})
+
+	if warning != "" {
+		t.Fatalf("expected resolved visible path to suppress warning, got %q", warning)
 	}
 }
 

@@ -132,6 +132,11 @@ export default function QueuePage() {
                         {item.errorMessage}
                       </div>
                     )}
+                    {item.pathWarning && (
+                      <div className="mt-1 text-xs text-amber-500 bg-amber-500/10 rounded px-2 py-1 break-words">
+                        {item.pathWarning}
+                      </div>
+                    )}
                     {item.percentage && (
                       <div className="mt-2 h-1 bg-slate-200 dark:bg-zinc-800 rounded-full overflow-hidden">
                         <div

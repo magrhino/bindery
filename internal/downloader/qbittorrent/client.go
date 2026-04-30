@@ -178,7 +178,7 @@ func (c *Client) AddTorrent(ctx context.Context, magnetOrURL, category, savePath
 		if newest != nil {
 			hash := strings.ToLower(newest.Hash)
 			if category != "" {
-				_ = c.setCategory(ctx, hash, category)
+				_ = c.SetCategory(ctx, hash, category)
 			}
 			return hash, nil
 		}
@@ -279,8 +279,8 @@ func (c *Client) DeleteTorrent(ctx context.Context, hash string, deleteFiles boo
 	return nil
 }
 
-// setCategory assigns a category to a torrent by hash.
-func (c *Client) setCategory(ctx context.Context, hash, category string) error {
+// SetCategory assigns a category to a torrent by hash.
+func (c *Client) SetCategory(ctx context.Context, hash, category string) error {
 	form := url.Values{
 		"hashes":   {hash},
 		"category": {category},
@@ -301,6 +301,9 @@ func (c *Client) setCategory(ctx context.Context, hash, category string) error {
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("setCategory HTTP %d", resp.StatusCode)
+	}
 	return nil
 }
 

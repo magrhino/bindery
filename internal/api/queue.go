@@ -10,6 +10,7 @@ import (
 
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/downloader"
+	"github.com/vavallee/bindery/internal/importer"
 	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/models"
 	"github.com/vavallee/bindery/internal/notifier"
@@ -21,6 +22,7 @@ type QueueHandler struct {
 	books     *db.BookRepo
 	history   *db.HistoryRepo
 	notif     *notifier.Notifier
+	pathMap   func(string) string
 }
 
 func NewQueueHandler(downloads *db.DownloadRepo, clients *db.DownloadClientRepo, books *db.BookRepo, history *db.HistoryRepo) *QueueHandler {
@@ -33,12 +35,23 @@ func (h *QueueHandler) WithNotifier(n *notifier.Notifier) *QueueHandler {
 	return h
 }
 
+// WithDownloadPathRemap applies the same downloader path remap used by the
+// importer before Queue checks whether qBittorrent paths are visible locally.
+func (h *QueueHandler) WithDownloadPathRemap(spec string) *QueueHandler {
+	remapper := importer.ParseRemap(spec)
+	if remapper != nil && !remapper.Empty() {
+		h.pathMap = remapper.Apply
+	}
+	return h
+}
+
 // QueueItem combines local download record with live downloader status.
 type QueueItem struct {
 	models.Download
-	Percentage string `json:"percentage,omitempty"`
-	TimeLeft   string `json:"timeLeft,omitempty"`
-	Speed      string `json:"speed,omitempty"`
+	Percentage  string `json:"percentage,omitempty"`
+	TimeLeft    string `json:"timeLeft,omitempty"`
+	Speed       string `json:"speed,omitempty"`
+	PathWarning string `json:"pathWarning,omitempty"`
 }
 
 func (h *QueueHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +86,7 @@ func (h *QueueHandler) List(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			statuses, usesTorrentID, err := downloader.GetLiveStatuses(r.Context(), client)
+			statuses, usesTorrentID, err := downloader.GetLiveStatusesWithPathResolver(r.Context(), client, h.pathMap)
 			if err != nil {
 				statusByClientID[clientID] = liveStatusResult{}
 				continue
@@ -104,6 +117,7 @@ func (h *QueueHandler) List(w http.ResponseWriter, r *http.Request) {
 			items[i].Percentage = status.Percentage
 			items[i].TimeLeft = status.TimeLeft
 			items[i].Speed = status.Speed
+			items[i].PathWarning = status.PathWarning
 		}
 	}
 

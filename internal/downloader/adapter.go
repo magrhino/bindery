@@ -5,6 +5,7 @@ package downloader
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -17,9 +18,10 @@ import (
 )
 
 type LiveStatus struct {
-	Percentage string
-	TimeLeft   string
-	Speed      string
+	Percentage  string
+	TimeLeft    string
+	Speed       string
+	PathWarning string
 }
 
 type SendResult struct {
@@ -235,8 +237,12 @@ func GetStalledIDs(ctx context.Context, client *models.DownloadClient) (map[stri
 }
 
 func GetLiveStatuses(ctx context.Context, client *models.DownloadClient) (map[string]LiveStatus, bool, error) {
+	return GetLiveStatusesWithPathResolver(ctx, client, nil)
+}
+
+func GetLiveStatusesWithPathResolver(ctx context.Context, client *models.DownloadClient, resolvePath func(string) string) (map[string]LiveStatus, bool, error) {
 	if IsTorrentClient(client.Type) {
-		statuses, err := getTorrentLiveStatuses(ctx, client)
+		statuses, err := getTorrentLiveStatuses(ctx, client, resolvePath)
 		return statuses, true, err
 	}
 	if IsNZBGetClient(client.Type) {
@@ -287,7 +293,7 @@ func getNZBGetLiveStatuses(ctx context.Context, client *models.DownloadClient) (
 	return out, nil
 }
 
-func getTorrentLiveStatuses(ctx context.Context, client *models.DownloadClient) (map[string]LiveStatus, error) {
+func getTorrentLiveStatuses(ctx context.Context, client *models.DownloadClient, resolvePath func(string) string) (map[string]LiveStatus, error) {
 	if client.Type == "transmission" {
 		trans := transmission.New(client.Host, client.Port, client.Username, client.Password, client.URLBase, client.UseSSL)
 		torrents, err := trans.GetTorrents(ctx, client.Category)
@@ -333,11 +339,29 @@ func getTorrentLiveStatuses(ctx context.Context, client *models.DownloadClient) 
 	out := make(map[string]LiveStatus, len(torrents))
 	for _, t := range torrents {
 		out[strings.ToLower(t.Hash)] = LiveStatus{
-			Percentage: fmt.Sprintf("%.1f", t.Progress*100),
-			TimeLeft:   etaToTimeLeft(int64(t.ETA)),
+			Percentage:  fmt.Sprintf("%.1f", t.Progress*100),
+			TimeLeft:    etaToTimeLeft(int64(t.ETA)),
+			PathWarning: qbittorrentPathWarning(t, resolvePath),
 		}
 	}
 	return out, nil
+}
+
+func qbittorrentPathWarning(t qbittorrent.Torrent, resolvePath func(string) string) string {
+	candidates := t.PathCandidates()
+	if len(candidates) == 0 {
+		return "qBittorrent did not report a download path for this torrent"
+	}
+	for _, candidate := range candidates {
+		localPath := candidate
+		if resolvePath != nil {
+			localPath = resolvePath(candidate)
+		}
+		if _, err := os.Stat(localPath); err == nil {
+			return ""
+		}
+	}
+	return fmt.Sprintf("qBittorrent path is not visible to Bindery: %s", candidates[0])
 }
 
 func etaToTimeLeft(etaSeconds int64) string {
