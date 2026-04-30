@@ -9,6 +9,7 @@ Expected scenario directories:
 - `ebook-only-item`
 - `mixed-metadata-completeness`
 - `series-linked-item`
+- `series-repeat-item`
 - `permission-limited-account`
 
 Keep the manifest in the parent directory as the contract source of truth for scenario IDs and intended behavior.

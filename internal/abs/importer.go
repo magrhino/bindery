@@ -503,27 +503,36 @@ func (i *Importer) importOne(ctx context.Context, cfg ImportConfig, runID int64,
 		i.enrichAudiobookFromASIN(ctx, bookResult.row)
 	}
 
-	seriesCount := 0
+	seriesMemberships := map[string]struct{}{}
 	for _, series := range item.Series {
-		created, matchedBy, err := i.upsertSeries(ctx, cfg, runID, bookResult.row.ID, series, stats)
+		seriesResult, err := i.upsertSeries(ctx, cfg, runID, bookResult.row.ID, item.ItemID, series, stats)
 		if err != nil {
 			slog.Warn("abs import: series upsert failed", "itemID", item.ItemID, "series", series.Name, "error", err)
 			continue
 		}
-		seriesCount++
-		if created {
+		if seriesResult.Linked && seriesResult.CountKey != "" {
+			seriesMemberships[seriesResult.CountKey] = struct{}{}
+		}
+		if seriesResult.CreatedSeries {
 			stats.SeriesCreated++
-		} else if matchedBy != "" {
+		} else if seriesResult.MembershipCreated {
 			stats.SeriesLinked++
 		}
 	}
-	seriesMeta, hardcoverSeriesCount := i.matchHardcoverSeries(ctx, cfg, runID, author, bookResult.row, item, stats)
+	seriesMeta, hardcoverSeriesResult := i.matchHardcoverSeries(ctx, cfg, runID, author, bookResult.row, item, stats)
 	stats.MetadataMatched += seriesMeta.Matched
 	stats.MetadataRelinked += seriesMeta.Relinked
 	stats.MetadataConflicts += seriesMeta.Conflicts
 	stats.MetadataAutoResolved += seriesMeta.AutoResolved
-	seriesCount += hardcoverSeriesCount
-	result.SeriesCount = seriesCount
+	if hardcoverSeriesResult.Linked && hardcoverSeriesResult.CountKey != "" {
+		seriesMemberships[hardcoverSeriesResult.CountKey] = struct{}{}
+	}
+	if hardcoverSeriesResult.CreatedSeries {
+		stats.SeriesCreated++
+	} else if hardcoverSeriesResult.MembershipCreated {
+		stats.SeriesLinked++
+	}
+	result.SeriesCount = len(seriesMemberships)
 
 	addedEditions, err := i.upsertEditions(ctx, cfg, runID, bookResult.row.ID, item)
 	if err != nil {
