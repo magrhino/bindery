@@ -130,6 +130,7 @@ type ImportStats struct {
 
 	dryRunSeriesExternalIDs map[string]struct{}
 	dryRunSeriesTitles      map[string]struct{}
+	dryRunSeriesMemberships map[string]struct{}
 }
 
 type ImportSourceSnapshot struct {
@@ -751,27 +752,36 @@ func (i *Importer) importOne(ctx context.Context, cfg ImportConfig, runID int64,
 		i.enrichAudiobookFromASIN(ctx, bookResult.row)
 	}
 
-	seriesCount := 0
+	seriesMemberships := map[string]struct{}{}
 	for _, series := range item.Series {
-		created, matchedBy, err := i.upsertSeries(ctx, cfg, runID, bookResult.row.ID, series, stats)
+		seriesResult, err := i.upsertSeries(ctx, cfg, runID, bookResult.row.ID, item.ItemID, series, stats)
 		if err != nil {
 			slog.Warn("abs import: series upsert failed", "itemID", item.ItemID, "series", series.Name, "error", err)
 			continue
 		}
-		seriesCount++
-		if created {
+		if seriesResult.Linked && seriesResult.CountKey != "" {
+			seriesMemberships[seriesResult.CountKey] = struct{}{}
+		}
+		if seriesResult.CreatedSeries {
 			stats.SeriesCreated++
-		} else if matchedBy != "" {
+		} else if seriesResult.MembershipCreated {
 			stats.SeriesLinked++
 		}
 	}
-	seriesMeta, hardcoverSeriesCount := i.matchHardcoverSeries(ctx, cfg, runID, author, bookResult.row, item, stats)
+	seriesMeta, hardcoverSeriesResult := i.matchHardcoverSeries(ctx, cfg, runID, author, bookResult.row, item, stats)
 	stats.MetadataMatched += seriesMeta.Matched
 	stats.MetadataRelinked += seriesMeta.Relinked
 	stats.MetadataConflicts += seriesMeta.Conflicts
 	stats.MetadataAutoResolved += seriesMeta.AutoResolved
-	seriesCount += hardcoverSeriesCount
-	result.SeriesCount = seriesCount
+	if hardcoverSeriesResult.Linked && hardcoverSeriesResult.CountKey != "" {
+		seriesMemberships[hardcoverSeriesResult.CountKey] = struct{}{}
+	}
+	if hardcoverSeriesResult.CreatedSeries {
+		stats.SeriesCreated++
+	} else if hardcoverSeriesResult.MembershipCreated {
+		stats.SeriesLinked++
+	}
+	result.SeriesCount = len(seriesMemberships)
 
 	addedEditions, err := i.upsertEditions(ctx, cfg, runID, bookResult.row.ID, item)
 	if err != nil {
@@ -1055,6 +1065,17 @@ func (i *Importer) effectiveLibraryDir(ctx context.Context, author *models.Autho
 type bookUpsertResult struct {
 	row       *models.Book
 	matchedBy string
+}
+
+type seriesUpsertResult struct {
+	SeriesID             int64
+	IdentityExternalID   string
+	MembershipExternalID string
+	CountKey             string
+	CreatedSeries        bool
+	MembershipCreated    bool
+	Linked               bool
+	MatchedBy            string
 }
 
 func (i *Importer) resolveAuthor(ctx context.Context, cfg ImportConfig, runID int64, item NormalizedLibraryItem, allowCreate bool, matcher *authorMatcher) (*models.Author, bool, string, metadataMergeResult, error) {
@@ -2512,20 +2533,22 @@ func (i *Importer) applyBookFields(ctx context.Context, book *models.Book, autho
 	return i.books.Update(ctx, book)
 }
 
-func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bookID int64, ref NormalizedSeries, stats *ImportStats) (bool, string, error) {
+func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bookID int64, itemID string, ref NormalizedSeries, stats *ImportStats) (seriesUpsertResult, error) {
 	title := strings.TrimSpace(ref.Name)
 	if title == "" {
-		return false, "", nil
+		return seriesUpsertResult{}, nil
 	}
 	externalID := seriesExternalID(ref)
 	var existing *models.Series
+	var identityLink *models.ABSProvenance
 	if i.provenance != nil {
 		if link, err := i.provenance.GetByExternal(ctx, cfg.SourceID, cfg.LibraryID, entityTypeSeries, externalID); err != nil {
-			return false, "", err
+			return seriesUpsertResult{}, err
 		} else if link != nil {
+			identityLink = link
 			existing, err = i.series.GetByID(ctx, link.LocalID)
 			if err != nil {
-				return false, "", err
+				return seriesUpsertResult{}, err
 			}
 		}
 	}
@@ -2533,10 +2556,10 @@ func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bo
 	if existing == nil {
 		match, ambiguous, err := i.findSeriesByTitle(ctx, title)
 		if err != nil {
-			return false, "", err
+			return seriesUpsertResult{}, err
 		}
 		if ambiguous {
-			return false, "", fmt.Errorf("ambiguous existing series match for %q", title)
+			return seriesUpsertResult{}, fmt.Errorf("ambiguous existing series match for %q", title)
 		}
 		if match != nil {
 			existing = match
@@ -2546,7 +2569,24 @@ func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bo
 	created := false
 	if existing == nil {
 		if cfg.DryRun && stats != nil && stats.dryRunSeriesAlreadyPlanned(externalID, title) {
-			return i.recordPlannedSeries(ctx, cfg, runID, bookID, externalID, ref, false, "planned")
+			countKey := seriesMembershipCountKey(0, title, externalID, bookID, itemID)
+			membershipCreated := !stats.dryRunSeriesMembershipAlreadyPlanned(countKey)
+			if membershipCreated {
+				metadata := map[string]any{
+					"bookId":   bookID,
+					"sequence": strings.TrimSpace(ref.Sequence),
+				}
+				_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, itemID, entityTypeSeries, seriesMembershipExternalID(externalID, bookID, itemID), 0, itemOutcomeLinked, metadata)
+				stats.rememberDryRunSeriesMembership(countKey)
+			}
+			return seriesUpsertResult{
+				IdentityExternalID:   externalID,
+				MembershipExternalID: seriesMembershipExternalID(externalID, bookID, itemID),
+				CountKey:             countKey,
+				MembershipCreated:    membershipCreated,
+				Linked:               true,
+				MatchedBy:            "planned",
+			}, nil
 		}
 		existing = &models.Series{
 			ForeignID:   absForeignID("series", cfg.LibraryID, externalID),
@@ -2555,20 +2595,51 @@ func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bo
 		}
 		if !cfg.DryRun {
 			if err := i.series.CreateOrGet(ctx, existing); err != nil {
-				return false, "", err
+				return seriesUpsertResult{}, err
 			}
 		}
 		created = true
 		matchedBy = "created"
 	}
+	localID := existing.ID
+	if cfg.DryRun && created {
+		localID = 0
+	}
+	countKey := seriesMembershipCountKey(localID, title, externalID, bookID, itemID)
+	membershipExternalID := seriesMembershipExternalID(externalID, bookID, itemID)
 	metadata := map[string]any{
 		"bookId":   bookID,
 		"sequence": strings.TrimSpace(ref.Sequence),
 	}
-	if !cfg.DryRun {
-		if err := i.series.LinkBook(ctx, existing.ID, bookID, strings.TrimSpace(ref.Sequence), true); err != nil {
-			return false, "", err
+	membershipCreated := false
+	if cfg.DryRun {
+		if stats == nil || !stats.dryRunSeriesMembershipAlreadyPlanned(countKey) {
+			membershipCreated = true
+			outcome := itemOutcomeLinked
+			if created {
+				outcome = itemOutcomeCreated
+			}
+			_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, itemID, entityTypeSeries, membershipExternalID, localID, outcome, metadata)
+			if stats != nil {
+				stats.rememberDryRunSeriesMembership(countKey)
+			}
 		}
+		if created && stats != nil {
+			stats.rememberDryRunSeries(externalID, title)
+		}
+		return seriesUpsertResult{
+			SeriesID:             localID,
+			IdentityExternalID:   externalID,
+			MembershipExternalID: membershipExternalID,
+			CountKey:             countKey,
+			CreatedSeries:        created,
+			MembershipCreated:    membershipCreated,
+			Linked:               true,
+			MatchedBy:            matchedBy,
+		}, nil
+	}
+	identityChanged := identityLink == nil || identityLink.LocalID != existing.ID
+	if identityChanged {
 		if err := i.upsertProvenance(ctx, &models.ABSProvenance{
 			SourceID:    cfg.SourceID,
 			LibraryID:   cfg.LibraryID,
@@ -2578,22 +2649,49 @@ func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bo
 			ItemID:      "",
 			ImportRunID: ptrInt64(runID),
 		}); err != nil {
-			return false, "", err
+			return seriesUpsertResult{}, err
 		}
+		outcome := itemOutcomeLinked
+		if created {
+			outcome = itemOutcomeCreated
+		}
+		_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, "", entityTypeSeries, externalID, existing.ID, outcome, map[string]any{
+			"matchedBy": matchedBy,
+			"identity":  true,
+		})
 	}
-	localID := existing.ID
-	if cfg.DryRun && created {
-		localID = 0
+	membershipCreated, err := i.series.LinkBookIfMissing(ctx, existing.ID, bookID, strings.TrimSpace(ref.Sequence), true)
+	if err != nil {
+		return seriesUpsertResult{}, err
 	}
-	outcome := itemOutcomeLinked
-	if created {
-		outcome = itemOutcomeCreated
+	if membershipCreated {
+		if err := i.upsertProvenance(ctx, &models.ABSProvenance{
+			SourceID:    cfg.SourceID,
+			LibraryID:   cfg.LibraryID,
+			EntityType:  entityTypeSeries,
+			ExternalID:  membershipExternalID,
+			LocalID:     existing.ID,
+			ItemID:      itemID,
+			ImportRunID: ptrInt64(runID),
+		}); err != nil {
+			return seriesUpsertResult{}, err
+		}
+		outcome := itemOutcomeLinked
+		if created {
+			outcome = itemOutcomeCreated
+		}
+		_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, itemID, entityTypeSeries, membershipExternalID, existing.ID, outcome, metadata)
 	}
-	_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, "", entityTypeSeries, externalID, localID, outcome, metadata)
-	if cfg.DryRun && created && stats != nil {
-		stats.rememberDryRunSeries(externalID, title)
-	}
-	return created, matchedBy, nil
+	return seriesUpsertResult{
+		SeriesID:             existing.ID,
+		IdentityExternalID:   externalID,
+		MembershipExternalID: membershipExternalID,
+		CountKey:             countKey,
+		CreatedSeries:        created,
+		MembershipCreated:    membershipCreated,
+		Linked:               true,
+		MatchedBy:            matchedBy,
+	}, nil
 }
 
 type hardcoverSeriesQuery struct {
@@ -2612,13 +2710,13 @@ type hardcoverSeriesCandidate struct {
 	TitleScore  int
 }
 
-func (i *Importer) matchHardcoverSeries(ctx context.Context, cfg ImportConfig, runID int64, author *models.Author, book *models.Book, item NormalizedLibraryItem, stats *ImportStats) (metadataMergeResult, int) {
+func (i *Importer) matchHardcoverSeries(ctx context.Context, cfg ImportConfig, runID int64, author *models.Author, book *models.Book, item NormalizedLibraryItem, stats *ImportStats) (metadataMergeResult, seriesUpsertResult) {
 	if i.meta == nil || i.series == nil || i.books == nil || book == nil {
-		return metadataMergeResult{}, 0
+		return metadataMergeResult{}, seriesUpsertResult{}
 	}
 	queries := hardcoverSeriesQueries(item)
 	if len(queries) == 0 {
-		return metadataMergeResult{}, 0
+		return metadataMergeResult{}, seriesUpsertResult{}
 	}
 	authorName := primaryAuthorName(item)
 	if author != nil && strings.TrimSpace(author.Name) != "" {
@@ -2652,23 +2750,16 @@ func (i *Importer) matchHardcoverSeries(ctx context.Context, cfg ImportConfig, r
 	}
 	selected, ambiguous := selectHardcoverSeriesCandidate(candidates)
 	if ambiguous {
-		return metadataMergeResult{Messages: []string{"hardcover series link skipped: match was ambiguous"}}, 0
+		return metadataMergeResult{Messages: []string{"hardcover series link skipped: match was ambiguous"}}, seriesUpsertResult{}
 	}
 	if selected == nil {
-		return metadataMergeResult{}, 0
+		return metadataMergeResult{}, seriesUpsertResult{}
 	}
 
-	created, matchedBy, err := i.upsertHardcoverSeries(ctx, cfg, runID, book.ID, selected.Catalog, selected.Book)
+	seriesResult, err := i.upsertHardcoverSeries(ctx, cfg, runID, book.ID, item.ItemID, selected.Catalog, selected.Book, stats)
 	if err != nil {
 		slog.Warn("abs import: hardcover series link failed", "itemID", item.ItemID, "series", selected.Catalog.ForeignID, "error", err)
-		return metadataMergeResult{}, 0
-	}
-	if stats != nil {
-		if created {
-			stats.SeriesCreated++
-		} else if matchedBy != "" {
-			stats.SeriesLinked++
-		}
+		return metadataMergeResult{}, seriesUpsertResult{}
 	}
 
 	metaResult := metadataMergeResult{}
@@ -2680,17 +2771,17 @@ func (i *Importer) matchHardcoverSeries(ctx context.Context, cfg ImportConfig, r
 		}
 	}
 	if !cfg.DryRun {
-		extra, err := i.linkExistingHardcoverCatalogBooks(ctx, cfg, runID, author, selected.Catalog, book.ID, created)
+		extra, err := i.linkExistingHardcoverCatalogBooks(ctx, cfg, runID, author, selected.Catalog, book.ID, seriesResult.CreatedSeries)
 		if err != nil {
 			slog.Warn("abs import: hardcover catalog existing-book linking failed", "itemID", item.ItemID, "series", selected.Catalog.ForeignID, "error", err)
 		} else if stats != nil {
 			stats.SeriesLinked += extra
 		}
 	}
-	if matchedBy != "" {
+	if seriesResult.MatchedBy != "" {
 		metaResult.Messages = append(metaResult.Messages, fmt.Sprintf("hardcover series linked by %s", selected.MatchedBy))
 	}
-	return metaResult, 1
+	return metaResult, seriesResult
 }
 
 func hardcoverSeriesQueries(item NormalizedLibraryItem) []hardcoverSeriesQuery {
@@ -2826,33 +2917,33 @@ func selectHardcoverSeriesCandidate(candidates map[string]hardcoverSeriesCandida
 	return &ordered[0], false
 }
 
-func (i *Importer) upsertHardcoverSeries(ctx context.Context, cfg ImportConfig, runID, bookID int64, catalog *metadata.SeriesCatalog, matchedBook metadata.SeriesCatalogBook) (bool, string, error) {
+func (i *Importer) upsertHardcoverSeries(ctx context.Context, cfg ImportConfig, runID, bookID int64, itemID string, catalog *metadata.SeriesCatalog, matchedBook metadata.SeriesCatalogBook, stats *ImportStats) (seriesUpsertResult, error) {
 	if catalog == nil || strings.TrimSpace(catalog.Title) == "" || strings.TrimSpace(catalog.ForeignID) == "" {
-		return false, "", nil
+		return seriesUpsertResult{}, nil
 	}
 	existing, err := i.series.GetByForeignID(ctx, catalog.ForeignID)
 	if err != nil {
-		return false, "", err
+		return seriesUpsertResult{}, err
 	}
 	matchedBy := ""
 	if existing == nil {
 		match, ambiguous, err := i.findSeriesByTitle(ctx, catalog.Title)
 		if err != nil {
-			return false, "", err
+			return seriesUpsertResult{}, err
 		}
 		if ambiguous {
-			return false, "", fmt.Errorf("ambiguous existing series match for %q", catalog.Title)
+			return seriesUpsertResult{}, fmt.Errorf("ambiguous existing series match for %q", catalog.Title)
 		}
 		if match != nil {
 			existing = match
 			matchedBy = "normalized_title"
 			if shouldPromoteSeriesToHardcover(match, catalog) {
 				if prior, err := i.series.GetByForeignID(ctx, catalog.ForeignID); err != nil {
-					return false, "", err
+					return seriesUpsertResult{}, err
 				} else if prior == nil {
 					if !cfg.DryRun {
 						if err := i.series.UpdateForeignID(ctx, existing.ID, catalog.ForeignID); err != nil {
-							return false, "", err
+							return seriesUpsertResult{}, err
 						}
 					}
 					existing.ForeignID = catalog.ForeignID
@@ -2863,6 +2954,28 @@ func (i *Importer) upsertHardcoverSeries(ctx context.Context, cfg ImportConfig, 
 	}
 	created := false
 	if existing == nil {
+		if cfg.DryRun && stats != nil && stats.dryRunSeriesAlreadyPlanned(catalog.ForeignID, catalog.Title) {
+			countKey := seriesMembershipCountKey(0, catalog.Title, catalog.ForeignID, bookID, itemID)
+			membershipCreated := !stats.dryRunSeriesMembershipAlreadyPlanned(countKey)
+			membershipExternalID := seriesMembershipExternalID(catalog.ForeignID, bookID, itemID)
+			if membershipCreated {
+				_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, itemID, entityTypeSeries, membershipExternalID, 0, itemOutcomeLinked, map[string]any{
+					"bookId":          bookID,
+					"sequence":        strings.TrimSpace(matchedBook.Position),
+					"matchedBy":       "hardcover_series",
+					"hardcoverBookId": strings.TrimSpace(matchedBook.ForeignID),
+				})
+				stats.rememberDryRunSeriesMembership(countKey)
+			}
+			return seriesUpsertResult{
+				IdentityExternalID:   catalog.ForeignID,
+				MembershipExternalID: membershipExternalID,
+				CountKey:             countKey,
+				MembershipCreated:    membershipCreated,
+				Linked:               true,
+				MatchedBy:            "planned",
+			}, nil
+		}
 		existing = &models.Series{
 			ForeignID:   catalog.ForeignID,
 			Title:       strings.TrimSpace(catalog.Title),
@@ -2870,7 +2983,7 @@ func (i *Importer) upsertHardcoverSeries(ctx context.Context, cfg ImportConfig, 
 		}
 		if !cfg.DryRun {
 			if err := i.series.CreateOrGet(ctx, existing); err != nil {
-				return false, "", err
+				return seriesUpsertResult{}, err
 			}
 		}
 		created = true
@@ -2880,9 +2993,11 @@ func (i *Importer) upsertHardcoverSeries(ctx context.Context, cfg ImportConfig, 
 	if cfg.DryRun && created {
 		localID = 0
 	}
+	countKey := seriesMembershipCountKey(localID, catalog.Title, catalog.ForeignID, bookID, itemID)
+	membershipExternalID := seriesMembershipExternalID(catalog.ForeignID, bookID, itemID)
 	if !cfg.DryRun {
 		if err := i.ensureHardcoverSeriesLink(ctx, existing.ID, catalog); err != nil {
-			return false, "", err
+			return seriesUpsertResult{}, err
 		}
 	}
 	metadata := map[string]any{
@@ -2891,25 +3006,39 @@ func (i *Importer) upsertHardcoverSeries(ctx context.Context, cfg ImportConfig, 
 		"matchedBy":       "hardcover_series",
 		"hardcoverBookId": strings.TrimSpace(matchedBook.ForeignID),
 	}
-	linkExternalID := hardcoverSeriesLinkExternalID(catalog.ForeignID, bookID)
-	linkCreated := cfg.DryRun
-	if !cfg.DryRun {
+	linkCreated := false
+	if cfg.DryRun {
+		if stats == nil || !stats.dryRunSeriesMembershipAlreadyPlanned(countKey) {
+			linkCreated = true
+			outcome := itemOutcomeLinked
+			if created {
+				outcome = itemOutcomeCreated
+			}
+			_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, itemID, entityTypeSeries, membershipExternalID, localID, outcome, metadata)
+			if stats != nil {
+				stats.rememberDryRunSeriesMembership(countKey)
+			}
+		}
+		if created && stats != nil {
+			stats.rememberDryRunSeries(catalog.ForeignID, catalog.Title)
+		}
+	} else {
 		var err error
 		linkCreated, err = i.series.LinkBookIfMissing(ctx, existing.ID, bookID, strings.TrimSpace(matchedBook.Position), true)
 		if err != nil {
-			return false, "", err
+			return seriesUpsertResult{}, err
 		}
 		if linkCreated {
 			if err := i.upsertProvenance(ctx, &models.ABSProvenance{
 				SourceID:    cfg.SourceID,
 				LibraryID:   cfg.LibraryID,
 				EntityType:  entityTypeSeries,
-				ExternalID:  linkExternalID,
+				ExternalID:  membershipExternalID,
 				LocalID:     existing.ID,
-				ItemID:      "",
+				ItemID:      itemID,
 				ImportRunID: ptrInt64(runID),
 			}); err != nil {
-				return false, "", err
+				return seriesUpsertResult{}, err
 			}
 		}
 	}
@@ -2917,10 +3046,19 @@ func (i *Importer) upsertHardcoverSeries(ctx context.Context, cfg ImportConfig, 
 	if created {
 		outcome = itemOutcomeCreated
 	}
-	if linkCreated {
-		_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, "", entityTypeSeries, linkExternalID, localID, outcome, metadata)
+	if !cfg.DryRun && linkCreated {
+		_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, itemID, entityTypeSeries, membershipExternalID, localID, outcome, metadata)
 	}
-	return created, matchedBy, nil
+	return seriesUpsertResult{
+		SeriesID:             localID,
+		IdentityExternalID:   catalog.ForeignID,
+		MembershipExternalID: membershipExternalID,
+		CountKey:             countKey,
+		CreatedSeries:        created,
+		MembershipCreated:    linkCreated,
+		Linked:               true,
+		MatchedBy:            matchedBy,
+	}, nil
 }
 
 func (i *Importer) ensureHardcoverSeriesLink(ctx context.Context, seriesID int64, catalog *metadata.SeriesCatalog) error {
@@ -2987,7 +3125,7 @@ func (i *Importer) linkExistingHardcoverCatalogBooks(ctx context.Context, cfg Im
 		if !linkCreated {
 			continue
 		}
-		linkExternalID := hardcoverSeriesLinkExternalID(catalog.ForeignID, localBook.ID)
+		linkExternalID := seriesMembershipExternalID(catalog.ForeignID, localBook.ID, "")
 		if err := i.upsertProvenance(ctx, &models.ABSProvenance{
 			SourceID:    cfg.SourceID,
 			LibraryID:   cfg.LibraryID,
@@ -3042,12 +3180,34 @@ func shouldPromoteSeriesToHardcover(existing *models.Series, catalog *metadata.S
 	return normalizeSeriesName(existing.Title) == normalizeSeriesName(catalog.Title)
 }
 
-func hardcoverSeriesLinkExternalID(seriesForeignID string, bookID int64) string {
-	seriesForeignID = strings.TrimSpace(seriesForeignID)
+func seriesMembershipExternalID(seriesExternalID string, bookID int64, itemID string) string {
+	seriesExternalID = strings.TrimSpace(seriesExternalID)
 	if bookID <= 0 {
-		return seriesForeignID + ":book:planned"
+		itemID = strings.TrimSpace(itemID)
+		if itemID == "" {
+			return seriesExternalID + ":book:planned"
+		}
+		return seriesExternalID + ":item:" + itemID
 	}
-	return fmt.Sprintf("%s:book:%d", seriesForeignID, bookID)
+	return fmt.Sprintf("%s:book:%d", seriesExternalID, bookID)
+}
+
+func seriesMembershipCountKey(seriesID int64, title, externalID string, bookID int64, itemID string) string {
+	bookKey := strings.TrimSpace(itemID)
+	if bookID > 0 {
+		bookKey = fmt.Sprintf("book:%d", bookID)
+	} else if bookKey != "" {
+		bookKey = "item:" + bookKey
+	} else {
+		bookKey = "book:planned"
+	}
+	if seriesID > 0 {
+		return fmt.Sprintf("series:%d:%s", seriesID, bookKey)
+	}
+	if titleKey := normalizeSeriesName(title); titleKey != "" {
+		return "title:" + titleKey + ":" + bookKey
+	}
+	return "external:" + strings.TrimSpace(externalID) + ":" + bookKey
 }
 
 func hardcoverAuthorScore(absAuthor, hcAuthor string) int {
@@ -3083,19 +3243,6 @@ func shelfarrTitleScore(a, b string) int {
 	return seriesmatch.TitleScore(a, b)
 }
 
-func (i *Importer) recordPlannedSeries(ctx context.Context, cfg ImportConfig, runID, bookID int64, externalID string, ref NormalizedSeries, created bool, matchedBy string) (bool, string, error) {
-	metadata := map[string]any{
-		"bookId":   bookID,
-		"sequence": strings.TrimSpace(ref.Sequence),
-	}
-	outcome := itemOutcomeLinked
-	if created {
-		outcome = itemOutcomeCreated
-	}
-	_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, "", entityTypeSeries, externalID, 0, outcome, metadata)
-	return created, matchedBy, nil
-}
-
 func (s *ImportStats) dryRunSeriesAlreadyPlanned(externalID, title string) bool {
 	if s == nil {
 		return false
@@ -3118,6 +3265,21 @@ func (s *ImportStats) rememberDryRunSeries(externalID, title string) {
 	}
 	s.dryRunSeriesExternalIDs[strings.TrimSpace(externalID)] = struct{}{}
 	s.dryRunSeriesTitles[normalizeTitle(title)] = struct{}{}
+}
+
+func (s *ImportStats) dryRunSeriesMembershipAlreadyPlanned(key string) bool {
+	if s == nil {
+		return false
+	}
+	_, ok := s.dryRunSeriesMemberships[strings.TrimSpace(key)]
+	return ok
+}
+
+func (s *ImportStats) rememberDryRunSeriesMembership(key string) {
+	if s.dryRunSeriesMemberships == nil {
+		s.dryRunSeriesMemberships = make(map[string]struct{})
+	}
+	s.dryRunSeriesMemberships[strings.TrimSpace(key)] = struct{}{}
 }
 
 func (i *Importer) findSeriesByTitle(ctx context.Context, title string) (*models.Series, bool, error) {
@@ -3336,9 +3498,32 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 	type set map[int64]struct{}
 	deletedBooks := make(set)
 	createdBookEntities := make(map[int64]models.ABSImportRunEntity)
+	runCreatedSeries := make(set)
+	seriesIdentityEntities := make(set)
+	runSeriesMemberships := make(map[int64]set)
+	seriesDeleteMembershipEntityID := make(map[int64]int64)
 	for _, entity := range entities {
 		if entity.EntityType == entityTypeBook && entity.Outcome == itemOutcomeCreated && entity.LocalID != 0 {
 			createdBookEntities[entity.LocalID] = entity
+		}
+		if entity.EntityType != entityTypeSeries || entity.LocalID == 0 {
+			continue
+		}
+		metadata := runEntityMetadataData(entity.MetadataJSON)
+		bookID := metadataBookID(metadata)
+		if entity.Outcome == itemOutcomeCreated {
+			runCreatedSeries[entity.LocalID] = struct{}{}
+		}
+		if bookID > 0 {
+			if runSeriesMemberships[entity.LocalID] == nil {
+				runSeriesMemberships[entity.LocalID] = make(set)
+			}
+			runSeriesMemberships[entity.LocalID][bookID] = struct{}{}
+			if entity.Outcome == itemOutcomeCreated && entity.ID > seriesDeleteMembershipEntityID[entity.LocalID] {
+				seriesDeleteMembershipEntityID[entity.LocalID] = entity.ID
+			}
+		} else {
+			seriesIdentityEntities[entity.LocalID] = struct{}{}
 		}
 	}
 	for _, entity := range entities {
@@ -3654,10 +3839,27 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 				result.Actions = append(result.Actions, action)
 				continue
 			}
-			bookID, _ := metadata["bookId"].(float64)
+			bookID := metadataBookID(metadata)
 			if bookID > 0 {
 				action.Action = "unlink_series"
 				result.Stats.ActionsPlanned++
+				_, createdByRun := runCreatedSeries[entity.LocalID]
+				_, hasIdentityEntity := seriesIdentityEntities[entity.LocalID]
+				deleteSeries := false
+				if createdByRun && !hasIdentityEntity && seriesDeleteMembershipEntityID[entity.LocalID] == entity.ID {
+					remaining, err := i.remainingSeriesBooksAfterRunRollback(ctx, entity.LocalID, runSeriesMemberships[entity.LocalID])
+					if err != nil {
+						action.Action = "skip"
+						action.Reason = err.Error()
+						result.Stats.Failed++
+						result.Actions = append(result.Actions, action)
+						continue
+					}
+					if remaining <= 0 {
+						action.Action = "delete_series"
+						deleteSeries = true
+					}
+				}
 				if !preview {
 					if err := i.series.UnlinkBook(ctx, entity.LocalID, int64(bookID)); err != nil {
 						action.Action = "skip"
@@ -3666,31 +3868,14 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 						result.Actions = append(result.Actions, action)
 						continue
 					}
-				}
-				if entity.Outcome == itemOutcomeCreated {
-					books, err := i.series.ListBooksInSeries(ctx, entity.LocalID)
-					if err == nil {
-						remaining := len(books)
-						if bookID > 0 && remaining > 0 {
-							remaining--
+					if deleteSeries {
+						if err := i.series.Delete(ctx, entity.LocalID); err != nil {
+							action.Action = "skip"
+							action.Reason = err.Error()
+							result.Stats.Failed++
+							result.Actions = append(result.Actions, action)
+							continue
 						}
-						if remaining <= 0 {
-							if !preview {
-								if err := i.series.Delete(ctx, entity.LocalID); err != nil {
-									action.Action = "skip"
-									action.Reason = err.Error()
-									result.Stats.Failed++
-									result.Actions = append(result.Actions, action)
-									continue
-								}
-								result.Stats.EntitiesDeleted++
-							}
-							action.Action = "delete_series"
-						}
-					}
-				}
-				if !preview {
-					if action.Action == "delete_series" {
 						unlinked, err := i.deleteProvenanceByLocal(ctx, entity.EntityType, entity.LocalID)
 						if err != nil {
 							action.Action = "skip"
@@ -3699,23 +3884,62 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 							result.Actions = append(result.Actions, action)
 							continue
 						}
+						result.Stats.EntitiesDeleted++
 						result.Stats.ProvenanceUnlinked += unlinked
-					} else if err := i.provenance.DeleteByExternal(ctx, entity.SourceID, entity.LibraryID, entity.EntityType, entity.ExternalID); err == nil {
+					} else if err := i.provenance.DeleteByExternal(ctx, entity.SourceID, entity.LibraryID, entity.EntityType, entity.ExternalID); err != nil {
+						action.Action = "skip"
+						action.Reason = err.Error()
+						result.Stats.Failed++
+						result.Actions = append(result.Actions, action)
+						continue
+					} else {
 						result.Stats.ProvenanceUnlinked++
 					}
 				}
 			} else {
 				action.Action = "unlink_provenance"
-				result.Stats.ActionsPlanned++
-				if !preview {
-					if err := i.provenance.DeleteByExternal(ctx, entity.SourceID, entity.LibraryID, entity.EntityType, entity.ExternalID); err != nil {
+				if entity.Outcome == itemOutcomeCreated {
+					remaining, err := i.remainingSeriesBooksAfterRunRollback(ctx, entity.LocalID, runSeriesMemberships[entity.LocalID])
+					if err != nil {
 						action.Action = "skip"
 						action.Reason = err.Error()
 						result.Stats.Failed++
 						result.Actions = append(result.Actions, action)
 						continue
 					}
-					result.Stats.ProvenanceUnlinked++
+					if remaining <= 0 {
+						action.Action = "delete_series"
+					}
+				}
+				result.Stats.ActionsPlanned++
+				if !preview {
+					if action.Action == "delete_series" {
+						if err := i.series.Delete(ctx, entity.LocalID); err != nil {
+							action.Action = "skip"
+							action.Reason = err.Error()
+							result.Stats.Failed++
+							result.Actions = append(result.Actions, action)
+							continue
+						}
+						unlinked, err := i.deleteProvenanceByLocal(ctx, entity.EntityType, entity.LocalID)
+						if err != nil {
+							action.Action = "skip"
+							action.Reason = err.Error()
+							result.Stats.Failed++
+							result.Actions = append(result.Actions, action)
+							continue
+						}
+						result.Stats.EntitiesDeleted++
+						result.Stats.ProvenanceUnlinked += unlinked
+					} else if err := i.provenance.DeleteByExternal(ctx, entity.SourceID, entity.LibraryID, entity.EntityType, entity.ExternalID); err != nil {
+						action.Action = "skip"
+						action.Reason = err.Error()
+						result.Stats.Failed++
+						result.Actions = append(result.Actions, action)
+						continue
+					} else {
+						result.Stats.ProvenanceUnlinked++
+					}
 				}
 			}
 		default:
@@ -3756,6 +3980,37 @@ func runEntityMetadataData(raw string) map[string]any {
 		return envelope.Data
 	}
 	return parseJSONObject(raw)
+}
+
+func metadataBookID(metadata map[string]any) int64 {
+	switch value := metadata["bookId"].(type) {
+	case float64:
+		return int64(value)
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	case json.Number:
+		parsed, _ := value.Int64()
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func (i *Importer) remainingSeriesBooksAfterRunRollback(ctx context.Context, seriesID int64, runOwnedBookIDs map[int64]struct{}) (int, error) {
+	books, err := i.series.ListBooksInSeries(ctx, seriesID)
+	if err != nil {
+		return 0, err
+	}
+	remaining := 0
+	for _, book := range books {
+		if _, ok := runOwnedBookIDs[book.ID]; ok {
+			continue
+		}
+		remaining++
+	}
+	return remaining, nil
 }
 
 func bookRollbackSnapshotFromMetadata(raw string) (*bookRollbackSnapshot, *bookRollbackSnapshot, bool) {
@@ -4431,11 +4686,14 @@ func rollbackEntityRank(entity models.ABSImportRunEntity) int {
 	case entityTypeBook:
 		return 1
 	case entityTypeSeries:
-		return 2
-	case entityTypeAuthor:
+		if metadataBookID(runEntityMetadataData(entity.MetadataJSON)) > 0 {
+			return 2
+		}
 		return 3
-	default:
+	case entityTypeAuthor:
 		return 4
+	default:
+		return 5
 	}
 }
 

@@ -226,7 +226,7 @@ func (h *fixtureABSHarness) canAccessLibrary(apiKey, libraryID string) bool {
 	return false
 }
 
-func newContractImporterFixture(t *testing.T) (*abs.Importer, *db.AuthorRepo, *db.BookRepo, *db.SettingsRepo, *db.ABSImportRunRepo) {
+func newContractImporterFixture(t *testing.T) (*abs.Importer, *db.AuthorRepo, *db.BookRepo, *db.SeriesRepo, *db.SettingsRepo, *db.ABSImportRunRepo) {
 	t.Helper()
 
 	database, err := db.OpenMemory()
@@ -237,6 +237,7 @@ func newContractImporterFixture(t *testing.T) (*abs.Importer, *db.AuthorRepo, *d
 
 	authorRepo := db.NewAuthorRepo(database)
 	bookRepo := db.NewBookRepo(database)
+	seriesRepo := db.NewSeriesRepo(database)
 	settingsRepo := db.NewSettingsRepo(database)
 	runRepo := db.NewABSImportRunRepo(database)
 	importer := abs.NewImporter(
@@ -244,7 +245,7 @@ func newContractImporterFixture(t *testing.T) (*abs.Importer, *db.AuthorRepo, *d
 		db.NewAuthorAliasRepo(database),
 		bookRepo,
 		db.NewEditionRepo(database),
-		db.NewSeriesRepo(database),
+		seriesRepo,
 		settingsRepo,
 		runRepo,
 		db.NewABSImportRunEntityRepo(database),
@@ -252,7 +253,7 @@ func newContractImporterFixture(t *testing.T) (*abs.Importer, *db.AuthorRepo, *d
 		db.NewABSReviewItemRepo(database),
 		db.NewABSMetadataConflictRepo(database),
 	).WithStoragePaths(t.TempDir(), t.TempDir(), nil)
-	return importer, authorRepo, bookRepo, settingsRepo, runRepo
+	return importer, authorRepo, bookRepo, seriesRepo, settingsRepo, runRepo
 }
 
 func loadHarnessLibraries(t *testing.T) []abs.Library {
@@ -274,6 +275,7 @@ func loadHarnessItems(t *testing.T) []abs.LibraryItem {
 		loadSingleListItem(t, repoFixturePath("internal", "abs", "testdata", "library_items_missing_size_duration_page_v2_33_2.json")),
 		loadLibraryItemFixture(t, filepath.Join("testdata", "fixtures", "responses", "library_item_ebook_only_v2_33_2.json")),
 		loadLibraryItemFixture(t, filepath.Join("testdata", "fixtures", "responses", "library_item_series_linked_v2_33_2.json")),
+		loadLibraryItemFixture(t, filepath.Join("testdata", "fixtures", "responses", "library_item_series_repeat_v2_33_2.json")),
 	}
 	return items
 }

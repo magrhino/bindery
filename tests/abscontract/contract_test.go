@@ -9,6 +9,7 @@ import (
 
 	"github.com/vavallee/bindery/internal/abs"
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/models"
 )
 
 func TestFixtureManifestMatchesPinnedBaseline(t *testing.T) {
@@ -130,8 +131,8 @@ func TestContractHarness_EnumeratesPagingAndDetailFallback(t *testing.T) {
 	if stats.PagesScanned != 3 {
 		t.Fatalf("pagesScanned = %d, want 3", stats.PagesScanned)
 	}
-	if stats.ItemsSeen != 5 || stats.ItemsNormalized != 5 {
-		t.Fatalf("stats = %+v, want 5 items seen/normalized", stats)
+	if stats.ItemsSeen != 6 || stats.ItemsNormalized != 6 {
+		t.Fatalf("stats = %+v, want 6 items seen/normalized", stats)
 	}
 	if stats.ItemsDetailFetched != 2 {
 		t.Fatalf("itemsDetailFetched = %d, want 2", stats.ItemsDetailFetched)
@@ -169,7 +170,7 @@ func TestContractHarness_ImporterDryRunAndIdempotentRerun(t *testing.T) {
 		t.Fatal(err)
 	}
 	harness := newFixtureABSHarness(t, cfg, manifest)
-	importer, authorRepo, bookRepo, _, runRepo := newContractImporterFixture(t)
+	importer, authorRepo, bookRepo, seriesRepo, _, runRepo := newContractImporterFixture(t)
 
 	dryRunStats, err := importer.Run(context.Background(), abs.ImportConfig{
 		SourceID:  abs.DefaultSourceID,
@@ -183,8 +184,8 @@ func TestContractHarness_ImporterDryRunAndIdempotentRerun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry-run Run: %v", err)
 	}
-	if dryRunStats.BooksCreated != 3 || dryRunStats.AuthorsCreated != 3 || dryRunStats.ReviewQueued != 2 {
-		t.Fatalf("dry-run stats = %+v, want 3 created books/authors and 2 queued reviews", dryRunStats)
+	if dryRunStats.BooksCreated != 4 || dryRunStats.AuthorsCreated != 4 || dryRunStats.SeriesCreated != 2 || dryRunStats.SeriesLinked != 1 || dryRunStats.ReviewQueued != 2 {
+		t.Fatalf("dry-run stats = %+v, want 4 books/authors, 2 created series, 1 linked series membership, and 2 queued reviews", dryRunStats)
 	}
 
 	authors, err := authorRepo.List(context.Background())
@@ -213,15 +214,26 @@ func TestContractHarness_ImporterDryRunAndIdempotentRerun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("commit Run: %v", err)
 	}
-	if commitStats.BooksCreated != 3 || commitStats.ReviewQueued != 2 {
-		t.Fatalf("commit stats = %+v, want 3 created books and 2 queued reviews", commitStats)
+	if commitStats.BooksCreated != 4 || commitStats.SeriesCreated != 2 || commitStats.SeriesLinked != 1 || commitStats.ReviewQueued != 2 {
+		t.Fatalf("commit stats = %+v, want 4 books, repeated series ownership, and 2 queued reviews", commitStats)
 	}
 	books, err = bookRepo.ListIncludingExcluded(context.Background())
 	if err != nil {
 		t.Fatalf("List books after commit: %v", err)
 	}
-	if len(books) != 3 {
-		t.Fatalf("books = %d, want 3 after commit", len(books))
+	if len(books) != 4 {
+		t.Fatalf("books = %d, want 4 after commit", len(books))
+	}
+	series, err := seriesRepo.ListWithBooks(context.Background())
+	if err != nil {
+		t.Fatalf("ListWithBooks after commit: %v", err)
+	}
+	assertContractSeriesCoverage(t, series)
+	runToRollback := int64(0)
+	if runs, err := runRepo.ListRecent(context.Background(), 1); err == nil && len(runs) == 1 {
+		runToRollback = runs[0].ID
+	} else {
+		t.Fatalf("ListRecent commit run = %d err=%v, want 1", len(runs), err)
 	}
 
 	rerunStats, err := importer.Run(context.Background(), abs.ImportConfig{
@@ -235,16 +247,21 @@ func TestContractHarness_ImporterDryRunAndIdempotentRerun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rerun Run: %v", err)
 	}
-	if rerunStats.BooksCreated != 0 {
-		t.Fatalf("rerun stats = %+v, want no new books", rerunStats)
+	if rerunStats.BooksCreated != 0 || rerunStats.SeriesCreated != 0 || rerunStats.SeriesLinked != 0 {
+		t.Fatalf("rerun stats = %+v, want no new books or series memberships", rerunStats)
 	}
 	books, err = bookRepo.ListIncludingExcluded(context.Background())
 	if err != nil {
 		t.Fatalf("List books after rerun: %v", err)
 	}
-	if len(books) != 3 {
-		t.Fatalf("books after rerun = %d, want 3", len(books))
+	if len(books) != 4 {
+		t.Fatalf("books after rerun = %d, want 4", len(books))
 	}
+	series, err = seriesRepo.ListWithBooks(context.Background())
+	if err != nil {
+		t.Fatalf("ListWithBooks after rerun: %v", err)
+	}
+	assertContractSeriesCoverage(t, series)
 
 	runs, err := runRepo.ListRecent(context.Background(), 3)
 	if err != nil {
@@ -254,8 +271,41 @@ func TestContractHarness_ImporterDryRunAndIdempotentRerun(t *testing.T) {
 		t.Fatalf("runs = %d, want 3", len(runs))
 	}
 	latestDryRun := abs.HydrateRun(runs[2])
-	if !latestDryRun.Summary.DryRun || latestDryRun.Summary.Stats.BooksCreated != 3 || latestDryRun.Summary.Stats.ReviewQueued != 2 {
+	if !latestDryRun.Summary.DryRun || latestDryRun.Summary.Stats.BooksCreated != 4 || latestDryRun.Summary.Stats.SeriesCreated != 2 || latestDryRun.Summary.Stats.SeriesLinked != 1 || latestDryRun.Summary.Stats.ReviewQueued != 2 {
 		t.Fatalf("dry-run summary = %+v", latestDryRun.Summary)
+	}
+	if rollback, err := importer.Rollback(context.Background(), runToRollback); err != nil {
+		t.Fatalf("Rollback commit run: %v", err)
+	} else if rollback.Stats.Failed != 0 {
+		t.Fatalf("rollback result = %+v, want no failures", rollback)
+	}
+	series, err = seriesRepo.ListWithBooks(context.Background())
+	if err != nil {
+		t.Fatalf("ListWithBooks after rollback: %v", err)
+	}
+	if len(series) != 0 {
+		t.Fatalf("series after rollback = %+v, want all fixture-created series removed", series)
+	}
+}
+
+func assertContractSeriesCoverage(t *testing.T, series []models.Series) {
+	t.Helper()
+
+	if len(series) != 2 {
+		t.Fatalf("series = %+v, want Stormlight plus repeated Murderbot series", series)
+	}
+	foundMurderbot := false
+	for _, item := range series {
+		if item.Title != "The Murderbot Diaries" {
+			continue
+		}
+		foundMurderbot = true
+		if len(item.Books) != 2 {
+			t.Fatalf("Murderbot books = %+v, want two repeated-series memberships", item.Books)
+		}
+	}
+	if !foundMurderbot {
+		t.Fatalf("series = %+v, want The Murderbot Diaries", series)
 	}
 }
 
@@ -270,7 +320,7 @@ func TestContractHarness_ImporterResumeFromFailedCheckpoint(t *testing.T) {
 	harness := newFixtureABSHarness(t, cfg, manifest)
 	harness.FailPage(1, 3)
 
-	importer, _, bookRepo, settingsRepo, runRepo := newContractImporterFixture(t)
+	importer, _, bookRepo, _, settingsRepo, runRepo := newContractImporterFixture(t)
 	_, err = importer.Run(context.Background(), abs.ImportConfig{
 		SourceID:  abs.DefaultSourceID,
 		BaseURL:   harness.BaseURL(),
@@ -316,16 +366,16 @@ func TestContractHarness_ImporterResumeFromFailedCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resume Run: %v", err)
 	}
-	if resumeStats.BooksCreated != 1 || resumeStats.ReviewQueued != 2 {
-		t.Fatalf("resume stats = %+v, want 1 newly created book and 2 queued reviews after resuming", resumeStats)
+	if resumeStats.BooksCreated != 2 || resumeStats.ReviewQueued != 2 {
+		t.Fatalf("resume stats = %+v, want 2 newly created books and 2 queued reviews after resuming", resumeStats)
 	}
 
 	books, err := bookRepo.ListIncludingExcluded(context.Background())
 	if err != nil {
 		t.Fatalf("List books after resume: %v", err)
 	}
-	if len(books) != 3 {
-		t.Fatalf("books after resume = %d, want 3", len(books))
+	if len(books) != 4 {
+		t.Fatalf("books after resume = %d, want 4", len(books))
 	}
 
 	runs, err := runRepo.ListRecent(context.Background(), 2)
