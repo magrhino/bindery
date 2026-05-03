@@ -570,6 +570,12 @@ func TestFilterCategoriesParentDrop(t *testing.T) {
 		mediaType string
 		want      []int
 	}{
+		// Core regression: bare parent 7000 must never reach the indexer as-is.
+		// Prowlarr reports only 7000 for generic book trackers; the searcher must
+		// widen this to the ebook default (7020) rather than sending the broad
+		// parent, which causes indexers to return noisier result sets.
+		{[]int{7000}, "ebook", []int{7020}},
+		{[]int{3000}, "audiobook", []int{3030}},
 		{[]int{7000, 7020}, "ebook", []int{7020}},
 		{[]int{7000, 7020, 7030}, "ebook", []int{7020}},
 		{[]int{3000, 3030}, "audiobook", []int{3030}},

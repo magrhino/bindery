@@ -27,8 +27,10 @@ func NewSearcher() *Searcher {
 // MatchCriteria describes what we're searching for. Year and ISBN are
 // optional and only used for ranking — they never cause a result to be
 // rejected. MediaType filters the indexer category set; "audiobook" narrows
-// to the Newznab audio tree (3000-range, primarily 3030), anything else
-// narrows to the books tree (7000-range).
+// to the Newznab audiobook subcategory (303x, primarily 3030), anything else
+// narrows to the ebook subcategory (702x, primarily 7020). The broad parent
+// categories 7000 and 3000 are never sent — they cause indexers to return
+// noisier, less-targeted result sets.
 // AllowedLanguages is the author's metadata-profile language list; when it
 // contains exactly "eng" (or "en"), foreign-tagged releases are filtered out.
 type MatchCriteria struct {
