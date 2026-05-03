@@ -246,6 +246,51 @@ func TestBookUpdate_RejectsFilePathInBody(t *testing.T) {
 	}
 }
 
+// TestBookDelete_MultiFile_RemovesAllOnDisk verifies the #343 fix:
+// ?deleteFiles=true enumerates via book_files and removes every on-disk
+// file, not just the first registered path.
+func TestBookDelete_MultiFile_RemovesAllOnDisk(t *testing.T) {
+	h, books, _, author, ctx := bookFixture(t)
+	tmp := t.TempDir()
+
+	epub := filepath.Join(tmp, "book.epub")
+	mobi := filepath.Join(tmp, "book.mobi")
+	pdf := filepath.Join(tmp, "book.pdf")
+	for _, p := range []string{epub, mobi, pdf} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	book := &models.Book{
+		ForeignID: "B-MF1", AuthorID: author.ID, Title: "Multi Format", SortTitle: "mf",
+		Status: "wanted", Genres: []string{}, MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := books.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{epub, mobi, pdf} {
+		if err := books.AddBookFile(ctx, book.ID, models.MediaTypeEbook, p); err != nil {
+			t.Fatalf("AddBookFile(%s): %v", p, err)
+		}
+	}
+
+	req := withURLParam(
+		httptest.NewRequest(http.MethodDelete, "/api/v1/book/"+strconv.FormatInt(book.ID, 10)+"?deleteFiles=true", nil),
+		"id", strconv.FormatInt(book.ID, 10))
+	rec := httptest.NewRecorder()
+	h.Delete(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", rec.Code)
+	}
+
+	for _, p := range []string{epub, mobi, pdf} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("file should be removed: %s (stat err=%v)", p, err)
+		}
+	}
+}
+
 // TestBookDelete_WithDeleteFiles exercises the ?deleteFiles=true branch end
 // to end: on-disk path must be swept before the row is removed.
 func TestBookDelete_WithDeleteFiles(t *testing.T) {
