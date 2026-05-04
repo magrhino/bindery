@@ -104,6 +104,12 @@ func (c *Client) Test(ctx context.Context) error {
 func (c *Client) AddTorrent(ctx context.Context, magnetOrURL, category, savePath string) (string, error) {
 	// Snapshot all existing hashes (unfiltered) so we can detect newly-added
 	// items regardless of which category qBittorrent assigns them initially.
+	// For indirect URLs (e.g. Prowlarr Torznab redirects), qBittorrent must
+	// follow the redirect and fetch the remote .torrent file before it assigns
+	// metadata and category. Polling with a category filter during this window
+	// returns nothing; the detection deadline expires and the hash is lost
+	// (#418). The before/after hash-set diff already uniquely identifies the
+	// new torrent, so the category filter is omitted from both polling calls.
 	beforeSet := map[string]struct{}{}
 	if before, err := c.GetTorrents(ctx, ""); err == nil {
 		for _, t := range before {
