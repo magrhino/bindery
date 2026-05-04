@@ -87,6 +87,9 @@ func (e *Enumerator) Enumerate(ctx context.Context, libraryID string, fn func(co
 		if err != nil {
 			return stats, err
 		}
+		if err := validateBookLibraryPage(libraryID, resp); err != nil {
+			return stats, err
+		}
 		stats.PagesScanned++
 		slog.Info("abs enumerate page",
 			"libraryID", libraryID,
@@ -180,6 +183,21 @@ func (e *Enumerator) Enumerate(ctx context.Context, libraryID string, fn func(co
 		"itemsNormalized", stats.ItemsNormalized,
 		"itemsDetailFetched", stats.ItemsDetailFetched)
 	return stats, nil
+}
+
+func validateBookLibraryPage(libraryID string, resp *LibraryItemsPage) error {
+	if resp == nil {
+		return errors.New("abs library items response is empty")
+	}
+	if mediaType := strings.TrimSpace(resp.MediaType); mediaType != "" && mediaType != "book" {
+		return fmt.Errorf("library %q is %q, expected book", libraryID, mediaType)
+	}
+	for _, item := range resp.Results {
+		if mediaType := strings.TrimSpace(item.MediaType); mediaType != "" && mediaType != "book" {
+			return fmt.Errorf("library %q contains %q item %q, expected book", libraryID, mediaType, item.ID)
+		}
+	}
+	return nil
 }
 
 func (e *Enumerator) loadCheckpoint(ctx context.Context) (*ImportCheckpoint, error) {

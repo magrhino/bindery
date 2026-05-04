@@ -1660,7 +1660,7 @@ function AudiobookshelfSection() {
               ))}
             </select>
             <p className="text-[11px] text-slate-500 dark:text-zinc-500 mt-1">
-              The selected library is validated during save. Only book libraries are shown here.
+              Save stores the selected library without contacting ABS. Use “List libraries” to show book libraries; imports reject non-book libraries before scanning.
             </p>
             {draft.libraryId && !libraries.some(lib => lib.id === draft.libraryId) && (
               <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">

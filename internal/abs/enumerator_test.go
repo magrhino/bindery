@@ -168,6 +168,34 @@ func TestEnumerator_MissingSizeDurationFetchesDetail(t *testing.T) {
 	}
 }
 
+func TestEnumerator_RejectsNonBookLibrary(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/api/libraries/lib-podcasts/items" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"results":[],"total":0,"limit":50,"page":0,"mediaType":"podcast"}`))
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(srv.URL, "fixture-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enumerator := NewEnumerator(client, nil, 50)
+
+	_, err = enumerator.Enumerate(context.Background(), "lib-podcasts", func(context.Context, NormalizedLibraryItem) error {
+		t.Fatal("unexpected item import callback")
+		return nil
+	})
+	if err == nil || err.Error() != `library "lib-podcasts" is "podcast", expected book` {
+		t.Fatalf("err = %v, want non-book library error", err)
+	}
+}
+
 func TestEnumerator_ResumeFromCheckpoint(t *testing.T) {
 	t.Parallel()
 
