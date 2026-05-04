@@ -31,8 +31,8 @@ type Config struct {
 	// Login rate limit (per-IP sliding window).
 	// BINDERY_RATE_LIMIT_MAX_FAILURES  (default: 5)
 	// BINDERY_RATE_LIMIT_WINDOW_MINUTES (default: 15)
-	RateLimitMaxFailures    int
-	RateLimitWindowMinutes  int
+	RateLimitMaxFailures   int
+	RateLimitWindowMinutes int
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -47,18 +47,18 @@ type Config struct {
 // takes precedence and the env var becomes a no-op.
 func Load() *Config {
 	return &Config{
-		Port:                envOr("BINDERY_PORT", "8787"),
-		DBPath:              envOr("BINDERY_DB_PATH", defaultDBPath(runtime.GOOS, os.UserConfigDir)),
-		DataDir:             envOr("BINDERY_DATA_DIR", defaultDataDir(runtime.GOOS, os.UserConfigDir)),
-		LogLevel:            envOr("BINDERY_LOG_LEVEL", "info"),
-		APIKey:              envOr("BINDERY_API_KEY", ""),
-		DownloadDir:         envOr("BINDERY_DOWNLOAD_DIR", "/downloads"),
-		LibraryDir:          envOr("BINDERY_LIBRARY_DIR", "/books"),
-		AudiobookDir:        envOr("BINDERY_AUDIOBOOK_DIR", ""),
-		DownloadPathRemap:   envOr("BINDERY_DOWNLOAD_PATH_REMAP", ""),
-		ProxyAuthHeader:     envOr("BINDERY_PROXY_AUTH_HEADER", "X-Forwarded-User"),
-		ProxyAutoProvision:  envBool("BINDERY_PROXY_AUTO_PROVISION", true),
-		OIDCRedirectBaseURL: envOr("BINDERY_OIDC_REDIRECT_BASE_URL", ""),
+		Port:                   envOr("BINDERY_PORT", "8787"),
+		DBPath:                 envOr("BINDERY_DB_PATH", defaultDBPath(runtime.GOOS, os.UserConfigDir)),
+		DataDir:                envOr("BINDERY_DATA_DIR", defaultDataDir(runtime.GOOS, os.UserConfigDir)),
+		LogLevel:               envOr("BINDERY_LOG_LEVEL", "info"),
+		APIKey:                 envOr("BINDERY_API_KEY", ""),
+		DownloadDir:            envOr("BINDERY_DOWNLOAD_DIR", "/downloads"),
+		LibraryDir:             envOr("BINDERY_LIBRARY_DIR", "/books"),
+		AudiobookDir:           envOr("BINDERY_AUDIOBOOK_DIR", ""),
+		DownloadPathRemap:      envOr("BINDERY_DOWNLOAD_PATH_REMAP", ""),
+		ProxyAuthHeader:        envOr("BINDERY_PROXY_AUTH_HEADER", "X-Forwarded-User"),
+		ProxyAutoProvision:     envBool("BINDERY_PROXY_AUTO_PROVISION", true),
+		OIDCRedirectBaseURL:    envOr("BINDERY_OIDC_REDIRECT_BASE_URL", ""),
 		LogRetentionDays:       envInt("BINDERY_LOG_RETENTION_DAYS", 14),
 		RateLimitMaxFailures:   envInt("BINDERY_RATE_LIMIT_MAX_FAILURES", 5),
 		RateLimitWindowMinutes: envInt("BINDERY_RATE_LIMIT_WINDOW_MINUTES", 15),

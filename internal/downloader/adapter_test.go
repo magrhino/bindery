@@ -644,11 +644,11 @@ func TestLiveStatusIsError_TransmissionIntegerCodes(t *testing.T) {
 		want   bool
 	}{
 		// Transmission error codes
-		{"16", true},  // TR_STATUS_CHECK_WAIT (error)
-		{"32", true},  // TR_STATUS_ISOLATED_ERROR
-		{"0", false},  // stopped but not an error code
-		{"3", false},  // seeding
-		{"2", false},  // downloading
+		{"16", true}, // TR_STATUS_CHECK_WAIT (error)
+		{"32", true}, // TR_STATUS_ISOLATED_ERROR
+		{"0", false}, // stopped but not an error code
+		{"3", false}, // seeding
+		{"2", false}, // downloading
 		// String-based statuses (qBittorrent, Deluge)
 		{"error", true},
 		{"Error", true},

@@ -21,8 +21,8 @@ type LiveStatus struct {
 	Percentage string
 	TimeLeft   string
 	Speed      string
-	Size     int64
-	SizeLeft int64
+	Size       int64
+	SizeLeft   int64
 	// Status is an optional client-specific status string. For Transmission,
 	// this is the integer torrent status code serialised via strconv.Itoa
 	// (e.g. "16" = error, "32" = isolated-error).
