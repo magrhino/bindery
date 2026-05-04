@@ -493,3 +493,145 @@ func TestRequireCSRFToken_BlocksMutationWithWrongToken(t *testing.T) {
 		t.Errorf("status = %d; want 403", w.status)
 	}
 }
+
+// --- RequireXRequestedWith tests -----------------------------------------------
+
+func TestRequireXRequestedWith_AllowsSafeMethod(t *testing.T) {
+	called := false
+	h := RequireXRequestedWith(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true }))
+	req, _ := http.NewRequest("GET", "/api/v1/queue", nil)
+	h.ServeHTTP(nopWriter{}, req)
+	if !called {
+		t.Fatal("GET must pass through without X-Requested-With")
+	}
+}
+
+func TestRequireXRequestedWith_BlocksMutationWithoutHeader(t *testing.T) {
+	called := false
+	h := RequireXRequestedWith(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true }))
+	req, _ := http.NewRequest("POST", "/api/v1/queue/grab", nil)
+	w := &captureWriter{}
+	h.ServeHTTP(w, req)
+	if called {
+		t.Fatal("POST without X-Requested-With and without API key must be rejected")
+	}
+	if w.status != http.StatusForbidden {
+		t.Errorf("status = %d; want 403", w.status)
+	}
+}
+
+func TestRequireXRequestedWith_AllowsMutationWithAPIKeyHeader(t *testing.T) {
+	called := false
+	h := RequireXRequestedWith(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true }))
+	req, _ := http.NewRequest("POST", "/api/v1/queue/grab", nil)
+	req.Header.Set("X-Api-Key", "some-api-key")
+	h.ServeHTTP(nopWriter{}, req)
+	if !called {
+		t.Fatal("POST with X-Api-Key must bypass RequireXRequestedWith")
+	}
+}
+
+func TestRequireXRequestedWith_AllowsMutationWithAPIKeyQuery(t *testing.T) {
+	called := false
+	h := RequireXRequestedWith(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true }))
+	req, _ := http.NewRequest("DELETE", "/api/v1/queue/1?apikey=some-api-key", nil)
+	h.ServeHTTP(nopWriter{}, req)
+	if !called {
+		t.Fatal("DELETE with ?apikey= must bypass RequireXRequestedWith")
+	}
+}
+
+func TestRequireXRequestedWith_AllowsMutationWithCorrectHeader(t *testing.T) {
+	called := false
+	h := RequireXRequestedWith(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true }))
+	req, _ := http.NewRequest("POST", "/api/v1/queue/grab", nil)
+	req.Header.Set("X-Requested-With", "bindery-ui")
+	h.ServeHTTP(nopWriter{}, req)
+	if !called {
+		t.Fatal("POST with correct X-Requested-With must pass")
+	}
+}
+
+// --- Full CSRF stack integration tests (Issue #424) ----------------------------
+//
+// These tests mirror the middleware chain applied to /api/v1 in main.go:
+// auth.Middleware → RequireXRequestedWith → RequireCSRFToken → handler.
+// They verify that external Arr clients (Harpoon, etc.) can reach
+// /api/queue using an API key while browser sessions still require both
+// CSRF guards.
+
+func buildCSRFStack(p Provider, secret []byte, inner http.Handler) http.Handler {
+	return Middleware(p)(
+		RequireXRequestedWith(
+			RequireCSRFToken(func() []byte { return secret })(inner),
+		),
+	)
+}
+
+func TestCSRFStack_APIKeyRequestPassesAllGuards(t *testing.T) {
+	secret := []byte("stack-secret")
+	p := &fakeProvider{mode: ModeEnabled, apiKey: "harpoon-key", secret: secret}
+	called := false
+	stack := buildCSRFStack(p, secret, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Simulate Harpoon: API key only, no browser headers.
+	req, _ := http.NewRequest("GET", "/api/v1/queue", nil)
+	req.Header.Set("X-Api-Key", "harpoon-key")
+	req.RemoteAddr = "10.0.0.5:50000"
+	rw := &captureWriter{}
+	stack.ServeHTTP(rw, req)
+	if !called {
+		t.Fatal("API-key GET to /api/queue must reach the handler")
+	}
+	if rw.status != http.StatusOK {
+		t.Errorf("status = %d; want 200", rw.status)
+	}
+}
+
+func TestCSRFStack_APIKeyGrabPassesAllGuards(t *testing.T) {
+	secret := []byte("stack-secret")
+	p := &fakeProvider{mode: ModeEnabled, apiKey: "harpoon-key", secret: secret}
+	called := false
+	stack := buildCSRFStack(p, secret, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Simulate Harpoon: POST /api/queue/grab with API key, no CSRF headers.
+	req, _ := http.NewRequest("POST", "/api/v1/queue/grab", nil)
+	req.Header.Set("X-Api-Key", "harpoon-key")
+	req.RemoteAddr = "10.0.0.5:50000"
+	rw := &captureWriter{}
+	stack.ServeHTTP(rw, req)
+	if !called {
+		t.Fatal("API-key POST to /api/queue/grab must reach the handler")
+	}
+}
+
+func TestCSRFStack_BrowserSessionWithoutCSRFTokenIsRejected(t *testing.T) {
+	secret := []byte("stack-secret")
+	p := &fakeProvider{mode: ModeEnabled, apiKey: "harpoon-key", secret: secret}
+	called := false
+	stack := buildCSRFStack(p, secret, http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		called = true
+	}))
+
+	// Browser session cookie present but no CSRF token — CSRF attack scenario.
+	sessionVal := SignSession(secret, 1, time.Now().Add(time.Hour))
+	req, _ := http.NewRequest("POST", "/api/v1/queue/grab", nil)
+	req.Header.Set("X-Requested-With", "bindery-ui")
+	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: sessionVal})
+	// Deliberately omit X-CSRF-Token.
+	req.RemoteAddr = "8.8.8.8:12345"
+	rw := &captureWriter{}
+	stack.ServeHTTP(rw, req)
+	if called {
+		t.Fatal("browser session POST without CSRF token must be rejected")
+	}
+	if rw.status != http.StatusForbidden {
+		t.Errorf("status = %d; want 403", rw.status)
+	}
+}
