@@ -150,8 +150,17 @@ func parseCSVRows(reader io.Reader) ([]csvRow, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Common header field names — if the first record's first cell matches
+		// one of these, the row is a column-label header and must be skipped.
+		headerFields := map[string]bool{
+			"name": true, "author": true, "author name": true,
+			"monitored": true, "searchonadd": true,
+		}
 		out := make([]csvRow, 0, len(records))
-		for _, rec := range records {
+		for i, rec := range records {
+			if i == 0 && len(rec) > 0 && headerFields[strings.ToLower(strings.TrimSpace(rec[0]))] {
+				continue
+			}
 			out = append(out, rowFromFields(rec))
 		}
 		return out, nil
