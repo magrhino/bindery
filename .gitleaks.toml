@@ -50,7 +50,7 @@ regexes = [
 
 # ── Stopwords ─────────────────────────────────────────────────────────────────
 # Short stopwords that appear in innocuous contexts throughout the codebase.
-[allowlist]
+[[allowlists]]
 description = "Global stopwords for common benign patterns"
 stopwords = [
   "example",

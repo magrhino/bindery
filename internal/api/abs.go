@@ -16,7 +16,7 @@ import (
 
 const (
 	SettingABSBaseURL   = "abs.base_url"
-	SettingABSAPIKey    = "abs.api_key" //nolint:gosec // settings key name, not a credential value
+	SettingABSAPIKey    = "abs.api_key" //nolint:gosec // #nosec G101 -- settings key name, not a credential value
 	SettingABSLibraryID = "abs.library_id"
 	SettingABSEnabled   = "abs.enabled"
 	SettingABSLabel     = "abs.label"
