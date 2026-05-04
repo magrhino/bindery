@@ -22,7 +22,7 @@ type absReviewImporter interface {
 type ABSReviewHandler struct {
 	reviews  *db.ABSReviewItemRepo
 	importer absReviewImporter
-	loadCfg  func() ABSStoredConfig
+	loadCfg  func(context.Context) ABSStoredConfig
 }
 
 type absReviewListResponse struct {
@@ -32,7 +32,7 @@ type absReviewListResponse struct {
 	Offset int                    `json:"offset"`
 }
 
-func NewABSReviewHandler(reviews *db.ABSReviewItemRepo, importer absReviewImporter, loadCfg func() ABSStoredConfig) *ABSReviewHandler {
+func NewABSReviewHandler(reviews *db.ABSReviewItemRepo, importer absReviewImporter, loadCfg func(context.Context) ABSStoredConfig) *ABSReviewHandler {
 	return &ABSReviewHandler{reviews: reviews, importer: importer, loadCfg: loadCfg}
 }
 
@@ -43,7 +43,7 @@ func (h *ABSReviewHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	cfg := h.loadCfg()
+	cfg := h.loadCfg(r.Context())
 	runCfg := abs.ImportConfig{
 		SourceID:  abs.DefaultSourceID,
 		BaseURL:   cfg.BaseURL,
@@ -91,7 +91,7 @@ func (h *ABSReviewHandler) Approve(w http.ResponseWriter, r *http.Request) {
 	}
 	applyReviewResolution(item, &payload)
 
-	cfg := h.loadCfg()
+	cfg := h.loadCfg(r.Context())
 	runCfg := abs.ImportConfig{
 		SourceID:  strings.TrimSpace(item.SourceID),
 		BaseURL:   cfg.BaseURL,

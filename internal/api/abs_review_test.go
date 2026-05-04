@@ -43,7 +43,7 @@ func absReviewFixture(t *testing.T) (*sql.DB, *ABSReviewHandler, *db.ABSReviewIt
 	t.Cleanup(func() { _ = database.Close() })
 	database.SetMaxOpenConns(1)
 	reviews := db.NewABSReviewItemRepo(database)
-	h := NewABSReviewHandler(reviews, &stubABSReviewImporter{}, func() ABSStoredConfig { return ABSStoredConfig{} })
+	h := NewABSReviewHandler(reviews, &stubABSReviewImporter{}, func(context.Context) ABSStoredConfig { return ABSStoredConfig{} })
 	return database, h, reviews
 }
 
@@ -182,7 +182,12 @@ func TestABSReviewHandler_Approve(t *testing.T) {
 	}
 
 	importer := &stubABSReviewImporter{}
-	h := NewABSReviewHandler(reviews, importer, func() ABSStoredConfig {
+	type ctxKey struct{}
+	key := ctxKey{}
+	h := NewABSReviewHandler(reviews, importer, func(ctx context.Context) ABSStoredConfig {
+		if ctx.Value(key) != "request" {
+			t.Fatalf("load config context value = %v, want request", ctx.Value(key))
+		}
 		return ABSStoredConfig{
 			BaseURL:   "https://abs.example.com",
 			APIKey:    "secret",
@@ -196,6 +201,7 @@ func TestABSReviewHandler_Approve(t *testing.T) {
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("id", "1")
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	req = req.WithContext(context.WithValue(req.Context(), key, "request"))
 	rec := httptest.NewRecorder()
 
 	h.Approve(rec, req)
@@ -235,7 +241,7 @@ func TestABSReviewHandler_ResolveAuthorGroupsByPrimaryAuthor(t *testing.T) {
 		}
 	}
 
-	h := NewABSReviewHandler(reviews, &stubABSReviewImporter{}, func() ABSStoredConfig { return ABSStoredConfig{} })
+	h := NewABSReviewHandler(reviews, &stubABSReviewImporter{}, func(context.Context) ABSStoredConfig { return ABSStoredConfig{} })
 	body := bytes.NewBufferString(`{"foreignAuthorId":"OL123A","authorName":"Brandon Sanderson","applyTo":"same_author"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/abs/review/1/resolve-author", body)
 	rctx := chi.NewRouteContext()
@@ -293,7 +299,7 @@ func TestABSReviewHandler_ResolveBookStoresEditedTitle(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	h := NewABSReviewHandler(reviews, &stubABSReviewImporter{}, func() ABSStoredConfig { return ABSStoredConfig{} })
+	h := NewABSReviewHandler(reviews, &stubABSReviewImporter{}, func(context.Context) ABSStoredConfig { return ABSStoredConfig{} })
 	body := bytes.NewBufferString(`{"foreignBookId":"OL456W","title":"The Bands of Mourning","editedTitle":"The Bands of Mourning"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/abs/review/1/resolve-book", body)
 	rctx := chi.NewRouteContext()
@@ -338,7 +344,7 @@ func TestABSReviewHandler_Dismiss(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := NewABSReviewHandler(reviews, &stubABSReviewImporter{}, func() ABSStoredConfig { return ABSStoredConfig{} })
+	h := NewABSReviewHandler(reviews, &stubABSReviewImporter{}, func(context.Context) ABSStoredConfig { return ABSStoredConfig{} })
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/abs/review/1/dismiss", bytes.NewReader(nil))
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("id", "1")

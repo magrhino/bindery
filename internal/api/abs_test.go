@@ -60,6 +60,17 @@ func absFixture(t *testing.T, client absClient) (*ABSHandler, *db.SettingsRepo, 
 	return h, repo, context.Background()
 }
 
+func assertSettingValue(t *testing.T, repo *db.SettingsRepo, ctx context.Context, key, want string) {
+	t.Helper()
+	got, err := repo.Get(ctx, key)
+	if err != nil {
+		t.Fatalf("get %s: %v", key, err)
+	}
+	if got == nil || got.Value != want {
+		t.Fatalf("%s = %+v, want %q", key, got, want)
+	}
+}
+
 func TestABSConfigGetRedactsAPIKey(t *testing.T) {
 	h, repo, ctx := absFixture(t, &stubABSClient{})
 	if err := repo.Set(ctx, SettingABSBaseURL, "https://abs.example.com"); err != nil {
@@ -97,11 +108,13 @@ func TestABSConfigGetIncludesFeatureFlag(t *testing.T) {
 	}
 }
 
-func TestABSSetConfigValidatesSelectedLibrary(t *testing.T) {
-	client := &stubABSClient{
-		libraryResp: &abs.Library{ID: "lib_books", Name: "Books", MediaType: "book"},
+func TestABSSetConfigSavesLibraryIDWithoutLiveProbe(t *testing.T) {
+	h, repo, ctx := absFixture(t, nil)
+	called := false
+	h.newFn = func(baseURL, apiKey string) (absClient, error) {
+		called = true
+		return nil, errors.New("unexpected live probe")
 	}
-	h, repo, _ := absFixture(t, client)
 
 	body := bytes.NewBufferString(`{"baseUrl":"https://abs.example.com/","apiKey":"secret","libraryId":"lib_books","enabled":true,"label":"Shelf"}`)
 	rec := httptest.NewRecorder()
@@ -109,13 +122,41 @@ func TestABSSetConfigValidatesSelectedLibrary(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
 	}
-	if client.lastLibraryID != "lib_books" {
-		t.Fatalf("validated library = %q", client.lastLibraryID)
+	if called {
+		t.Fatal("client factory was called during config save")
 	}
-	got, _ := repo.Get(context.Background(), SettingABSAPIKey)
+	got, _ := repo.Get(ctx, SettingABSLibraryID)
+	if got == nil || got.Value != "lib_books" {
+		t.Fatalf("library id not persisted: %+v", got)
+	}
+	got, _ = repo.Get(ctx, SettingABSAPIKey)
 	if got == nil || got.Value != "secret" {
 		t.Fatalf("api key not persisted: %+v", got)
 	}
+}
+
+func TestABSSetConfigSavesEditableFieldsWhenABSUnreachable(t *testing.T) {
+	h, repo, ctx := absFixture(t, nil)
+	if err := repo.Set(ctx, SettingABSBaseURL, "https://abs.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Set(ctx, SettingABSAPIKey, "stored-secret"); err != nil {
+		t.Fatal(err)
+	}
+	h.newFn = func(baseURL, apiKey string) (absClient, error) {
+		return nil, errors.New("abs is unreachable")
+	}
+
+	body := bytes.NewBufferString(`{"label":"Offline Shelf","enabled":true,"libraryId":"lib_offline"}`)
+	rec := httptest.NewRecorder()
+	h.SetConfig(rec, httptest.NewRequest(http.MethodPut, "/api/v1/abs/config", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	assertSettingValue(t, repo, ctx, SettingABSLabel, "Offline Shelf")
+	assertSettingValue(t, repo, ctx, SettingABSEnabled, "true")
+	assertSettingValue(t, repo, ctx, SettingABSLibraryID, "lib_offline")
 }
 
 func TestABSSetConfig_OmittedBaseURLPreservesStoredValue(t *testing.T) {
@@ -190,6 +231,28 @@ func TestABSTestMapsUnauthorizedTo502(t *testing.T) {
 	h.Test(rec, httptest.NewRequest(http.MethodPost, "/api/v1/abs/test", bytes.NewBufferString(`{}`)))
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestABSLibrariesMapsRemoteFailureTo502(t *testing.T) {
+	client := &stubABSClient{
+		librariesErr: errors.New("connect: connection refused"),
+	}
+	h, repo, ctx := absFixture(t, client)
+	if err := repo.Set(ctx, SettingABSBaseURL, "https://abs.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Set(ctx, SettingABSAPIKey, "secret"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Libraries(rec, httptest.NewRequest(http.MethodPost, "/api/v1/abs/libraries", bytes.NewBufferString(`{}`)))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "connection refused") {
+		t.Fatalf("body = %s, want remote failure", rec.Body.String())
 	}
 }
 

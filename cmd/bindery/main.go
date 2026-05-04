@@ -221,7 +221,7 @@ func main() {
 		WithStoragePaths(cfg.LibraryDir, cfg.AudiobookDir, rootFolderRepo).
 		WithMetadata(metaAgg)
 	if cfg.ABSFeatureEnabled {
-		storedABS := api.LoadABSConfig(settingsRepo)
+		storedABS := api.LoadABSConfig(ctxBoot, settingsRepo)
 		resumeCfg := abs.ImportConfig{
 			SourceID:  abs.DefaultSourceID,
 			BaseURL:   storedABS.BaseURL,
@@ -361,11 +361,11 @@ func main() {
 	calibreHandler := api.NewCalibreHandler(settingsRepo)
 	absHandler := api.NewABSHandler(settingsRepo).WithFeatureEnabled(cfg.ABSFeatureEnabled)
 	absConflictHandler := api.NewABSConflictHandler(absConflictRepo, authorRepo, bookRepo)
-	absImportHandler := api.NewABSImportHandler(absImporter, func() api.ABSStoredConfig {
-		return api.LoadABSConfig(settingsRepo)
+	absImportHandler := api.NewABSImportHandler(absImporter, func(ctx context.Context) api.ABSStoredConfig {
+		return api.LoadABSConfig(ctx, settingsRepo)
 	})
-	absReviewHandler := api.NewABSReviewHandler(absReviewRepo, absImporter, func() api.ABSStoredConfig {
-		return api.LoadABSConfig(settingsRepo)
+	absReviewHandler := api.NewABSReviewHandler(absReviewRepo, absImporter, func(ctx context.Context) api.ABSStoredConfig {
+		return api.LoadABSConfig(ctx, settingsRepo)
 	})
 	calibreImportHandler := api.NewCalibreImportHandler(calibreImporter, func() calibre.Config {
 		return api.LoadCalibreConfig(settingsRepo)

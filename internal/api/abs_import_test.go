@@ -47,7 +47,12 @@ func TestABSImportHandler_Start(t *testing.T) {
 	t.Parallel()
 
 	stub := &stubABSImporter{progress: abs.ImportProgress{Running: true, Message: "kickoff", RunID: 7}}
-	h := NewABSImportHandler(stub, func() ABSStoredConfig {
+	type ctxKey struct{}
+	key := ctxKey{}
+	h := NewABSImportHandler(stub, func(ctx context.Context) ABSStoredConfig {
+		if ctx.Value(key) != "request" {
+			t.Fatalf("load config context value = %v, want request", ctx.Value(key))
+		}
 		return ABSStoredConfig{
 			BaseURL:   "https://abs.example.com",
 			APIKey:    "secret",
@@ -58,7 +63,9 @@ func TestABSImportHandler_Start(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	h.Start(rec, httptest.NewRequest(http.MethodPost, "/api/v1/abs/import", nil))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/abs/import", nil)
+	req = req.WithContext(context.WithValue(req.Context(), key, "request"))
+	h.Start(rec, req)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
 	}
@@ -71,7 +78,7 @@ func TestABSImportHandler_StartUsesRequestOverridesAndStoredKeyFallback(t *testi
 	t.Parallel()
 
 	stub := &stubABSImporter{progress: abs.ImportProgress{Running: true}}
-	h := NewABSImportHandler(stub, func() ABSStoredConfig {
+	h := NewABSImportHandler(stub, func(context.Context) ABSStoredConfig {
 		return ABSStoredConfig{
 			BaseURL:   "https://stored.example.com",
 			APIKey:    "stored-secret",
@@ -105,7 +112,7 @@ func TestABSImportHandler_StartAcceptsDryRun(t *testing.T) {
 	t.Parallel()
 
 	stub := &stubABSImporter{progress: abs.ImportProgress{Running: true, DryRun: true}}
-	h := NewABSImportHandler(stub, func() ABSStoredConfig {
+	h := NewABSImportHandler(stub, func(context.Context) ABSStoredConfig {
 		return ABSStoredConfig{
 			BaseURL:   "https://stored.example.com",
 			APIKey:    "stored-secret",
@@ -130,7 +137,7 @@ func TestABSImportHandler_StartRejectsInvalidConfig(t *testing.T) {
 	t.Parallel()
 
 	stub := &stubABSImporter{}
-	h := NewABSImportHandler(stub, func() ABSStoredConfig {
+	h := NewABSImportHandler(stub, func(context.Context) ABSStoredConfig {
 		return ABSStoredConfig{Enabled: false}
 	})
 
@@ -145,7 +152,7 @@ func TestABSImportHandler_StartAlreadyRunning(t *testing.T) {
 	t.Parallel()
 
 	stub := &stubABSImporter{startErr: abs.ErrAlreadyRunning}
-	h := NewABSImportHandler(stub, func() ABSStoredConfig {
+	h := NewABSImportHandler(stub, func(context.Context) ABSStoredConfig {
 		return ABSStoredConfig{
 			BaseURL:   "https://abs.example.com",
 			APIKey:    "secret",
@@ -166,7 +173,7 @@ func TestABSImportHandler_Status(t *testing.T) {
 	t.Parallel()
 
 	stub := &stubABSImporter{progress: abs.ImportProgress{Running: false, Processed: 3}}
-	h := NewABSImportHandler(stub, func() ABSStoredConfig { return ABSStoredConfig{} })
+	h := NewABSImportHandler(stub, func(context.Context) ABSStoredConfig { return ABSStoredConfig{} })
 
 	rec := httptest.NewRecorder()
 	h.Status(rec, httptest.NewRequest(http.MethodGet, "/api/v1/abs/import/status", nil))
@@ -186,7 +193,7 @@ func TestABSImportHandler_StartBubblesImporterValidation(t *testing.T) {
 	t.Parallel()
 
 	stub := &stubABSImporter{startErr: errors.New("boom")}
-	h := NewABSImportHandler(stub, func() ABSStoredConfig {
+	h := NewABSImportHandler(stub, func(context.Context) ABSStoredConfig {
 		return ABSStoredConfig{
 			BaseURL:   "https://abs.example.com",
 			APIKey:    "secret",

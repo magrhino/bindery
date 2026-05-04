@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -27,7 +26,6 @@ const (
 type absClient interface {
 	Authorize(ctx context.Context) (*abs.AuthorizeResponse, error)
 	ListLibraries(ctx context.Context) ([]abs.Library, error)
-	GetLibrary(ctx context.Context, id string) (*abs.Library, error)
 }
 
 type absClientFactory func(baseURL, apiKey string) (absClient, error)
@@ -87,11 +85,11 @@ func (h *ABSHandler) WithFeatureEnabled(enabled bool) *ABSHandler {
 }
 
 func (h *ABSHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, h.loadConfig())
+	writeJSON(w, http.StatusOK, h.loadConfig(r.Context()))
 }
 
 func (h *ABSHandler) SetConfig(w http.ResponseWriter, r *http.Request) {
-	current := h.loadStoredConfig()
+	current := h.loadStoredConfig(r.Context())
 
 	var req absConfigRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -140,23 +138,6 @@ func (h *ABSHandler) SetConfig(w http.ResponseWriter, r *http.Request) {
 	enabled := current.Enabled
 	if req.Enabled != nil {
 		enabled = *req.Enabled
-	}
-
-	if libraryID != "" {
-		client, err := h.newConfiguredClient(baseURL, apiKey)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		lib, err := client.GetLibrary(r.Context(), libraryID)
-		if err != nil {
-			h.writeProbeError(w, "abs save validation failed", baseURL, err)
-			return
-		}
-		if lib.MediaType != "book" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("library %q is %q, expected book", lib.Name, lib.MediaType)})
-			return
-		}
 	}
 
 	if err := h.settings.Set(r.Context(), SettingABSBaseURL, baseURL); err != nil {
@@ -258,9 +239,9 @@ type ABSStoredConfig struct {
 	Enabled   bool
 }
 
-func LoadABSConfig(settings *db.SettingsRepo) ABSStoredConfig {
+func LoadABSConfig(ctx context.Context, settings *db.SettingsRepo) ABSStoredConfig {
 	get := func(key string) string {
-		s, _ := settings.Get(contextBackground(), key)
+		s, _ := settings.Get(ctx, key)
 		if s == nil {
 			return ""
 		}
@@ -280,12 +261,12 @@ func LoadABSConfig(settings *db.SettingsRepo) ABSStoredConfig {
 	}
 }
 
-func (h *ABSHandler) loadStoredConfig() ABSStoredConfig {
-	return LoadABSConfig(h.settings)
+func (h *ABSHandler) loadStoredConfig(ctx context.Context) ABSStoredConfig {
+	return LoadABSConfig(ctx, h.settings)
 }
 
-func (h *ABSHandler) loadConfig() ABSConfigResponse {
-	cfg := h.loadStoredConfig()
+func (h *ABSHandler) loadConfig(ctx context.Context) ABSConfigResponse {
+	cfg := h.loadStoredConfig(ctx)
 	return ABSConfigResponse{
 		FeatureEnabled:   h.featureEnabled,
 		BaseURL:          cfg.BaseURL,
@@ -298,7 +279,7 @@ func (h *ABSHandler) loadConfig() ABSConfigResponse {
 }
 
 func (h *ABSHandler) clientFromProbe(r *http.Request) (absClient, error) {
-	current := h.loadStoredConfig()
+	current := h.loadStoredConfig(r.Context())
 	req := absProbeRequest{}
 	if r.Body != nil {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {

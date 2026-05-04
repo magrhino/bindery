@@ -24,7 +24,7 @@ type absImporterAPI interface {
 
 type ABSImportHandler struct {
 	importer absImporterAPI
-	loadCfg  func() ABSStoredConfig
+	loadCfg  func(context.Context) ABSStoredConfig
 }
 
 type absImportStartRequest struct {
@@ -36,12 +36,12 @@ type absImportStartRequest struct {
 	DryRun    *bool   `json:"dryRun"`
 }
 
-func NewABSImportHandler(importer absImporterAPI, loadCfg func() ABSStoredConfig) *ABSImportHandler {
+func NewABSImportHandler(importer absImporterAPI, loadCfg func(context.Context) ABSStoredConfig) *ABSImportHandler {
 	return &ABSImportHandler{importer: importer, loadCfg: loadCfg}
 }
 
 func (h *ABSImportHandler) Start(w http.ResponseWriter, r *http.Request) {
-	cfg := h.loadCfg()
+	cfg := h.loadCfg(r.Context())
 	var req absImportStartRequest
 	if r.Body != nil {
 		defer r.Body.Close()
