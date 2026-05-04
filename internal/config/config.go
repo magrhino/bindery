@@ -28,6 +28,11 @@ type Config struct {
 	OIDCRedirectBaseURL string // BINDERY_OIDC_REDIRECT_BASE_URL
 	// Log retention in days (BINDERY_LOG_RETENTION_DAYS, default 14).
 	LogRetentionDays int
+	// Login rate limit (per-IP sliding window).
+	// BINDERY_RATE_LIMIT_MAX_FAILURES  (default: 5)
+	// BINDERY_RATE_LIMIT_WINDOW_MINUTES (default: 15)
+	RateLimitMaxFailures    int
+	RateLimitWindowMinutes  int
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -54,7 +59,9 @@ func Load() *Config {
 		ProxyAuthHeader:     envOr("BINDERY_PROXY_AUTH_HEADER", "X-Forwarded-User"),
 		ProxyAutoProvision:  envBool("BINDERY_PROXY_AUTO_PROVISION", true),
 		OIDCRedirectBaseURL: envOr("BINDERY_OIDC_REDIRECT_BASE_URL", ""),
-		LogRetentionDays:    envInt("BINDERY_LOG_RETENTION_DAYS", 14),
+		LogRetentionDays:       envInt("BINDERY_LOG_RETENTION_DAYS", 14),
+		RateLimitMaxFailures:   envInt("BINDERY_RATE_LIMIT_MAX_FAILURES", 5),
+		RateLimitWindowMinutes: envInt("BINDERY_RATE_LIMIT_WINDOW_MINUTES", 15),
 	}
 }
 

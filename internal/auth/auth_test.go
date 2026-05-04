@@ -136,6 +136,25 @@ func TestLoginLimiterResetOnSuccess(t *testing.T) {
 	}
 }
 
+// TestLoginLimiterConfigurableThreshold verifies that a limiter built with a
+// non-default max blocks exactly at that threshold, not at the hardcoded default of 5.
+func TestLoginLimiterConfigurableThreshold(t *testing.T) {
+	const customMax = 3
+	lim := NewLoginLimiter(customMax, time.Minute)
+	ip := "10.0.0.1"
+
+	for i := range customMax {
+		if !lim.Allow(ip) {
+			t.Fatalf("attempt %d should be allowed (max=%d)", i+1, customMax)
+		}
+		lim.Record(ip)
+	}
+	// Next attempt must be blocked at customMax, not at 5.
+	if lim.Allow(ip) {
+		t.Fatalf("attempt %d should be blocked (max=%d)", customMax+1, customMax)
+	}
+}
+
 func TestLoginLimiterExpiresOldEvents(t *testing.T) {
 	lim := NewLoginLimiter(2, 10*time.Millisecond)
 	ip := "1.2.3.4"

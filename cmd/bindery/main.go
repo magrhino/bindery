@@ -145,8 +145,9 @@ func main() {
 		slog.Info("proxy auth mode: trusted proxies", "cidrs", trustedCIDRs)
 	}
 
-	// Login rate limiter: 5 failures / 15 min per IP, matches Sonarr's posture.
-	loginLimiter := auth.NewLoginLimiter(5, 15*time.Minute)
+	// Login rate limiter: thresholds are configurable via BINDERY_RATE_LIMIT_MAX_FAILURES
+	// and BINDERY_RATE_LIMIT_WINDOW_MINUTES; defaults match the original Sonarr-style posture.
+	loginLimiter := auth.NewLoginLimiter(cfg.RateLimitMaxFailures, time.Duration(cfg.RateLimitWindowMinutes)*time.Minute)
 
 	// Metadata providers
 	olClient := openlibrary.New()
