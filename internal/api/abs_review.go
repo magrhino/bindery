@@ -105,12 +105,17 @@ func (h *ABSReviewHandler) Approve(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if _, err := h.importer.ImportReview(r.Context(), runCfg, payload); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
+	// Mark approved before importing so that a crash between the two writes
+	// leaves an approved-but-not-imported item (visible and recoverable via
+	// status reset) rather than an imported item whose status stays "pending"
+	// and triggers a duplicate import on the next approval attempt.
 	if err := h.reviews.UpdateStatus(r.Context(), item.ID, "approved"); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if _, err := h.importer.ImportReview(r.Context(), runCfg, payload); err != nil {
+		_ = h.reviews.UpdateStatus(r.Context(), item.ID, "pending")
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	updated, err := h.reviews.GetByID(r.Context(), item.ID)

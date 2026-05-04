@@ -118,7 +118,37 @@ func (h *ABSConflictHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "source must be 'abs' or 'upstream'"})
 		return
 	}
+	// Atomically claim the conflict to prevent a TOCTOU race where two
+	// concurrent Resolve calls both read "pending", apply different entity
+	// values, and both write "resolved" — leaving the entity and status record
+	// disagreeing on which source won.
+	claimed, err := h.conflicts.Claim(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !claimed {
+		// Re-read and return the current state so the client can see the
+		// winning resolution without treating it as an error.
+		current, err := h.conflicts.GetByID(r.Context(), id)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if current == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "conflict not found"})
+			return
+		}
+		item, err := h.decorateConflict(r, current)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+		return
+	}
 	if err := h.applyConflictChoice(r, conflict, source); err != nil {
+		_ = h.conflicts.Unclaim(r.Context(), id)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

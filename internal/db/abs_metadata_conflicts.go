@@ -86,6 +86,33 @@ func (r *ABSMetadataConflictRepo) ListPaginated(ctx context.Context, limit, offs
 	return out, total, rows.Err()
 }
 
+// Claim atomically transitions a conflict from "pending" to "resolving" so
+// that concurrent Resolve calls cannot both apply conflicting entity writes.
+// Returns true if the claim succeeded (this caller owns the conflict), false if
+// another caller already claimed or resolved it.
+func (r *ABSMetadataConflictRepo) Claim(ctx context.Context, id int64) (bool, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE abs_metadata_conflicts SET resolution_status = 'resolving', updated_at = ? WHERE id = ? AND resolution_status IN ('pending', 'unresolved')`,
+		time.Now().UTC(), id)
+	if err != nil {
+		return false, fmt.Errorf("claim abs metadata conflict %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("claim abs metadata conflict %d rows affected: %w", id, err)
+	}
+	return n == 1, nil
+}
+
+// Unclaim reverts a conflict from "resolving" back to "unresolved". Called when
+// the entity update inside Resolve fails after a successful Claim.
+func (r *ABSMetadataConflictRepo) Unclaim(ctx context.Context, id int64) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE abs_metadata_conflicts SET resolution_status = 'unresolved', updated_at = ? WHERE id = ? AND resolution_status = 'resolving'`,
+		time.Now().UTC(), id)
+	return err
+}
+
 func (r *ABSMetadataConflictRepo) Upsert(ctx context.Context, c *models.ABSMetadataConflict) error {
 	now := time.Now().UTC()
 	if c.SourceID == "" {
