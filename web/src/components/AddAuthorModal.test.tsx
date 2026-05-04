@@ -14,6 +14,10 @@ vi.mock('react-i18next', () => ({
       if (key === 'addAuthorModal.searchError') {
         return `Could not reach the metadata provider - ${String(options?.error ?? '')}`
       }
+      if (key === 'addAuthorModal.showHiddenResults') {
+        const count = Number(options?.count ?? 0)
+        return `Show ${count} hidden result${count === 1 ? '' : 's'}`
+      }
       return strings[key] ?? key
     },
   }),
@@ -26,12 +30,50 @@ vi.mock('../api/client', () => ({
     listRootFolders: vi.fn().mockResolvedValue([]),
     getSetting: vi.fn().mockResolvedValue({ key: 'default.media_type', value: 'ebook' }),
     searchAuthors: vi.fn(),
+    searchBooks: vi.fn(),
     addAuthor: vi.fn(),
   },
 }))
 
 // Import after the mock is set up so we get the mocked version.
 import { api } from '../api/client'
+import type { Author, Book } from '../api/client'
+
+function author(overrides: Partial<Author>): Author {
+  return {
+    id: 1,
+    foreignAuthorId: 'OL_AUTHOR_A',
+    authorName: 'Author',
+    sortName: 'Author',
+    description: '',
+    imageUrl: '',
+    disambiguation: '',
+    ratingsCount: 0,
+    averageRating: 0,
+    monitored: true,
+    ...overrides,
+  }
+}
+
+function book(overrides: Partial<Book>): Book {
+  return {
+    id: 1,
+    foreignBookId: 'OL_BOOK_W',
+    authorId: 1,
+    title: 'Book',
+    description: '',
+    imageUrl: '',
+    genres: [],
+    monitored: true,
+    status: 'wanted',
+    filePath: '',
+    mediaType: 'ebook',
+    ebookFilePath: '',
+    audiobookFilePath: '',
+    excluded: false,
+    ...overrides,
+  }
+}
 
 describe('AddAuthorModal — search error handling', () => {
   const onClose = vi.fn()
@@ -42,6 +84,8 @@ describe('AddAuthorModal — search error handling', () => {
     vi.mocked(api.listMetadataProfiles).mockResolvedValue([])
     vi.mocked(api.listRootFolders).mockResolvedValue([])
     vi.mocked(api.getSetting).mockResolvedValue({ key: 'default.media_type', value: 'ebook' })
+    vi.mocked(api.searchBooks).mockResolvedValue([])
+    vi.mocked(api.addAuthor).mockResolvedValue(author({}))
   })
 
   it('shows an error banner when the metadata provider is unreachable', async () => {
@@ -172,5 +216,125 @@ describe('AddAuthorModal — search error handling', () => {
       foreignAuthorId: 'OL26320A',
       authorName: 'J.R.R. Tolkien',
     }))
+  })
+
+  it('hides likely book-title results by default and reveals them on request', async () => {
+    const hiddenAuthor = author({
+      foreignAuthorId: 'OL_BAD_TITLE_A',
+      authorName: 'Romeo and Juliet',
+      disambiguation: 'William Shakespeare',
+    })
+    vi.mocked(api.searchAuthors).mockResolvedValue([hiddenAuthor])
+    vi.mocked(api.searchBooks).mockResolvedValue([
+      book({
+        title: 'Romeo and Juliet',
+        author: author({
+          foreignAuthorId: 'OL_SHAKESPEARE_A',
+          authorName: 'William Shakespeare',
+        }),
+      }),
+    ])
+
+    render(<AddAuthorModal onClose={onClose} onAdded={onAdded} />)
+
+    fireEvent.change(screen.getByPlaceholderText('Search by author name...'), {
+      target: { value: 'Romeo and Juliet' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^search$/i }))
+
+    const revealButton = await screen.findByRole('button', { name: /show 1 hidden result/i })
+    expect(screen.queryByText('Romeo and Juliet')).not.toBeInTheDocument()
+
+    fireEvent.click(revealButton)
+    expect(screen.getByText('Romeo and Juliet')).toBeInTheDocument()
+  })
+
+  it('allows revealed hidden results to be added', async () => {
+    const hiddenAuthor = author({
+      foreignAuthorId: 'OL_BAD_TITLE_A',
+      authorName: 'Romeo and Juliet',
+      disambiguation: 'William Shakespeare',
+    })
+    vi.mocked(api.searchAuthors).mockResolvedValue([hiddenAuthor])
+    vi.mocked(api.searchBooks).mockResolvedValue([
+      book({
+        title: 'Romeo and Juliet',
+        author: author({
+          foreignAuthorId: 'OL_SHAKESPEARE_A',
+          authorName: 'William Shakespeare',
+        }),
+      }),
+    ])
+
+    render(<AddAuthorModal onClose={onClose} onAdded={onAdded} />)
+
+    fireEvent.change(screen.getByPlaceholderText('Search by author name...'), {
+      target: { value: 'Romeo and Juliet' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^search$/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /show 1 hidden result/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^add$/i }))
+
+    await waitFor(() =>
+      expect(api.addAuthor).toHaveBeenCalledWith(expect.objectContaining({
+        foreignAuthorId: 'OL_BAD_TITLE_A',
+        authorName: 'Romeo and Juliet',
+      }))
+    )
+    expect(onAdded).toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('keeps regular author results visible while hiding only the title-shaped result', async () => {
+    const visibleAuthor = author({
+      foreignAuthorId: 'OL_SHAKESPEARE_A',
+      authorName: 'William Shakespeare',
+      disambiguation: 'Romeo and Juliet',
+    })
+    const hiddenAuthor = author({
+      foreignAuthorId: 'OL_BAD_TITLE_A',
+      authorName: 'Romeo and Juliet',
+      disambiguation: 'William Shakespeare',
+    })
+    vi.mocked(api.searchAuthors).mockResolvedValue([visibleAuthor, hiddenAuthor])
+    vi.mocked(api.searchBooks).mockResolvedValue([
+      book({
+        title: 'Romeo and Juliet',
+        author: visibleAuthor,
+      }),
+    ])
+
+    render(<AddAuthorModal onClose={onClose} onAdded={onAdded} />)
+
+    fireEvent.change(screen.getByPlaceholderText('Search by author name...'), {
+      target: { value: 'Romeo and Juliet' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^search$/i }))
+
+    await waitFor(() => expect(screen.getByText('William Shakespeare')).toBeInTheDocument())
+    expect(screen.queryByText('Romeo and Juliet')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /show 1 hidden result/i })).toBeInTheDocument()
+  })
+
+  it('keeps author results visible when the book guard lookup fails', async () => {
+    vi.mocked(api.searchAuthors).mockResolvedValue([
+      author({
+        foreignAuthorId: 'OL_BAD_TITLE_A',
+        authorName: 'Romeo and Juliet',
+        disambiguation: 'William Shakespeare',
+      }),
+    ])
+    vi.mocked(api.searchBooks).mockRejectedValue(new Error('book search down'))
+
+    render(<AddAuthorModal onClose={onClose} onAdded={onAdded} />)
+
+    fireEvent.change(screen.getByPlaceholderText('Search by author name...'), {
+      target: { value: 'Romeo and Juliet' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^search$/i }))
+
+    await waitFor(() => expect(screen.getByText('Romeo and Juliet')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: /hidden result/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/could not reach/i)).not.toBeInTheDocument()
   })
 })

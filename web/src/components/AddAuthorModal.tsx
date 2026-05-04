@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, Author, MediaType, MetadataProfile, RootFolder } from '../api/client'
+import { splitAuthorSearchResults } from './addAuthorTitleGuard'
 
 interface Props {
   onClose: () => void
@@ -23,6 +24,8 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
   const { t } = useTranslation()
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<Author[]>([])
+  const [hiddenResults, setHiddenResults] = useState<Author[]>([])
+  const [showHiddenResults, setShowHiddenResults] = useState(false)
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [adding, setAdding] = useState<string | null>(null)
@@ -57,15 +60,23 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
   }, [])
 
   const search = async () => {
-    if (!query.trim()) return
+    const q = query.trim()
+    if (!q) return
     setSearching(true)
     setSearchError(null)
+    setShowHiddenResults(false)
     try {
-      const authors = await api.searchAuthors(query)
-      setResults(authors)
+      const [authors, books] = await Promise.all([
+        api.searchAuthors(q),
+        api.searchBooks(q).catch(() => []),
+      ])
+      const split = splitAuthorSearchResults(authors, books, q)
+      setResults(split.visible)
+      setHiddenResults(split.hidden)
     } catch (err) {
       setSearchError(err instanceof Error ? err.message : 'Search failed — try again')
       setResults([])
+      setHiddenResults([])
     } finally {
       setSearching(false)
     }
@@ -180,7 +191,7 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
           </div>
 
           <div className="mt-4 max-h-80 overflow-y-auto space-y-2">
-            {results.map(author => (
+            {(showHiddenResults ? [...results, ...hiddenResults] : results).map(author => (
               <div
                 key={author.foreignAuthorId}
                 className="flex items-center justify-between p-3 rounded-md bg-slate-200/50 dark:bg-zinc-800/50 hover:bg-slate-200 dark:hover:bg-zinc-800"
@@ -202,10 +213,22 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
                 </button>
               </div>
             ))}
+            {hiddenResults.length > 0 && !showHiddenResults && (
+              <button
+                type="button"
+                onClick={() => setShowHiddenResults(true)}
+                className="w-full px-3 py-2 rounded-md border border-slate-300 dark:border-zinc-700 text-xs font-medium text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/60 dark:hover:bg-zinc-800/60 transition-colors"
+              >
+                {t('addAuthorModal.showHiddenResults', {
+                  count: hiddenResults.length,
+                  defaultValue: `Show ${hiddenResults.length} hidden result${hiddenResults.length === 1 ? '' : 's'}`,
+                })}
+              </button>
+            )}
             {searchError && (
               <p className="text-sm text-red-400 text-center py-4">{t('addAuthorModal.searchError', { error: searchError })}</p>
             )}
-            {results.length === 0 && !searching && !searchError && query && (
+            {results.length === 0 && hiddenResults.length === 0 && !searching && !searchError && query && (
               <p className="text-sm text-slate-600 dark:text-zinc-500 text-center py-4">{t('addAuthorModal.noResults')}</p>
             )}
           </div>

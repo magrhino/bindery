@@ -447,6 +447,8 @@
     "booksTooltip": "OpenLibrary's raw work count. The actual catalogue added will be smaller after deduplication, language filtering, and junk-title removal.",
     "ratings": "{{count}} ratings",
     "noResults": "No results found",
+    "showHiddenResults_one": "Show {{count}} hidden result",
+    "showHiddenResults_other": "Show {{count}} hidden results",
     "searchError": "Could not reach the metadata provider — {{error}}",
     "addFail": "Failed to add author"
   },
