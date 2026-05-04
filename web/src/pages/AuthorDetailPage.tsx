@@ -43,6 +43,7 @@ export default function AuthorDetailPage() {
   const [allAuthors, setAllAuthors] = useState<Author[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [searchingWanted, setSearchingWanted] = useState(false)
   const [showMerge, setShowMerge] = useState(false)
   const [showExcluded, setShowExcluded] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -143,6 +144,25 @@ export default function AuthorDetailPage() {
     }
   }
 
+  const handleSearchWanted = async () => {
+    if (!author) return
+    const searchableWantedCount = books.filter(b => b.status === 'wanted' && b.monitored && !b.excluded).length
+    if (searchableWantedCount === 0) return
+    setSearchingWanted(true)
+    setError(null)
+    try {
+      const res = await api.searchAuthorWanted(author.id)
+      const item = res.results[String(author.id)]
+      if (item && !item.ok) {
+        throw new Error(item.error || 'Search failed')
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Search failed')
+    } finally {
+      setSearchingWanted(false)
+    }
+  }
+
   const handleDelete = async () => {
     if (!author) return
     const withFiles = books.filter(b => b.filePath)
@@ -180,10 +200,11 @@ export default function AuthorDetailPage() {
   if (loading) return <div className="text-slate-600 dark:text-zinc-500">Loading…</div>
   if (!author) return <div className="text-slate-600 dark:text-zinc-500">Author not found</div>
 
+  const searchableWantedCount = books.filter(b => b.status === 'wanted' && b.monitored && !b.excluded).length
   const counts = {
     total: books.length,
     imported: books.filter(b => b.status === 'imported').length,
-    wanted: books.filter(b => b.status === 'wanted').length,
+    wanted: searchableWantedCount,
     audiobook: books.filter(b => b.mediaType === 'audiobook').length,
   }
 
@@ -238,6 +259,14 @@ export default function AuthorDetailPage() {
               className="px-3 py-1.5 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 rounded text-xs font-medium disabled:opacity-50"
             >
               {refreshing ? 'Refreshing…' : 'Refresh metadata'}
+            </button>
+            <button
+              onClick={handleSearchWanted}
+              disabled={searchingWanted || searchableWantedCount === 0}
+              className="px-3 py-1.5 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 rounded text-xs font-medium disabled:opacity-50"
+              title={searchableWantedCount === 0 ? 'No wanted books to search' : `Search ${searchableWantedCount} wanted book${searchableWantedCount === 1 ? '' : 's'}`}
+            >
+              {searchingWanted ? 'Searching…' : 'Search all wanted'}
             </button>
             <button
               onClick={() => {

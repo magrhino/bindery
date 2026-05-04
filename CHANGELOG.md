@@ -9,6 +9,7 @@ All notable changes to Bindery are documented here. Format loosely follows
 ### Added
 
 - **Arr-compatible queue endpoint for Harpoon integrations** (#370) — `GET /api/queue` now returns a Sonarr/Radarr-style queue payload with `totalRecords`, queue records, live `size`/`sizeleft`, downloader status, client name, remote download ID, protocol, optional pagination, and sorting. The existing `GET /api/v1/queue` UI response remains unchanged.
+- **Author detail search-all-wanted action** (#410) — the Author Detail page now has a **Search all wanted** button that queues searches for that author's monitored wanted books, disables itself when there is nothing searchable, and surfaces bulk-search errors inline. Author bulk search now also skips unmonitored wanted books so explicit per-book unmonitor decisions are respected.
 
 ### Fixed
 

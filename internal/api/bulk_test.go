@@ -274,14 +274,20 @@ func TestAuthorsBulk_Search_FiresSearcherForWantedBooks(t *testing.T) {
 	searcher := newMockBookSearcher()
 	h, _, books, author, ctx := bulkFixtureWithSearcher(t, searcher)
 
-	// One wanted book + one imported book; only wanted should be searched.
+	// One monitored wanted book, one unmonitored wanted book, and one imported
+	// book; only the monitored wanted book should be searched.
 	mustCreateBook(t, books, ctx, &models.Book{
 		ForeignID: "OL_BK1", AuthorID: author.ID, Title: "Wanted Book",
 		SortTitle: "wanted book", Status: models.BookStatusWanted,
 		Genres: []string{}, MetadataProvider: "openlibrary", Monitored: true,
 	})
 	mustCreateBook(t, books, ctx, &models.Book{
-		ForeignID: "OL_BK2", AuthorID: author.ID, Title: "Imported Book",
+		ForeignID: "OL_BK2", AuthorID: author.ID, Title: "Unmonitored Wanted Book",
+		SortTitle: "unmonitored wanted book", Status: models.BookStatusWanted,
+		Genres: []string{}, MetadataProvider: "openlibrary", Monitored: false,
+	})
+	mustCreateBook(t, books, ctx, &models.Book{
+		ForeignID: "OL_BK3", AuthorID: author.ID, Title: "Imported Book",
 		SortTitle: "imported book", Status: models.BookStatusImported,
 		Genres: []string{}, MetadataProvider: "openlibrary", Monitored: true,
 	})
@@ -297,7 +303,7 @@ func TestAuthorsBulk_Search_FiresSearcherForWantedBooks(t *testing.T) {
 	if got.Title != "Wanted Book" {
 		t.Errorf("expected search for 'Wanted Book', got %q", got.Title)
 	}
-	// Imported book must not trigger a search.
+	// Imported and unmonitored wanted books must not trigger a search.
 	searcher.assertNoCall(t, 50*time.Millisecond)
 }
 

@@ -109,7 +109,7 @@ func (h *BulkHandler) AuthorsBulk(w http.ResponseWriter, r *http.Request) {
 			if h.searcher != nil {
 				bgCtx := contextBackground()
 				for _, b := range books {
-					if b.Status == models.BookStatusWanted {
+					if b.Status == models.BookStatusWanted && b.Monitored {
 						b := b
 						go h.searcher.SearchAndGrabBook(bgCtx, b)
 					}
