@@ -8,26 +8,27 @@ title = "Bindery Gitleaks Configuration"
 [extend]
 useDefault = true
 
-# ── Allow-listed paths ────────────────────────────────────────────────────────
-# Test, testdata, and fixture files use placeholder credentials — none are real.
-# A path-only entry (no regexes) skips ALL gitleaks rules for matching files.
-[[allowlists]]
-description = "Test, testdata, and fixture files – all secrets are non-real placeholders"
-paths = [
-  '''.*_test\.go''',
-  '''.*testdata/.*''',
-  '''.*fixtures/.*'''
-]
-
+# ── Allow-listed paths and known fixture values ────────────────────────────────
 [[allowlists]]
 description = "Known safe URL hosts – example.com, localhost, loopback"
 regexes = [
-  # Example domains used in documentation, comments, and test assertions.
   '''https?://(www\.)?example\.com''',
-  # Localhost addresses are not secrets.
   '''https?://localhost(:[0-9]+)?''',
   '''https?://127\.0\.0\.1(:[0-9]+)?''',
   '''https?://\[?::1\]?(:[0-9]+)?'''
+]
+
+# These exact strings are deliberate test-fixture placeholders. They appear in
+# *_test.go files and carry no real credentials; the gitleaks:allow inline
+# comments also suppress them, but an explicit allowlist ensures older commits
+# (which predate the inline comments) are also suppressed on full-history scans.
+[[allowlists]]
+description = "Test-fixture placeholder credential values"
+regexes = [
+  '''test-api-key''',
+  '''abcdefghijklmnopqrstuvwxyz012345''',
+  '''admin123''',
+  '''SCREAMING_TEST_KEY_[A-Z0-9_]+'''
 ]
 
 # ── Stopwords ─────────────────────────────────────────────────────────────────

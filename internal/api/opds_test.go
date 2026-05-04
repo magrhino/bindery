@@ -65,8 +65,8 @@ func opdsFixture(t *testing.T) (*chi.Mux, *db.UserRepo, *db.SettingsRepo, string
 	// sane values (API key, mode, session secret). No users — Basic auth
 	// tests add them per-case.
 	for _, kv := range [][2]string{
-		{SettingAuthAPIKey, "test-api-key"},                        // gitleaks:allow
-		{SettingAuthSessionSecret, "abcdefghijklmnopqrstuvwxyz012345"}, // gitleaks:allow
+		{SettingAuthAPIKey, "test-api-key"},
+		{SettingAuthSessionSecret, "abcdefghijklmnopqrstuvwxyz012345"},
 		{SettingAuthMode, string(auth.ModeEnabled)},
 	} {
 		if err := settings.Set(ctx, kv[0], kv[1]); err != nil {
