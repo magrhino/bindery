@@ -8,7 +8,7 @@ This page is the user-facing companion to [`docs/abs_import.md`](./abs_import.md
 
 The current ABS importer supports one configured ABS source and one selected target book library at a time. From that source, Bindery can:
 
-- test API-key access and discover the ABS libraries visible to that key
+- test API-key access and discover the ABS book libraries visible to that key
 - import the ABS catalog metadata it can read for each visible item
 - create or match shared authors, books, series, and editions in Bindery
 - preserve ABS provenance so reruns stay idempotent
@@ -50,7 +50,7 @@ A good pre-import cleanup pass in ABS is worth it. If your library already has s
 ## Before You Start
 
 - Use an ABS API key for a user that can see the target book library. ABS admin access is not required. The key only needs permission to authenticate and read the library you plan to import.
-- Pick the one ABS library you want to import from.
+- Pick the one ABS book library you want to import from.
 - If ABS and Bindery see the same storage under different mount prefixes, configure path remaps such as `/audiobookshelf:/books/audiobookshelf`.
 - Path remaps are prefix rewrites. The left side is the path prefix ABS reports, and the right side is the path prefix Bindery can actually read. Bindery applies the rewrite before checking whether the resolved file lives under a Bindery-visible library root.
 - If you want the best initial match rate, it helps to make sure your ABS library metadata is already in good shape before importing.
@@ -58,12 +58,13 @@ A good pre-import cleanup pass in ABS is worth it. If your library already has s
 ## Import Flow
 
 1. Open `Settings -> ABS`.
-2. Save the ABS base URL, API key, label, target library, and any optional path remaps.
-3. Test the connection and list available libraries.
-4. Start a dry run if you want a safe first pass.
-5. Start the import.
-6. Review any queued items or metadata conflicts.
-7. Use rollback preview or rollback if you need to undo a run.
+2. Save the ABS base URL, API key, label, target book library, and any optional path remaps. Saving stores normalized settings without contacting ABS.
+3. Test the connection and list available book libraries.
+4. Pick a book library from the list, or keep a known library ID if you entered one manually.
+5. Start a dry run if you want a safe first pass.
+6. Start the import.
+7. Review any queued items or metadata conflicts.
+8. Use rollback preview or rollback if you need to undo a run.
 
 ## Review Queue And Conflicts
 
@@ -76,14 +77,17 @@ Bindery deliberately fails safe when matching is unclear.
 ## Known Behavior
 
 - Only one ABS source is supported in the current MVP.
-- Only one selected ABS library is imported per run.
+- Only one selected ABS book library is imported per run.
+- Saving settings does not test the ABS server. Use **Test connection** or **List libraries** when you want live validation.
+- The library selector shows book libraries only, and imports reject non-book library or item responses before scanning.
 - Imports are asynchronous.
 - Non-visible file paths become metadata-only imports instead of hard failures.
 - Ambiguous title matches are not auto-applied.
 
 ## Troubleshooting
 
-- Connection test fails: verify the ABS base URL, API key, and that the key can see the selected library.
+- Connection test or library listing fails: verify the saved ABS base URL, API key, and that the key can see the target book library.
+- Import rejects the selected library: use **List libraries** and choose a book library. Podcast or other non-book ABS libraries are not imported.
 - Files are not attaching after import: check path remaps and make sure the ABS-reported paths resolve under a Bindery-visible library root.
 - Too many review items: improve ABS metadata quality first, especially ASIN coverage and author/title consistency, then rerun.
 - Unexpected metadata disagreements: resolve them from the conflicts panel instead of rerunning until the same field flips back and forth.

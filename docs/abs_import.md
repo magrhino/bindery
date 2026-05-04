@@ -9,8 +9,8 @@ It replaces the earlier phase-by-phase planning notes with one implementation-fo
 The ABS importer lets an admin:
 
 - configure one ABS source
-- test API-key access and discover visible libraries
-- select a single target library
+- test API-key access and discover visible book libraries
+- select a single target book library
 - import ABS metadata into Bindery
 - review import runs, dry-runs, rollback previews, and review/conflict items
 
@@ -30,41 +30,49 @@ Import quality depends heavily on ABS metadata quality. The more books you alrea
 
 Backend:
 
-- [internal/abs/client.go](internal/abs/client.go): ABS HTTP client, auth, library and item fetches
-- [internal/abs/enumerator.go](internal/abs/enumerator.go): paged enumeration and checkpoint-aware traversal
-- [internal/abs/importer.go](internal/abs/importer.go): import orchestration, dry-run, rollback planning, mapping, progress
-- [internal/abs/types.go](internal/abs/types.go): ABS response and normalized item types
-- [internal/api/abs.go](internal/api/abs.go): config, connection test, library discovery
-- [internal/api/abs_import.go](internal/api/abs_import.go): start, status, recent runs, rollback endpoints
-- [internal/api/abs_review.go](internal/api/abs_review.go): review queue actions
-- [internal/api/abs_conflicts.go](internal/api/abs_conflicts.go): conflict listing and source resolution
+- [../internal/abs/client.go](../internal/abs/client.go): ABS HTTP client, auth, library and item fetches, retries, error decoding, and `bindery/<version>` user-agent handling
+- [../internal/abs/enumerator.go](../internal/abs/enumerator.go): paged enumeration, checkpoint-aware traversal, detail-fetch fallback, and book-library validation
+- [../internal/abs/importer.go](../internal/abs/importer.go): import orchestration, dry-run execution, progress, resume handling, and client construction
+- [../internal/abs/import_author_matcher.go](../internal/abs/import_author_matcher.go): cached author and alias matching for an import run
+- [../internal/abs/import_upserts.go](../internal/abs/import_upserts.go): author, book, series, edition, provenance, and review upserts
+- [../internal/abs/import_files.go](../internal/abs/import_files.go): path remaps, file visibility checks, and owned-state reconciliation
+- [../internal/abs/import_conflicts.go](../internal/abs/import_conflicts.go): ABS versus upstream metadata merge and conflict recording
+- [../internal/abs/import_rollback.go](../internal/abs/import_rollback.go): recent run hydration, rollback planning, rollback preview, and rollback execution
+- [../internal/abs/import_snapshots.go](../internal/abs/import_snapshots.go): before/after entity snapshots used by rollback
+- [../internal/abs/import_types.go](../internal/abs/import_types.go): import config, progress, run, rollback, and helper types
+- [../internal/abs/import_utils.go](../internal/abs/import_utils.go): shared importer normalization and utility helpers
+- [../internal/abs/types.go](../internal/abs/types.go): ABS response and normalized item types
+- [../internal/api/abs.go](../internal/api/abs.go): config storage, explicit connection test, and book-library discovery
+- [../internal/api/abs_import.go](../internal/api/abs_import.go): start, status, recent runs, rollback endpoints
+- [../internal/api/abs_review.go](../internal/api/abs_review.go): review queue actions
+- [../internal/api/abs_conflicts.go](../internal/api/abs_conflicts.go): conflict listing and source resolution
 
 Persistence:
 
-- [internal/db/abs_imports.go](internal/db/abs_imports.go): run, provenance, run-entity, and review repositories
-- [internal/db/abs_metadata_conflicts.go](internal/db/abs_metadata_conflicts.go): conflict persistence
-- [internal/db/migrations/029_abs_imports.sql](internal/db/migrations/029_abs_imports.sql)
-- [internal/db/migrations/030_abs_metadata_conflicts.sql](internal/db/migrations/030_abs_metadata_conflicts.sql)
-- [internal/db/migrations/031_abs_import_run_tracking.sql](internal/db/migrations/031_abs_import_run_tracking.sql)
-- [internal/db/migrations/032_abs_review_queue.sql](internal/db/migrations/032_abs_review_queue.sql)
-- [internal/db/migrations/033_abs_review_resolution.sql](internal/db/migrations/033_abs_review_resolution.sql)
+- [../internal/db/abs_imports.go](../internal/db/abs_imports.go): run, provenance, run-entity, and review repositories
+- [../internal/db/abs_metadata_conflicts.go](../internal/db/abs_metadata_conflicts.go): conflict persistence
+- [../internal/db/migrations/029_abs_imports.sql](../internal/db/migrations/029_abs_imports.sql)
+- [../internal/db/migrations/030_abs_metadata_conflicts.sql](../internal/db/migrations/030_abs_metadata_conflicts.sql)
+- [../internal/db/migrations/031_abs_import_run_tracking.sql](../internal/db/migrations/031_abs_import_run_tracking.sql)
+- [../internal/db/migrations/032_abs_review_queue.sql](../internal/db/migrations/032_abs_review_queue.sql)
+- [../internal/db/migrations/033_abs_review_resolution.sql](../internal/db/migrations/033_abs_review_resolution.sql)
 
 Frontend:
 
-- [web/src/api/client.ts](web/src/api/client.ts): ABS API client types and methods
-- [web/src/pages/SettingsPage.tsx](web/src/pages/SettingsPage.tsx): ABS settings/import UI
-- [web/src/components/ABSAuthorConflictsPanel.tsx](web/src/components/ABSAuthorConflictsPanel.tsx): author conflict review panel
+- [../web/src/api/client.ts](../web/src/api/client.ts): ABS API client types and methods
+- [../web/src/pages/SettingsPage.tsx](../web/src/pages/SettingsPage.tsx): ABS settings/import UI
+- [../web/src/components/ABSAuthorConflictsPanel.tsx](../web/src/components/ABSAuthorConflictsPanel.tsx): author conflict review panel
 
 Bootstrap:
 
-- [cmd/bindery/main.go](cmd/bindery/main.go): repo wiring, importer construction, and route registration
+- [../cmd/bindery/main.go](../cmd/bindery/main.go): repo wiring, importer construction, versioned user-agent wiring, and route registration
 
 ## Runtime Flow
 
-1. An admin saves ABS settings under the `abs.*` keys.
-2. The UI can probe the ABS instance to validate auth and list accessible libraries.
+1. An admin saves ABS settings under the `abs.*` keys. `PUT /api/v1/abs/config` normalizes and stores local settings without contacting ABS.
+2. The UI can explicitly probe the ABS instance to validate auth and list accessible book libraries. Probes require a saved base URL and use either a request API-key override or the stored write-only key.
 3. `POST /api/v1/abs/import` starts an async import using the stored config plus any request overrides.
-4. The importer enumerates the selected ABS library, fetching detail payloads when list data is incomplete.
+4. The importer validates that the selected library response is for a book library, rejects non-book items, and fetches detail payloads when list data is incomplete.
 5. Each normalized ABS item is mapped into Bindery authors, books, series, editions, provenance, and optional review/conflict records.
 6. Progress is exposed through `GET /api/v1/abs/import/status`.
 7. Completed runs are persisted and surfaced through recent-runs and rollback endpoints.
@@ -160,6 +168,8 @@ Config is stored in existing settings rows for the single-source MVP:
 - `abs.label`
 - `abs.path_remap`
 
+Saving config validates local syntax only. It does not authorize against ABS or verify the selected library ID; `POST /api/v1/abs/test`, `POST /api/v1/abs/libraries`, and import enumeration handle live ABS validation.
+
 Run and provenance persistence adds these tables:
 
 - `abs_import_runs`: batch envelope, status, config snapshot, checkpoint, summary
@@ -175,9 +185,9 @@ This gives the importer idempotent reruns, traceability, and rollback planning w
 Config and discovery:
 
 - `GET /api/v1/abs/config`
-- `PUT /api/v1/abs/config`
-- `POST /api/v1/abs/test`
-- `POST /api/v1/abs/libraries`
+- `PUT /api/v1/abs/config`: store normalized settings without a live ABS probe
+- `POST /api/v1/abs/test`: authorize against ABS and return user/server/default-library details
+- `POST /api/v1/abs/libraries`: list only accessible ABS libraries whose media type is `book`
 
 Import and rollback:
 
@@ -201,15 +211,15 @@ Review and conflict handling:
 
 Unit and handler coverage lives in:
 
-- [internal/abs/client_test.go](internal/abs/client_test.go)
-- [internal/abs/contract_test.go](internal/abs/contract_test.go)
-- [internal/abs/enumerator_test.go](internal/abs/enumerator_test.go)
-- [internal/abs/importer_test.go](internal/abs/importer_test.go)
-- [internal/api/abs_import_test.go](internal/api/abs_import_test.go)
-- [internal/api/abs_review_test.go](internal/api/abs_review_test.go)
-- [internal/api/abs_conflicts_test.go](internal/api/abs_conflicts_test.go)
+- [../internal/abs/client_test.go](../internal/abs/client_test.go)
+- [../internal/abs/contract_test.go](../internal/abs/contract_test.go)
+- [../internal/abs/enumerator_test.go](../internal/abs/enumerator_test.go)
+- [../internal/abs/importer_test.go](../internal/abs/importer_test.go)
+- [../internal/api/abs_import_test.go](../internal/api/abs_import_test.go)
+- [../internal/api/abs_review_test.go](../internal/api/abs_review_test.go)
+- [../internal/api/abs_conflicts_test.go](../internal/api/abs_conflicts_test.go)
 
-Pinned contract coverage lives in [tests/abscontract](tests/abscontract) and is exposed through `make abs-contract`.
+Pinned contract coverage lives in [../tests/abscontract](../tests/abscontract) and is exposed through `make abs-contract`.
 
 Pinned baseline:
 
@@ -231,13 +241,13 @@ Covered behaviors:
 - paging and detail-fetch fallback
 - dry-run behavior
 - idempotent reruns
-- checkpoint-aware resume seams
+- checkpoint-aware resume behavior
 
 ## Contributor Notes
 
 When changing the ABS importer:
 
-- prefer extending the existing ABS importer and enumerator seams instead of introducing a second runner shape
+- prefer extending the existing ABS importer and enumerator helpers instead of introducing a second runner shape
 - keep ABS-created rows shared unless product requirements explicitly change
 - preserve the metadata-first, filesystem-aware behavior
 - update `tests/abscontract` when external contract assumptions change

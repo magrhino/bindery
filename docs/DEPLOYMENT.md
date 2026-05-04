@@ -239,6 +239,8 @@ On first launch Bindery bootstraps itself — **no environment variables are req
 
 **Feature flag:** ABS is disabled by default. Set `BINDERY_ABS_ENABLED=true` before startup to expose and enable the ABS feature surface.
 
+**Outbound ABS requests:** ABS probes and imports send `User-Agent: bindery/<version>` to the configured ABS server. Development or unversioned builds use `bindery/dev`.
+
 ### From v0.11.x to v0.12.0 (security posture)
 
 **Schema:** no changes. Drop-in binary or image replacement is safe.
