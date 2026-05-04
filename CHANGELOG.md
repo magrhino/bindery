@@ -6,6 +6,10 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **Arr-compatible queue endpoint for Harpoon integrations** (#370) — `GET /api/queue` now returns a Sonarr/Radarr-style queue payload with `totalRecords`, queue records, live `size`/`sizeleft`, downloader status, client name, remote download ID, protocol, optional pagination, and sorting. The existing `GET /api/v1/queue` UI response remains unchanged.
+
 ### Fixed
 
 - **Library scanner series matching now runs in the server** — the scanner is wired to the series repository at startup, so filename-based series/position matching can reconcile wanted series books during library scans.
