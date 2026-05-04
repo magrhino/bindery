@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/vavallee/bindery/internal/calibre"
@@ -202,4 +204,63 @@ func TestPushToCalibre_NilResolver(t *testing.T) {
 	s, _, book, author, ctx := importScannerFixture(t)
 	// No WithCalibre call.
 	s.pushToCalibre(ctx, book, author, "/library/book.epub") // must not panic
+}
+
+// TestImportInternal_ThreeFileBundle_TracksAllInBookFiles verifies the #343
+// fix: importing a multi-format download (epub + mobi + pdf) stores a
+// separate book_files row for each file rather than overwriting a single path.
+func TestImportInternal_ThreeFileBundle_TracksAllInBookFiles(t *testing.T) {
+	libDir := t.TempDir()
+	dlDir := t.TempDir()
+
+	// Create three book files that simulate a multi-format NZB download.
+	for _, name := range []string{"book.epub", "book.mobi", "book.pdf"} {
+		if err := os.WriteFile(filepath.Join(dlDir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	ctx := context.Background()
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	dlRepo := db.NewDownloadRepo(database)
+	clientRepo := db.NewDownloadClientRepo(database)
+
+	author := &models.Author{ForeignID: "OLA-3F", Name: "Author", SortName: "Author", Monitored: true, MetadataProvider: "openlibrary"}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	book := &models.Book{
+		ForeignID: "OLB-3F", AuthorID: author.ID, Title: "Three Formats",
+		SortTitle: "Three Formats", Status: models.BookStatusWanted,
+		Monitored: true, AnyEditionOK: true, MetadataProvider: "openlibrary",
+	}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	dl := &models.Download{
+		GUID: "3f-guid", Title: "Three Formats", BookID: &book.ID,
+		Status: models.StateCompleted,
+	}
+	if err := dlRepo.Create(ctx, dl); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewScanner(dlRepo, clientRepo, bookRepo, authorRepo, db.NewHistoryRepo(database), libDir, "", "", "", "")
+	s.tryImportInternal(ctx, dl, dlDir, "", "", nil)
+
+	files, err := bookRepo.ListFiles(ctx, book.ID)
+	if err != nil {
+		t.Fatalf("ListFiles: %v", err)
+	}
+	if len(files) != 3 {
+		t.Errorf("want 3 book_files rows for epub+mobi+pdf bundle, got %d", len(files))
+	}
 }

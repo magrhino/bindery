@@ -27,8 +27,10 @@ func NewSearcher() *Searcher {
 // MatchCriteria describes what we're searching for. Year and ISBN are
 // optional and only used for ranking — they never cause a result to be
 // rejected. MediaType filters the indexer category set; "audiobook" narrows
-// to the Newznab audio tree (3000-range, primarily 3030), anything else
-// narrows to the books tree (7000-range).
+// to the Newznab audiobook subcategory (303x, primarily 3030), anything else
+// narrows to the ebook subcategory (702x, primarily 7020). The broad parent
+// categories 7000 and 3000 are never sent — they cause indexers to return
+// noisier, less-targeted result sets.
 // AllowedLanguages is the author's metadata-profile language list; when it
 // contains exactly "eng" (or "en"), foreign-tagged releases are filtered out.
 type MatchCriteria struct {
@@ -39,6 +41,7 @@ type MatchCriteria struct {
 	ASIN             string   // for audiobook ASIN anchoring
 	MediaType        string   // models.MediaTypeEbook or models.MediaTypeAudiobook
 	AllowedLanguages []string // from author's MetadataProfile; empty = no filter
+	AuthorAliases    []string // alternate names (e.g. latin-script romanisations for non-latin authors)
 }
 
 // filterCategoriesForMedia returns the subset of configured indexer
@@ -114,7 +117,7 @@ func (s *Searcher) SearchBook(ctx context.Context, indexers []models.Indexer, c 
 
 	results = dedupe(results)
 	results = filterUsenetJunk(results)
-	results = filterRelevant(results, c.Title, c.Author)
+	results = filterRelevant(results, c.Title, c.Author, c.AuthorAliases)
 	rankResults(results, c)
 	return results
 }
@@ -247,7 +250,7 @@ func titleMatchesResult(normResult string, titleKws []string, surname string, al
 // any result happened to phrase-match) caused correctly-titled releases to be
 // dropped when an abbreviated result set the gate — e.g. "Name.Wind.epub"
 // enabling strict mode that then rejected "Name.of.the.Wind.epub".
-func filterRelevant(results []newznab.SearchResult, title, author string) []newznab.SearchResult {
+func filterRelevant(results []newznab.SearchResult, title, author string, aliases []string) []newznab.SearchResult {
 	// Strip edition qualifiers ("(German Edition)" etc.) and normalize
 	// smart quotes before tokenizing, so they don't become spurious keywords.
 	title = newznab.NormalizeQueryTitle(title)
@@ -255,6 +258,28 @@ func filterRelevant(results []newznab.SearchResult, title, author string) []newz
 	primaryKws := sigWords(primaryTitle(title))
 	authorKws := sigWords(author)
 	surname := AuthorSurname(author)
+
+	// Build candidate surnames. When the primary surname is non-ASCII (e.g.
+	// "春樹" for "村上春樹"), also include surnames from any latin-script
+	// aliases (e.g. "murakami" from "Haruki Murakami") so release names
+	// romanised by indexers are not incorrectly filtered out.
+	surnames := []string{surname}
+	if !isAllASCIILower(surname) {
+		for _, alias := range aliases {
+			if s := AuthorSurname(alias); s != "" && isAllASCIILower(s) {
+				surnames = append(surnames, s)
+			}
+		}
+	}
+
+	tryMatch := func(n string, kws []string) bool {
+		for _, sn := range surnames {
+			if titleMatchesResult(n, kws, sn, true) {
+				return true
+			}
+		}
+		return false
+	}
 
 	if len(fullKws) == 0 && len(primaryKws) == 0 && len(authorKws) == 0 {
 		return results
@@ -272,16 +297,28 @@ func filterRelevant(results []newznab.SearchResult, title, author string) []newz
 
 		// allowFallback=true: each result gets phrase match first, then keyword
 		// fallback if the phrase fails. No batch-level gate.
-		fullOK := titleMatchesResult(n, fullKws, surname, true)
+		fullOK := tryMatch(n, fullKws)
 		primaryOK := false
 		if !fullOK && len(primaryKws) > 0 && !sameKws(primaryKws, fullKws) {
-			primaryOK = titleMatchesResult(n, primaryKws, surname, true)
+			primaryOK = tryMatch(n, primaryKws)
 		}
 		if fullOK || primaryOK {
 			filtered = append(filtered, r)
 		}
 	}
 	return filtered
+}
+
+// isAllASCIILower returns true when every byte in the lowercased s is 7-bit ASCII.
+// AuthorSurname already returns lowercase, so this is equivalent to checking
+// whether the surname string contains only ASCII characters.
+func isAllASCIILower(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] > 127 {
+			return false
+		}
+	}
+	return true
 }
 
 func sameKws(a, b []string) bool {

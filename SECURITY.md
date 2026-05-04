@@ -9,8 +9,8 @@ Only the latest minor release receives security fixes. Older minors do not.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.12.x  | Yes       |
-| < 0.12  | No        |
+| 1.2.x   | Yes       |
+| < 1.2   | No        |
 
 ## Reporting a vulnerability
 
@@ -87,7 +87,7 @@ CSP, cookie Secure auto-detect, container hardening, CI scans).
 - **Kubernetes**: dedicated ServiceAccount with token automount disabled,
   API key sourced from a Secret, optional NetworkPolicy.
 - **CI**: gosec, govulncheck, semgrep, gitleaks, ESLint security, Trivy,
-  Grype, Dockle, Syft SBOM, ZAP baseline, OpenSSF Scorecard, helm-unittest
+  Grype, Syft SBOM, ZAP baseline, OpenSSF Scorecard, Checkov, helm-unittest
   — SARIF uploaded to the Security tab; weekly rerun on a cron.
 - **Supply chain**: SLSA build provenance via
   `actions/attest-build-provenance`, verifiable with

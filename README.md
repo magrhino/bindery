@@ -84,14 +84,14 @@
 - **Dual-format books** — Each book can hold an ebook *and* an audiobook simultaneously. The Book Detail page has separate format panels with independent status, file path, and grab buttons. The search pipeline uses Newznab category 7020 for ebooks and 3030 for audiobooks; the importer moves whole audiobook folders (multi-part `.m4b` / `.mp3`) as one unit into a separate audiobook library root; the Wanted page lists each missing format as a separate row.
 - **Series support** — Books grouped by series with position tracking and dedicated Series page
 - **Edition tracking** — Multiple editions per work, with format, ISBN, publisher, page count
-- **Library scan** — Walk `/books/` and reconcile existing files with wanted books in the database; trigger on-demand from **Settings → General → Scan Library**
+- **Library scan** — Walk `/books/` and reconcile existing files with wanted books in the database; trigger on-demand from **Settings → General → Scan Library**. Matching is four-tier: ASIN → title + author → series name + position number → fuzzy title. Files annotated with series info (e.g. `[Mistborn, Book 1]` or `(Dune Chronicles #2)`) are matched even when the title alone would be ambiguous.
 - **Author aliases** — Merge duplicate authors ("RR Haywood" / "R.R. Haywood" / "R R Haywood") into one canonical row from the Authors page; add-author flow detects aliases and prompts for merge instead of silently ingesting a duplicate
 
 ### Search & downloads
 - **Newznab + Torznab** — Query multiple Usenet and torrent indexers in parallel, deduplicated and ranked
-- **SABnzbd, qBittorrent, Transmission** — Full support for both Usenet and torrent download clients
+- **SABnzbd, NZBGet, qBittorrent, Transmission, Deluge** — Full support for both Usenet and torrent download clients. All clients support **Use SSL** and **URL Base** for connections through a reverse-proxy subpath (configure under **Settings → Download Clients**).
 - **Auto-grab** — Scheduler searches for wanted books every 12h and automatically grabs the best result. Adding a new author or flipping a book to `wanted` fires an immediate search — no waiting for the next scheduled pass. Toggle the global kill-switch at **Settings → General → Auto-grab** to pause all automatic grabbing without losing your monitored list.
-- **Interactive search** — Manual per-book search from the Wanted page with full result details; Grab button shows a spinner while in-flight and a ✓ on success
+- **Interactive search** — Manual per-book search from the Wanted page with full result details; Grab button shows a spinner while in-flight and a ✓ on success. Author Detail page has a **Search all wanted** button to queue bulk searches for all monitored wanted books for that author in one click.
 - **Smart matching** — Four-tier query fallback (`t=book` → `surname+title` → `author+title` → title); word-boundary keyword matching; contiguous-phrase requirement for multi-word titles; dual-author-anchor for ambiguous short titles; subtitle-aware (`Title: Subtitle`)
 - **Composite ranking** — Results scored by format quality, edition tags (RETAIL / UNABRIDGED / ABRIDGED), year match to the book's release year, grab count, size, and ISBN exact-match bonus
 - **Quality profiles** — Preference order for EPUB / MOBI / AZW3 / PDF, with cutoff rules
@@ -104,7 +104,7 @@
 ### Import & organize
 - **Automatic import** — Completed downloads matched by NZO ID, placed in library with configurable naming template
 - **Import modes** — **Move** (default): source deleted after import. **Copy**: source kept so torrent clients continue seeding. **Hardlink**: zero extra disk, both paths share an inode (download dir and library must be on the same filesystem). Configurable under **Settings → General → Import Mode**.
-- **Naming tokens** — `{Author}`, `{SortAuthor}`, `{Title}`, `{Year}`, `{ext}` with sanitized path components
+- **Naming tokens** — `{Author}`, `{SortAuthor}`, `{Title}`, `{Year}`, `{Series}`, `{SeriesNumber}`, `{ext}` with sanitized path components. `{Series}` expands to the book's primary series name (e.g. `Mistborn`); `{SeriesNumber}` to its position (e.g. `1` or `3.5`). Both silently expand to nothing for books not in a series, so the path collapses cleanly.
 - **Cross-filesystem moves** — Atomic rename when possible, copy+verify+delete for NFS/separate volumes
 - **History** — Every grab, import, and failure recorded with full detail (shown inline on History page)
 - **Calibre library integration** — Three modes, all configurable under **Settings → Calibre**:
@@ -123,6 +123,12 @@
 - **Cover image proxy** — Cover images are fetched and cached server-side under `<dataDir>/image-cache/` (30-day TTL). All `imageURL` fields in API responses are rewritten to `/api/v1/images?url=<encoded>` before leaving the server. The browser never contacts Goodreads, OpenLibrary, or Google Books directly — no IP leakage, no third-party tracking.
 - No Goodreads scraping. All sources use documented, stable public APIs.
 
+### Discover
+- **Recommendations engine** — The **Discover** page generates personalised book suggestions from multiple signals: next books in series you're reading, new releases from monitored authors, genre-similar titles (requires ≥ 20 books in library), OpenLibrary subject-based popular picks, and Hardcover.app wishlist cross-reference.
+- **Taste profile** — Built from your downloaded/imported books: preferred genres, era, language, authors, and series. Recency scoring is relative to the median publication year of your library rather than the current year, so backlist readers aren't penalised.
+- **Discover filters** — Candidates are hard-filtered: already-owned, dismissed, excluded-author, wrong-language, fewer-than-50-ratings, sub-3.0-rated, and collection/omnibus titles are all suppressed. Only individual, reasonably-rated books reach the page.
+- **Dismiss / exclude** — Mark a recommendation as "not interested" or exclude an author entirely from future suggestions. Dismissals persist across engine runs.
+
 ### Migration
 - **CSV import** — Upload a newline-separated list of author names (or a `name,monitored,searchOnAdd` CSV); each name is resolved against OpenLibrary.
 - **Readarr import** — Upload `readarr.db` directly. Authors are re-resolved via OpenLibrary (Goodreads IDs aren't portable since `bookinfo.club` is dead); Indexers, download clients, and blocklist entries port structurally. Run a library scan afterward to match existing files.
@@ -136,7 +142,8 @@
 - **Tag system** — Scope indexers/profiles/notifications to specific authors
 - **Backup/restore** — Snapshot the SQLite database on demand
 - **Log viewer** — Settings → Logs persists entries to the database and survives restarts. Filterable by date range, level, component, and full-text search. Retention period defaults to 14 days and is configurable. Runtime log level switchable to DEBUG without restarting via `PUT /api/v1/system/loglevel`
-- **Authentication** — First-run setup creates an admin account (argon2id password hashing, signed session cookies). Four modes: **Enabled** (always require login), **Local only** (bypass auth for private IPs — home network convenience), **Disabled** (no auth, trusted network only), **Proxy** (trust an upstream `X-Forwarded-User` header from a configured trusted proxy — drop-in for Authelia / Authentik / oauth2-proxy forward-auth). Per-account API key for external integrations. Per-IP rate limiting on the login endpoint. CSRF double-submit tokens harden browser mutations (API-key clients exempt).
+- **Authentication** — First-run setup creates an admin account (argon2id password hashing, signed session cookies). Four modes: **Enabled** (always require login), **Local only** (bypass auth for private IPs — home network convenience), **Disabled** (no auth, trusted network only), **Proxy** (trust an upstream `X-Forwarded-User` header from a configured trusted proxy — drop-in for Authelia / Authentik / oauth2-proxy forward-auth). Per-account API key for external integrations. Per-IP rate limiting on the login endpoint (thresholds configurable via `BINDERY_RATE_LIMIT_MAX_FAILURES` / `BINDERY_RATE_LIMIT_WINDOW_MINUTES`). CSRF double-submit tokens harden browser mutations (API-key clients exempt).
+- **Arr-compatible queue API** — `GET /api/queue` exposes a Sonarr/Radarr-style queue payload for external tools such as [Harpoon](https://github.com/harpoon-io/harpoon). Returns `totalRecords`, per-record live size/sizeleft, status, client name, remote ID, and protocol. Supports pagination and sort. API-key authentication required; browser-session CSRF protections do not apply to this endpoint.
 - **OIDC single sign-on** — Native Authorization Code + PKCE client with multi-provider support. Pre-configured for Google, GitHub (via Dex), Authelia, and Keycloak; any compliant IdP works. Users identified by stable `(issuer, sub)` — safe against email/username changes. Managed under Settings → Authentication.
 - **Multi-user mode** — Per-user libraries, monitored authors, profiles, and downloads. Admin role manages indexers, download clients, and users; standard users see only their own catalogue. Users can be created locally, auto-provisioned via OIDC, or forward-auth mapped by username. Admin password reset from the Users page.
 
@@ -238,8 +245,12 @@ No Goodreads scraping. All sources use documented, stable public APIs. Cover ima
 
 ### Download clients
 - **SABnzbd** — full support (NZB submission, queue/history polling, pause/resume/delete)
+- **NZBGet** — JSON-RPC v2 (NZB submission, queue/history polling, remove)
 - **qBittorrent** — WebUI API v2 with Username/Password auth (add magnet/URL, list/delete torrents)
-- **Transmission** - WebUI API with Username/Password auth (add magnet/URL, list/delete torrents)
+- **Transmission** — RPC API with Username/Password auth (add magnet/URL, list/delete torrents)
+- **Deluge** — JSON-RPC with cookie auth (add magnet/URL, list/delete torrents)
+
+All clients support **Use SSL** (HTTPS) and **URL Base** (reverse-proxy subpath). Configure both under **Settings → Download Clients**.
 
 ### Indexers
 - **Newznab** (Usenet) — NZBGeek, NZBFinder, NZBPlanet, DrunkenSlug, etc.
@@ -284,8 +295,9 @@ GET    /api/v1/author                    - list authors
 POST   /api/v1/author                    - add author (triggers async book fetch)
 GET    /api/v1/book?status=wanted        - filter books by status
 POST   /api/v1/book/{id}/search          - manual indexer search for a book
-GET    /api/v1/queue                     - active downloads with live SABnzbd overlay
+GET    /api/v1/queue                     - active downloads with live downloader overlay
 POST   /api/v1/queue/grab                - submit a search result to download client
+GET    /api/queue                        - *arr-compatible queue for external tools
 GET    /api/v1/history                   - grab/import/failure events
 POST   /api/v1/history/{id}/blocklist    - add a history event's release to the blocklist
 GET    /api/v1/blocklist                 - blocked releases

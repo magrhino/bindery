@@ -8,6 +8,27 @@ import (
 	"github.com/vavallee/bindery/internal/models"
 )
 
+func TestLooksLikeCollection(t *testing.T) {
+	tests := []struct {
+		title string
+		want  bool
+	}{
+		{"The Complete Asimov Stories", true},
+		{"Collected Poems", true},
+		{"Dune Omnibus", true},
+		{"Box Set: Stormlight Archive", true},
+		{"The Best of Philip K. Dick", true},
+		{"Dune", false},
+		{"Complete Guide to Go Programming", true}, // false positive we accept
+		{"The Collected Works of Terry Pratchett, Vol. 3", true},
+	}
+	for _, tt := range tests {
+		if got := looksLikeCollection(tt.title); got != tt.want {
+			t.Errorf("looksLikeCollection(%q) = %v, want %v", tt.title, got, tt.want)
+		}
+	}
+}
+
 func TestGenreToSubjectSlug(t *testing.T) {
 	tests := []struct {
 		in, want string

@@ -21,15 +21,15 @@ jobs:
         with:
           go-version: '1.24'
           cache: true
-      - uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7
+      - uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
         with:
           version: v2.11.4
           args: --timeout=5m
       - name: govulncheck
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          go install golang.org/x/vuln/cmd/govulncheck@d1f380186385b4f64e00313f31743df8e4b89a77
           govulncheck ./...
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22"
           cache: npm
@@ -48,15 +48,17 @@ jobs:
         with:
           go-version: '1.24'
           cache: true
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: make smoke
 
-  # PR-only: validates tests + frontend build (with race detector for correctness)
-  validate:
+  # PR-only: Go race-detector tests and frontend build run in parallel so
+  # neither blocks the other.
+  validate-go:
+    name: validate (Go)
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
@@ -74,7 +76,16 @@ jobs:
           flags: backend
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+
+  validate-frontend:
+    name: validate (frontend)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22"
           cache: npm
@@ -101,7 +112,7 @@ jobs:
           flags: backend
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22"
           cache: npm
@@ -124,16 +135,14 @@ jobs:
           cache: true
       - run: go test -race ./cmd/... ./internal/...
 
-  # ── Docker image — runs after test passes, parallel with goreleaser ─────────
+  # ── Docker image — runs after test passes ──────────────────────────────────
   image:
     needs: test
     runs-on: ubuntu-latest
     permissions:
-      contents: write
       packages: write
       id-token: write
       attestations: write
-      pull-requests: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -144,7 +153,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+      - uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}
@@ -154,6 +163,7 @@ jobs:
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=raw,value=development,enable=${{ github.ref == 'refs/heads/development' }}
             type=semver,pattern={{version}}
+            type=semver,pattern=v{{version}}
       - name: Derive version
         id: ver
         run: |
@@ -185,19 +195,33 @@ jobs:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
-      # On tag push: update values-dev.yaml on the development branch so the
-      # bindery-dev ArgoCD app picks up the new image. Production promotion is
-      # done separately via the promote workflow (Actions → Promote to production)
-      # after you've validated the dev deployment.
-      - name: Deploy to dev (update values-dev.yaml on development branch)
-        if: startsWith(github.ref, 'refs/tags/v')
-        continue-on-error: true
+
+  # ── Deploy to bindery-dev (development branch only) ────────────────────────
+  # Runs after image build on every push to development. Updates
+  # values-dev.yaml with the SHA image tag so ArgoCD picks up the new build.
+  deploy-dev:
+    name: Deploy to dev
+    needs: image
+    if: github.ref == 'refs/heads/development'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Update values-dev.yaml on development branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          IMAGE_TAG="${GITHUB_REF_NAME#v}"
+          IMAGE_TAG="sha-${GITHUB_SHA::7}"
           FILE_PATH="charts/bindery/values-dev.yaml"
-          FILE_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${FILE_PATH}?ref=development" --jq .sha 2>/dev/null || echo "")
+          DEPLOY_BRANCH="auto/dev-deploy-${GITHUB_SHA::7}"
+
+          DEV_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/git/refs/heads/development" --jq .object.sha)
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/heads/${DEPLOY_BRANCH}" \
+            -f sha="${DEV_SHA}"
+
+          FILE_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${FILE_PATH}?ref=${DEPLOY_BRANCH}" --jq .sha 2>/dev/null || echo "")
           CONTENT=$(printf 'image:\n  tag: "%s"\n' "${IMAGE_TAG}" | base64 -w0)
           if [ -n "$FILE_SHA" ]; then
             gh api "repos/${GITHUB_REPOSITORY}/contents/${FILE_PATH}" \
@@ -205,17 +229,24 @@ jobs:
               -f message="chore(deploy-dev): update to ${IMAGE_TAG} [skip ci]" \
               -f content="${CONTENT}" \
               -f sha="${FILE_SHA}" \
-              -f branch="development"
+              -f branch="${DEPLOY_BRANCH}"
           else
             gh api "repos/${GITHUB_REPOSITORY}/contents/${FILE_PATH}" \
               -X PUT \
               -f message="chore(deploy-dev): create values-dev.yaml for ${IMAGE_TAG} [skip ci]" \
               -f content="${CONTENT}" \
-              -f branch="development"
+              -f branch="${DEPLOY_BRANCH}"
           fi
-          echo "Dev image tag updated to ${IMAGE_TAG} on development branch"
-      - name: Trigger Argo CD dev refresh
-        if: startsWith(github.ref, 'refs/tags/v')
+
+          gh pr create \
+            --head "${DEPLOY_BRANCH}" \
+            --base development \
+            --title "chore(deploy-dev): update to ${IMAGE_TAG}" \
+            --body "Automated dev deploy: image tag \`${IMAGE_TAG}\`." 2>/dev/null || true
+          gh pr merge "${DEPLOY_BRANCH}" --squash --admin --delete-branch
+          echo "bindery-dev image tag updated to ${IMAGE_TAG}"
+
+      - name: Trigger ArgoCD dev refresh
         env:
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           ARGOCD_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
@@ -227,10 +258,10 @@ jobs:
           curl -sf -X POST \
             -H "Authorization: Bearer ${ARGOCD_TOKEN}" \
             "${ARGOCD_SERVER}/api/v1/applications/bindery-dev?refresh=hard" \
-            && echo "Argo CD dev refresh triggered" \
-            || echo "::warning::Argo CD dev refresh trigger failed — Argo will pick up changes on next poll"
+            && echo "ArgoCD bindery-dev refresh triggered" \
+            || echo "::warning::ArgoCD dev refresh failed — Argo will pick up changes on next poll"
 
-  # ── GoReleaser — runs after test passes, parallel with image, tags only ─────
+  # ── GoReleaser — runs after test passes, tag pushes only ───────────────────
   goreleaser:
     needs: test
     if: startsWith(github.ref, 'refs/tags/v')
@@ -246,7 +277,7 @@ jobs:
         with:
           go-version: '1.24'
           cache: true
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22"
           cache: npm
@@ -254,7 +285,7 @@ jobs:
       - run: npm ci --prefix web
       - run: npm run build --prefix web
       - name: Populate embedded frontend
-        run: rm -rf internal/webui/dist && cp -r web/dist internal/webui/dist
+        run: rm -rf internal/webui/dist && cp -r web/dist internal/webui/dist && touch internal/webui/dist/.gitkeep
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -283,7 +314,7 @@ jobs:
       - name: Install Syft
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
       - name: GoReleaser (release binaries)
-        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        uses: goreleaser/goreleaser-action@1a80836c5c9d9e5755a25cb59ec6f45a3b5f41a8 # v7.2.1
         with:
           version: "~> v2"
           args: release --clean
@@ -313,13 +344,11 @@ jobs:
         run: |
           make abs-contract
 
-  # ── Pre-deploy smoke — hits dev after image deploys ────────────────────────
-  # Update BINDERY_DEV_URL below (or add a BINDERY_DEV_URL secret) once you
-  # have a dev/staging instance URL distinct from production.
+  # ── Pre-deploy smoke — sanity check dev before promoting to prod ───────────
   predeploy-smoke:
     name: Pre-deploy smoke
     needs: image
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -340,9 +369,10 @@ jobs:
           fi
           echo "Waiting for ArgoCD app 'bindery-dev' to be Healthy+Synced..."
           for i in $(seq 1 24); do
+            # jq avoids a curl|python3 pipe flagged by OpenSSF Scorecard downloadThenRun
             STATUS=$(curl -sf -H "Authorization: Bearer $ARGOCD_TOKEN" \
-              "$ARGOCD_SERVER/api/v1/applications/bindery-dev" | \
-              python3 -c "import json,sys; d=json.load(sys.stdin); print(d['status']['health']['status'], d['status']['sync']['status'])" 2>/dev/null || echo "unknown unknown")
+              "$ARGOCD_SERVER/api/v1/applications/bindery-dev" 2>/dev/null | \
+              jq -r '"\(.status.health.status) \(.status.sync.status)"' 2>/dev/null || echo "unknown unknown")
             echo "  attempt $i: $STATUS"
             [[ "$STATUS" == "Healthy Synced" ]] && echo "ArgoCD dev sync complete" && exit 0
             sleep 10
@@ -359,3 +389,105 @@ jobs:
             exit 0
           fi
           make predeploy-smoke
+
+  # ── Deploy to prod (bindery) — tag push, after image + goreleaser + smoke ──
+  # Updates values.yaml on main; ArgoCD prod app (bindery) picks it up.
+  deploy-prod:
+    name: Deploy to prod
+    needs: [image, goreleaser, predeploy-smoke]
+    if: startsWith(github.ref, 'refs/tags/v') && needs.goreleaser.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Update values.yaml on main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          IMAGE_TAG="${GITHUB_REF_NAME#v}"
+          FILE_PATH="charts/bindery/values.yaml"
+          DEPLOY_BRANCH="auto/prod-deploy-${IMAGE_TAG}"
+
+          MAIN_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/git/refs/heads/main" --jq .object.sha)
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/heads/${DEPLOY_BRANCH}" \
+            -f sha="${MAIN_SHA}"
+
+          FILE_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${FILE_PATH}?ref=${DEPLOY_BRANCH}" --jq .sha)
+          CONTENT=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${FILE_PATH}?ref=${DEPLOY_BRANCH}" \
+            --jq '.content' | base64 -d | sed "s|tag:.*|tag: \"${IMAGE_TAG}\"|" | base64 -w0)
+          gh api "repos/${GITHUB_REPOSITORY}/contents/${FILE_PATH}" \
+            -X PUT \
+            -f message="chore(deploy): promote bindery to ${IMAGE_TAG} [skip ci]" \
+            -f content="${CONTENT}" \
+            -f sha="${FILE_SHA}" \
+            -f branch="${DEPLOY_BRANCH}"
+
+          gh pr create \
+            --repo "${GITHUB_REPOSITORY}" \
+            --head "${DEPLOY_BRANCH}" \
+            --base main \
+            --title "chore(deploy): promote bindery to ${GITHUB_REF_NAME}" \
+            --body "Automated prod deploy: image tag \`${IMAGE_TAG}\`." 2>/dev/null || true
+          gh pr merge "${DEPLOY_BRANCH}" --repo "${GITHUB_REPOSITORY}" --squash --admin --delete-branch
+          echo "bindery (prod) image tag updated to ${IMAGE_TAG}"
+
+      - name: Trigger ArgoCD prod refresh
+        env:
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+          ARGOCD_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
+        run: |
+          if [ -z "${ARGOCD_SERVER:-}" ] || [ -z "${ARGOCD_TOKEN:-}" ]; then
+            echo "::warning::ARGOCD_SERVER or ARGOCD_TOKEN not configured — Argo will pick up changes on next poll"
+            exit 0
+          fi
+          curl -sf -X POST \
+            -H "Authorization: Bearer ${ARGOCD_TOKEN}" \
+            "${ARGOCD_SERVER}/api/v1/applications/bindery?refresh=hard" \
+            && echo "ArgoCD bindery (prod) refresh triggered" \
+            || echo "::warning::ArgoCD prod refresh failed — Argo will pick up changes on next poll"
+
+  # ── Discord release announcement ───────────────────────────────────────────
+  notify-discord:
+    name: Notify Discord
+    needs: [goreleaser, image]
+    if: startsWith(github.ref, 'refs/tags/v') && needs.goreleaser.result == 'success'
+    runs-on: ubuntu-latest
+    # A broken/expired webhook should never fail the release workflow.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Post release announcement
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          PAYLOAD=$(python3 -c "
+          import json, re, os, sys
+          version = os.environ['VERSION']
+          with open('CHANGELOG.md') as f:
+              content = f.read()
+          pattern = r'## \[' + re.escape(version) + r'\][^\n]*\n(.*?)(?=\n## \[|\Z)'
+          m = re.search(pattern, content, re.DOTALL)
+          notes = m.group(1).strip() if m else ''
+          if len(notes) > 900:
+              notes = notes[:900].rsplit('\n', 1)[0] + '\n...'
+          body = '**Bindery ' + version + '** is out!'
+          if notes:
+              body += '\n\n' + notes
+          body += '\n\n<https://github.com/vavallee/bindery/releases/tag/' + version + '>'
+          print(json.dumps({'content': body}))
+          ")
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            -H "Content-Type: application/json" \
+            --data-binary "$PAYLOAD" \
+            "$DISCORD_WEBHOOK")
+          if [ "$HTTP" = "204" ]; then
+            echo "Discord notified for ${VERSION}"
+          else
+            echo "::warning::Discord webhook returned HTTP ${HTTP} — check DISCORD_RELEASE_WEBHOOK secret"
+            exit 1
+          fi

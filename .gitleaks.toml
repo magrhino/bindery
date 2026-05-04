@@ -57,7 +57,8 @@ stopwords = [
   "placeholder",
   "REPLACE_ME",
   "YOUR_KEY_HERE",
-  "test-only"
+  "test-only",
+  "test-secret-"
 ]
 # Paths excluded globally from all rules.
 paths = [

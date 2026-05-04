@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -40,17 +41,20 @@ func NewRenamerWithAudiobook(ebookTemplate, audiobookTemplate string) *Renamer {
 }
 
 // DestPath computes the destination path for an ebook file.
-func (r *Renamer) DestPath(rootFolder string, author *models.Author, book *models.Book, srcPath string) (string, error) {
+// series and seriesNumber are the book's primary series title and position
+// (empty strings for standalone books without a series).
+func (r *Renamer) DestPath(rootFolder string, author *models.Author, book *models.Book, series, seriesNumber, srcPath string) (string, error) {
 	ext := strings.TrimPrefix(filepath.Ext(srcPath), ".")
-	dest := filepath.Join(rootFolder, r.apply(r.template, author, book, ext))
+	dest := filepath.Join(rootFolder, r.apply(r.template, author, book, series, seriesNumber, ext))
 	return ensureContained(dest, rootFolder)
 }
 
 // AudiobookDestDir computes the destination directory into which an audiobook
 // download folder should be moved. The download's internal file structure is
 // preserved inside (multi-part m4b/mp3 + cover + cue sheet stay together).
-func (r *Renamer) AudiobookDestDir(rootFolder string, author *models.Author, book *models.Book) (string, error) {
-	dest := filepath.Join(rootFolder, r.apply(r.audiobookTemplate, author, book, ""))
+// series and seriesNumber are the book's primary series title and position.
+func (r *Renamer) AudiobookDestDir(rootFolder string, author *models.Author, book *models.Book, series, seriesNumber string) (string, error) {
+	dest := filepath.Join(rootFolder, r.apply(r.audiobookTemplate, author, book, series, seriesNumber, ""))
 	return ensureContained(dest, rootFolder)
 }
 
@@ -66,7 +70,7 @@ func ensureContained(dest, baseDir string) (string, error) {
 	return cleanDest, nil
 }
 
-func (r *Renamer) apply(template string, author *models.Author, book *models.Book, ext string) string {
+func (r *Renamer) apply(template string, author *models.Author, book *models.Book, series, seriesNumber, ext string) string {
 	year := ""
 	if book.ReleaseDate != nil {
 		year = fmt.Sprintf("%d", book.ReleaseDate.Year())
@@ -81,6 +85,8 @@ func (r *Renamer) apply(template string, author *models.Author, book *models.Boo
 	result = strings.ReplaceAll(result, "{Title}", sanitizePath(book.Title))
 	result = strings.ReplaceAll(result, "{Year}", year)
 	result = strings.ReplaceAll(result, "{ASIN}", sanitizePath(book.ASIN))
+	result = strings.ReplaceAll(result, "{Series}", sanitizePath(series))
+	result = strings.ReplaceAll(result, "{SeriesNumber}", sanitizePath(seriesNumber))
 	result = strings.ReplaceAll(result, "{ext}", ext)
 	return result
 }
@@ -349,7 +355,12 @@ func copyFileRooted(srcRoot, dstRoot *os.Root, rel string) error {
 	return out.Sync()
 }
 
-func copyFile(src, dst string) error {
+// copyFileCtx copies src to dst, returning ctx.Err() if the context is
+// cancelled before the copy completes. Closing the file descriptors on
+// cancellation encourages the blocking io.Copy goroutine to unblock on
+// Linux (including NFS); if it does not, the goroutine exits when the
+// process eventually closes those fds. Any partial dst is removed.
+func copyFileCtx(ctx context.Context, src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -362,10 +373,98 @@ func copyFile(src, dst string) error {
 	}
 	defer out.Close()
 
-	if _, err := io.Copy(out, in); err != nil {
-		return err
+	type result struct{ err error }
+	ch := make(chan result, 1)
+	go func() {
+		_, copyErr := io.Copy(out, in)
+		if copyErr == nil {
+			copyErr = out.Sync()
+		}
+		ch <- result{copyErr}
+	}()
+
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			_ = os.Remove(dst)
+		}
+		return r.err
+	case <-ctx.Done():
+		_ = in.Close()
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return ctx.Err()
 	}
-	return out.Sync()
+}
+
+func copyFile(src, dst string) error {
+	return copyFileCtx(context.Background(), src, dst)
+}
+
+// MoveFileCtx is like MoveFile but returns ctx.Err() if the context is
+// cancelled during the cross-filesystem copy phase.
+func MoveFileCtx(ctx context.Context, src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+		return fmt.Errorf("create dir: %w", err)
+	}
+
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+
+	if err := copyFileCtx(ctx, src, dst); err != nil {
+		return fmt.Errorf("copy file: %w", err)
+	}
+
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("stat source: %w", err)
+	}
+	dstInfo, err := os.Stat(dst)
+	if err != nil {
+		return fmt.Errorf("stat destination: %w", err)
+	}
+	if srcInfo.Size() != dstInfo.Size() {
+		_ = os.Remove(dst)
+		return fmt.Errorf("size mismatch: src=%d dst=%d", srcInfo.Size(), dstInfo.Size())
+	}
+
+	return os.Remove(src)
+}
+
+// CopyFileCtx is like CopyFile but returns ctx.Err() if the context is
+// cancelled during the copy.
+func CopyFileCtx(ctx context.Context, src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+		return fmt.Errorf("create dir: %w", err)
+	}
+	return copyFileCtx(ctx, src, dst)
+}
+
+// MoveDirCtx is like MoveDir but returns ctx.Err() if the context is
+// cancelled. The background goroutine may still be running on NFS after
+// cancellation but will complete or be cleaned up on process restart.
+func MoveDirCtx(ctx context.Context, src, dst string) error {
+	ch := make(chan error, 1)
+	go func() { ch <- MoveDir(src, dst) }()
+	select {
+	case err := <-ch:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// CopyDirCtx is like CopyDir but returns ctx.Err() if the context is cancelled.
+func CopyDirCtx(ctx context.Context, src, dst string) error {
+	ch := make(chan error, 1)
+	go func() { ch <- CopyDir(src, dst) }()
+	select {
+	case err := <-ch:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func sanitizePath(s string) string {

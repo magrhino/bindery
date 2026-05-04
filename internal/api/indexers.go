@@ -47,6 +47,7 @@ type IndexerHandler struct {
 	indexers  *db.IndexerRepo
 	books     *db.BookRepo
 	authors   *db.AuthorRepo
+	aliases   *db.AuthorAliasRepo
 	profiles  *db.MetadataProfileRepo
 	searcher  indexerSearcher
 	settings  *db.SettingsRepo
@@ -60,6 +61,12 @@ func NewIndexerHandler(indexers *db.IndexerRepo, books *db.BookRepo, authors *db
 		searcher: searcher, settings: settings, blocklist: blocklist,
 		lastDebug: &lastDebugStore{},
 	}
+}
+
+// WithAliases attaches the author alias repo used to populate AuthorAliases in MatchCriteria.
+func (h *IndexerHandler) WithAliases(aliases *db.AuthorAliasRepo) *IndexerHandler {
+	h.aliases = aliases
+	return h
 }
 
 func (h *IndexerHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -233,12 +240,20 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve author name and metadata profile for better search results.
+	// Resolve author name, metadata profile and aliases for better search results.
 	authorName := ""
 	var allowedLangs []string
+	var authorAliases []string
 	if author, err := h.authors.GetByID(r.Context(), book.AuthorID); err == nil && author != nil {
 		authorName = author.Name
 		allowedLangs = h.resolveAllowedLanguages(r.Context(), author)
+		if h.aliases != nil {
+			if aliases, err := h.aliases.ListByAuthor(r.Context(), author.ID); err == nil {
+				for _, a := range aliases {
+					authorAliases = append(authorAliases, a.Name)
+				}
+			}
+		}
 	}
 
 	crit := indexer.MatchCriteria{
@@ -247,6 +262,7 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 		MediaType:        book.MediaType,
 		ASIN:             book.ASIN,
 		AllowedLanguages: allowedLangs,
+		AuthorAliases:    authorAliases,
 	}
 	if book.ReleaseDate != nil {
 		crit.Year = book.ReleaseDate.Year()

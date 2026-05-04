@@ -28,6 +28,38 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 - Added an ABS import guide and user-facing wiki documentation covering setup, required API-key access, path remaps, review flow, conflicts, rollback, and import-quality expectations.
 
+## [v1.2.7] — 2026-05-04
+
+### Added
+
+- **Arr-compatible queue endpoint for Harpoon integrations** (#370) — `GET /api/queue` returns a Sonarr/Radarr-style queue payload with `totalRecords`, queue records, live `size`/`sizeleft`, downloader status, client name, remote download ID, protocol, optional pagination, and sorting. The existing `GET /api/v1/queue` UI response remains unchanged.
+- **Author detail search-all-wanted action** (#410) — the Author Detail page now has a **Search all wanted** button that queues searches for that author's monitored wanted books, disables itself when there is nothing searchable, and surfaces bulk-search errors inline. Author bulk search now also skips unmonitored wanted books so explicit per-book unmonitor decisions are respected.
+- **Startup configuration validation** (#430) — Bindery now validates its configuration on startup and logs actionable warnings for known conflict patterns (conflicting audiobook dir, invalid URLs, non-existent paths). Does not block startup; surfaces problems early before they cause silent failures at runtime.
+- **Configurable login rate-limit thresholds** (#428) — `BINDERY_RATE_LIMIT_MAX_FAILURES` (default 5) and `BINDERY_RATE_LIMIT_WINDOW_MINUTES` (default 15) let operators tune the per-IP brute-force lockout without recompiling.
+
+### Fixed
+
+- **OpenLibrary search results restored** (#408) — the deprecated `/search.json` endpoint (which began returning HTTP 500) is replaced by `/authors/{id}/works.json` as the primary works source with `/search` demoted to enrichment. Series data now comes from the primary call so fewer round-trips are needed.
+- **Audiobook routing now respects `BINDERY_AUDIOBOOK_DIR`** (#421) — per-author ebook root folders were incorrectly applied to audiobook destinations; audiobooks now always route to the dedicated audiobook directory and ignore the ebook root.
+- **Audiobook directory visible in Settings UI** (#420) — the audiobook storage path is now displayed in Settings → General alongside the library directory.
+- **API-key requests exempt from CSRF middleware** (#424) — external tools such as Harpoon that authenticate via X-Api-Key header were receiving 403 on `POST /api/queue`; API-key-authenticated requests now bypass `RequireXRequestedWith` and `RequireCSRFToken` checks while browser-session requests remain protected.
+- **Torrent hash case sensitivity** (#425) — torrent hashes are now lowercased on assignment, preventing hash-not-found mismatches when clients return mixed-case identifiers.
+- **Transmission error states now surface in queue** (#426) — integer status codes 16 and 32 (error / isolated-error) are now recognised and translated to `TrackedDownloadStatus: Warning`, so stuck Transmission downloads appear in the queue instead of silently stalling.
+- **CSV author import skips header row** (#419) — CSV imports with a header row no longer create a spurious author entry from column names.
+- **qBittorrent hash detection no longer filtered by category** (#418) — the category filter on the hash detection poll was a spurious race condition that prevented hashes from being recorded on redirect URLs; the filter is removed.
+- **Credential normalization silent clear fixed** (#422) — `normalizeClientCredentialStorage` now applies the same `legacyCredentialURLBase` guard as the read path, preventing a bare `url_base` with no `api_key` from being silently migrated into `username` on write.
+- **Library scanner series matching now runs in production** — the scanner is wired to the series repository at startup; filename-based series/position matching now runs during normal library scans.
+- **qBittorrent and Transmission URL Base preserved on read** — legacy credential hydration no longer clears real reverse-proxy URL Base values (e.g. `/qbit`) — only old credential-as-url_base rows are migrated.
+
+## [v1.2.6] — 2026-04-25
+
+### Fixed
+
+- **NZBGet grabs broken** (#396) — `GetFirstEnabledByProtocol` and `GetEnabledByProtocol` only queried `sabnzbd` for the usenet protocol; NZBGet was never returned, causing "no enabled download clients" on every grab attempt for users with only NZBGet configured.
+- **NZBGet credentials zeroed on read** (#396) — `hydrateClientCredentials` blanked `username`/`password` for all non-qBit/Transmission clients, silently wiping NZBGet HTTP Basic auth credentials before they reached the adapter.
+- **Deluge missing from torrent protocol selector** (#396) — both `GetFirstEnabledByProtocol` and `GetEnabledByProtocol` excluded Deluge from the torrent client `IN` list, causing "no enabled download clients" for Deluge-only setups.
+- **Imageproxy concurrent-write race** (#396) — concurrent requests for the same image URL all wrote to the shared `imgFile+".tmp"` path; a racing `O_TRUNC` open could zero the file while another goroutine renamed it into the cache, resulting in empty image responses. Each goroutine now uses `os.CreateTemp()` for an isolated temp file.
+
 ## [v1.2.5] — 2026-04-24
 
 ### Added

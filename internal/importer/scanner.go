@@ -39,6 +39,7 @@ type Scanner struct {
 	authors      *db.AuthorRepo
 	history      *db.HistoryRepo
 	rootFolders  *db.RootFolderRepo
+	series       *db.SeriesRepo
 	renamer      *Renamer
 	remapper     *Remapper
 	calibreAdder calibreAdder
@@ -76,6 +77,29 @@ func NewScanner(downloads *db.DownloadRepo, clients *db.DownloadClientRepo,
 func (s *Scanner) WithRootFolders(rf *db.RootFolderRepo) *Scanner {
 	s.rootFolders = rf
 	return s
+}
+
+// WithSeriesRepo attaches the series repo so the scanner can resolve series
+// name and position when building rename destination paths, and so ScanLibrary
+// can fall back to series+position matching for series-annotated filenames.
+func (s *Scanner) WithSeriesRepo(sr *db.SeriesRepo) *Scanner {
+	s.series = sr
+	return s
+}
+
+// primarySeriesFor returns the primary series title and position for the given
+// book. Returns empty strings when the series repo is not configured or the
+// book has no primary series.
+func (s *Scanner) primarySeriesFor(ctx context.Context, book *models.Book) (seriesTitle, seriesNumber string) {
+	if s.series == nil || book == nil {
+		return "", ""
+	}
+	title, pos, err := s.series.GetPrimarySeriesForBook(ctx, book.ID)
+	if err != nil {
+		slog.Warn("renamer: failed to load primary series", "bookID", book.ID, "error", err)
+		return "", ""
+	}
+	return title, pos
 }
 
 // effectiveLibraryDir returns the library root to use for the given author.
@@ -259,7 +283,7 @@ func (s *Scanner) markDownloadFailed(ctx context.Context, dl *models.Download, m
 
 // checkSABnzbdDownloads polls SABnzbd for status changes.
 func (s *Scanner) checkSABnzbdDownloads(ctx context.Context, client *models.DownloadClient) {
-	sab := sabnzbd.New(client.Host, client.Port, client.APIKey, client.UseSSL)
+	sab := sabnzbd.New(client.Host, client.Port, client.APIKey, client.URLBase, client.UseSSL)
 
 	// Check history for completed downloads (no category filter — match by NZO ID)
 	history, err := sab.GetHistory(ctx, "", 50)
@@ -297,7 +321,7 @@ func (s *Scanner) checkSABnzbdDownloads(ctx context.Context, client *models.Down
 
 // checkNZBGetDownloads polls NZBGet for status changes using its JSON-RPC API.
 func (s *Scanner) checkNZBGetDownloads(ctx context.Context, client *models.DownloadClient) {
-	ng := nzbget.New(client.Host, client.Port, client.Username, client.Password, client.UseSSL)
+	ng := nzbget.New(client.Host, client.Port, client.Username, client.Password, client.URLBase, client.UseSSL)
 
 	// Check history for completed/failed downloads (matched by NZBID stored as sabnzbd_nzo_id).
 	history, err := ng.GetHistory(ctx)
@@ -345,7 +369,7 @@ func (s *Scanner) tryImportNZBGet(ctx context.Context, ng *nzbget.Client, dl *mo
 
 // checkTransmissionDownloads polls Transmission for status changes.
 func (s *Scanner) checkTransmissionDownloads(ctx context.Context, client *models.DownloadClient) {
-	trans := transmission.New(client.Host, client.Port, client.Username, client.Password, client.UseSSL)
+	trans := transmission.New(client.Host, client.Port, client.Username, client.Password, client.URLBase, client.UseSSL)
 
 	// Get all torrents — Category is used as the download directory filter so
 	// Bindery only sees its own torrents on a shared Transmission instance.
@@ -399,7 +423,7 @@ func (s *Scanner) checkTransmissionDownloads(ctx context.Context, client *models
 
 // checkQbittorrentDownloads polls qBittorrent for status changes.
 func (s *Scanner) checkQbittorrentDownloads(ctx context.Context, client *models.DownloadClient) {
-	qb := qbittorrent.New(client.Host, client.Port, client.Username, client.Password, client.UseSSL)
+	qb := qbittorrent.New(client.Host, client.Port, client.Username, client.Password, client.URLBase, client.UseSSL)
 
 	torrents, err := qb.GetTorrents(ctx, client.Category)
 	if err != nil {
@@ -520,6 +544,12 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 
 	s.updateDownloadStatus(ctx, dl.ID, models.StateImporting)
 
+	// Per-import timeout so a stalled NFS copy does not hold the download in
+	// StateImporting indefinitely. 30 minutes is generous for any realistic
+	// book file; the context-aware file operations return promptly when it fires.
+	importCtx, importCancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer importCancel()
+
 	// Resolve the book and author for naming. Lookup errors are not fatal -
 	// we fall through to the "unmatched import" log below.
 	var book *models.Book
@@ -548,11 +578,16 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 	// Audiobook path: place the entire download directory as a unit so
 	// multi-part m4b/mp3 files, cover art, and cue sheets stay together.
 	if detectedFormat == models.MediaTypeAudiobook {
+		// audiobookRoot always starts from BINDERY_AUDIOBOOK_DIR (set at
+		// startup). effectiveLibraryDir is format-agnostic — it resolves the
+		// per-author ebook root folder — so applying it here would send
+		// audiobooks into the ebook root whenever the author has any custom
+		// root folder assigned, silently ignoring BINDERY_AUDIOBOOK_DIR
+		// (#421). Until a per-author audiobook root folder field exists we
+		// leave audiobookRoot as-is.
 		audiobookRoot := s.audiobookDir
-		if effLib := s.effectiveLibraryDir(ctx, author); effLib != s.libraryDir {
-			audiobookRoot = effLib
-		}
-		audiobookDest, destErr := s.renamer.AudiobookDestDir(audiobookRoot, author, book)
+		seriesTitle, seriesNum := s.primarySeriesFor(ctx, book)
+		audiobookDest, destErr := s.renamer.AudiobookDestDir(audiobookRoot, author, book, seriesTitle, seriesNum)
 		if destErr != nil {
 			slog.Error("failed to compute audiobook destination", "src", downloadPath, "error", destErr)
 			s.failImport(ctx, dl, models.StateImportBlocked, fmt.Sprintf("audiobook destination invalid: %v", destErr))
@@ -576,9 +611,9 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 			case "hardlink":
 				dirErr = HardlinkDir(downloadPath, destDir)
 			case "copy":
-				dirErr = CopyDir(downloadPath, destDir)
+				dirErr = CopyDirCtx(importCtx, downloadPath, destDir)
 			default:
-				dirErr = MoveDir(downloadPath, destDir)
+				dirErr = MoveDirCtx(importCtx, downloadPath, destDir)
 			}
 		} else {
 			if err := os.MkdirAll(destDir, 0o750); err != nil {
@@ -589,9 +624,9 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 				case "hardlink":
 					dirErr = HardlinkFile(downloadPath, dstFile)
 				case "copy":
-					dirErr = CopyFile(downloadPath, dstFile)
+					dirErr = CopyFileCtx(importCtx, downloadPath, dstFile)
 				default:
-					dirErr = MoveFile(downloadPath, dstFile)
+					dirErr = MoveFileCtx(importCtx, downloadPath, dstFile)
 				}
 			}
 		}
@@ -634,7 +669,8 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 			continue
 		}
 
-		destPath, destErr := s.renamer.DestPath(s.effectiveLibraryDir(ctx, author), author, book, srcFile)
+		seriesTitle, seriesNum := s.primarySeriesFor(ctx, book)
+		destPath, destErr := s.renamer.DestPath(s.effectiveLibraryDir(ctx, author), author, book, seriesTitle, seriesNum, srcFile)
 		if destErr != nil {
 			slog.Error("failed to compute book destination", "src", srcFile, "error", destErr)
 			lastFileErr = destErr
@@ -649,9 +685,9 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 		case "hardlink":
 			fileErr = HardlinkFile(srcFile, destPath)
 		case "copy":
-			fileErr = CopyFile(srcFile, destPath)
+			fileErr = CopyFileCtx(importCtx, srcFile, destPath)
 		default:
-			fileErr = MoveFile(srcFile, destPath)
+			fileErr = MoveFileCtx(importCtx, srcFile, destPath)
 		}
 		if fileErr != nil {
 			slog.Error("failed to import", "src", srcFile, "mode", mode, "error", fileErr)
@@ -1077,6 +1113,28 @@ func (s *Scanner) ScanLibrary(ctx context.Context) {
 				reconciled++
 				matched = true
 				break
+			}
+		}
+
+		if !matched && s.series != nil && parsed.Series != "" && parsed.SeriesNumber != "" {
+			book, seriesErr := s.series.GetBookBySeriesPosition(ctx, parsed.Series, parsed.SeriesNumber)
+			if seriesErr != nil {
+				slog.Warn("library scan: series position lookup error",
+					"series", parsed.Series, "position", parsed.SeriesNumber, "error", seriesErr)
+			} else if book != nil && !reconciledBooks[book.ID] {
+				effDir := s.effectiveLibraryDir(ctx, authorMap[book.AuthorID])
+				if pathUnderDir(path, effDir) {
+					if err := s.books.AddBookFile(ctx, book.ID, detectedFmt, path); err != nil {
+						slog.Error("library scan: failed to update book via series match", "id", book.ID, "error", err)
+					} else {
+						slog.Info("library scan: reconciled book via series position",
+							"series", parsed.Series, "position", parsed.SeriesNumber, "title", book.Title, "path", path)
+						trackedPaths[cleanPath] = true
+						reconciledBooks[book.ID] = true
+						reconciled++
+						matched = true
+					}
+				}
 			}
 		}
 

@@ -37,6 +37,9 @@ func TestGetLiveStatusesSABnzbd(t *testing.T) {
 				"speed": "2.0 MB/s",
 				"slots": []map[string]any{{
 					"nzo_id":     "nzo123",
+					"status":     "Downloading",
+					"mb":         "10.0",
+					"mbleft":     "5.0",
 					"percentage": "55",
 					"timeleft":   "0:10:00",
 				}},
@@ -62,6 +65,9 @@ func TestGetLiveStatusesSABnzbd(t *testing.T) {
 	if status.Percentage != "55" || status.TimeLeft != "0:10:00" || status.Speed != "2.0 MB/s" {
 		t.Fatalf("unexpected status: %+v", status)
 	}
+	if status.Size != 10*1024*1024 || status.SizeLeft != 5*1024*1024 || status.Status != "Downloading" {
+		t.Fatalf("unexpected size/status overlay: %+v", status)
+	}
 }
 
 func TestGetLiveStatusesTransmission(t *testing.T) {
@@ -73,11 +79,14 @@ func TestGetLiveStatusesTransmission(t *testing.T) {
 			"arguments": map[string]any{
 				"torrents": []map[string]any{
 					{
-						"id":           7,
-						"percentDone":  0.42,
-						"eta":          125,
-						"rateDownload": 4096,
-						"downloadDir":  "/books",
+						"id":            7,
+						"percentDone":   0.42,
+						"totalSize":     1000,
+						"leftUntilDone": 580,
+						"status":        2,
+						"eta":           125,
+						"rateDownload":  4096,
+						"downloadDir":   "/books",
 					},
 					{
 						"id":          99,
@@ -115,6 +124,9 @@ func TestGetLiveStatusesTransmission(t *testing.T) {
 	if status.TimeLeft == "" || status.Speed == "" {
 		t.Fatalf("expected non-empty timeLeft/speed, got %+v", status)
 	}
+	if status.Size != 1000 || status.SizeLeft != 580 || status.Status != "2" {
+		t.Fatalf("unexpected size/status: %+v", status)
+	}
 
 	// Category acts as a download-directory filter on shared Transmission instances.
 	clientFiltered := &models.DownloadClient{Type: "transmission", Host: host, Port: port, Category: "/books"}
@@ -140,9 +152,13 @@ func TestGetLiveStatusesQbittorrent(t *testing.T) {
 			_, _ = w.Write([]byte("Ok."))
 		case "/api/v2/torrents/info":
 			_ = json.NewEncoder(w).Encode([]map[string]any{{
-				"hash":     "ABCDEF",
-				"progress": 0.9,
-				"eta":      300,
+				"hash":        "ABCDEF",
+				"progress":    0.9,
+				"eta":         300,
+				"size":        2000,
+				"amount_left": 200,
+				"state":       "downloading",
+				"dlspeed":     1024,
 			}})
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -169,6 +185,104 @@ func TestGetLiveStatusesQbittorrent(t *testing.T) {
 	}
 	if status.TimeLeft == "" {
 		t.Fatalf("expected non-empty timeLeft")
+	}
+	if status.Size != 2000 || status.SizeLeft != 200 || status.Status != "downloading" || status.Speed == "" {
+		t.Fatalf("unexpected size/status/speed: %+v", status)
+	}
+}
+
+func TestGetLiveStatusesNZBGet(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.Method != "listgroups" {
+			t.Fatalf("expected listgroups, got %q", req.Method)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"result": []map[string]any{{
+				"NZBID":           101,
+				"Status":          "DOWNLOADING",
+				"FileSizeMB":      20.0,
+				"RemainingSizeMB": 2.5,
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	host, port := serverHostPort(t, srv.URL)
+	client := &models.DownloadClient{Type: "nzbget", Host: host, Port: port}
+
+	statusByID, usesTorrentID, err := GetLiveStatuses(context.Background(), client)
+	if err != nil {
+		t.Fatalf("GetLiveStatuses: %v", err)
+	}
+	if usesTorrentID {
+		t.Fatalf("expected usesTorrentID=false for nzbget")
+	}
+	status, ok := statusByID["101"]
+	if !ok {
+		t.Fatalf("expected NZBID 101 status")
+	}
+	if status.Size != 20*1024*1024 || status.SizeLeft != int64(2.5*1024*1024) || status.Status != "DOWNLOADING" {
+		t.Fatalf("unexpected status: %+v", status)
+	}
+}
+
+func TestGetLiveStatusesDeluge(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		var req struct {
+			Method string `json:"method"`
+			ID     int64  `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		var result any
+		switch req.Method {
+		case "auth.login":
+			result = true
+		case "core.get_torrents_status":
+			result = map[string]any{
+				"abc123": map[string]any{
+					"hash":                  "abc123",
+					"progress":              25.0,
+					"state":                 "Downloading",
+					"eta":                   60,
+					"download_payload_rate": 2048,
+					"total_size":            4000,
+					"total_done":            1000,
+				},
+			}
+		default:
+			t.Fatalf("unexpected method: %s", req.Method)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": result, "error": nil, "id": req.ID})
+	}))
+	defer srv.Close()
+
+	host, port := serverHostPort(t, srv.URL)
+	client := &models.DownloadClient{Type: "deluge", Host: host, Port: port, Password: "pw"}
+
+	statusByID, usesTorrentID, err := GetLiveStatuses(context.Background(), client)
+	if err != nil {
+		t.Fatalf("GetLiveStatuses: %v", err)
+	}
+	if !usesTorrentID {
+		t.Fatalf("expected usesTorrentID=true for deluge")
+	}
+	status, ok := statusByID["abc123"]
+	if !ok {
+		t.Fatalf("expected abc123 status")
+	}
+	if status.Size != 4000 || status.SizeLeft != 3000 || status.Status != "Downloading" {
+		t.Fatalf("unexpected status: %+v", status)
 	}
 }
 
@@ -517,5 +631,72 @@ func TestBytesPerSecondToString_MB(t *testing.T) {
 func TestBytesPerSecondToString_Bytes(t *testing.T) {
 	if got := bytesPerSecondToString(512); got != "512 B/s" {
 		t.Errorf("expected \"512 B/s\", got %q", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// liveStatusIsError — issue #426
+// ---------------------------------------------------------------------------
+
+func TestLiveStatusIsError_TransmissionIntegerCodes(t *testing.T) {
+	tests := []struct {
+		status string
+		want   bool
+	}{
+		// Transmission error codes
+		{"16", true}, // TR_STATUS_CHECK_WAIT (error)
+		{"32", true}, // TR_STATUS_ISOLATED_ERROR
+		{"0", false}, // stopped but not an error code
+		{"3", false}, // seeding
+		{"2", false}, // downloading
+		// String-based statuses (qBittorrent, Deluge)
+		{"error", true},
+		{"Error", true},
+		{"stalledDL", false},
+		{"downloading", false},
+		{"failed", true},
+		{"Failed", true},
+		{"", false},
+	}
+	for _, tc := range tests {
+		ls := LiveStatus{Status: tc.status}
+		if got := liveStatusIsError(ls); got != tc.want {
+			t.Errorf("liveStatusIsError(%q) = %v, want %v", tc.status, got, tc.want)
+		}
+	}
+}
+
+func TestGetLiveStatusesTransmission_PopulatesStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"arguments": map[string]any{
+				"torrents": []map[string]any{
+					{
+						"id":          10,
+						"percentDone": 0.5,
+						"status":      16, // Transmission error code
+					},
+				},
+			},
+			"result": "success",
+		})
+	}))
+	defer srv.Close()
+
+	host, port := serverHostPort(t, srv.URL)
+	client := &models.DownloadClient{Type: "transmission", Host: host, Port: port}
+	statusByID, _, err := GetLiveStatuses(context.Background(), client)
+	if err != nil {
+		t.Fatalf("GetLiveStatuses: %v", err)
+	}
+	ls, ok := statusByID["10"]
+	if !ok {
+		t.Fatalf("expected torrent id 10 in status map")
+	}
+	if ls.Status != "16" {
+		t.Errorf("expected Status=%q, got %q", "16", ls.Status)
+	}
+	if !liveStatusIsError(ls) {
+		t.Error("expected liveStatusIsError to return true for Transmission status 16")
 	}
 }

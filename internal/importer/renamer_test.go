@@ -19,7 +19,7 @@ func TestRenamerDestPath(t *testing.T) {
 		ReleaseDate: &releaseDate,
 	}
 
-	got, err := r.DestPath("/books", author, book, "/downloads/complete/something.epub")
+	got, err := r.DestPath("/books", author, book, "", "", "/downloads/complete/something.epub")
 	if err != nil {
 		t.Fatalf("DestPath: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestRenamerNoYear(t *testing.T) {
 	author := &models.Author{Name: "Author"}
 	book := &models.Book{Title: "Book Title"}
 
-	got, err := r.DestPath("/lib", author, book, "file.pdf")
+	got, err := r.DestPath("/lib", author, book, "", "", "file.pdf")
 	if err != nil {
 		t.Fatalf("DestPath: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestRenamerSanitizesPath(t *testing.T) {
 	author := &models.Author{Name: "Author: Bad/Name"}
 	book := &models.Book{Title: "Title? With <Bad> Chars"}
 
-	got, err := r.DestPath("/lib", author, book, "test.epub")
+	got, err := r.DestPath("/lib", author, book, "", "", "test.epub")
 	if err != nil {
 		t.Fatalf("DestPath: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestRenamerASINToken(t *testing.T) {
 		ReleaseDate: &releaseDate,
 	}
 
-	got, err := r.DestPath("/books", author, book, "book.epub")
+	got, err := r.DestPath("/books", author, book, "", "", "book.epub")
 	if err != nil {
 		t.Fatalf("DestPath: %v", err)
 	}
@@ -101,11 +101,58 @@ func TestRenamerASINTokenEmpty(t *testing.T) {
 	author := &models.Author{Name: "Author"}
 	book := &models.Book{Title: "Some Book"}
 
-	got, err := r.DestPath("/books", author, book, "book.epub")
+	got, err := r.DestPath("/books", author, book, "", "", "book.epub")
 	if err != nil {
 		t.Fatalf("DestPath: %v", err)
 	}
 	want := filepath.Join("/books", "Some Book.epub")
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+func TestRenamerSeriesTokens(t *testing.T) {
+	r := NewRenamer("{Author}/{Series}/{SeriesNumber} - {Title}.{ext}")
+	releaseDate := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	author := &models.Author{Name: "Frank Herbert"}
+	book := &models.Book{Title: "Dune", ReleaseDate: &releaseDate}
+
+	got, err := r.DestPath("/books", author, book, "Dune Chronicles", "1", "book.m4b")
+	if err != nil {
+		t.Fatalf("DestPath: %v", err)
+	}
+	want := filepath.Join("/books", "Frank Herbert", "Dune Chronicles", "1 - Dune.m4b")
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+func TestRenamerSeriesTokensEmpty(t *testing.T) {
+	// No series — {Series} and {SeriesNumber} produce empty segments, stripped by sanitizePath
+	r := NewRenamer("{Author}/{Series}/{Title}.{ext}")
+	author := &models.Author{Name: "Author"}
+	book := &models.Book{Title: "Standalone"}
+
+	got, err := r.DestPath("/books", author, book, "", "", "book.epub")
+	if err != nil {
+		t.Fatalf("DestPath: %v", err)
+	}
+	want := filepath.Join("/books", "Author", "Standalone.epub")
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+func TestRenamerAudiobookSeriesTokens(t *testing.T) {
+	r := NewRenamerWithAudiobook("", "{Author}/{Series}/{SeriesNumber} - {Title}")
+	author := &models.Author{Name: "Brandon Sanderson"}
+	book := &models.Book{Title: "The Way of Kings"}
+
+	got, err := r.AudiobookDestDir("/audiobooks", author, book, "Stormlight Archive", "1")
+	if err != nil {
+		t.Fatalf("AudiobookDestDir: %v", err)
+	}
+	want := filepath.Join("/audiobooks", "Brandon Sanderson", "Stormlight Archive", "1 - The Way of Kings")
 	if got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}

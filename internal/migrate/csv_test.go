@@ -139,6 +139,21 @@ func TestParseCSVRows(t *testing.T) {
 			},
 		},
 		{
+			name: "csv with header row skipped",
+			in:   "Author Name,Monitored,SearchOnAdd\nAndy Weir,true,false\nIsaac Asimov,false,true\n",
+			want: []csvRow{
+				{name: "Andy Weir", monitored: true, searchOnAdd: false},
+				{name: "Isaac Asimov", monitored: false, searchOnAdd: true},
+			},
+		},
+		{
+			name: "csv with 'name' header skipped",
+			in:   "name,monitored\nN. K. Jemisin,true\n",
+			want: []csvRow{
+				{name: "N. K. Jemisin", monitored: true, searchOnAdd: false},
+			},
+		},
+		{
 			name: "empty input",
 			in:   "",
 			want: nil,

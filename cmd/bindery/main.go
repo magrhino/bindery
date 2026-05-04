@@ -81,6 +81,14 @@ func main() {
 		"dataDir", cfg.DataDir,
 	)
 
+	// Validate config before anything else touches the filesystem or network.
+	// Warnings are logged inline; a non-nil return means a clearly broken
+	// config (e.g. an unparseable OIDC redirect URL) and is treated as fatal.
+	if err := cfg.Validate(slog.Default()); err != nil {
+		slog.Error("configuration error — refusing to start", "error", err)
+		os.Exit(1)
+	}
+
 	// Fail fast if BINDERY_PUID/PGID is set but the container isn't running
 	// as that UID/GID. See cmd/bindery/uidcheck.go for the full rationale.
 	checkPUIDPGID()
@@ -151,8 +159,9 @@ func main() {
 		slog.Info("proxy auth mode: trusted proxies", "cidrs", trustedCIDRs)
 	}
 
-	// Login rate limiter: 5 failures / 15 min per IP, matches Sonarr's posture.
-	loginLimiter := auth.NewLoginLimiter(5, 15*time.Minute)
+	// Login rate limiter: thresholds are configurable via BINDERY_RATE_LIMIT_MAX_FAILURES
+	// and BINDERY_RATE_LIMIT_WINDOW_MINUTES; defaults match the original Sonarr-style posture.
+	loginLimiter := auth.NewLoginLimiter(cfg.RateLimitMaxFailures, time.Duration(cfg.RateLimitWindowMinutes)*time.Minute)
 
 	// Metadata providers
 	olClient := openlibrary.New()
@@ -275,6 +284,7 @@ func main() {
 	sched := scheduler.New(importScanner, idxSearcher, metaAgg,
 		authorRepo, bookRepo, indexerRepo, downloadRepo, dlClientRepo, settingsRepo, blocklistRepo)
 	sched.WithHistory(historyRepo)
+	sched.WithAliases(authorAliasRepo)
 	sched.WithDelayProfiles(delayProfileRepo)
 	sched.WithPendingReleases(pendingReleaseRepo)
 	// Register the Calibre importer as the 24-hour sync job. The scheduler
@@ -319,12 +329,13 @@ func main() {
 	authorHandler := api.NewAuthorHandler(authorRepo, authorAliasRepo, bookRepo, seriesRepo, metaAgg, settingsRepo, metadataProfileRepo, sched).WithFinder(importScanner)
 	authorAliasHandler := api.NewAuthorAliasHandler(authorRepo, authorAliasRepo)
 	bookHandler := api.NewBookHandler(bookRepo, metaAgg, historyRepo, sched).WithSettings(settingsRepo).WithDownloads(downloadRepo)
-	indexerHandler := api.NewIndexerHandler(indexerRepo, bookRepo, authorRepo, metadataProfileRepo, idxSearcher, settingsRepo, blocklistRepo)
+	indexerHandler := api.NewIndexerHandler(indexerRepo, bookRepo, authorRepo, metadataProfileRepo, idxSearcher, settingsRepo, blocklistRepo).WithAliases(authorAliasRepo)
 	dlClientHandler := api.NewDownloadClientHandler(dlClientRepo)
 	queueHandler := api.NewQueueHandler(downloadRepo, dlClientRepo, bookRepo, historyRepo).WithNotifier(notif)
 	pendingHandler := api.NewPendingHandler(pendingReleaseRepo, queueHandler, downloadRepo, bookRepo)
 	importScanner.WithSettings(settingsRepo)
 	importScanner.WithRootFolders(rootFolderRepo)
+	importScanner.WithSeriesRepo(seriesRepo)
 
 	// Startup check: warn if the configured default root folder no longer exists on disk.
 	if s, _ := settingsRepo.Get(ctxBoot, api.SettingDefaultLibraryRootFolderID); s != nil && s.Value != "" {
@@ -410,6 +421,14 @@ func main() {
 		proxyProvision: cfg.ProxyAutoProvision,
 		proxyCIDRs:     trustedCIDRs,
 	}
+
+	r.Route("/api", func(r chi.Router) {
+		r.Use(auth.Middleware(authProvider))
+		r.Use(auth.RequireXRequestedWith)
+		r.Use(auth.RequireCSRFToken(authProvider.SessionSecret))
+
+		r.Get("/queue", queueHandler.ListArrCompatible)
+	})
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(auth.Middleware(authProvider))

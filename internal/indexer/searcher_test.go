@@ -41,7 +41,7 @@ func TestFilterRelevantTheSparrow(t *testing.T) {
 		"The.Hempcrete.Book.William.Stanwix.Alex.Sparrow.epub",
 		"Dark.Horse.Blade.Of.The.Immortal.Vol.18.The.Sparrow.Net.Comic.eBook",
 	)
-	got := filterRelevant(results, "The Sparrow", "Mary Doria Russell")
+	got := filterRelevant(results, "The Sparrow", "Mary Doria Russell", nil)
 
 	if !contains(got, "Mary.Doria.Russell.-.The.Sparrow.1996.RETAIL.EPUB") {
 		t.Errorf("expected Russell's Sparrow to be kept, got %v", resultTitles(got))
@@ -68,7 +68,7 @@ func TestFilterRelevantWordBoundary(t *testing.T) {
 		"sparrows.russell.epub",
 		"the.sparrow.russell.epub",
 	)
-	got := filterRelevant(results, "The Sparrow", "Mary Doria Russell")
+	got := filterRelevant(results, "The Sparrow", "Mary Doria Russell", nil)
 	if contains(got, "sparrowhawk.by.russell.epub") {
 		t.Error("must not match 'sparrowhawk' for 'sparrow' keyword")
 	}
@@ -87,7 +87,7 @@ func TestFilterRelevantMultiWordPhrase(t *testing.T) {
 		"On.The.Road.Again.Willie.Nelson.epub",
 		"The.Road.To.Wigan.Pier.Orwell.epub",
 	)
-	got := filterRelevant(results, "The Road", "Cormac McCarthy")
+	got := filterRelevant(results, "The Road", "Cormac McCarthy", nil)
 
 	if !contains(got, "Cormac.McCarthy.-.The.Road.2006.epub") {
 		t.Error("expected McCarthy's The Road to pass")
@@ -118,7 +118,7 @@ func TestFilterRelevantSubtitle(t *testing.T) {
 		"Dune.Messiah.Herbert.epub",
 		"Frank.Herbert.Dune.epub", // primary-title-only match
 	)
-	got := filterRelevant(results, "Dune: Messiah", "Frank Herbert")
+	got := filterRelevant(results, "Dune: Messiah", "Frank Herbert", nil)
 	for _, title := range []string{
 		"Frank.Herbert.Dune.Messiah.epub",
 		"Dune.Messiah.Herbert.epub",
@@ -132,7 +132,7 @@ func TestFilterRelevantSubtitle(t *testing.T) {
 
 func TestFilterRelevantNoResults(t *testing.T) {
 	// Empty input → empty output, no panic.
-	got := filterRelevant(nil, "The Sparrow", "Russell")
+	got := filterRelevant(nil, "The Sparrow", "Russell", nil)
 	if len(got) != 0 {
 		t.Errorf("expected empty, got %v", got)
 	}
@@ -182,7 +182,7 @@ func TestFilterRelevantApostrophe(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		got := filterRelevant(toResults(tc.releases...), tc.bookTitle, tc.author)
+		got := filterRelevant(toResults(tc.releases...), tc.bookTitle, tc.author, nil)
 		if !contains(got, tc.wantAny) {
 			t.Errorf("filterRelevant(%q, %q): expected %q in results, got %v",
 				tc.bookTitle, tc.author, tc.wantAny, resultTitles(got))
@@ -202,7 +202,7 @@ func TestFilterRelevantEditionQualifier(t *testing.T) {
 		"Die.Stille.ist.ein.Geraeusch.Mueller.epub",
 		"Some.Unrelated.Noise.epub",
 	)
-	got := filterRelevant(results, "Die Stille ist ein Geräusch (German Edition)", "Herta Müller")
+	got := filterRelevant(results, "Die Stille ist ein Geräusch (German Edition)", "Herta Müller", nil)
 	if !contains(got, "Herta.Mueller.Die.Stille.ist.ein.Geraeusch.epub") {
 		t.Errorf("expected full-title release to pass, got %v", resultTitles(got))
 	}
@@ -505,7 +505,7 @@ func TestFilterRelevantAnyPhraseMatchTrap(t *testing.T) {
 		"Name.Wind.Rothfuss.epub", // abbreviated — phrase-matches ["name","wind"]
 		"Completely.Unrelated.Book.epub",
 	)
-	got := filterRelevant(results, "The Name of the Wind", "Patrick Rothfuss")
+	got := filterRelevant(results, "The Name of the Wind", "Patrick Rothfuss", nil)
 
 	if !contains(got, "Patrick.Rothfuss.-.The.Name.of.the.Wind.EPUB") {
 		t.Errorf("correct release dropped by anyPhraseMatch trap; got %v", resultTitles(got))
@@ -531,7 +531,7 @@ func TestFilterRelevantStopWordsBetweenKeywords(t *testing.T) {
 		"Lord.of.the.Rings.Unabridged.m4b",
 		"Unrelated.Fantasy.Novel.epub",
 	)
-	got := filterRelevant(results, "The Lord of the Rings", "J.R.R. Tolkien")
+	got := filterRelevant(results, "The Lord of the Rings", "J.R.R. Tolkien", nil)
 
 	for _, title := range []string{
 		"J.R.R.Tolkien.-.The.Lord.of.the.Rings.EPUB",
@@ -570,6 +570,12 @@ func TestFilterCategoriesParentDrop(t *testing.T) {
 		mediaType string
 		want      []int
 	}{
+		// Core regression: bare parent 7000 must never reach the indexer as-is.
+		// Prowlarr reports only 7000 for generic book trackers; the searcher must
+		// widen this to the ebook default (7020) rather than sending the broad
+		// parent, which causes indexers to return noisier result sets.
+		{[]int{7000}, "ebook", []int{7020}},
+		{[]int{3000}, "audiobook", []int{3030}},
 		{[]int{7000, 7020}, "ebook", []int{7020}},
 		{[]int{7000, 7020, 7030}, "ebook", []int{7020}},
 		{[]int{3000, 3030}, "audiobook", []int{3030}},
@@ -645,10 +651,46 @@ func TestFilterRelevantGermanUmlauts(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		got := filterRelevant(toResults(tc.releases...), tc.bookTitle, tc.author)
+		got := filterRelevant(toResults(tc.releases...), tc.bookTitle, tc.author, nil)
 		if !contains(got, tc.wantAny) {
 			t.Errorf("filterRelevant(%q, %q): want %q in results, got %v",
 				tc.bookTitle, tc.author, tc.wantAny, resultTitles(got))
 		}
+	}
+}
+
+// TestFilterRelevantNonLatinAuthor verifies that releases whose author token is
+// romanised are accepted when the primary author name is non-latin but a
+// latin-script alias is provided. The alias surname is needed for single-keyword
+// titles (where filterRelevant requires the surname alongside the keyword to
+// prevent false positives).
+func TestFilterRelevantNonLatinAuthor(t *testing.T) {
+	// "Silence" by 遠藤周作 (Shusaku Endo): 1 significant keyword → surname required.
+	releases := []string{
+		"Endo.Silence.epub",
+		"Shusaku.Endo.Silence.m4b",
+		"Silence.epub",
+		"Unrelated.Noise.epub",
+	}
+	results := toResults(releases...)
+
+	// Without aliases, the non-latin surname ("作" from 遠藤周作) never appears in
+	// any release name, so author-anchored matches are missed.
+	withoutAliases := filterRelevant(results, "Silence", "遠藤周作", nil)
+	if contains(withoutAliases, "Endo.Silence.epub") {
+		t.Error("without aliases, romanised-surname release should not pass for non-latin primary name")
+	}
+
+	// With the latin alias, "endo" is extracted as an alias surname and the
+	// author-anchored releases pass.
+	aliases := []string{"Shusaku Endo"}
+	withAliases := filterRelevant(results, "Silence", "遠藤周作", aliases)
+	for _, want := range []string{"Endo.Silence.epub", "Shusaku.Endo.Silence.m4b"} {
+		if !contains(withAliases, want) {
+			t.Errorf("with alias, expected %q to pass; got %v", want, resultTitles(withAliases))
+		}
+	}
+	if contains(withAliases, "Unrelated.Noise.epub") {
+		t.Error("unrelated result should still be filtered out even with aliases")
 	}
 }

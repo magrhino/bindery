@@ -221,6 +221,8 @@ export const api = {
   // Bulk actions
   bulkActionAuthors: (ids: number[], action: AuthorBulkAction, mediaType?: MediaType) =>
     request<BulkResult>('/author/bulk', { method: 'POST', body: JSON.stringify({ ids, action, ...(mediaType ? { mediaType } : {}) }) }),
+  searchAuthorWanted: (id: number) =>
+    request<BulkResult>('/author/bulk', { method: 'POST', body: JSON.stringify({ ids: [id], action: 'search' }) }),
   bulkActionBooks: (ids: number[], action: BookBulkAction, mediaType?: MediaType) =>
     request<BulkResult>('/book/bulk', { method: 'POST', body: JSON.stringify({ ids, action, ...(mediaType ? { mediaType } : {}) }) }),
   bulkActionWanted: (ids: number[], action: WantedBulkAction) =>
@@ -817,6 +819,7 @@ export interface DownloadClient {
   username: string
   password: string
   useSsl: boolean
+  urlBase: string
   category: string
   enabled: boolean
 }

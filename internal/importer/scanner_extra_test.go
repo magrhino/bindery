@@ -498,6 +498,59 @@ func TestScanLibrary_AudiobookTagReadFailureFallsBack(t *testing.T) {
 	}
 }
 
+// TestScanLibrary_RejectsFileOutsideLibraryRoot verifies the #343 path-constraint
+// fix: a rescan must not claim a file that lives outside the candidate book's
+// effective library root, even when title+author match.
+func TestScanLibrary_RejectsFileOutsideLibraryRoot(t *testing.T) {
+	libDir := t.TempDir()
+	otherDir := t.TempDir() // separate tree — book should NOT be claimed from here
+
+	// Put the orphan under otherDir, not under libDir.
+	epub := filepath.Join(otherDir, "Dune.epub")
+	if err := os.WriteFile(epub, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Also put a correctly-located file under libDir so the walk finds it.
+	localEpub := filepath.Join(libDir, "Dune-local.epub")
+	if err := os.WriteFile(localEpub, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, books, authors, ctx := scannerFixture(t, libDir)
+	author := &models.Author{ForeignID: "OLA-343", Name: "Frank Herbert", SortName: "Herbert, Frank"}
+	if err := authors.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	book := &models.Book{
+		ForeignID: "OLB-343", AuthorID: author.ID,
+		Title: "Dune", Status: models.BookStatusWanted,
+	}
+	if err := books.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	// Only scan libDir — otherDir is outside. The scanner should reconcile
+	// localEpub (inside libDir) and ignore epub (outside libDir).
+	s.ScanLibrary(ctx)
+
+	got, err := books.GetByID(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// localEpub is inside libDir so it should have been claimed.
+	if got.FilePath != localEpub {
+		t.Errorf("expected FilePath=%q, got %q", localEpub, got.FilePath)
+	}
+	// The file from outside the root must NOT be registered in book_files.
+	files, _ := books.ListFiles(ctx, book.ID)
+	for _, f := range files {
+		if f.Path == epub {
+			t.Errorf("file outside library root was incorrectly claimed: %q", epub)
+		}
+	}
+}
+
 // TestScanLibrary_DirectoryAuthorInference — when a file's name provides no
 // author hint, the scanner should infer the author from the first directory
 // component relative to libraryDir (the standard Author/Title/file.ext layout).

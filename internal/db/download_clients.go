@@ -23,20 +23,58 @@ func isCredentialClient(clientType string) bool {
 	return clientType == "qbittorrent" || clientType == "transmission"
 }
 
+// legacyCredentialURLBase reports whether a download-client row was written by
+// an older version of bindery that stored qBittorrent/Transmission credentials
+// in the url_base and api_key columns instead of the dedicated username and
+// password columns.
+//
+// Detection requires all three signals to agree:
+//   - username is empty or equals url_base (url_base held the username)
+//   - url_base is non-empty (there is actually something to migrate)
+//   - apiKey is non-empty (the legacy schema also stored password in api_key;
+//     if api_key is empty, the row is a modern client with a real url_base path,
+//     not a migrated credential pair)
+//
+// Scoping apiKey into the guard fixes the regression described in #423:
+// the previous implementation only looked at username and url_base, so a modern
+// client with a bare url_base (e.g. "qbit") and an empty api_key would be
+// misidentified as a legacy row and have its url_base silently cleared on read.
+func legacyCredentialURLBase(username, urlBase, apiKey string) bool {
+	urlBase = strings.TrimSpace(urlBase)
+	if urlBase == "" || strings.HasPrefix(urlBase, "/") {
+		return false
+	}
+	username = strings.TrimSpace(username)
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return false
+	}
+	return username == "" || username == urlBase
+}
+
 func hydrateClientCredentials(c *models.DownloadClient) {
-	if isCredentialClient(c.Type) {
+	switch c.Type {
+	case "qbittorrent", "transmission":
 		// Backward compatibility: older rows stored credentials in url_base/api_key.
-		if strings.TrimSpace(c.Username) == "" {
+		// Only migrate when the row looks like a genuine legacy row (url_base and
+		// api_key both populated); leave modern rows with a real url_base path
+		// and dedicated username/password columns untouched. (closes #423)
+		if legacyCredentialURLBase(c.Username, c.URLBase, c.APIKey) {
 			c.Username = strings.TrimSpace(c.URLBase)
 		}
 		if c.Password == "" {
 			c.Password = c.APIKey
 		}
-		return
+		if legacyCredentialURLBase(c.Username, c.URLBase, c.APIKey) {
+			c.URLBase = ""
+		}
+	case "nzbget", "deluge":
+		// These clients use username/password directly — preserve as stored.
+	default:
+		// SABnzbd authenticates via api_key, not username/password.
+		c.Username = ""
+		c.Password = ""
 	}
-	// Non-credential clients should not expose username/password values.
-	c.Username = ""
-	c.Password = ""
 }
 
 func normalizeClientCredentialStorage(c *models.DownloadClient) {
@@ -44,8 +82,10 @@ func normalizeClientCredentialStorage(c *models.DownloadClient) {
 		return
 	}
 	// Backward compatibility: accept legacy payloads that sent credentials in
-	// urlBase/apiKey.
-	if strings.TrimSpace(c.Username) == "" {
+	// urlBase/apiKey. Use the same legacyCredentialURLBase guard as the read
+	// path so that a client saved with a bare url_base and no api_key does not
+	// have its url_base silently migrated into username on write. (closes #422)
+	if legacyCredentialURLBase(c.Username, c.URLBase, c.APIKey) {
 		c.Username = strings.TrimSpace(c.URLBase)
 	}
 	if c.Password == "" && c.APIKey != "" {
@@ -131,19 +171,18 @@ func (r *DownloadClientRepo) GetFirstEnabled(ctx context.Context) (*models.Downl
 func (r *DownloadClientRepo) GetFirstEnabledByProtocol(ctx context.Context, protocol string) (*models.DownloadClient, error) {
 	var c models.DownloadClient
 	var enabled, useSSL int
-	query := `
-		SELECT ` + downloadClientSelectColumns + `
-		FROM download_clients WHERE enabled=1 AND type=? ORDER BY priority LIMIT 1`
 	var err error
 	if protocol == "torrent" {
 		err = r.db.QueryRowContext(ctx, `
 			SELECT `+downloadClientSelectColumns+`
-			FROM download_clients WHERE enabled=1 AND type IN (?, ?) ORDER BY priority LIMIT 1`, "qbittorrent", "transmission").
+			FROM download_clients WHERE enabled=1 AND type IN (?, ?, ?) ORDER BY priority LIMIT 1`, "qbittorrent", "transmission", "deluge").
 			Scan(&c.ID, &c.Name, &c.Type, &c.Host, &c.Port, &c.APIKey,
 				&useSSL, &c.URLBase, &c.Username, &c.Password, &c.Category, &c.Priority,
 				&enabled, &c.CreatedAt, &c.UpdatedAt)
 	} else {
-		err = r.db.QueryRowContext(ctx, query, "sabnzbd").
+		err = r.db.QueryRowContext(ctx, `
+			SELECT `+downloadClientSelectColumns+`
+			FROM download_clients WHERE enabled=1 AND type IN (?, ?) ORDER BY priority LIMIT 1`, "sabnzbd", "nzbget").
 			Scan(&c.ID, &c.Name, &c.Type, &c.Host, &c.Port, &c.APIKey,
 				&useSSL, &c.URLBase, &c.Username, &c.Password, &c.Category, &c.Priority,
 				&enabled, &c.CreatedAt, &c.UpdatedAt)
@@ -171,11 +210,11 @@ func (r *DownloadClientRepo) GetEnabledByProtocol(ctx context.Context, protocol 
 	if protocol == "torrent" {
 		rows, err = r.db.QueryContext(ctx, `
 			SELECT `+downloadClientSelectColumns+`
-			FROM download_clients WHERE enabled=1 AND type IN (?, ?) ORDER BY priority`, "qbittorrent", "transmission")
+			FROM download_clients WHERE enabled=1 AND type IN (?, ?, ?) ORDER BY priority`, "qbittorrent", "transmission", "deluge")
 	} else {
 		rows, err = r.db.QueryContext(ctx, `
 			SELECT `+downloadClientSelectColumns+`
-			FROM download_clients WHERE enabled=1 AND type=? ORDER BY priority`, "sabnzbd")
+			FROM download_clients WHERE enabled=1 AND type IN (?, ?) ORDER BY priority`, "sabnzbd", "nzbget")
 	}
 	if err != nil {
 		return nil, err

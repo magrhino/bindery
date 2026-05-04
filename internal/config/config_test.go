@@ -118,3 +118,32 @@ func TestDefaultDataDir_FallsBackOnDirError(t *testing.T) {
 		t.Errorf("expected fallback /config on UserConfigDir error, got %s", got)
 	}
 }
+
+func TestRateLimitDefaults(t *testing.T) {
+	// Ensure no relevant env vars are set.
+	t.Setenv("BINDERY_RATE_LIMIT_MAX_FAILURES", "")
+	t.Setenv("BINDERY_RATE_LIMIT_WINDOW_MINUTES", "")
+
+	cfg := Load()
+
+	if cfg.RateLimitMaxFailures != 5 {
+		t.Errorf("default RateLimitMaxFailures = %d; want 5", cfg.RateLimitMaxFailures)
+	}
+	if cfg.RateLimitWindowMinutes != 15 {
+		t.Errorf("default RateLimitWindowMinutes = %d; want 15", cfg.RateLimitWindowMinutes)
+	}
+}
+
+func TestRateLimitFromEnv(t *testing.T) {
+	t.Setenv("BINDERY_RATE_LIMIT_MAX_FAILURES", "10")
+	t.Setenv("BINDERY_RATE_LIMIT_WINDOW_MINUTES", "30")
+
+	cfg := Load()
+
+	if cfg.RateLimitMaxFailures != 10 {
+		t.Errorf("RateLimitMaxFailures = %d; want 10", cfg.RateLimitMaxFailures)
+	}
+	if cfg.RateLimitWindowMinutes != 30 {
+		t.Errorf("RateLimitWindowMinutes = %d; want 30", cfg.RateLimitWindowMinutes)
+	}
+}

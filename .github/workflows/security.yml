@@ -46,11 +46,11 @@ jobs:
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: '1.25'
+          go-version: "1.25.9"
           cache: true
 
       - name: gosec (SARIF)
-        uses: securego/gosec@64b97151cd7b978abdf8d2f1159a4e9096a12c2b # master
+        uses: securego/gosec@5f4eec95fa28ce5dc6cf555de8c242cb57545f01 # master
         with:
           # G402 (TLS/cookie insecure) excluded: cookie Secure flag is dynamic (auto-detected
           # from r.TLS and X-Forwarded-Proto, overridable via BINDERY_COOKIE_SECURE) and gosec
@@ -72,7 +72,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22"
           cache: npm
@@ -281,10 +281,10 @@ jobs:
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: '1.25'
+          go-version: "1.25.9"
           cache: true
 
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22"
           cache: npm

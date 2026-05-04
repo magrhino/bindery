@@ -18,7 +18,7 @@ func TestAudiobookDestDir(t *testing.T) {
 	author := &models.Author{Name: "Ursula K. Le Guin"}
 	book := &models.Book{Title: "The Dispossessed", ReleaseDate: &releaseDate}
 
-	got, err := r.AudiobookDestDir("/audio", author, book)
+	got, err := r.AudiobookDestDir("/audio", author, book, "", "")
 	if err != nil {
 		t.Fatalf("AudiobookDestDir: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestAudiobookDestDir_NilAuthor(t *testing.T) {
 	// still land under a predictable folder rather than panicking.
 	r := NewRenamer("")
 	book := &models.Book{Title: "Mystery"}
-	got, err := r.AudiobookDestDir("/audio", nil, book)
+	got, err := r.AudiobookDestDir("/audio", nil, book, "", "")
 	if err != nil {
 		t.Fatalf("AudiobookDestDir: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestAudiobookDestDir_CustomTemplate(t *testing.T) {
 	r := NewRenamerWithAudiobook("", "Audiobooks/{SortAuthor}/{Title}")
 	author := &models.Author{Name: "Andy Weir"}
 	book := &models.Book{Title: "Project Hail Mary"}
-	got, err := r.AudiobookDestDir("/root", author, book)
+	got, err := r.AudiobookDestDir("/root", author, book, "", "")
 	if err != nil {
 		t.Fatalf("AudiobookDestDir: %v", err)
 	}

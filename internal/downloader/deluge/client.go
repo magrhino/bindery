@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/vavallee/bindery/internal/downloader/urlbase"
 )
 
 // hashPollTimeout is the maximum time to wait for a newly-added torrent's hash
@@ -54,15 +56,16 @@ type rpcError struct {
 	Message string `json:"message"`
 }
 
-// New creates a Deluge client.
-func New(host string, port int, password string, useSSL bool) *Client {
+// New creates a Deluge client. urlBase is the optional reverse-proxy
+// subpath that is appended between host:port and the json endpoint.
+func New(host string, port int, password, urlBase string, useSSL bool) *Client {
 	scheme := "http"
 	if useSSL {
 		scheme = "https"
 	}
 	jar, _ := cookiejar.New(nil)
 	return &Client{
-		baseURL:  fmt.Sprintf("%s://%s:%d", scheme, host, port),
+		baseURL:  fmt.Sprintf("%s://%s:%d%s", scheme, host, port, urlbase.Normalize(urlBase)),
 		password: password,
 		http:     &http.Client{Timeout: 15 * time.Second, Jar: jar},
 	}
@@ -214,7 +217,7 @@ func (c *Client) setLabel(ctx context.Context, hash, label string) error {
 
 // GetTorrents returns status for all torrents, keyed by lower-cased hash.
 func (c *Client) GetTorrents(ctx context.Context) (map[string]TorrentStatus, error) {
-	fields := []string{"name", "hash", "progress", "state", "eta", "download_payload_rate"}
+	fields := []string{"name", "hash", "progress", "state", "eta", "download_payload_rate", "total_size", "total_done"}
 	var raw map[string]TorrentStatus
 	if err := c.call(ctx, true, "core.get_torrents_status", []any{map[string]any{}, fields}, &raw); err != nil {
 		return nil, fmt.Errorf("get torrents status: %w", err)

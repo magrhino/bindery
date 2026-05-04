@@ -72,7 +72,9 @@ func (c *Client) SearchAuthors(ctx context.Context, query string) ([]models.Auth
 }
 
 func (c *Client) SearchBooks(ctx context.Context, query string) ([]models.Book, error) {
-	u := fmt.Sprintf("%s/search.json?q=%s&fields=key,title,author_name,author_key,first_publish_year,cover_i,isbn,subject&limit=20",
+	// OpenLibrary migrated /search.json to FastAPI. The new endpoint is /search
+	// which accepts the same query parameters and returns the same JSON shape.
+	u := fmt.Sprintf("%s/search?q=%s&fields=key,title,author_name,author_key,first_publish_year,cover_i,isbn,subject&limit=20",
 		baseURL, url.QueryEscape(query))
 	var resp searchResponse
 	if err := c.getJSON(ctx, u, &resp); err != nil {
@@ -139,6 +141,8 @@ func (c *Client) GetAuthor(ctx context.Context, foreignID string) (*models.Autho
 		a.ImageURL = fmt.Sprintf("%s/a/id/%d-L.jpg", coverURL, resp.Photos[0])
 	}
 
+	a.AlternateNames = resp.AlternateNames
+
 	return a, nil
 }
 
@@ -190,59 +194,49 @@ func (c *Client) GetBook(ctx context.Context, foreignID string) (*models.Book, e
 }
 
 // GetAuthorWorks fetches all works by an author. It merges two OpenLibrary
-// endpoints: the search index (/search.json?author_key=X) is the primary
-// source because it matches the count shown in the Add-Author preview and
-// carries rich metadata (language, subjects, covers, year) in a single call;
-// the /authors/{id}/works endpoint is a backfill for works that the search
-// index hasn't picked up yet and hydrates series membership — which the
-// search index does not expose.
+// endpoints: the /authors/{id}/works endpoint is the primary source because it
+// includes series membership data — critical for series reconciliation — and is
+// the stable, non-deprecated API; the /search endpoint (new FastAPI version,
+// formerly /search.json) is a secondary source that enriches books with
+// language, cover image, and first-publish-year metadata not available from the
+// works list.
+//
+// Previously the search index was primary and /authors/{id}/works was a
+// backfill. This was reversed when OpenLibrary deprecated /search.json (HTTP
+// 500 "DEPRECATED ENDPOINT ACCESSED"), which broke series reconciliation for
+// all users (issue #408). The works endpoint now leads; the search endpoint
+// enriches when available.
 //
 // Noise (study guides, screenplay companions, film adaptations, etc.) is
 // filtered at this layer so the authors-ingestion pipeline never sees it.
 // Both upstream calls are best-effort: as long as one returns, we proceed —
 // the other's failure is logged.
 func (c *Client) GetAuthorWorks(ctx context.Context, authorForeignID string) ([]models.Book, error) {
-	primary, primaryErr := c.searchAuthorWorks(ctx, authorForeignID)
+	primary, primaryErr := c.authorWorksBackfill(ctx, authorForeignID)
 	if primaryErr != nil {
-		slog.Warn("openlibrary: author search failed, falling back to works endpoint", "author", authorForeignID, "error", primaryErr)
+		slog.Warn("openlibrary: author works endpoint failed", "author", authorForeignID, "error", primaryErr)
 	}
-	backfill, backfillErr := c.authorWorksBackfill(ctx, authorForeignID)
-	if backfillErr != nil {
-		slog.Debug("openlibrary: author works backfill failed", "author", authorForeignID, "error", backfillErr)
+	enrichment, enrichErr := c.searchAuthorWorks(ctx, authorForeignID)
+	if enrichErr != nil {
+		slog.Debug("openlibrary: author search enrichment failed", "author", authorForeignID, "error", enrichErr)
 	}
-	if primaryErr != nil && backfillErr != nil {
-		return nil, fmt.Errorf("get author works %s: primary=%w backfill=%w", authorForeignID, primaryErr, backfillErr)
+	if primaryErr != nil && enrichErr != nil {
+		return nil, fmt.Errorf("get author works %s: primary=%w enrichment=%w", authorForeignID, primaryErr, enrichErr)
 	}
 
-	// index maps workID → position in `books`, letting backfill entries either
-	// enrich an existing primary book (series, description) or be appended
-	// when the search index hasn't seen them yet.
+	// Build enrichment index: workID → search result for fast lookup.
+	enrichIndex := make(map[string]int, len(enrichment))
+	for i, b := range enrichment {
+		enrichIndex[b.ForeignID] = i
+	}
+
+	// index maps workID → position in `books`.
 	index := make(map[string]int, len(primary))
-	books := make([]models.Book, 0, len(primary)+len(backfill))
+	books := make([]models.Book, 0, len(primary)+len(enrichment))
 
-	for _, b := range primary {
-		if shouldFilterOLNoise(b.Title, b.Genres) {
-			continue
-		}
-		b.Author = &models.Author{
-			ForeignID:        authorForeignID,
-			MetadataProvider: "openlibrary",
-		}
-		index[b.ForeignID] = len(books)
-		books = append(books, b)
-	}
-
-	for _, entry := range backfill {
+	for _, entry := range primary {
 		workID := strings.TrimPrefix(entry.Key, "/works/")
-		seriesRefs := seriesRefsFrom(entry.Series)
-		if pos, ok := index[workID]; ok {
-			// Enrich existing book with data only the works endpoint carries.
-			if len(books[pos].SeriesRefs) == 0 && len(seriesRefs) > 0 {
-				books[pos].SeriesRefs = seriesRefs
-			}
-			if books[pos].Description == "" {
-				books[pos].Description = extractText(entry.Description)
-			}
+		if workID == "" || entry.Title == "" {
 			continue
 		}
 		if shouldFilterOLNoise(entry.Title, entry.Subjects) {
@@ -254,6 +248,7 @@ func (c *Client) GetAuthorWorks(ctx context.Context, authorForeignID string) ([]
 			SortTitle:        entry.Title,
 			Description:      extractText(entry.Description),
 			Genres:           truncateSlice(entry.Subjects, 10),
+			SeriesRefs:       seriesRefsFrom(entry.Series),
 			MetadataProvider: "openlibrary",
 			Monitored:        true,
 			Status:           models.BookStatusWanted,
@@ -265,21 +260,54 @@ func (c *Client) GetAuthorWorks(ctx context.Context, authorForeignID string) ([]
 		if len(entry.Covers) > 0 && entry.Covers[0] > 0 {
 			b.ImageURL = fmt.Sprintf("%s/b/id/%d-L.jpg", coverURL, entry.Covers[0])
 		}
-		b.SeriesRefs = seriesRefs
+		// Enrich with data the search endpoint carries that works endpoint omits.
+		if i, ok := enrichIndex[workID]; ok {
+			e := enrichment[i]
+			if b.ImageURL == "" && e.ImageURL != "" {
+				b.ImageURL = e.ImageURL
+			}
+			if e.Language != "" {
+				b.Language = e.Language
+			}
+			if b.ReleaseDate == nil {
+				b.ReleaseDate = e.ReleaseDate
+			}
+		}
 		index[workID] = len(books)
 		books = append(books, b)
+	}
+
+	// Append enrichment-only entries: works in the search index that the
+	// /authors/{id}/works endpoint hasn't returned (can happen when the works
+	// API is paginated or temporarily behind).
+	for _, e := range enrichment {
+		if _, ok := index[e.ForeignID]; ok {
+			continue // already handled above
+		}
+		if shouldFilterOLNoise(e.Title, e.Genres) {
+			continue
+		}
+		e.Author = &models.Author{
+			ForeignID:        authorForeignID,
+			MetadataProvider: "openlibrary",
+		}
+		index[e.ForeignID] = len(books)
+		books = append(books, e)
 	}
 
 	return books, nil
 }
 
-// searchAuthorWorks queries the OL search index for all works by the given
+// searchAuthorWorks queries the OL search endpoint for all works by the given
 // author. It returns one Book per indexed work, pre-populated with the fields
 // the search index exposes (title, language, subjects, cover, first year).
-// Series membership is not in the search response — callers get it via
-// authorWorksBackfill.
+// Series membership is not in the search response — callers get it from
+// authorWorksBackfill (the /authors/{id}/works endpoint).
+//
+// Uses the /search endpoint (FastAPI, current) rather than the deprecated
+// /search.json (Solr, which now returns HTTP 500; see issue #408).
 func (c *Client) searchAuthorWorks(ctx context.Context, authorForeignID string) ([]models.Book, error) {
-	u := fmt.Sprintf("%s/search.json?author_key=%s&fields=key,title,language,edition_count,first_publish_year,cover_i,subject&limit=200",
+	u := fmt.Sprintf("%s/search?author_key=%s&fields=key,title,language,edition_count,first_publish_year,cover_i,subject&limit=200",
 		baseURL, authorForeignID)
 	var resp struct {
 		Docs []struct {
