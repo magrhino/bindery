@@ -222,7 +222,7 @@ func TestEffectiveLibraryDir_AuthorRootFolderTakesPriorityOverDefault(t *testing
 // is format-agnostic) was applied unconditionally to audiobookRoot, causing
 // audiobooks to land in the ebook root whenever any custom root was assigned.
 func TestAudiobookImport_UsesAudiobookDirNotEbookRoot(t *testing.T) {
-	ebookRoot := t.TempDir()   // per-author ebook root folder
+	ebookRoot := t.TempDir()    // per-author ebook root folder
 	audiobookDir := t.TempDir() // BINDERY_AUDIOBOOK_DIR
 
 	database, err := db.OpenMemory()
