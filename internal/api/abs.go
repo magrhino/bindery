@@ -33,6 +33,7 @@ type absClientFactory func(baseURL, apiKey string) (absClient, error)
 type ABSHandler struct {
 	settings       *db.SettingsRepo
 	newFn          absClientFactory
+	userAgent      string
 	featureEnabled bool
 }
 
@@ -70,17 +71,39 @@ type absLibraryResponse struct {
 }
 
 func NewABSHandler(settings *db.SettingsRepo) *ABSHandler {
-	return &ABSHandler{
+	h := &ABSHandler{
 		settings:       settings,
 		featureEnabled: true,
-		newFn: func(baseURL, apiKey string) (absClient, error) {
-			return abs.NewClient(baseURL, apiKey)
-		},
+		userAgent:      abs.UserAgent(""),
 	}
+	h.newFn = h.defaultClient
+	return h
+}
+
+func (h *ABSHandler) defaultClient(baseURL, apiKey string) (absClient, error) {
+	client, err := abs.NewClient(baseURL, apiKey)
+	if err != nil {
+		return nil, err
+	}
+	return client.WithUserAgent(h.userAgent), nil
 }
 
 func (h *ABSHandler) WithFeatureEnabled(enabled bool) *ABSHandler {
 	h.featureEnabled = enabled
+	return h
+}
+
+func (h *ABSHandler) WithVersion(version string) *ABSHandler {
+	h.userAgent = abs.UserAgent(version)
+	return h
+}
+
+func (h *ABSHandler) WithUserAgent(userAgent string) *ABSHandler {
+	userAgent = strings.TrimSpace(userAgent)
+	if userAgent == "" {
+		userAgent = abs.UserAgent("")
+	}
+	h.userAgent = userAgent
 	return h
 }
 

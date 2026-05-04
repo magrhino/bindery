@@ -218,6 +218,7 @@ func main() {
 	// at a time" guard.
 	calibreImporter := calibre.NewImporter(authorRepo, authorAliasRepo, bookRepo, editionRepo, settingsRepo)
 	absImporter := abs.NewImporter(authorRepo, authorAliasRepo, bookRepo, editionRepo, seriesRepo, settingsRepo, absImportRunRepo, absImportRunEntityRepo, absProvenanceRepo, absReviewRepo, absConflictRepo).
+		WithVersion(version).
 		WithStoragePaths(cfg.LibraryDir, cfg.AudiobookDir, rootFolderRepo).
 		WithMetadata(metaAgg)
 	if cfg.ABSFeatureEnabled {
@@ -359,7 +360,7 @@ func main() {
 	logHandler := api.NewLogHandler(ring).WithLogRepo(logRepo)
 	prowlarrHandler := api.NewProwlarrHandler(prowlarrRepo, indexerRepo)
 	calibreHandler := api.NewCalibreHandler(settingsRepo)
-	absHandler := api.NewABSHandler(settingsRepo).WithFeatureEnabled(cfg.ABSFeatureEnabled)
+	absHandler := api.NewABSHandler(settingsRepo).WithVersion(version).WithFeatureEnabled(cfg.ABSFeatureEnabled)
 	absConflictHandler := api.NewABSConflictHandler(absConflictRepo, authorRepo, bookRepo)
 	absImportHandler := api.NewABSImportHandler(absImporter, func(ctx context.Context) api.ABSStoredConfig {
 		return api.LoadABSConfig(ctx, settingsRepo)

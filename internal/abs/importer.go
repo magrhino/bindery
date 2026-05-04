@@ -31,7 +31,7 @@ func NewImporter(
 	reviews *db.ABSReviewItemRepo,
 	conflicts *db.ABSMetadataConflictRepo,
 ) *Importer {
-	return &Importer{
+	importer := &Importer{
 		authors:     authors,
 		aliases:     aliases,
 		books:       books,
@@ -43,14 +43,36 @@ func NewImporter(
 		provenance:  provenance,
 		reviews:     reviews,
 		conflicts:   conflicts,
-		newClient: func(baseURL, apiKey string) (enumerationClient, error) {
-			return NewClient(baseURL, apiKey)
-		},
+		userAgent:   UserAgent(""),
 	}
+	importer.newClient = importer.defaultClient
+	return importer
+}
+
+func (i *Importer) defaultClient(baseURL, apiKey string) (enumerationClient, error) {
+	client, err := NewClient(baseURL, apiKey)
+	if err != nil {
+		return nil, err
+	}
+	return client.WithUserAgent(i.userAgent), nil
 }
 
 func (i *Importer) WithMetadata(meta *metadata.Aggregator) *Importer {
 	i.meta = meta
+	return i
+}
+
+func (i *Importer) WithVersion(version string) *Importer {
+	i.userAgent = UserAgent(version)
+	return i
+}
+
+func (i *Importer) WithUserAgent(userAgent string) *Importer {
+	userAgent = strings.TrimSpace(userAgent)
+	if userAgent == "" {
+		userAgent = UserAgent("")
+	}
+	i.userAgent = userAgent
 	return i
 }
 

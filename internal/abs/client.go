@@ -16,7 +16,7 @@ import (
 
 const (
 	defaultTimeout   = 10 * time.Second
-	defaultUserAgent = "bindery-abs-phase1/1"
+	defaultUserAgent = "bindery/dev"
 	maxAttempts      = 3
 )
 
@@ -67,6 +67,14 @@ func NormalizeAPIKey(raw string) (string, error) {
 	return key, nil
 }
 
+func UserAgent(version string) string {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return defaultUserAgent
+	}
+	return "bindery/" + version
+}
+
 type Client struct {
 	baseURL    string
 	apiKey     string
@@ -94,6 +102,20 @@ func NewClient(baseURL, apiKey string) (*Client, error) {
 		},
 		userAgent: defaultUserAgent,
 	}, nil
+}
+
+func (c *Client) WithVersion(version string) *Client {
+	c.userAgent = UserAgent(version)
+	return c
+}
+
+func (c *Client) WithUserAgent(userAgent string) *Client {
+	userAgent = strings.TrimSpace(userAgent)
+	if userAgent == "" {
+		userAgent = defaultUserAgent
+	}
+	c.userAgent = userAgent
+	return c
 }
 
 func (c *Client) Authorize(ctx context.Context) (*AuthorizeResponse, error) {

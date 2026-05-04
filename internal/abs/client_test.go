@@ -27,6 +27,28 @@ func (e retryNetError) Temporary() bool {
 	return e.temporary
 }
 
+func TestUserAgent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		version string
+		want    string
+	}{
+		{version: "", want: "bindery/dev"},
+		{version: "v1.2.3", want: "bindery/v1.2.3"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.version, func(t *testing.T) {
+			t.Parallel()
+
+			if got := UserAgent(tt.version); got != tt.want {
+				t.Fatalf("UserAgent(%q) = %q, want %q", tt.version, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestClientAuthorizeInjectsBearerHeader(t *testing.T) {
 	t.Parallel()
 
@@ -56,8 +78,8 @@ func TestClientAuthorizeInjectsBearerHeader(t *testing.T) {
 	if sawAuth != "Bearer secret-key" {
 		t.Fatalf("Authorization header = %q", sawAuth)
 	}
-	if sawAgent == "" {
-		t.Fatal("User-Agent header should be set")
+	if sawAgent != "bindery/dev" {
+		t.Fatalf("User-Agent header = %q, want bindery/dev", sawAgent)
 	}
 	if sawRawQuery != "" {
 		t.Fatalf("query = %q, want api key absent from URL query", sawRawQuery)

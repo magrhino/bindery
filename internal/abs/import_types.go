@@ -204,6 +204,7 @@ type Importer struct {
 	conflicts    *db.ABSMetadataConflictRepo
 	meta         *metadata.Aggregator
 	newClient    importClientFactory
+	userAgent    string
 	enumerateFn  enumerateFunc
 	rootFolders  *db.RootFolderRepo
 	libraryDir   string
