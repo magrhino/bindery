@@ -540,14 +540,17 @@ func TestQueueListArrCompatibleLiveStatusMatrix(t *testing.T) {
 				})
 			case "transmission":
 				status := 2
+				errorString := ""
 				if errorState {
-					status = 16
+					status = 0
+					errorString = "No data found! Ensure your drives are connected"
 				}
 				_ = json.NewEncoder(w).Encode(map[string]any{
 					"arguments": map[string]any{
 						"torrents": []map[string]any{{
 							"id":            7,
 							"status":        status,
+							"errorString":   errorString,
 							"percentDone":   0.5,
 							"totalSize":     1000,
 							"leftUntilDone": 500,

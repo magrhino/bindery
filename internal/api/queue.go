@@ -342,13 +342,7 @@ func trackedDownloadStatus(item enrichedQueueItem) string {
 
 func liveStatusIsError(status string) bool {
 	status = strings.ToLower(status)
-	if strings.Contains(status, "error") || strings.Contains(status, "fail") {
-		return true
-	}
-	if n, err := strconv.Atoi(status); err == nil {
-		return n == 16 || n == 32
-	}
-	return false
+	return strings.Contains(status, "error") || strings.Contains(status, "fail")
 }
 
 func queueItemSize(item enrichedQueueItem) int64 {

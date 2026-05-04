@@ -715,18 +715,18 @@ func TestBytesPerSecondToString_Bytes(t *testing.T) {
 // liveStatusIsError — issue #426
 // ---------------------------------------------------------------------------
 
-func TestLiveStatusIsError_TransmissionIntegerCodes(t *testing.T) {
+func TestLiveStatusIsError_StatusStrings(t *testing.T) {
 	tests := []struct {
 		status string
 		want   bool
 	}{
-		// Transmission error codes
-		{"16", true}, // TR_STATUS_CHECK_WAIT (error)
-		{"32", true}, // TR_STATUS_ISOLATED_ERROR
-		{"0", false}, // stopped but not an error code
+		// Transmission integer statuses are not error codes; failures are
+		// surfaced through errorString overlays.
+		{"0", false}, // stopped
 		{"3", false}, // seeding
 		{"2", false}, // downloading
-		// String-based statuses (qBittorrent, Deluge)
+		{"error: No data found", true},
+		// String-based statuses (qBittorrent, Deluge, SABnzbd, NZBGet)
 		{"error", true},
 		{"Error", true},
 		{"stalledDL", false},
@@ -743,7 +743,7 @@ func TestLiveStatusIsError_TransmissionIntegerCodes(t *testing.T) {
 	}
 }
 
-func TestGetLiveStatusesTransmission_PopulatesStatus(t *testing.T) {
+func TestGetLiveStatusesTransmission_UsesErrorStringStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"arguments": map[string]any{
@@ -751,7 +751,8 @@ func TestGetLiveStatusesTransmission_PopulatesStatus(t *testing.T) {
 					{
 						"id":          10,
 						"percentDone": 0.5,
-						"status":      16, // Transmission error code
+						"status":      0,
+						"errorString": "No data found! Ensure your drives are connected",
 					},
 				},
 			},
@@ -770,10 +771,10 @@ func TestGetLiveStatusesTransmission_PopulatesStatus(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected torrent id 10 in status map")
 	}
-	if ls.Status != "16" {
-		t.Errorf("expected Status=%q, got %q", "16", ls.Status)
+	if ls.Status != "error: No data found! Ensure your drives are connected" {
+		t.Errorf("unexpected Status=%q", ls.Status)
 	}
 	if !liveStatusIsError(ls) {
-		t.Error("expected liveStatusIsError to return true for Transmission status 16")
+		t.Error("expected liveStatusIsError to return true for Transmission errorString")
 	}
 }
