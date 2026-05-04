@@ -346,9 +346,10 @@ jobs:
           fi
           echo "Waiting for ArgoCD app 'bindery-dev' to be Healthy+Synced..."
           for i in $(seq 1 24); do
+            # jq avoids a curl|python3 pipe flagged by OpenSSF Scorecard downloadThenRun
             STATUS=$(curl -sf -H "Authorization: Bearer $ARGOCD_TOKEN" \
-              "$ARGOCD_SERVER/api/v1/applications/bindery-dev" | \
-              python3 -c "import json,sys; d=json.load(sys.stdin); print(d['status']['health']['status'], d['status']['sync']['status'])" 2>/dev/null || echo "unknown unknown")
+              "$ARGOCD_SERVER/api/v1/applications/bindery-dev" 2>/dev/null | \
+              jq -r '"\(.status.health.status) \(.status.sync.status)"' 2>/dev/null || echo "unknown unknown")
             echo "  attempt $i: $STATUS"
             [[ "$STATUS" == "Healthy Synced" ]] && echo "ArgoCD dev sync complete" && exit 0
             sleep 10
