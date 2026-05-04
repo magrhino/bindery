@@ -9,28 +9,10 @@ title = "Bindery Gitleaks Configuration"
 useDefault = true
 
 # ── Allow-listed paths ────────────────────────────────────────────────────────
-# Test files containing placeholder credentials for fixture/unit-test use.
+# Test, testdata, and fixture files use placeholder credentials — none are real.
+# A path-only entry (no regexes) skips ALL gitleaks rules for matching files.
 [[allowlists]]
-description = "Test fixture files – placeholder keys with SCREAMING_TEST_KEY_ prefix"
-regexes = [
-  # Keys that start with SCREAMING_TEST_KEY_ are fixture placeholders, not real secrets.
-  'SCREAMING_TEST_KEY_[A-Z0-9_]+'
-]
-paths = [
-  # All Go test files in the repo
-  '''.*_test\.go'''
-]
-
-[[allowlists]]
-description = "Demo credential strings in test files only"
-regexes = [
-  # These literal strings appear in fixture/test helpers, not production code.
-  '''admin123''',
-  '''password''',
-  # 'secret' is matched only when surrounded by word boundaries to avoid
-  # hitting legitimate field-names like 'clientSecret' (handled below).
-  '''\bsecret\b'''
-]
+description = "Test, testdata, and fixture files – all secrets are non-real placeholders"
 paths = [
   '''.*_test\.go''',
   '''.*testdata/.*''',
