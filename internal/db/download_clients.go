@@ -23,18 +23,49 @@ func isCredentialClient(clientType string) bool {
 	return clientType == "qbittorrent" || clientType == "transmission"
 }
 
+// legacyCredentialURLBase reports whether a download-client row was written by
+// an older version of bindery that stored qBittorrent/Transmission credentials
+// in the url_base and api_key columns instead of the dedicated username and
+// password columns.
+//
+// Detection requires all three signals to agree:
+//   - username is empty or equals url_base (url_base held the username)
+//   - url_base is non-empty (there is actually something to migrate)
+//   - apiKey is non-empty (the legacy schema also stored password in api_key;
+//     if api_key is empty, the row is a modern client with a real url_base path,
+//     not a migrated credential pair)
+//
+// Scoping apiKey into the guard fixes the regression described in #423:
+// the previous implementation only looked at username and url_base, so a modern
+// client with a bare url_base (e.g. "qbit") and an empty api_key would be
+// misidentified as a legacy row and have its url_base silently cleared on read.
+func legacyCredentialURLBase(username, urlBase, apiKey string) bool {
+	urlBase = strings.TrimSpace(urlBase)
+	if urlBase == "" || strings.HasPrefix(urlBase, "/") {
+		return false
+	}
+	username = strings.TrimSpace(username)
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return false
+	}
+	return username == "" || username == urlBase
+}
+
 func hydrateClientCredentials(c *models.DownloadClient) {
 	switch c.Type {
 	case "qbittorrent", "transmission":
 		// Backward compatibility: older rows stored credentials in url_base/api_key.
-		legacyURLBase := legacyCredentialURLBase(c)
-		if strings.TrimSpace(c.Username) == "" && legacyURLBase {
+		// Only migrate when the row looks like a genuine legacy row (url_base and
+		// api_key both populated); leave modern rows with a real url_base path
+		// and dedicated username/password columns untouched. (closes #423)
+		if legacyCredentialURLBase(c.Username, c.URLBase, c.APIKey) {
 			c.Username = strings.TrimSpace(c.URLBase)
 		}
 		if c.Password == "" {
 			c.Password = c.APIKey
 		}
-		if legacyURLBase {
+		if legacyCredentialURLBase(c.Username, c.URLBase, c.APIKey) {
 			c.URLBase = ""
 		}
 	case "nzbget", "deluge":
@@ -46,27 +77,15 @@ func hydrateClientCredentials(c *models.DownloadClient) {
 	}
 }
 
-func legacyCredentialURLBase(c *models.DownloadClient) bool {
-	urlBase := strings.TrimSpace(c.URLBase)
-	if urlBase == "" || strings.HasPrefix(urlBase, "/") {
-		return false
-	}
-	username := strings.TrimSpace(c.Username)
-	apiKey := strings.TrimSpace(c.APIKey)
-	password := strings.TrimSpace(c.Password)
-	if apiKey == "" {
-		return false
-	}
-	return username == "" || username == urlBase || (password != "" && password == apiKey)
-}
-
 func normalizeClientCredentialStorage(c *models.DownloadClient) {
 	if !isCredentialClient(c.Type) {
 		return
 	}
 	// Backward compatibility: accept legacy payloads that sent credentials in
-	// urlBase/apiKey.
-	if strings.TrimSpace(c.Username) == "" && c.APIKey != "" {
+	// urlBase/apiKey. Use the same legacyCredentialURLBase guard as the read
+	// path so that a client saved with a bare url_base and no api_key does not
+	// have its url_base silently migrated into username on write. (closes #422)
+	if legacyCredentialURLBase(c.Username, c.URLBase, c.APIKey) {
 		c.Username = strings.TrimSpace(c.URLBase)
 	}
 	if c.Password == "" && c.APIKey != "" {

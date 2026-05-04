@@ -624,6 +624,90 @@ func TestDownloadClientRepoCredentialFields(t *testing.T) {
 	}
 }
 
+// TestNormalizeClientCredentialStorageWritePath covers the write-path guard in
+// normalizeClientCredentialStorage: a qBittorrent client saved with a bare
+// url_base and an empty api_key must read back with url_base preserved and
+// username NOT populated from it. (closes #422)
+func TestNormalizeClientCredentialStorageWritePath(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	repo := NewDownloadClientRepo(database)
+
+	// A client with a bare url_base path and no api_key — the write-path guard
+	// (normalizeClientCredentialStorage) must not migrate url_base into username
+	// because api_key is empty, which means this is not a legacy credential row.
+	qbt := &models.DownloadClient{
+		Name:    "qBittorrent bare url_base",
+		Type:    "qbittorrent",
+		Host:    "localhost",
+		Port:    8080,
+		URLBase: "qbit",
+		APIKey:  "", // empty — no migration should happen
+		Enabled: true,
+	}
+	if err := repo.Create(ctx, qbt); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := repo.GetByID(ctx, qbt.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	// url_base must be preserved exactly as written.
+	if got.URLBase != "qbit" {
+		t.Errorf("URLBase: want %q, got %q", "qbit", got.URLBase)
+	}
+	// username must NOT be populated from url_base when api_key is empty.
+	if got.Username != "" {
+		t.Errorf("Username: want empty (should not be populated from url_base when api_key is empty), got %q", got.Username)
+	}
+}
+
+// TestLegacyCredentialURLBase exercises legacyCredentialURLBase directly to
+// guard against regressions in the legacy-row detection logic. (closes #423)
+func TestLegacyCredentialURLBase(t *testing.T) {
+	tests := []struct {
+		name     string
+		username string
+		urlBase  string
+		apiKey   string
+		want     bool
+	}{
+		// Legacy row: username column is still empty, url_base held the username,
+		// api_key held the password.
+		{"empty username non-empty urlBase with apiKey", "", "admin", "secret", true},
+		// Legacy row: both fields kept in sync by old code.
+		{"username equals urlBase with apiKey", "admin", "admin", "secret", true},
+		// Modern row: distinct username and a real url_base path — must NOT fire.
+		{"distinct username and urlBase", "admin", "/qbit", "secret", false},
+		// Modern row: username set, url_base empty — already migrated.
+		{"username set urlBase empty", "admin", "", "secret", false},
+		// Both empty — nothing to migrate.
+		{"both empty", "", "", "", false},
+		// Whitespace-only urlBase does not count as a legacy row.
+		{"whitespace urlBase", "", "   ", "secret", false},
+		// Modern row: bare url_base but no api_key — client has a real url_base
+		// path but no password stored in the legacy location. Must NOT fire.
+		// This is the core regression from #423.
+		{"bare urlBase empty apiKey", "", "qbit", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := legacyCredentialURLBase(tt.username, tt.urlBase, tt.apiKey)
+			if got != tt.want {
+				t.Errorf("legacyCredentialURLBase(%q, %q, %q) = %v, want %v",
+					tt.username, tt.urlBase, tt.apiKey, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDownloadClientRepoGetEnabledByProtocol(t *testing.T) {
 	database, err := OpenMemory()
 	if err != nil {
