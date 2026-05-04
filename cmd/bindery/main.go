@@ -299,6 +299,7 @@ func main() {
 	pendingHandler := api.NewPendingHandler(pendingReleaseRepo, queueHandler, downloadRepo, bookRepo)
 	importScanner.WithSettings(settingsRepo)
 	importScanner.WithRootFolders(rootFolderRepo)
+	importScanner.WithSeriesRepo(seriesRepo)
 
 	// Startup check: warn if the configured default root folder no longer exists on disk.
 	if s, _ := settingsRepo.Get(ctxBoot, api.SettingDefaultLibraryRootFolderID); s != nil && s.Value != "" {

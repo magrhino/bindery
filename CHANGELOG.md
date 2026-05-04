@@ -6,6 +6,13 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Library scanner series matching now runs in the server** — the scanner is wired to the series repository at startup, so filename-based series/position matching can reconcile wanted series books during library scans.
+- **qBittorrent/Transmission URL Base preserved** — legacy credential hydration now clears only old credential values stored in `url_base`, preserving real reverse-proxy URL Base values such as `/qbit` or `transmission`.
+- **Deploy promotion PR merge commands** — automated development and production deploy promotions no longer pass an unsupported `--base` flag to `gh pr merge`.
+- **Gitleaks PR scans now fetch full history** — the Secrets Scan job checks out the full commit graph before running Gitleaks, so pull request scan ranges resolve correctly instead of failing with an ambiguous revision before any secrets scan runs.
+
 ## [v1.2.6] — 2026-04-25
 
 ### Fixed

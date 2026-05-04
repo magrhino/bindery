@@ -27,11 +27,15 @@ func hydrateClientCredentials(c *models.DownloadClient) {
 	switch c.Type {
 	case "qbittorrent", "transmission":
 		// Backward compatibility: older rows stored credentials in url_base/api_key.
-		if strings.TrimSpace(c.Username) == "" {
+		legacyURLBase := legacyCredentialURLBase(c)
+		if strings.TrimSpace(c.Username) == "" && legacyURLBase {
 			c.Username = strings.TrimSpace(c.URLBase)
 		}
 		if c.Password == "" {
 			c.Password = c.APIKey
+		}
+		if legacyURLBase {
+			c.URLBase = ""
 		}
 	case "nzbget", "deluge":
 		// These clients use username/password directly — preserve as stored.
@@ -42,13 +46,27 @@ func hydrateClientCredentials(c *models.DownloadClient) {
 	}
 }
 
+func legacyCredentialURLBase(c *models.DownloadClient) bool {
+	urlBase := strings.TrimSpace(c.URLBase)
+	if urlBase == "" || strings.HasPrefix(urlBase, "/") {
+		return false
+	}
+	username := strings.TrimSpace(c.Username)
+	apiKey := strings.TrimSpace(c.APIKey)
+	password := strings.TrimSpace(c.Password)
+	if apiKey == "" {
+		return false
+	}
+	return username == "" || username == urlBase || (password != "" && password == apiKey)
+}
+
 func normalizeClientCredentialStorage(c *models.DownloadClient) {
 	if !isCredentialClient(c.Type) {
 		return
 	}
 	// Backward compatibility: accept legacy payloads that sent credentials in
 	// urlBase/apiKey.
-	if strings.TrimSpace(c.Username) == "" {
+	if strings.TrimSpace(c.Username) == "" && c.APIKey != "" {
 		c.Username = strings.TrimSpace(c.URLBase)
 	}
 	if c.Password == "" && c.APIKey != "" {
