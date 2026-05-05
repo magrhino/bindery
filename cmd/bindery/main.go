@@ -505,6 +505,7 @@ func main() {
 		// OIDC — login/callback are unauthenticated; provider management requires auth.
 		r.Get("/auth/oidc/providers", oidcHandler.GetProviders)
 		r.Put("/auth/oidc/providers", oidcHandler.SetProviders)
+		r.Get("/auth/oidc/redirect-base", oidcHandler.GetRedirectBase)
 		r.Get("/auth/oidc/{provider}/login", oidcHandler.Login)
 		r.Get("/auth/oidc/{provider}/callback", oidcHandler.Callback)
 		// Admin-only auth mutations.

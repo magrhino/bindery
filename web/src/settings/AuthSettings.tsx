@@ -141,6 +141,40 @@ function AddProviderForm({
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
   const [scopes, setScopes] = useState('openid email profile')
+  // Live callback URL preview — fetched once from the backend so we get the
+  // same base URL Bindery itself will resolve at /login (honors the env var
+  // / forwarded-headers precedence). Older backends don't have this endpoint;
+  // fall back to window.location.origin which is the right answer for any
+  // deploy not using a path prefix.
+  const [redirectBase, setRedirectBase] = useState(() =>
+    typeof window !== 'undefined' ? window.location.origin : ''
+  )
+  const [callbackTemplate, setCallbackTemplate] = useState('/api/v1/auth/oidc/{id}/callback')
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    api.oidcRedirectBase()
+      .then(rb => {
+        if (rb.base) setRedirectBase(rb.base)
+        if (rb.callback_path) setCallbackTemplate(rb.callback_path)
+      })
+      .catch(() => {})
+  }, [])
+
+  const trimmedId = id.trim()
+  const callbackPreview = trimmedId
+    ? redirectBase + callbackTemplate.replace('{id}', encodeURIComponent(trimmedId))
+    : ''
+  const copyCallback = async () => {
+    if (!callbackPreview) return
+    try {
+      await navigator.clipboard.writeText(callbackPreview)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
@@ -166,6 +200,34 @@ function AddProviderForm({
           <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">{t('settings.oidc.fieldName')}</label>
           <input value={name} onChange={e => setName(e.target.value)} required placeholder="Google" className={inputCls} />
         </div>
+      </div>
+      {/* Live preview of the redirect URI Bindery will register with the IdP.
+          Eliminates the most common setup mistake: registering a URL that
+          doesn't match what Bindery actually sends. */}
+      <div>
+        <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">
+          {t('settings.oidc.fieldCallbackUrl')}
+        </label>
+        <div className="flex gap-2 items-center">
+          <code className="flex-1 text-xs font-mono px-3 py-2 rounded bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-600 dark:text-zinc-400 truncate min-w-0">
+            {callbackPreview || (
+              <span className="italic text-slate-400 dark:text-zinc-600">
+                {t('settings.oidc.callbackUrlEmpty')}
+              </span>
+            )}
+          </code>
+          <button
+            type="button"
+            onClick={copyCallback}
+            disabled={!callbackPreview}
+            className="px-2 py-1.5 text-xs rounded border border-slate-300 dark:border-zinc-700 hover:bg-slate-100 dark:hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+          >
+            {copied ? t('settings.oidc.callbackUrlCopied') : t('settings.oidc.callbackUrlCopy')}
+          </button>
+        </div>
+        <p className="text-[11px] text-slate-500 dark:text-zinc-500 mt-1">
+          {t('settings.oidc.callbackUrlHint')}
+        </p>
       </div>
       <div>
         <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">{t('settings.oidc.fieldIssuer')}</label>

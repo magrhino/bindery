@@ -187,6 +187,19 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
+// GetRedirectBase returns the public-facing base URL Bindery will use as
+// the prefix for OIDC callback URLs, resolved from the current request. The
+// Settings UI uses this to render a live preview of the redirect URI so
+// admins can copy-paste it into their IdP without constructing it manually —
+// the #1 source of redirect_uri_mismatch errors.
+// GET /api/v1/auth/oidc/redirect-base
+func (h *OIDCHandler) GetRedirectBase(w http.ResponseWriter, r *http.Request) {
+	writeOK(w, map[string]any{
+		"base":          h.resolveBase(r),
+		"callback_path": oidc.CallbackPath("{id}"),
+	})
+}
+
 // providerWithStatus pairs the public config of a configured provider with
 // its current runtime status (loaded vs failed-discovery). Status is decided
 // from the in-memory manager state, not the DB — a provider configured in the

@@ -147,6 +147,11 @@ export const api = {
   oidcProviders: () => request<OidcProvider[]>('/auth/oidc/providers'),
   oidcSetProviders: (providers: OidcProviderConfig[]) =>
     request<void>('/auth/oidc/providers', { method: 'PUT', body: JSON.stringify(providers) }),
+  // Returns the public base URL Bindery will use as the prefix for OIDC
+  // callback URLs (resolved from the current request) plus the path template
+  // with `{id}` placeholder. The settings UI uses these to live-render the
+  // redirect URI as the admin types the provider id.
+  oidcRedirectBase: () => request<{ base: string; callback_path: string }>('/auth/oidc/redirect-base'),
   authLogin: async (username: string, password: string, rememberMe: boolean) => {
     const res = await request<{ ok: boolean; username: string }>('/auth/login', {
       method: 'POST',
