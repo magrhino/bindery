@@ -138,13 +138,13 @@ func (r *SeriesRepo) hydrateHardcoverLinks(ctx context.Context, series []models.
 		placeholders = append(placeholders, "?")
 		args = append(args, s.ID)
 	}
-	//nolint:gosec // placeholders are generated from in-memory series IDs and values are still parameterized
-	rows, err := r.db.QueryContext(ctx, `
+	query := `
 		SELECT id, series_id, hardcover_series_id, hardcover_provider_id, hardcover_title,
 		       hardcover_author_name, hardcover_book_count, link_confidence, linked_by,
 		       linked_at, created_at, updated_at
 		FROM series_hardcover_links
-		WHERE series_id IN (`+strings.Join(placeholders, ",")+`)`, args...)
+		WHERE series_id IN (` + strings.Join(placeholders, ",") + `)` // #nosec G202 -- placeholders are generated from fixed ? tokens; series IDs remain bound args
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("list series hardcover links: %w", err)
 	}
