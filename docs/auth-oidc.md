@@ -17,29 +17,44 @@ Sessions are issued using the same HMAC-signed cookie as password login. OIDC si
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BINDERY_OIDC_REDIRECT_BASE_URL` | _(required)_ | Public base URL Bindery is reachable at (e.g. `https://bindery.example.com`). Used to construct OIDC callback URLs. Required when Bindery is behind a reverse proxy. |
+| `BINDERY_OIDC_REDIRECT_BASE_URL` | _(see resolution below)_ | Public base URL Bindery is reachable at (e.g. `https://bindery.example.com`). Used as the prefix for OIDC callback URLs. Required for path-prefix deploys; otherwise optional when behind a trusted proxy that sets `X-Forwarded-Proto` and `X-Forwarded-Host`. |
+| `BINDERY_TRUSTED_PROXY` | _(unset)_ | Comma-separated CIDRs of reverse proxies whose `X-Forwarded-*` headers Bindery may trust. Required for the auto-derive fallback to kick in. |
 
 ## Redirect URL construction
 
 The callback URL registered in your IdP must exactly match what Bindery sends during the authorization redirect. Bindery constructs it as:
 
 ```
-<BINDERY_OIDC_REDIRECT_BASE_URL>/api/v1/auth/oidc/<provider-id>/callback
+<base-url>/api/v1/auth/oidc/<provider-id>/callback
 ```
+
+### Redirect base URL resolution
+
+Bindery picks the `<base-url>` per request, in this order:
+
+1. **`BINDERY_OIDC_REDIRECT_BASE_URL`** — if set, this wins unconditionally. Use this for path-prefix deploys (`https://example.com/bindery`) or any case where forwarded headers don't reflect the public URL the IdP will see.
+2. **`X-Forwarded-Proto` + `X-Forwarded-Host`** — if `BINDERY_TRUSTED_PROXY` is configured *and* the immediate peer is in that CIDR list, Bindery uses the forwarded headers. Untrusted peers can't influence the URL — their headers are ignored.
+3. **`r.Host`** — direct-access fallback. The scheme is inferred from the TLS connection or `X-Forwarded-Proto`. Suitable for development; not what you want behind a proxy.
+
+For typical reverse-proxy deploys (Traefik, nginx, Caddy, Kubernetes Ingress) where `BINDERY_TRUSTED_PROXY` already needs to be set for proxy-auth or X-Forwarded-For trust, you can leave `BINDERY_OIDC_REDIRECT_BASE_URL` unset and the redirect URL will track the public hostname automatically.
+
+**Path-prefix example** (Bindery mounted at `/bindery/`):
+
+```
+BINDERY_OIDC_REDIRECT_BASE_URL=https://example.com/bindery
+# → callback: https://example.com/bindery/api/v1/auth/oidc/<id>/callback
+```
+
+The auto-derive path doesn't know about path prefixes — when Bindery is mounted under a sub-path, set the env var explicitly.
+
+### Pinning across the flow
+
+The base URL Bindery resolves at `/login` is stored in the (HttpOnly, short-lived) flow cookie and replayed at `/callback`, so the `redirect_uri` in the token exchange always matches the value the IdP saw at the authorize request. If the proxy chain changes between the two hops (extremely unusual), the callback would still use the originally-resolved URL.
 
 For example, with `BINDERY_OIDC_REDIRECT_BASE_URL=https://bindery.example.com` and provider id `google`:
 
 ```
 https://bindery.example.com/api/v1/auth/oidc/google/callback
-```
-
-**Behind a reverse proxy:** Bindery cannot detect its own public URL — it only knows the port it listens on. Always set `BINDERY_OIDC_REDIRECT_BASE_URL` to the public-facing URL your proxy exposes, including scheme and any path prefix. Omitting this env var causes Bindery to construct the callback URL from the internal `Host` header, which will not match your IdP registration and will result in a redirect loop or `redirect_uri_mismatch` error.
-
-**Path prefix example** (Bindery mounted at `/bindery/`):
-
-```
-BINDERY_OIDC_REDIRECT_BASE_URL=https://example.com/bindery
-# → callback: https://example.com/bindery/api/v1/auth/oidc/<id>/callback
 ```
 
 ## Adding a provider

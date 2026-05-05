@@ -21,15 +21,22 @@ const (
 var oidcProviderIDRe = regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
 
 // OIDCHandler owns GET /auth/oidc/:provider/login and /callback.
+//
+// resolveBase resolves the public-facing base URL from the incoming request.
+// Most deploys want the helper from this package (ResolveOIDCRedirectBase)
+// which honors the configured BINDERY_OIDC_REDIRECT_BASE_URL env var first
+// and falls back to forwarded headers from a trusted proxy. Tests can supply
+// a fixed-value resolver.
 type OIDCHandler struct {
-	mgr      *oidc.Manager
-	users    *db.UserRepo
-	settings *db.SettingsRepo
-	auth     *AuthHandler
+	mgr         *oidc.Manager
+	users       *db.UserRepo
+	settings    *db.SettingsRepo
+	auth        *AuthHandler
+	resolveBase func(*http.Request) string
 }
 
-func NewOIDCHandler(mgr *oidc.Manager, users *db.UserRepo, settings *db.SettingsRepo, auth *AuthHandler) *OIDCHandler {
-	return &OIDCHandler{mgr: mgr, users: users, settings: settings, auth: auth}
+func NewOIDCHandler(mgr *oidc.Manager, users *db.UserRepo, settings *db.SettingsRepo, auth *AuthHandler, resolveBase func(*http.Request) string) *OIDCHandler {
+	return &OIDCHandler{mgr: mgr, users: users, settings: settings, auth: auth, resolveBase: resolveBase}
 }
 
 // Login initiates the Authorization Code + PKCE flow.
@@ -57,15 +64,19 @@ func (h *OIDCHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	authURL, err := h.mgr.AuthURL(r.Context(), providerID, state, nonce, verifier)
+	redirectBase := h.resolveBase(r)
+	authURL, err := h.mgr.AuthURL(r.Context(), redirectBase, providerID, state, nonce, verifier)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	// Store state+nonce+verifier in a secure HttpOnly cookie so the callback
-	// can verify them without any server-side session store.
-	flowVal, err := oidc.EncodeFlowState(state, nonce, verifier)
+	// Store state+nonce+verifier+redirectBase in a secure HttpOnly cookie so
+	// the callback can verify them without any server-side session store.
+	// redirectBase is round-tripped because the IdP requires the redirect_uri
+	// in the token exchange to match the one used in the authorize request,
+	// and we resolve it from the request rather than a static env var.
+	flowVal, err := oidc.EncodeFlowState(state, nonce, verifier, redirectBase)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "encode flow: "+err.Error())
 		return
@@ -141,7 +152,16 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, err := h.mgr.Exchange(ctx, providerID, code, fs.Nonce, fs.CodeVerifier)
+	// Use the redirectBase pinned by /login when available — the IdP enforces
+	// that the token-exchange redirect_uri matches the authorize redirect_uri.
+	// Older flow cookies (pre-upgrade) may not have it; fall back to resolving
+	// from the current request, which is correct for any deploy where the
+	// proxy chain is stable across the two requests.
+	redirectBase := fs.RedirectBase
+	if redirectBase == "" {
+		redirectBase = h.resolveBase(r)
+	}
+	claims, err := h.mgr.Exchange(ctx, redirectBase, providerID, code, fs.Nonce, fs.CodeVerifier)
 	if err != nil {
 		slog.Warn("oidc: token exchange failed", "provider", providerID, "error", err) // #nosec -- providerID validated by oidcProviderIDRe at handler entry
 		writeErr(w, http.StatusUnauthorized, "token exchange failed")

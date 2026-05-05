@@ -93,21 +93,25 @@ type Status struct {
 	LastAttempt time.Time `json:"last_attempt,omitempty"` // last time discovery was tried
 }
 
-// Manager holds per-provider OIDC verifiers and oauth2 configs, keyed by
-// provider ID. It is rebuilt when the settings change. Providers whose
-// initial discovery fails are kept in `failed` so admins can see them and
-// so login attempts can trigger an on-demand retry.
+// Manager holds per-provider OIDC verifiers and oauth2 endpoint metadata,
+// keyed by provider ID. It is rebuilt when the settings change. Providers
+// whose initial discovery fails are kept in `failed` so admins can see them
+// and so login attempts can trigger an on-demand retry.
+//
+// The OAuth2 redirect URL is resolved per-request rather than stored on the
+// entry so that Bindery behind a reverse proxy doesn't strictly require
+// BINDERY_OIDC_REDIRECT_BASE_URL — when that env var is unset the API layer
+// derives the base URL from the request's forwarded headers.
 type Manager struct {
-	mu           sync.RWMutex
-	providers    map[string]*entry
-	failed       map[string]*failedEntry
-	redirectBase string
+	mu        sync.RWMutex
+	providers map[string]*entry
+	failed    map[string]*failedEntry
 }
 
 type entry struct {
 	cfg      ProviderConfig
 	verifier *gooidc.IDTokenVerifier
-	oauth2   oauth2.Config
+	endpoint oauth2.Endpoint
 }
 
 type failedEntry struct {
@@ -116,11 +120,31 @@ type failedEntry struct {
 	lastAttempt time.Time
 }
 
-func NewManager(redirectBase string) *Manager {
+func NewManager() *Manager {
 	return &Manager{
-		providers:    make(map[string]*entry),
-		failed:       make(map[string]*failedEntry),
-		redirectBase: redirectBase,
+		providers: make(map[string]*entry),
+		failed:    make(map[string]*failedEntry),
+	}
+}
+
+// CallbackPath returns the URL path appended to the redirect base URL for a
+// given provider id. Exposed so the API handler can render the same path
+// the manager uses when constructing the IdP redirect_uri parameter.
+func CallbackPath(id string) string {
+	return "/api/v1/auth/oidc/" + id + "/callback"
+}
+
+func (e *entry) oauth2Config(redirectBase string) oauth2.Config {
+	scopes := e.cfg.Scopes
+	if len(scopes) == 0 {
+		scopes = []string{gooidc.ScopeOpenID, "profile", "email"}
+	}
+	return oauth2.Config{
+		ClientID:     e.cfg.ClientID,
+		ClientSecret: e.cfg.ClientSecret,
+		Endpoint:     e.endpoint,
+		RedirectURL:  redirectBase + CallbackPath(e.cfg.ID),
+		Scopes:       scopes,
 	}
 }
 
@@ -157,19 +181,8 @@ func (m *Manager) buildEntry(ctx context.Context, cfg ProviderConfig) (*entry, e
 	if err != nil {
 		return nil, fmt.Errorf("oidc discovery for %q: %w", cfg.Issuer, err)
 	}
-	scopes := cfg.Scopes
-	if len(scopes) == 0 {
-		scopes = []string{gooidc.ScopeOpenID, "profile", "email"}
-	}
-	oc := oauth2.Config{
-		ClientID:     cfg.ClientID,
-		ClientSecret: cfg.ClientSecret,
-		Endpoint:     p.Endpoint(),
-		RedirectURL:  m.redirectBase + "/api/v1/auth/oidc/" + cfg.ID + "/callback",
-		Scopes:       scopes,
-	}
 	verifier := p.Verifier(&gooidc.Config{ClientID: cfg.ClientID})
-	return &entry{cfg: cfg, verifier: verifier, oauth2: oc}, nil
+	return &entry{cfg: cfg, verifier: verifier, endpoint: p.Endpoint()}, nil
 }
 
 // EnsureLoaded attempts on-demand re-discovery for a provider that is in the
@@ -255,16 +268,20 @@ func (m *Manager) List() []ProviderConfig {
 
 // AuthURL returns the Authorization Code + PKCE redirect URL for the provider.
 // state and codeVerifier are caller-generated; nonce is embedded in the URL.
-// If the provider is in the failed map, AuthURL first triggers an on-demand
-// re-discovery attempt (rate-limited) before checking again.
-func (m *Manager) AuthURL(ctx context.Context, id, state, nonce, codeVerifier string) (string, error) {
+// redirectBase is the public-facing scheme://host prefix that Bindery is
+// reachable at — the OAuth2 redirect_uri is constructed by appending the
+// per-provider callback path. If the provider is in the failed map, AuthURL
+// first triggers an on-demand re-discovery attempt (rate-limited) before
+// checking again.
+func (m *Manager) AuthURL(ctx context.Context, redirectBase, id, state, nonce, codeVerifier string) (string, error) {
 	m.EnsureLoaded(ctx, id)
 	e := m.Get(id)
 	if e == nil {
 		return "", fmt.Errorf("unknown oidc provider %q", id)
 	}
+	oc := e.oauth2Config(redirectBase)
 	challenge := pkceChallenge(codeVerifier)
-	return e.oauth2.AuthCodeURL(state,
+	return oc.AuthCodeURL(state,
 		oauth2.SetAuthURLParam("nonce", nonce),
 		oauth2.SetAuthURLParam("code_challenge", challenge),
 		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
@@ -272,14 +289,17 @@ func (m *Manager) AuthURL(ctx context.Context, id, state, nonce, codeVerifier st
 }
 
 // Exchange completes the code exchange and validates the ID token.
-// Returns the verified Claims on success.
-func (m *Manager) Exchange(ctx context.Context, id, code, nonce, codeVerifier string) (*Claims, error) {
+// Returns the verified Claims on success. redirectBase must match the value
+// passed to AuthURL during the original authorize request — the IdP echoes
+// the redirect_uri back during the token request and rejects mismatches.
+func (m *Manager) Exchange(ctx context.Context, redirectBase, id, code, nonce, codeVerifier string) (*Claims, error) {
 	m.EnsureLoaded(ctx, id)
 	e := m.Get(id)
 	if e == nil {
 		return nil, fmt.Errorf("unknown oidc provider %q", id)
 	}
-	token, err := e.oauth2.Exchange(ctx, code,
+	oc := e.oauth2Config(redirectBase)
+	token, err := oc.Exchange(ctx, code,
 		oauth2.SetAuthURLParam("code_verifier", codeVerifier),
 	)
 	if err != nil {
@@ -352,18 +372,33 @@ func NewNonce() (string, error) {
 
 // --- State cookie value (state + nonce + codeVerifier packed as JSON) --------
 
+// flowState is the encrypted-at-rest blob the browser carries between the
+// /login and /callback hops. RedirectBase is included so the token-exchange
+// in /callback uses the exact redirect_uri the IdP saw at /login — a
+// requirement of the OAuth2 spec.
 type flowState struct {
 	State        string    `json:"s"`
 	Nonce        string    `json:"n"`
 	CodeVerifier string    `json:"cv"`
+	RedirectBase string    `json:"rb,omitempty"`
 	Expiry       time.Time `json:"exp"`
 }
 
-func EncodeFlowState(state, nonce, codeVerifier string) (string, error) {
+// FlowState exposes the decoded flow-cookie fields callers care about. The
+// internal struct stays unexported so wire-format changes don't leak.
+type FlowState struct {
+	State        string
+	Nonce        string
+	CodeVerifier string
+	RedirectBase string
+}
+
+func EncodeFlowState(state, nonce, codeVerifier, redirectBase string) (string, error) {
 	fs := flowState{
 		State:        state,
 		Nonce:        nonce,
 		CodeVerifier: codeVerifier,
+		RedirectBase: redirectBase,
 		Expiry:       time.Now().Add(10 * time.Minute),
 	}
 	return encodeFlowStateRaw(fs)
@@ -383,7 +418,7 @@ func encodeFlowStateRaw(fs flowState) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-func DecodeFlowState(encoded string) (*flowState, error) {
+func DecodeFlowState(encoded string) (*FlowState, error) {
 	b, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, fmt.Errorf("decode flow state: %w", err)
@@ -395,5 +430,10 @@ func DecodeFlowState(encoded string) (*flowState, error) {
 	if time.Now().After(fs.Expiry) {
 		return nil, fmt.Errorf("flow state expired")
 	}
-	return &fs, nil
+	return &FlowState{
+		State:        fs.State,
+		Nonce:        fs.Nonce,
+		CodeVerifier: fs.CodeVerifier,
+		RedirectBase: fs.RedirectBase,
+	}, nil
 }

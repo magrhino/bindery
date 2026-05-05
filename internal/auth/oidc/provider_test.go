@@ -65,8 +65,9 @@ func TestEncodeDecodeFlowState(t *testing.T) {
 	state, _ := NewState()
 	nonce, _ := NewNonce()
 	verifier, _ := NewVerifier()
+	base := "https://bindery.example.com"
 
-	encoded, err := EncodeFlowState(state, nonce, verifier)
+	encoded, err := EncodeFlowState(state, nonce, verifier, base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +75,30 @@ func TestEncodeDecodeFlowState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fs.State != state || fs.Nonce != nonce || fs.CodeVerifier != verifier {
+	if fs.State != state || fs.Nonce != nonce || fs.CodeVerifier != verifier || fs.RedirectBase != base {
 		t.Fatalf("round-trip mismatch: %+v", fs)
+	}
+}
+
+func TestDecodeFlowState_LegacyCookieWithoutRedirectBase(t *testing.T) {
+	// Old flow cookies (pre-1.4) didn't carry a redirect_base field. Make
+	// sure decoding still works — callers fall back to live-resolving from
+	// the request when RedirectBase is empty.
+	encoded, err := encodeFlowStateRaw(flowState{
+		State:        "s",
+		Nonce:        "n",
+		CodeVerifier: "cv",
+		Expiry:       time.Now().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs, err := DecodeFlowState(encoded)
+	if err != nil {
+		t.Fatalf("legacy cookie should still decode: %v", err)
+	}
+	if fs.RedirectBase != "" {
+		t.Fatalf("legacy cookie should report empty RedirectBase, got %q", fs.RedirectBase)
 	}
 }
 
@@ -164,7 +187,7 @@ func TestReload_FailedProviderRecorded(t *testing.T) {
 	defer idp.Close()
 	idp.failing.Store(true)
 
-	mgr := NewManager("https://bindery.example.com")
+	mgr := NewManager()
 	cfg := ProviderConfig{ID: "x", Name: "X", Issuer: idp.URL, ClientID: "cid", ClientSecret: "sec"}
 	mgr.Reload(context.Background(), []ProviderConfig{cfg})
 
@@ -190,7 +213,7 @@ func TestStatus_LoadedProviderReportsOk(t *testing.T) {
 	idp := newFakeIDP()
 	defer idp.Close()
 
-	mgr := NewManager("https://bindery.example.com")
+	mgr := NewManager()
 	mgr.Reload(context.Background(), []ProviderConfig{
 		{ID: "y", Name: "Y", Issuer: idp.URL, ClientID: "cid", ClientSecret: "sec"},
 	})
@@ -214,7 +237,7 @@ func TestEnsureLoaded_RetryRespectsInterval(t *testing.T) {
 	retryMinInterval = 50 * time.Millisecond
 	defer func() { retryMinInterval = prev }()
 
-	mgr := NewManager("https://bindery.example.com")
+	mgr := NewManager()
 	mgr.Reload(context.Background(), []ProviderConfig{
 		{ID: "z", Name: "Z", Issuer: idp.URL, ClientID: "cid", ClientSecret: "sec"},
 	})
@@ -247,7 +270,7 @@ func TestEnsureLoaded_RetryRespectsInterval(t *testing.T) {
 }
 
 func TestEnsureLoaded_NoOpForUnknown(t *testing.T) {
-	mgr := NewManager("https://bindery.example.com")
+	mgr := NewManager()
 	// Should not panic, should not log, should not touch internal maps.
 	mgr.EnsureLoaded(context.Background(), "nope")
 	if mgr.Get("nope") != nil {
@@ -264,7 +287,7 @@ func TestAuthURL_TriggersRetryForFailedProvider(t *testing.T) {
 	retryMinInterval = 1 * time.Millisecond
 	defer func() { retryMinInterval = prev }()
 
-	mgr := NewManager("https://bindery.example.com")
+	mgr := NewManager()
 	mgr.Reload(context.Background(), []ProviderConfig{
 		{ID: "p", Name: "P", Issuer: idp.URL, ClientID: "cid", ClientSecret: "sec"},
 	})
@@ -275,7 +298,7 @@ func TestAuthURL_TriggersRetryForFailedProvider(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 
 	verifier, _ := NewVerifier()
-	url, err := mgr.AuthURL(context.Background(), "p", "state", "nonce", verifier)
+	url, err := mgr.AuthURL(context.Background(), "https://bindery.example.com", "p", "state", "nonce", verifier)
 	if err != nil {
 		t.Fatalf("AuthURL should have succeeded after on-demand retry: %v", err)
 	}
@@ -293,14 +316,14 @@ func TestAuthURL_StillFailsWhenIdPDown(t *testing.T) {
 	retryMinInterval = 1 * time.Millisecond
 	defer func() { retryMinInterval = prev }()
 
-	mgr := NewManager("https://bindery.example.com")
+	mgr := NewManager()
 	mgr.Reload(context.Background(), []ProviderConfig{
 		{ID: "q", Name: "Q", Issuer: idp.URL, ClientID: "cid", ClientSecret: "sec"},
 	})
 	time.Sleep(5 * time.Millisecond)
 
 	verifier, _ := NewVerifier()
-	_, err := mgr.AuthURL(context.Background(), "q", "state", "nonce", verifier)
+	_, err := mgr.AuthURL(context.Background(), "https://bindery.example.com", "q", "state", "nonce", verifier)
 	if err == nil {
 		t.Fatal("AuthURL should fail when IdP is still down after retry attempt")
 	}
@@ -314,7 +337,7 @@ func TestReload_RecoversPreviouslyFailedProvider(t *testing.T) {
 	defer idp.Close()
 	idp.failing.Store(true)
 
-	mgr := NewManager("https://bindery.example.com")
+	mgr := NewManager()
 	cfg := ProviderConfig{ID: "r", Name: "R", Issuer: idp.URL, ClientID: "cid", ClientSecret: "sec"}
 	mgr.Reload(context.Background(), []ProviderConfig{cfg})
 	if mgr.Status("r").State != "failed" {
@@ -337,7 +360,7 @@ func TestReload_RemovesStaleProviders(t *testing.T) {
 	idp := newFakeIDP()
 	defer idp.Close()
 
-	mgr := NewManager("https://bindery.example.com")
+	mgr := NewManager()
 	mgr.Reload(context.Background(), []ProviderConfig{
 		{ID: "keep", Name: "K", Issuer: idp.URL, ClientID: "cid", ClientSecret: "sec"},
 		{ID: "drop", Name: "D", Issuer: idp.URL, ClientID: "cid", ClientSecret: "sec"},

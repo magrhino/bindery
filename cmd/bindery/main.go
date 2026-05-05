@@ -319,18 +319,27 @@ func main() {
 	// Notifier
 	notif := notifier.New(notificationRepo)
 
-	// OIDC manager — loaded from settings, reload on config change.
-	oidcMgr := oidcauth.NewManager(cfg.OIDCRedirectBaseURL)
+	// OIDC manager — loaded from settings, reload on config change. The
+	// redirect base URL is resolved per-request from the Login/Callback
+	// handlers, falling back through (1) BINDERY_OIDC_REDIRECT_BASE_URL,
+	// (2) X-Forwarded-* from a trusted proxy, (3) the request Host.
+	oidcMgr := oidcauth.NewManager()
 	if s, _ := settingsRepo.Get(ctxBoot, api.SettingOIDCProviders); s != nil && s.Value != "" {
 		if ps, err := oidcauth.ParseProviders(s.Value); err == nil && len(ps) > 0 {
 			oidcMgr.Reload(ctxBoot, ps)
 			slog.Info("oidc: loaded providers from settings", "count", len(ps))
+			if cfg.OIDCRedirectBaseURL == "" && len(trustedCIDRs) == 0 {
+				slog.Warn("oidc: BINDERY_OIDC_REDIRECT_BASE_URL is unset and no trusted-proxy CIDRs are configured — callback URLs will be derived from the request Host header, which is the internal hostname behind a proxy. Set BINDERY_OIDC_REDIRECT_BASE_URL or BINDERY_TRUSTED_PROXY to fix.")
+			}
 		}
 	}
 
 	// API handlers
 	authHandler := api.NewAuthHandler(userRepo, settingsRepo, loginLimiter)
-	oidcHandler := api.NewOIDCHandler(oidcMgr, userRepo, settingsRepo, authHandler)
+	oidcResolveBase := func(r *http.Request) string {
+		return api.ResolveOIDCRedirectBase(r, cfg.OIDCRedirectBaseURL, trustedCIDRs)
+	}
+	oidcHandler := api.NewOIDCHandler(oidcMgr, userRepo, settingsRepo, authHandler, oidcResolveBase)
 	userMgmtHandler := api.NewUserManagementHandler(userRepo)
 	searchHandler := api.NewSearchHandler(metaAgg)
 	authorHandler := api.NewAuthorHandler(authorRepo, authorAliasRepo, bookRepo, seriesRepo, metaAgg, settingsRepo, metadataProfileRepo, sched).WithFinder(importScanner)
