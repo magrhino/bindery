@@ -1011,6 +1011,103 @@ func TestSeriesFillCreatesMissingHardcoverBook(t *testing.T) {
 	}
 }
 
+func TestSeriesFillReusesCrossProviderAuthorAndExistingBook(t *testing.T) {
+	catalog := stormlightCatalog()
+	searcher := newMockBookSearcher()
+	h, seriesRepo, authorRepo, bookRepo := seriesFixtureWithProvider(t, &stubSeriesProvider{
+		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+	}, searcher)
+	ctx := contextBackground()
+	series := &models.Series{ForeignID: "ol-series:stormlight", Title: "The Stormlight Archive"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+	if err := seriesRepo.UpsertHardcoverLink(ctx, &models.SeriesHardcoverLink{
+		SeriesID:            series.ID,
+		HardcoverSeriesID:   catalog.ForeignID,
+		HardcoverProviderID: catalog.ProviderID,
+		HardcoverTitle:      catalog.Title,
+		HardcoverAuthorName: catalog.AuthorName,
+		HardcoverBookCount:  catalog.BookCount,
+		Confidence:          1,
+		LinkedBy:            "manual",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	author := &models.Author{
+		ForeignID:        "ol:brandon-sanderson",
+		Name:             "Brandon Sanderson",
+		SortName:         "Sanderson, Brandon",
+		MetadataProvider: "openlibrary",
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	linkedLocalBook := &models.Book{
+		ForeignID:        "ol:words-of-radiance",
+		AuthorID:         author.ID,
+		Title:            "Words of Radiance",
+		SortTitle:        "Words of Radiance",
+		Status:           models.BookStatusImported,
+		Genres:           []string{},
+		MetadataProvider: "openlibrary",
+	}
+	if err := bookRepo.Create(ctx, linkedLocalBook); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seriesRepo.LinkBookIfMissing(ctx, series.ID, linkedLocalBook.ID, "2", true); err != nil {
+		t.Fatal(err)
+	}
+	existingBook := &models.Book{
+		ForeignID:        "ol:the-way-of-kings",
+		AuthorID:         author.ID,
+		Title:            "The Way of Kings",
+		SortTitle:        "The Way of Kings",
+		Status:           models.BookStatusSkipped,
+		Genres:           []string{},
+		MetadataProvider: "openlibrary",
+	}
+	if err := bookRepo.Create(ctx, existingBook); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Fill(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/fill", nil), "id", strconv.FormatInt(series.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var response map[string]int
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["queued"] != 1 {
+		t.Fatalf("expected one queued existing book, got %+v", response)
+	}
+	queued := searcher.waitForCall(t, time.Second)
+	if queued.ID != existingBook.ID {
+		t.Fatalf("expected existing cross-provider book to be queued, got %+v", queued)
+	}
+	if hcAuthor, err := authorRepo.GetByForeignID(ctx, "hc:brandon-sanderson"); err != nil || hcAuthor != nil {
+		t.Fatalf("expected no duplicate Hardcover author, got author=%+v err=%v", hcAuthor, err)
+	}
+	if duplicate, err := bookRepo.GetByForeignID(ctx, "hc:the-way-of-kings"); err != nil || duplicate != nil {
+		t.Fatalf("expected no duplicate Hardcover book, got book=%+v err=%v", duplicate, err)
+	}
+	books, err := seriesRepo.ListBooksInSeries(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundExisting := false
+	for _, book := range books {
+		if book.ID == existingBook.ID {
+			foundExisting = true
+		}
+	}
+	if !foundExisting {
+		t.Fatalf("expected existing book linked to series, got %+v", books)
+	}
+}
+
 func TestSeriesFillSkipsExcludedHardcoverForeignIDMatch(t *testing.T) {
 	catalog := stormlightCatalog()
 	searcher := newMockBookSearcher()
@@ -1161,6 +1258,162 @@ func TestSeriesFillSkipsExcludedHardcoverTitleMatch(t *testing.T) {
 	}
 	if len(books) != 0 {
 		t.Fatalf("expected excluded title match to remain unlinked, got %+v", books)
+	}
+}
+
+func TestSeriesFillSkipsExcludedCrossProviderTitleMatch(t *testing.T) {
+	catalog := stormlightCatalog()
+	catalog.Books[0].ForeignID = "hc:the-way-of-kings-new"
+	catalog.Books[0].Book.ForeignID = "hc:the-way-of-kings-new"
+	searcher := newMockBookSearcher()
+	h, seriesRepo, authorRepo, bookRepo := seriesFixtureWithProvider(t, &stubSeriesProvider{
+		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+	}, searcher)
+	ctx := contextBackground()
+	series := &models.Series{ForeignID: "ol-series:stormlight", Title: "The Stormlight Archive"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+	if err := seriesRepo.UpsertHardcoverLink(ctx, &models.SeriesHardcoverLink{
+		SeriesID:            series.ID,
+		HardcoverSeriesID:   catalog.ForeignID,
+		HardcoverProviderID: catalog.ProviderID,
+		HardcoverTitle:      catalog.Title,
+		HardcoverAuthorName: catalog.AuthorName,
+		HardcoverBookCount:  catalog.BookCount,
+		Confidence:          1,
+		LinkedBy:            "manual",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	author := &models.Author{
+		ForeignID:        "ol:brandon-sanderson",
+		Name:             "Brandon Sanderson",
+		SortName:         "Sanderson, Brandon",
+		MetadataProvider: "openlibrary",
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	linkedLocalBook := &models.Book{
+		ForeignID:        "ol:words-of-radiance",
+		AuthorID:         author.ID,
+		Title:            "Words of Radiance",
+		SortTitle:        "Words of Radiance",
+		Status:           models.BookStatusImported,
+		Genres:           []string{},
+		MetadataProvider: "openlibrary",
+	}
+	if err := bookRepo.Create(ctx, linkedLocalBook); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seriesRepo.LinkBookIfMissing(ctx, series.ID, linkedLocalBook.ID, "2", true); err != nil {
+		t.Fatal(err)
+	}
+	excludedBook := &models.Book{
+		ForeignID:        "ol:the-way-of-kings",
+		AuthorID:         author.ID,
+		Title:            "The Way of Kings",
+		SortTitle:        "The Way of Kings",
+		Status:           models.BookStatusSkipped,
+		Genres:           []string{},
+		MetadataProvider: "openlibrary",
+	}
+	if err := bookRepo.Create(ctx, excludedBook); err != nil {
+		t.Fatal(err)
+	}
+	if err := bookRepo.SetExcluded(ctx, excludedBook.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Fill(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/fill", nil), "id", strconv.FormatInt(series.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var response map[string]int
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["queued"] != 0 {
+		t.Fatalf("expected no queued excluded book, got %+v", response)
+	}
+	searcher.assertNoCall(t, 50*time.Millisecond)
+	if hcAuthor, err := authorRepo.GetByForeignID(ctx, "hc:brandon-sanderson"); err != nil || hcAuthor != nil {
+		t.Fatalf("expected no duplicate Hardcover author, got author=%+v err=%v", hcAuthor, err)
+	}
+	if created, err := bookRepo.GetByForeignID(ctx, "hc:the-way-of-kings-new"); err != nil || created != nil {
+		t.Fatalf("expected no duplicate Hardcover book, got book=%+v err=%v", created, err)
+	}
+	books, err := seriesRepo.ListBooksInSeries(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(books) != 1 || books[0].ID != linkedLocalBook.ID {
+		t.Fatalf("expected only existing local series book to remain linked, got %+v", books)
+	}
+}
+
+func TestSeriesFillSkipsAmbiguousCrossProviderAuthorMatch(t *testing.T) {
+	catalog := stormlightCatalog()
+	searcher := newMockBookSearcher()
+	h, seriesRepo, authorRepo, bookRepo := seriesFixtureWithProvider(t, &stubSeriesProvider{
+		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+	}, searcher)
+	ctx := contextBackground()
+	series := &models.Series{ForeignID: "ol-series:stormlight", Title: "The Stormlight Archive"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+	if err := seriesRepo.UpsertHardcoverLink(ctx, &models.SeriesHardcoverLink{
+		SeriesID:            series.ID,
+		HardcoverSeriesID:   catalog.ForeignID,
+		HardcoverProviderID: catalog.ProviderID,
+		HardcoverTitle:      catalog.Title,
+		HardcoverAuthorName: catalog.AuthorName,
+		HardcoverBookCount:  catalog.BookCount,
+		Confidence:          1,
+		LinkedBy:            "manual",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, foreignID := range []string{"ol:brandon-sanderson", "manual:brandon-sanderson"} {
+		author := &models.Author{
+			ForeignID:        foreignID,
+			Name:             "Brandon Sanderson",
+			SortName:         "Sanderson, Brandon",
+			MetadataProvider: "manual",
+		}
+		if err := authorRepo.Create(ctx, author); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	h.Fill(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/fill", nil), "id", strconv.FormatInt(series.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var response map[string]int
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["queued"] != 0 {
+		t.Fatalf("expected no queued ambiguous author match, got %+v", response)
+	}
+	searcher.assertNoCall(t, 50*time.Millisecond)
+	if hcAuthor, err := authorRepo.GetByForeignID(ctx, "hc:brandon-sanderson"); err != nil || hcAuthor != nil {
+		t.Fatalf("expected no duplicate Hardcover author, got author=%+v err=%v", hcAuthor, err)
+	}
+	if created, err := bookRepo.GetByForeignID(ctx, "hc:the-way-of-kings"); err != nil || created != nil {
+		t.Fatalf("expected no Hardcover book creation, got book=%+v err=%v", created, err)
+	}
+	books, err := seriesRepo.ListBooksInSeries(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(books) != 0 {
+		t.Fatalf("expected no series links, got %+v", books)
 	}
 }
 

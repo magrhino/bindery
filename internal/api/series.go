@@ -1036,7 +1036,7 @@ func (h *SeriesHandler) createMissingHardcoverBooks(ctx context.Context, seriesI
 		if !ok {
 			continue
 		}
-		if _, err := h.ensureHardcoverCatalogBook(ctx, series.ID, catalog.AuthorName, catalogBook); err != nil {
+		if _, err := h.ensureHardcoverCatalogBook(ctx, series, catalog.AuthorName, catalogBook); err != nil {
 			return err
 		}
 	}
@@ -1076,7 +1076,7 @@ func (h *SeriesHandler) createMissingHardcoverBook(ctx context.Context, seriesID
 		if !ok {
 			return nil, errSeriesCatalogBookNotFound
 		}
-		return h.ensureHardcoverCatalogBook(ctx, series.ID, catalog.AuthorName, catalogBook)
+		return h.ensureHardcoverCatalogBook(ctx, series, catalog.AuthorName, catalogBook)
 	}
 	return nil, errSeriesCatalogBookNotFound
 }
@@ -1093,7 +1093,10 @@ func findCatalogBook(books []metadata.SeriesCatalogBook, foreignID, position str
 	return metadata.SeriesCatalogBook{}, false
 }
 
-func (h *SeriesHandler) ensureHardcoverCatalogBook(ctx context.Context, seriesID int64, fallbackAuthor string, catalogBook metadata.SeriesCatalogBook) (*models.Book, error) {
+func (h *SeriesHandler) ensureHardcoverCatalogBook(ctx context.Context, series *models.Series, fallbackAuthor string, catalogBook metadata.SeriesCatalogBook) (*models.Book, error) {
+	if series == nil {
+		return nil, errSeriesNotFound
+	}
 	book := catalogBook.Book
 	book.ForeignID = firstNonEmpty(book.ForeignID, catalogBook.ForeignID)
 	if book.ForeignID == "" {
@@ -1105,7 +1108,7 @@ func (h *SeriesHandler) ensureHardcoverCatalogBook(ctx context.Context, seriesID
 		if existing.Excluded {
 			return nil, nil
 		}
-		_, err := h.series.LinkBookIfMissing(ctx, seriesID, existing.ID, catalogBook.Position, true)
+		_, err := h.series.LinkBookIfMissing(ctx, series.ID, existing.ID, catalogBook.Position, true)
 		return existing, err
 	}
 
@@ -1133,9 +1136,12 @@ func (h *SeriesHandler) ensureHardcoverCatalogBook(ctx context.Context, seriesID
 	metadataProfileID := models.DefaultMetadataProfileID
 	author.MetadataProfileID = &metadataProfileID
 
-	storedAuthor, err := h.authors.GetByForeignID(ctx, author.ForeignID)
+	storedAuthor, skip, err := h.resolveHardcoverCatalogAuthor(ctx, series, author)
 	if err != nil {
 		return nil, err
+	}
+	if skip {
+		return nil, nil
 	}
 	if storedAuthor == nil {
 		if err := h.authors.Create(ctx, author); err != nil {
@@ -1155,7 +1161,7 @@ func (h *SeriesHandler) ensureHardcoverCatalogBook(ctx context.Context, seriesID
 				blockedByExcludedTitle = true
 				continue
 			}
-			_, err := h.series.LinkBookIfMissing(ctx, seriesID, existing.ID, catalogBook.Position, true)
+			_, err := h.series.LinkBookIfMissing(ctx, series.ID, existing.ID, catalogBook.Position, true)
 			return &existing, err
 		}
 	}
@@ -1179,10 +1185,94 @@ func (h *SeriesHandler) ensureHardcoverCatalogBook(ctx context.Context, seriesID
 	if err := h.books.Create(ctx, &book); err != nil {
 		return nil, err
 	}
-	if _, err := h.series.LinkBookIfMissing(ctx, seriesID, book.ID, catalogBook.Position, true); err != nil {
+	if _, err := h.series.LinkBookIfMissing(ctx, series.ID, book.ID, catalogBook.Position, true); err != nil {
 		return nil, err
 	}
 	return &book, nil
+}
+
+func (h *SeriesHandler) resolveHardcoverCatalogAuthor(ctx context.Context, series *models.Series, candidate *models.Author) (*models.Author, bool, error) {
+	if candidate == nil || h.authors == nil {
+		return nil, false, nil
+	}
+	if strings.TrimSpace(candidate.ForeignID) != "" {
+		author, err := h.authors.GetByForeignID(ctx, candidate.ForeignID)
+		if err != nil || author != nil {
+			return author, false, err
+		}
+	}
+	if strings.TrimSpace(candidate.Name) == "" {
+		return nil, false, nil
+	}
+	if author, ambiguous, err := h.matchSeriesAuthorByName(ctx, series, candidate.Name); err != nil || ambiguous || author != nil {
+		return author, ambiguous, err
+	}
+	return h.matchGlobalAuthorByName(ctx, candidate.Name)
+}
+
+func (h *SeriesHandler) matchSeriesAuthorByName(ctx context.Context, series *models.Series, name string) (*models.Author, bool, error) {
+	if series == nil || h.authors == nil {
+		return nil, false, nil
+	}
+	seen := map[int64]struct{}{}
+	var match *models.Author
+	for _, seriesBook := range series.Books {
+		var author *models.Author
+		if seriesBook.Book != nil && seriesBook.Book.AuthorID > 0 {
+			if _, ok := seen[seriesBook.Book.AuthorID]; ok {
+				continue
+			}
+			seen[seriesBook.Book.AuthorID] = struct{}{}
+			var err error
+			author, err = h.authors.GetByID(ctx, seriesBook.Book.AuthorID)
+			if err != nil {
+				return nil, false, err
+			}
+		} else if seriesBook.Book != nil && seriesBook.Book.Author != nil {
+			author = seriesBook.Book.Author
+		}
+		if author == nil || author.ID == 0 {
+			continue
+		}
+		if !trustedAuthorNameMatch(author, name) {
+			continue
+		}
+		if match != nil && match.ID != author.ID {
+			return nil, true, nil
+		}
+		match = author
+	}
+	return match, false, nil
+}
+
+func (h *SeriesHandler) matchGlobalAuthorByName(ctx context.Context, name string) (*models.Author, bool, error) {
+	if h.authors == nil {
+		return nil, false, nil
+	}
+	authors, err := h.authors.List(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	var match *models.Author
+	for idx := range authors {
+		if !trustedAuthorNameMatch(&authors[idx], name) {
+			continue
+		}
+		if match != nil && match.ID != authors[idx].ID {
+			return nil, true, nil
+		}
+		copy := authors[idx]
+		match = &copy
+	}
+	return match, false, nil
+}
+
+func trustedAuthorNameMatch(author *models.Author, name string) bool {
+	if author == nil {
+		return false
+	}
+	match := textutil.MatchAuthorName(author.Name, name)
+	return match.Kind == textutil.AuthorMatchExact || match.Kind == textutil.AuthorMatchFuzzyAuto
 }
 
 func hardcoverAuthorFallbackID(name string) string {
