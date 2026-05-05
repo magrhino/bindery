@@ -2381,7 +2381,7 @@ func TestImporter_HardcoverSeriesLinksExistingCatalogBookWithRollback(t *testing
 		t.Fatalf("series books = %+v, want existing catalog book linked at position 2", hydrated.Books)
 	}
 
-	linkExternalID := hardcoverSeriesLinkExternalID(catalog.ForeignID, existingBook.ID)
+	linkExternalID := seriesMembershipExternalID(catalog.ForeignID, existingBook.ID, "")
 	link, err := provenanceRepo.GetByExternal(ctx, DefaultSourceID, item.LibraryID, entityTypeSeries, linkExternalID)
 	if err != nil {
 		t.Fatalf("GetByExternal: %v", err)
