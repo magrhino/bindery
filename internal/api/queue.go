@@ -314,7 +314,7 @@ func paginateArrQueueRecords(records []arrQueueRecord, page, pageSize int) []arr
 
 func storedDownloadID(d models.Download) string {
 	if d.TorrentID != nil && *d.TorrentID != "" {
-		return *d.TorrentID
+		return strings.ToLower(*d.TorrentID)
 	}
 	if d.SABnzbdNzoID != nil && *d.SABnzbdNzoID != "" {
 		return *d.SABnzbdNzoID

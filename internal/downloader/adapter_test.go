@@ -3,11 +3,13 @@ package downloader
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/vavallee/bindery/internal/models"
 )
@@ -360,6 +362,81 @@ func TestTestClient_Qbittorrent(t *testing.T) {
 	}
 }
 
+func TestTestClient_ConnectionFailureMatrix(t *testing.T) {
+	tests := []struct {
+		name       string
+		clientType string
+	}{
+		{name: "SABnzbd", clientType: "sabnzbd"},
+		{name: "NZBGet", clientType: "nzbget"},
+		{name: "Transmission", clientType: "transmission"},
+		{name: "qBittorrent", clientType: "qbittorrent"},
+		{name: "Deluge", clientType: "deluge"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+			host, port := serverHostPort(t, srv.URL)
+			srv.Close()
+
+			client := &models.DownloadClient{
+				Type:     tc.clientType,
+				Host:     host,
+				Port:     port,
+				APIKey:   "testkey",
+				Username: "user",
+				Password: "pass",
+			}
+			if err := TestClient(context.Background(), client); err == nil {
+				t.Fatal("expected connection failure error, got nil")
+			}
+		})
+	}
+}
+
+func TestTestClient_TimeoutMatrix(t *testing.T) {
+	tests := []struct {
+		name       string
+		clientType string
+	}{
+		{name: "SABnzbd", clientType: "sabnzbd"},
+		{name: "NZBGet", clientType: "nzbget"},
+		{name: "Transmission", clientType: "transmission"},
+		{name: "qBittorrent", clientType: "qbittorrent"},
+		{name: "Deluge", clientType: "deluge"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+				time.Sleep(200 * time.Millisecond)
+			}))
+			defer srv.Close()
+
+			host, port := serverHostPort(t, srv.URL)
+			client := &models.DownloadClient{
+				Type:     tc.clientType,
+				Host:     host,
+				Port:     port,
+				APIKey:   "testkey",
+				Username: "user",
+				Password: "pass",
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+
+			err := TestClient(ctx, client)
+			if err == nil {
+				t.Fatal("expected timeout error, got nil")
+			}
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected context deadline exceeded, got %v", err)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // SendDownload
 // ---------------------------------------------------------------------------
@@ -638,18 +715,18 @@ func TestBytesPerSecondToString_Bytes(t *testing.T) {
 // liveStatusIsError — issue #426
 // ---------------------------------------------------------------------------
 
-func TestLiveStatusIsError_TransmissionIntegerCodes(t *testing.T) {
+func TestLiveStatusIsError_StatusStrings(t *testing.T) {
 	tests := []struct {
 		status string
 		want   bool
 	}{
-		// Transmission error codes
-		{"16", true}, // TR_STATUS_CHECK_WAIT (error)
-		{"32", true}, // TR_STATUS_ISOLATED_ERROR
-		{"0", false}, // stopped but not an error code
+		// Transmission integer statuses are not error codes; failures are
+		// surfaced through errorString overlays.
+		{"0", false}, // stopped
 		{"3", false}, // seeding
 		{"2", false}, // downloading
-		// String-based statuses (qBittorrent, Deluge)
+		{"error: No data found", true},
+		// String-based statuses (qBittorrent, Deluge, SABnzbd, NZBGet)
 		{"error", true},
 		{"Error", true},
 		{"stalledDL", false},
@@ -666,7 +743,7 @@ func TestLiveStatusIsError_TransmissionIntegerCodes(t *testing.T) {
 	}
 }
 
-func TestGetLiveStatusesTransmission_PopulatesStatus(t *testing.T) {
+func TestGetLiveStatusesTransmission_UsesErrorStringStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"arguments": map[string]any{
@@ -674,7 +751,8 @@ func TestGetLiveStatusesTransmission_PopulatesStatus(t *testing.T) {
 					{
 						"id":          10,
 						"percentDone": 0.5,
-						"status":      16, // Transmission error code
+						"status":      0,
+						"errorString": "No data found! Ensure your drives are connected",
 					},
 				},
 			},
@@ -693,10 +771,10 @@ func TestGetLiveStatusesTransmission_PopulatesStatus(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected torrent id 10 in status map")
 	}
-	if ls.Status != "16" {
-		t.Errorf("expected Status=%q, got %q", "16", ls.Status)
+	if ls.Status != "error: No data found! Ensure your drives are connected" {
+		t.Errorf("unexpected Status=%q", ls.Status)
 	}
 	if !liveStatusIsError(ls) {
-		t.Error("expected liveStatusIsError to return true for Transmission status 16")
+		t.Error("expected liveStatusIsError to return true for Transmission errorString")
 	}
 }
