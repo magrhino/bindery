@@ -530,7 +530,7 @@ func (i *Importer) importOne(ctx context.Context, cfg ImportConfig, runID int64,
 	}
 	seriesMeta := metadataMergeResult{}
 	if i.enhancedHardcoverSeriesEnabled(ctx) {
-		hardcoverSeriesResult := seriesUpsertResult{}
+		var hardcoverSeriesResult seriesUpsertResult
 		seriesMeta, hardcoverSeriesResult = i.matchHardcoverSeries(ctx, cfg, runID, author, bookResult.row, item, stats)
 		stats.MetadataMatched += seriesMeta.Matched
 		stats.MetadataRelinked += seriesMeta.Relinked
