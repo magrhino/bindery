@@ -1,0 +1,16 @@
+{
+  "user": {
+    "id": "user-123",
+    "username": "fixture-user",
+    "type": "user",
+    "permissions": {
+      "accessAllLibraries": true
+    },
+    "librariesAccessible": []
+  },
+  "userDefaultLibraryId": "lib-books",
+  "serverSettings": {
+    "version": "2.33.2"
+  },
+  "Source": "docker"
+}

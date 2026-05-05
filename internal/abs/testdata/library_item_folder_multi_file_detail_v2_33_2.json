@@ -1,0 +1,69 @@
+{
+  "id": "li_folder_multi",
+  "libraryId": "lib-books",
+  "folderId": "fol-books",
+  "path": "/audiobooks/Brandon Sanderson/The Way of Kings",
+  "relPath": "Brandon Sanderson/The Way of Kings",
+  "isFile": false,
+  "mediaType": "book",
+  "media": {
+    "libraryItemId": "li_folder_multi",
+    "metadata": {
+      "title": "The Way of Kings",
+      "subtitle": "Book One of the Stormlight Archive",
+      "authors": [
+        {
+          "id": "au_brandon_sanderson",
+          "name": "Brandon Sanderson"
+        }
+      ],
+      "narrators": [
+        "Michael Kramer",
+        "Kate Reading"
+      ],
+      "series": [
+        {
+          "id": "series_stormlight",
+          "name": "The Stormlight Archive",
+          "sequence": "1"
+        }
+      ],
+      "genres": [
+        "Fantasy"
+      ],
+      "publishedYear": "2010",
+      "publishedDate": "2010-08-31",
+      "publisher": "Tor Books",
+      "description": "An epic beginning to the Stormlight Archive.",
+      "language": "en",
+      "isbn": "9780765326355",
+      "asin": "B003P2WO5E"
+    },
+    "duration": 162345.7,
+    "size": 2147483648,
+    "audioFiles": [
+      {
+        "ino": "ino_way_1",
+        "index": 1,
+        "path": "/audiobooks/Brandon Sanderson/The Way of Kings/Part 1.mp3",
+        "duration": 81234.1,
+        "size": 1073741824,
+        "metadata": {
+          "filename": "Part 1.mp3",
+          "ext": "mp3"
+        }
+      },
+      {
+        "ino": "ino_way_2",
+        "index": 2,
+        "path": "/audiobooks/Brandon Sanderson/The Way of Kings/Part 2.mp3",
+        "duration": 81111.6,
+        "size": 1073741824,
+        "metadata": {
+          "filename": "Part 2.mp3",
+          "ext": "mp3"
+        }
+      }
+    ]
+  }
+}

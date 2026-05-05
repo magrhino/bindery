@@ -6,6 +6,28 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **Audiobookshelf (ABS) import workflow** — Bindery can now connect to one ABS source, validate an API key, discover visible book libraries, and import ABS catalog metadata into shared authors, books, series, and ebook/audiobook editions. Imports support dry runs, persisted run history, rollback preview/rollback, low-confidence review queues, metadata conflict resolution, and path remaps when ABS and Bindery see the same files under different mount prefixes. Import quality is best when the ABS library already has strong metadata, especially ASIN coverage.
+
+### Changed
+
+- **ABS configuration saves no longer probe the live server** — saving ABS settings now normalizes and stores the base URL, label, enabled flag, selected library ID, path remaps, and write-only API key without contacting ABS. Use **Test connection** or **List libraries** for live validation; library discovery returns book libraries only.
+- **ABS importer internals split by domain** — the importer orchestration remains in `internal/abs/importer.go`, with author matching, upserts, file reconciliation, metadata conflicts, rollback, snapshots, shared types, and utilities split into focused helper files.
+
+### Fixed
+
+- **ABS imports reject non-book libraries before scanning** — import enumeration now validates that the selected ABS library page is `mediaType=book` and that each returned item is a book item before mapping catalog data.
+- **ABS API calls use a Bindery user agent** — config probes and import enumeration now send `User-Agent: bindery/<version>` (`bindery/dev` when no build version is available) instead of the Go default user agent.
+
+### Chores
+
+- **Go toolchain pinned for CI** — `go.mod` now targets Go `1.25.9`, while GitHub Actions setup uses the Go `1.25` minor family across CI, security, and ABS contract jobs.
+
+### Docs
+
+- Added an ABS import guide and user-facing wiki documentation covering setup, required API-key access, path remaps, review flow, conflicts, rollback, and import-quality expectations.
+
 ## [v1.2.7] — 2026-05-04
 
 ### Added

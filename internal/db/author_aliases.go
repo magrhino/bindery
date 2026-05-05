@@ -46,6 +46,26 @@ func (r *AuthorAliasRepo) ListByAuthor(ctx context.Context, authorID int64) ([]m
 	return out, rows.Err()
 }
 
+func (r *AuthorAliasRepo) List(ctx context.Context) ([]models.AuthorAlias, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, author_id, name, COALESCE(source_ol_id, ''), created_at
+		FROM author_aliases ORDER BY created_at DESC, id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list aliases: %w", err)
+	}
+	defer rows.Close()
+
+	var out []models.AuthorAlias
+	for rows.Next() {
+		var a models.AuthorAlias
+		if err := rows.Scan(&a.ID, &a.AuthorID, &a.Name, &a.SourceOLID, &a.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan alias: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // LookupByName returns the canonical author id for the given name, or nil if
 // no alias matches. The comparison is case-insensitive and trimmed so the
 // caller doesn't need to normalise before calling.

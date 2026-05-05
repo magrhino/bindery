@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/vavallee/bindery/internal/abs"
 	"github.com/vavallee/bindery/internal/api"
 	"github.com/vavallee/bindery/internal/auth"
 	oidcauth "github.com/vavallee/bindery/internal/auth/oidc"
@@ -110,6 +111,11 @@ func main() {
 	authorAliasRepo := db.NewAuthorAliasRepo(database)
 	bookRepo := db.NewBookRepo(database)
 	editionRepo := db.NewEditionRepo(database)
+	absImportRunRepo := db.NewABSImportRunRepo(database)
+	absImportRunEntityRepo := db.NewABSImportRunEntityRepo(database)
+	absProvenanceRepo := db.NewABSProvenanceRepo(database)
+	absConflictRepo := db.NewABSMetadataConflictRepo(database)
+	absReviewRepo := db.NewABSReviewItemRepo(database)
 	indexerRepo := db.NewIndexerRepo(database)
 	dlClientRepo := db.NewDownloadClientRepo(database)
 	downloadRepo := db.NewDownloadRepo(database)
@@ -220,6 +226,27 @@ func main() {
 	// startup-sync branch below — both paths share the "only one import
 	// at a time" guard.
 	calibreImporter := calibre.NewImporter(authorRepo, authorAliasRepo, bookRepo, editionRepo, settingsRepo)
+	absImporter := abs.NewImporter(authorRepo, authorAliasRepo, bookRepo, editionRepo, seriesRepo, settingsRepo, absImportRunRepo, absImportRunEntityRepo, absProvenanceRepo, absReviewRepo, absConflictRepo).
+		WithVersion(version).
+		WithStoragePaths(cfg.LibraryDir, cfg.AudiobookDir, rootFolderRepo).
+		WithMetadata(metaAgg)
+	if cfg.ABSFeatureEnabled {
+		storedABS := api.LoadABSConfig(ctxBoot, settingsRepo)
+		resumeCfg := abs.ImportConfig{
+			SourceID:  abs.DefaultSourceID,
+			BaseURL:   storedABS.BaseURL,
+			APIKey:    storedABS.APIKey,
+			LibraryID: storedABS.LibraryID,
+			PathRemap: storedABS.PathRemap,
+			Label:     storedABS.Label,
+			Enabled:   storedABS.Enabled,
+		}
+		if resumed, err := absImporter.ResumeInterrupted(ctxBoot, resumeCfg); err != nil {
+			slog.Warn("abs interrupted import resume skipped", "error", err)
+		} else if resumed {
+			slog.Info("abs interrupted import resumed from checkpoint")
+		}
+	}
 	if syncOnStartup(settingsRepo) {
 		cfg := api.LoadCalibreConfig(settingsRepo)
 		if cfg.Enabled && cfg.LibraryPath != "" {
@@ -344,6 +371,14 @@ func main() {
 	logHandler := api.NewLogHandler(ring).WithLogRepo(logRepo)
 	prowlarrHandler := api.NewProwlarrHandler(prowlarrRepo, indexerRepo)
 	calibreHandler := api.NewCalibreHandler(settingsRepo)
+	absHandler := api.NewABSHandler(settingsRepo).WithVersion(version).WithFeatureEnabled(cfg.ABSFeatureEnabled)
+	absConflictHandler := api.NewABSConflictHandler(absConflictRepo, authorRepo, bookRepo)
+	absImportHandler := api.NewABSImportHandler(absImporter, func(ctx context.Context) api.ABSStoredConfig {
+		return api.LoadABSConfig(ctx, settingsRepo)
+	})
+	absReviewHandler := api.NewABSReviewHandler(absReviewRepo, absImporter, func(ctx context.Context) api.ABSStoredConfig {
+		return api.LoadABSConfig(ctx, settingsRepo)
+	})
 	calibreImportHandler := api.NewCalibreImportHandler(calibreImporter, func() calibre.Config {
 		return api.LoadCalibreConfig(settingsRepo)
 	})
@@ -455,6 +490,7 @@ func main() {
 		r.Put("/author/{id}", authorHandler.Update)
 		r.Delete("/author/{id}", authorHandler.Delete)
 		r.Post("/author/{id}/refresh", authorHandler.Refresh)
+		r.Post("/author/{id}/relink-upstream", authorHandler.RelinkUpstream)
 		r.Get("/author/{id}/aliases", authorAliasHandler.List)
 		r.Post("/author/{id}/merge", authorAliasHandler.Merge)
 
@@ -549,6 +585,24 @@ func main() {
 			r.Use(auth.RequireAdmin)
 			r.Put("/setting/{key}", settingsHandler.Set)
 			r.Delete("/setting/{key}", settingsHandler.Delete)
+			r.Get("/abs/config", absHandler.GetConfig)
+			if cfg.ABSFeatureEnabled {
+				r.Put("/abs/config", absHandler.SetConfig)
+				r.Post("/abs/test", absHandler.Test)
+				r.Post("/abs/libraries", absHandler.Libraries)
+				r.Post("/abs/import", absImportHandler.Start)
+				r.Get("/abs/import/status", absImportHandler.Status)
+				r.Get("/abs/import/runs", absImportHandler.Runs)
+				r.Post("/abs/import/runs/{runID}/rollback/preview", absImportHandler.RollbackPreview)
+				r.Post("/abs/import/runs/{runID}/rollback", absImportHandler.Rollback)
+				r.Get("/abs/review", absReviewHandler.List)
+				r.Post("/abs/review/{id}/approve", absReviewHandler.Approve)
+				r.Post("/abs/review/{id}/resolve-author", absReviewHandler.ResolveAuthor)
+				r.Post("/abs/review/{id}/resolve-book", absReviewHandler.ResolveBook)
+				r.Post("/abs/review/{id}/dismiss", absReviewHandler.Dismiss)
+				r.Get("/abs/conflicts", absConflictHandler.List)
+				r.Post("/abs/conflicts/{id}/resolve", absConflictHandler.Resolve)
+			}
 		})
 
 		// Series

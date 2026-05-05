@@ -147,14 +147,14 @@ func (r *BookRepo) Update(ctx context.Context, b *models.Book) error {
 	}
 
 	_, err = r.db.ExecContext(ctx, `
-		UPDATE books SET title=?, sort_title=?, original_title=?, description=?, image_url=?,
+		UPDATE books SET foreign_id=?, author_id=?, title=?, sort_title=?, original_title=?, description=?, image_url=?,
 		                 release_date=?, genres=?, average_rating=?, ratings_count=?,
 		                 monitored=?, status=?, any_edition_ok=?, selected_edition_id=?,
 		                 file_path=?, language=?, media_type=?, narrator=?, duration_seconds=?, asin=?,
 		                 metadata_provider=?, last_metadata_refresh_at=?, updated_at=?,
 		                 ebook_file_path=?, audiobook_file_path=?
 		WHERE id=?`,
-		b.Title, b.SortTitle, b.OriginalTitle, b.Description, b.ImageURL,
+		b.ForeignID, b.AuthorID, b.Title, b.SortTitle, b.OriginalTitle, b.Description, b.ImageURL,
 		b.ReleaseDate, string(genresJSON), b.AverageRating, b.RatingsCount,
 		b.Monitored, b.Status, b.AnyEditionOK, b.SelectedEditionID,
 		b.FilePath, b.Language, mediaType, b.Narrator, b.DurationSeconds, b.ASIN,

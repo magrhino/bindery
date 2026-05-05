@@ -1,6 +1,13 @@
 # .gitleaks.toml — Bindery-tuned Gitleaks configuration
 # Extends the default gitleaks ruleset with project-specific allowlists.
 # Reference: https://github.com/gitleaks/gitleaks#configuration
+#
+# NOTE: gitleaks 8.24.x (used in CI via gitleaks-action) requires the global
+# allowlist to use [allowlist] (singular table), not [[allowlists]] (array of
+# tables). The [[allowlists]] form silently has no effect in this version.
+# When combining multiple condition types (regexes + paths) within [allowlist],
+# gitleaks applies AND semantics — all conditions must match. Use only one
+# condition type per block, or accept the OR-via-one-type approach below.
 
 title = "Bindery Gitleaks Configuration"
 
@@ -8,62 +15,24 @@ title = "Bindery Gitleaks Configuration"
 [extend]
 useDefault = true
 
-# ── Allow-listed paths ────────────────────────────────────────────────────────
-# Test files containing placeholder credentials for fixture/unit-test use.
-[[allowlists]]
-description = "Test fixture files – placeholder keys with SCREAMING_TEST_KEY_ prefix"
+# ── Global allowlist (gitleaks 8.24.x compatible) ─────────────────────────────
+# Regexes are matched against both the full match string and the extracted
+# secret. Any finding whose secret or match contains one of these strings is
+# suppressed globally.
+[allowlist]
+description = "Bindery project false-positive suppressions"
 regexes = [
-  # Keys that start with SCREAMING_TEST_KEY_ are fixture placeholders, not real secrets.
-  'SCREAMING_TEST_KEY_[A-Z0-9_]+'
-]
-paths = [
-  # All Go test files in the repo
-  '''.*_test\.go'''
-]
-
-[[allowlists]]
-description = "Demo credential strings in test files only"
-regexes = [
-  # These literal strings appear in fixture/test helpers, not production code.
-  '''admin123''',
-  '''password''',
-  # 'secret' is matched only when surrounded by word boundaries to avoid
-  # hitting legitimate field-names like 'clientSecret' (handled below).
-  '''\bsecret\b'''
-]
-paths = [
-  '''.*_test\.go''',
-  '''.*testdata/.*''',
-  '''.*fixtures/.*'''
-]
-
-[[allowlists]]
-description = "Known safe URL hosts – example.com, localhost, loopback"
-regexes = [
-  # Example domains used in documentation, comments, and test assertions.
+  # Known-safe URL hosts used in examples and config defaults
   '''https?://(www\.)?example\.com''',
-  # Localhost addresses are not secrets.
   '''https?://localhost(:[0-9]+)?''',
   '''https?://127\.0\.0\.1(:[0-9]+)?''',
-  '''https?://\[?::1\]?(:[0-9]+)?'''
-]
-
-# ── Stopwords ─────────────────────────────────────────────────────────────────
-# Short stopwords that appear in innocuous contexts throughout the codebase.
-[allowlist]
-description = "Global stopwords for common benign patterns"
-stopwords = [
-  "example",
-  "placeholder",
-  "REPLACE_ME",
-  "YOUR_KEY_HERE",
-  "test-only",
-  "test-secret-"
-]
-# Paths excluded globally from all rules.
-paths = [
-  '''CHANGELOG\.md''',
-  '''docs/.*''',
-  '''web/dist/.*''',
-  '''web/node_modules/.*'''
+  '''https?://\[?::1\]?(:[0-9]+)?''',
+  # Test-fixture placeholder credential values (opds_test.go, auth_test.go)
+  '''abcdefghijklmnopqrstuvwxyz012345''',
+  '''test-secret-32-bytes-long-enough''',
+  '''test-api-key''',
+  '''admin123''',
+  '''SCREAMING_TEST_KEY_[A-Z0-9_]+''',
+  # URL path false-positive in docs/auth-proxy.md (authelia verify endpoint)
+  '''9091/api/verify''',
 ]

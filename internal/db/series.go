@@ -188,6 +188,14 @@ func (r *SeriesRepo) LinkBook(ctx context.Context, seriesID, bookID int64, posit
 	return nil
 }
 
+func (r *SeriesRepo) UnlinkBook(ctx context.Context, seriesID, bookID int64) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM series_books WHERE series_id = ? AND book_id = ?`, seriesID, bookID)
+	if err != nil {
+		return fmt.Errorf("unlink book %d from series %d: %w", bookID, seriesID, err)
+	}
+	return nil
+}
+
 func (r *SeriesRepo) Delete(ctx context.Context, id int64) error {
 	_, err := r.db.ExecContext(ctx, "DELETE FROM series WHERE id=?", id)
 	if err != nil {

@@ -82,6 +82,7 @@ func TestDeleteAuthor_WithDeleteFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
+	database.SetMaxOpenConns(1)
 
 	authorRepo := db.NewAuthorRepo(database)
 	bookRepo := db.NewBookRepo(database)
@@ -167,6 +168,7 @@ func TestDeleteAuthor_WithoutDeleteFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
+	database.SetMaxOpenConns(1)
 
 	authorRepo := db.NewAuthorRepo(database)
 	bookRepo := db.NewBookRepo(database)
@@ -495,6 +497,79 @@ func (p *fixedAuthorProvider) GetAuthor(_ context.Context, _ string) (*models.Au
 	return p.result, nil
 }
 
+type searchableAuthorProvider struct {
+	stubMetaProvider
+	searchAuthorsByQuery map[string][]models.Author
+	authors              map[string]*models.Author
+}
+
+func (p *searchableAuthorProvider) SearchAuthors(_ context.Context, query string) ([]models.Author, error) {
+	return p.searchAuthorsByQuery[query], nil
+}
+
+func (p *searchableAuthorProvider) GetAuthor(_ context.Context, foreignID string) (*models.Author, error) {
+	if p.authors == nil {
+		return nil, nil
+	}
+	if author := p.authors[foreignID]; author != nil {
+		copy := *author
+		return &copy, nil
+	}
+	return nil, nil
+}
+
+type relinkUpstreamFixture struct {
+	ctx     context.Context
+	authors *db.AuthorRepo
+	aliases *db.AuthorAliasRepo
+	handler *AuthorHandler
+}
+
+func newRelinkUpstreamFixture(t *testing.T, provider metadata.Provider) *relinkUpstreamFixture {
+	t.Helper()
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = database.Close()
+	})
+
+	authorRepo := db.NewAuthorRepo(database)
+	aliasRepo := db.NewAuthorAliasRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+
+	return &relinkUpstreamFixture{
+		ctx:     context.Background(),
+		authors: authorRepo,
+		aliases: aliasRepo,
+		handler: NewAuthorHandler(authorRepo, aliasRepo, bookRepo, nil, metadata.NewAggregator(provider), nil, profileRepo, nil),
+	}
+}
+
+func (f *relinkUpstreamFixture) createAuthor(t *testing.T, author *models.Author) *models.Author {
+	t.Helper()
+	if err := f.authors.Create(f.ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	return author
+}
+
+func (f *relinkUpstreamFixture) relink(t *testing.T, authorID int64) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/author/"+strconv.FormatInt(authorID, 10)+"/relink-upstream", bytes.NewReader(nil))
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", strconv.FormatInt(authorID, 10))
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	rec := httptest.NewRecorder()
+
+	f.handler.RelinkUpstream(rec, req)
+	return rec
+}
+
 // TestCreateAuthor_DuplicateConstraint_Returns409 is a regression test for
 // issue #91: when the database INSERT fails with a UNIQUE constraint violation
 // (the race-condition path where GetByForeignID passes but the row already
@@ -554,11 +629,351 @@ func TestCreateAuthor_DuplicateConstraint_Returns409(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected 409 Conflict for UNIQUE constraint violation, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var resp map[string]string
+	var resp map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatal("response body not valid JSON:", err)
 	}
 	if resp["error"] == "" {
 		t.Error("expected non-empty error field in response body")
+	}
+	if _, ok := resp["canonicalAuthor"]; !ok {
+		t.Error("expected canonicalAuthor in response body")
+	}
+}
+
+func TestCreateAuthor_UsesCanonicalMetadataAndRecordsAlias(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	authorRepo := db.NewAuthorRepo(database)
+	aliasRepo := db.NewAuthorAliasRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+	provider := &fixedAuthorProvider{
+		result: &models.Author{
+			ForeignID:        "OL23919A",
+			Name:             "J. K. Rowling",
+			SortName:         "Rowling, J. K.",
+			Description:      "Canonical author row",
+			ImageURL:         "https://example.com/jk.jpg",
+			MetadataProvider: "openlibrary",
+		},
+	}
+
+	h := NewAuthorHandler(authorRepo, aliasRepo, bookRepo, nil, metadata.NewAggregator(provider), nil, profileRepo, nil)
+	body, _ := json.Marshal(map[string]any{
+		"foreignAuthorId": "OL23919A",
+		"authorName":      "J.K. Rowling",
+		"monitored":       true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/author", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	authors, err := authorRepo.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(authors) != 1 {
+		t.Fatalf("authors = %d, want 1", len(authors))
+	}
+	if authors[0].Name != "J. K. Rowling" {
+		t.Fatalf("name = %q, want canonical name", authors[0].Name)
+	}
+	aliases, err := aliasRepo.ListByAuthor(context.Background(), authors[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliases) != 1 || aliases[0].Name != "J.K. Rowling" {
+		t.Fatalf("aliases = %+v, want J.K. Rowling alias", aliases)
+	}
+}
+
+func TestCreateAuthor_RelinksExistingABSAuthor(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	authorRepo := db.NewAuthorRepo(database)
+	aliasRepo := db.NewAuthorAliasRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+	ctx := context.Background()
+
+	existing := &models.Author{
+		ForeignID:        "abs:author:lib-books:author-tolkien",
+		Name:             "J. R. R. Tolkien",
+		SortName:         "Tolkien, J. R. R.",
+		MetadataProvider: "audiobookshelf",
+		Monitored:        true,
+	}
+	if err := authorRepo.Create(ctx, existing); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &fixedAuthorProvider{
+		result: &models.Author{
+			ForeignID:        "OL26320A",
+			Name:             "J.R.R. Tolkien",
+			SortName:         "Tolkien, J.R.R.",
+			Description:      "Author of The Hobbit.",
+			ImageURL:         "https://example.com/tolkien.jpg",
+			MetadataProvider: "openlibrary",
+		},
+	}
+	h := NewAuthorHandler(authorRepo, aliasRepo, bookRepo, nil, metadata.NewAggregator(provider), nil, profileRepo, nil)
+
+	body, _ := json.Marshal(map[string]any{
+		"foreignAuthorId": "OL26320A",
+		"authorName":      "J.R.R. Tolkien",
+		"monitored":       true,
+		"searchOnAdd":     false,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/author", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	authors, err := authorRepo.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(authors) != 1 {
+		t.Fatalf("authors = %d, want 1", len(authors))
+	}
+	got := authors[0]
+	if got.ID != existing.ID || got.ForeignID != "OL26320A" || got.Name != "J.R.R. Tolkien" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("author = %+v, want relinked existing Tolkien", got)
+	}
+	aliases, err := aliasRepo.ListByAuthor(ctx, got.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliases) != 1 || aliases[0].Name != "J. R. R. Tolkien" {
+		t.Fatalf("aliases = %+v, want old ABS spelling", aliases)
+	}
+}
+
+func TestCreateAuthor_RejectsNormalizedDuplicate(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	authorRepo := db.NewAuthorRepo(database)
+	aliasRepo := db.NewAuthorAliasRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+	ctx := context.Background()
+
+	existing := &models.Author{
+		ForeignID:        "OL23919A",
+		Name:             "J. K. Rowling",
+		SortName:         "Rowling, J. K.",
+		MetadataProvider: "openlibrary",
+		Monitored:        true,
+	}
+	if err := authorRepo.Create(ctx, existing); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &fixedAuthorProvider{
+		result: &models.Author{
+			ForeignID:        "OL_NEW_ROWLING",
+			Name:             "J.K. Rowling",
+			SortName:         "Rowling, J.K.",
+			MetadataProvider: "openlibrary",
+		},
+	}
+	h := NewAuthorHandler(authorRepo, aliasRepo, bookRepo, nil, metadata.NewAggregator(provider), nil, profileRepo, nil)
+
+	body, _ := json.Marshal(map[string]any{
+		"foreignAuthorId": "OL_NEW_ROWLING",
+		"authorName":      "J.K. Rowling",
+		"monitored":       true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/author", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if int(resp["canonicalAuthorId"].(float64)) != int(existing.ID) {
+		t.Fatalf("canonicalAuthorId = %v, want %d", resp["canonicalAuthorId"], existing.ID)
+	}
+	authors, err := authorRepo.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(authors) != 1 {
+		t.Fatalf("authors = %d, want 1", len(authors))
+	}
+}
+
+func TestRelinkUpstream_RelinksPlaceholderAuthorUsingInitialsFallback(t *testing.T) {
+	fixture := newRelinkUpstreamFixture(t, &searchableAuthorProvider{
+		searchAuthorsByQuery: map[string][]models.Author{
+			"J.R.R. Tolkien": {{ForeignID: "OL26320A", Name: "J.R.R. Tolkien"}},
+		},
+		authors: map[string]*models.Author{
+			"OL26320A": {
+				ForeignID:        "OL26320A",
+				Name:             "J.R.R. Tolkien",
+				SortName:         "Tolkien, J.R.R.",
+				Description:      "Author of The Hobbit.",
+				ImageURL:         "https://example.com/tolkien.jpg",
+				MetadataProvider: "openlibrary",
+			},
+		},
+	})
+
+	existing := fixture.createAuthor(t, &models.Author{
+		ForeignID:        "abs:author:lib-books:author-tolkien",
+		Name:             "J. R. R. Tolkien",
+		SortName:         "Tolkien, J. R. R.",
+		MetadataProvider: "audiobookshelf",
+		Monitored:        true,
+	})
+	rec := fixture.relink(t, existing.ID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	got, err := fixture.authors.GetByID(fixture.ctx, existing.ID)
+	if err != nil || got == nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ForeignID != "OL26320A" || got.Name != "J.R.R. Tolkien" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("author = %+v, want relinked upstream Tolkien", got)
+	}
+	aliases, err := fixture.aliases.ListByAuthor(fixture.ctx, got.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliases) != 1 || aliases[0].Name != "J. R. R. Tolkien" {
+		t.Fatalf("aliases = %+v, want original placeholder spelling", aliases)
+	}
+}
+
+func TestRelinkUpstream_RejectsCanonicalConflict(t *testing.T) {
+	fixture := newRelinkUpstreamFixture(t, &searchableAuthorProvider{
+		searchAuthorsByQuery: map[string][]models.Author{
+			"Andrzej Sapkowski": {{ForeignID: "OL368638A", Name: "Andrzej Sapkowski"}},
+		},
+		authors: map[string]*models.Author{
+			"OL368638A": {
+				ForeignID:        "OL368638A",
+				Name:             "Andrzej Sapkowski",
+				SortName:         "Sapkowski, Andrzej",
+				MetadataProvider: "openlibrary",
+			},
+		},
+	})
+
+	placeholder := fixture.createAuthor(t, &models.Author{
+		ForeignID:        "abs:author:lib-books:author-sapkowski",
+		Name:             "Andrzej Sapkowski",
+		SortName:         "Sapkowski, Andrzej",
+		MetadataProvider: "audiobookshelf",
+		Monitored:        true,
+	})
+	canonical := fixture.createAuthor(t, &models.Author{
+		ForeignID:        "OL368638A",
+		Name:             "Canonical Sapkowski",
+		SortName:         "Sapkowski, Canonical",
+		MetadataProvider: "openlibrary",
+		Monitored:        true,
+	})
+	rec := fixture.relink(t, placeholder.ID)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if int(resp["canonicalAuthorId"].(float64)) != int(canonical.ID) {
+		t.Fatalf("canonicalAuthorId = %v, want %d", resp["canonicalAuthorId"], canonical.ID)
+	}
+	got, err := fixture.authors.GetByID(fixture.ctx, placeholder.ID)
+	if err != nil || got == nil {
+		t.Fatalf("GetByID placeholder: %v", err)
+	}
+	if got.ForeignID != placeholder.ForeignID || got.MetadataProvider != placeholder.MetadataProvider {
+		t.Fatalf("placeholder author mutated unexpectedly: %+v", got)
+	}
+}
+
+func TestRelinkUpstream_RejectsCanonicalNameConflict(t *testing.T) {
+	fixture := newRelinkUpstreamFixture(t, &searchableAuthorProvider{
+		searchAuthorsByQuery: map[string][]models.Author{
+			"J.R.R. Tolkien": {{ForeignID: "OL26320A", Name: "J.R.R. Tolkien"}},
+		},
+		authors: map[string]*models.Author{
+			"OL26320A": {
+				ForeignID:        "OL26320A",
+				Name:             "J.R.R. Tolkien",
+				SortName:         "Tolkien, J.R.R.",
+				Description:      "Author of The Hobbit.",
+				MetadataProvider: "openlibrary",
+			},
+		},
+	})
+
+	placeholder := fixture.createAuthor(t, &models.Author{
+		ForeignID:        "abs:author:lib-books:author-tolkien",
+		Name:             "J. R. R. Tolkien",
+		SortName:         "Tolkien, J. R. R.",
+		MetadataProvider: "audiobookshelf",
+		Monitored:        true,
+	})
+	canonical := fixture.createAuthor(t, &models.Author{
+		ForeignID:        "manual:tolkien",
+		Name:             "J.R.R. Tolkien",
+		SortName:         "Tolkien, J.R.R.",
+		MetadataProvider: "openlibrary",
+		Monitored:        true,
+	})
+	rec := fixture.relink(t, placeholder.ID)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if int(resp["canonicalAuthorId"].(float64)) != int(canonical.ID) {
+		t.Fatalf("canonicalAuthorId = %v, want %d", resp["canonicalAuthorId"], canonical.ID)
+	}
+	got, err := fixture.authors.GetByID(fixture.ctx, placeholder.ID)
+	if err != nil || got == nil {
+		t.Fatalf("GetByID placeholder: %v", err)
+	}
+	if got.ForeignID != placeholder.ForeignID || got.MetadataProvider != placeholder.MetadataProvider {
+		t.Fatalf("placeholder author mutated unexpectedly: %+v", got)
 	}
 }

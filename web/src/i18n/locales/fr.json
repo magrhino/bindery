@@ -204,6 +204,7 @@
       "logs": "Journaux",
       "general": "Général",
       "calibre": "Calibre",
+      "abs": "Audiobookshelf",
       "blocklist": "Liste de blocage"
     },
     "indexers": {

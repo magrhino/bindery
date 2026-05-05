@@ -1,0 +1,49 @@
+{
+  "id": "li_missing_stats",
+  "libraryId": "lib-books",
+  "folderId": "fol-books",
+  "path": "/audiobooks/Ursula K. Le Guin/A Wizard of Earthsea.m4b",
+  "relPath": "Ursula K. Le Guin/A Wizard of Earthsea.m4b",
+  "isFile": true,
+  "mediaType": "book",
+  "media": {
+    "libraryItemId": "li_missing_stats",
+    "metadata": {
+      "title": "A Wizard of Earthsea",
+      "authors": [
+        {
+          "id": "au_le_guin",
+          "name": "Ursula K. Le Guin"
+        }
+      ],
+      "narrators": [
+        "Rob Inglis"
+      ],
+      "series": [],
+      "genres": [
+        "Fantasy"
+      ],
+      "publishedYear": "1968",
+      "publishedDate": "1968-09-01",
+      "publisher": "Parnassus Press",
+      "description": "The first Earthsea book.",
+      "language": "en",
+      "isbn": "9780547773742"
+    },
+    "duration": 26430.25,
+    "size": 456789123,
+    "audioFiles": [
+      {
+        "ino": "ino_earthsea",
+        "index": 1,
+        "path": "/audiobooks/Ursula K. Le Guin/A Wizard of Earthsea.m4b",
+        "duration": 26430.25,
+        "size": 456789123,
+        "metadata": {
+          "filename": "A Wizard of Earthsea.m4b",
+          "ext": "m4b"
+        }
+      }
+    ]
+  }
+}
