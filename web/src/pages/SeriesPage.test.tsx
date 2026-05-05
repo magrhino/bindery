@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom'
 import SeriesPage from './SeriesPage'
 import { api } from '../api/client'
-import type { Series, SystemStatus } from '../api/client'
+import type { Series, SeriesHardcoverLink, SeriesHardcoverSearchResult, SystemStatus } from '../api/client'
 
 vi.mock('../api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('../api/client')>()
@@ -194,6 +194,95 @@ describe('SeriesPage', () => {
     expect(screen.getByText('Currently linked')).toBeInTheDocument()
     expect(screen.getByText('Brandon Sanderson')).toBeInTheDocument()
     expect(api.autoLinkSeriesHardcover).not.toHaveBeenCalled()
+  })
+
+  it('confirms a manually selected Hardcover link from the modal', async () => {
+    const result: SeriesHardcoverSearchResult = {
+      foreignId: 'hc-series:42',
+      providerId: '42',
+      title: 'The Stormlight Archive',
+      authorName: 'Brandon Sanderson',
+      bookCount: 10,
+      readersCount: 19323,
+      books: ['The Way of Kings'],
+      confidence: 0.68,
+    }
+    const link: SeriesHardcoverLink = {
+      id: 2,
+      seriesId: 12,
+      hardcoverSeriesId: result.foreignId,
+      hardcoverProviderId: result.providerId,
+      hardcoverTitle: result.title,
+      hardcoverAuthorName: result.authorName,
+      hardcoverBookCount: result.bookCount,
+      confidence: 1,
+      linkedBy: 'manual',
+      linkedAt: '2026-01-01T00:00:00Z',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    }
+    vi.mocked(api.autoLinkSeriesHardcover).mockResolvedValue({
+      linked: false,
+      reason: 'low confidence',
+      candidates: [result],
+    })
+    vi.mocked(api.linkSeriesHardcover).mockResolvedValue(link)
+
+    renderSeriesPage([
+      {
+        id: 12,
+        foreignSeriesId: 'series-12',
+        title: 'Stormlight',
+        description: '',
+        monitored: true,
+        books: [],
+      },
+    ])
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Search' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm Selection' }))
+
+    await waitFor(() => expect(api.linkSeriesHardcover).toHaveBeenCalledWith(12, result))
+    expect(await screen.findByRole('button', { name: 'Manual link' })).toBeInTheDocument()
+  })
+
+  it('removes an existing Hardcover link from the modal', async () => {
+    const hardcoverLink: SeriesHardcoverLink = {
+      id: 3,
+      seriesId: 13,
+      hardcoverSeriesId: 'hc-series:42',
+      hardcoverProviderId: '42',
+      hardcoverTitle: 'The Stormlight Archive',
+      hardcoverAuthorName: 'Brandon Sanderson',
+      hardcoverBookCount: 10,
+      confidence: 1,
+      linkedBy: 'manual',
+      linkedAt: '2026-01-01T00:00:00Z',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    }
+    vi.mocked(api.getSeriesHardcoverLink).mockResolvedValue(hardcoverLink)
+    vi.mocked(api.unlinkSeriesHardcover).mockResolvedValue({ success: true })
+
+    renderSeriesPage([
+      {
+        id: 13,
+        foreignSeriesId: 'series-13',
+        title: 'The Stormlight Archive',
+        description: '',
+        monitored: true,
+        books: [],
+        hardcoverLink,
+      },
+    ])
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Manual link' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove Link' }))
+
+    await waitFor(() => expect(api.unlinkSeriesHardcover).toHaveBeenCalledWith(13))
+    await waitFor(() => expect(within(dialog).queryByText('Currently linked')).not.toBeInTheDocument())
   })
 
   it('creates a manual series from the page header', async () => {

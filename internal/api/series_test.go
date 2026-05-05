@@ -599,6 +599,285 @@ func TestSeriesAutoLinkHardcoverAmbiguousNoop(t *testing.T) {
 	}
 }
 
+func TestSeriesPutHardcoverLinkPersistsManualLink(t *testing.T) {
+	catalog := stormlightCatalog()
+	provider := &stubSeriesProvider{
+		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+	}
+	h, seriesRepo, _, _ := seriesFixtureWithProvider(t, provider, nil)
+	ctx := contextBackground()
+	series := &models.Series{ForeignID: "manual:series:stormlight", Title: "Stormlight"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+
+	body := bytes.NewBufferString(`{"foreignId":"hc-series:42","providerId":"draft","title":"Draft title","authorName":"Draft Author","bookCount":99,"confidence":0.4}`)
+	rec := httptest.NewRecorder()
+	h.PutHardcoverLink(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/api/v1/series/1/hardcover-link", body), "id", strconv.FormatInt(series.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got models.SeriesHardcoverLink
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.HardcoverSeriesID != catalog.ForeignID || got.HardcoverTitle != catalog.Title || got.HardcoverBookCount != catalog.BookCount {
+		t.Fatalf("expected catalog-backed manual link, got %+v", got)
+	}
+	if got.LinkedBy != "manual" || got.Confidence != 0.4 {
+		t.Fatalf("expected manual confidence to persist, got %+v", got)
+	}
+	stored, err := seriesRepo.GetHardcoverLink(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || stored.HardcoverSeriesID != catalog.ForeignID {
+		t.Fatalf("expected stored link, got %+v", stored)
+	}
+}
+
+func TestSeriesPutHardcoverLinkInvalidRequests(t *testing.T) {
+	catalog := stormlightCatalog()
+	h, seriesRepo, _, _ := seriesFixtureWithProvider(t, &stubSeriesProvider{
+		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+	}, nil)
+	ctx := contextBackground()
+	series := &models.Series{ForeignID: "manual:series:stormlight", Title: "Stormlight"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		id   string
+		body string
+		code int
+	}{
+		{name: "missing series", id: "999", body: `{"foreignId":"hc-series:42"}`, code: http.StatusNotFound},
+		{name: "invalid body", id: strconv.FormatInt(series.ID, 10), body: `{`, code: http.StatusBadRequest},
+		{name: "missing foreign id", id: strconv.FormatInt(series.ID, 10), body: `{"title":"Stormlight"}`, code: http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.PutHardcoverLink(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/api/v1/series/1/hardcover-link", bytes.NewBufferString(tt.body)), "id", tt.id))
+			if rec.Code != tt.code {
+				t.Fatalf("expected %d, got %d: %s", tt.code, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestSeriesPutHardcoverLinkProviderFailure(t *testing.T) {
+	catalog := stormlightCatalog()
+	h, seriesRepo, _, _ := seriesFixtureWithProvider(t, &stubSeriesProvider{
+		catalogs:   map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+		catalogErr: errors.New("hardcover unavailable"),
+	}, nil)
+	ctx := contextBackground()
+	series := &models.Series{ForeignID: "manual:series:stormlight", Title: "Stormlight"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.PutHardcoverLink(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/api/v1/series/1/hardcover-link", bytes.NewBufferString(`{"foreignId":"hc-series:42"}`)), "id", strconv.FormatInt(series.ID, 10)))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d: %s", rec.Code, rec.Body.String())
+	}
+	link, err := seriesRepo.GetHardcoverLink(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link != nil {
+		t.Fatalf("provider failure should not persist a link, got %+v", link)
+	}
+}
+
+func TestSeriesDeleteHardcoverLinkRemovesStoredLink(t *testing.T) {
+	catalog := stormlightCatalog()
+	h, seriesRepo, _, _ := seriesFixtureWithProvider(t, &stubSeriesProvider{
+		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+	}, nil)
+	ctx := contextBackground()
+	series := &models.Series{ForeignID: "manual:series:stormlight", Title: "Stormlight"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+	if err := seriesRepo.UpsertHardcoverLink(ctx, &models.SeriesHardcoverLink{
+		SeriesID:            series.ID,
+		HardcoverSeriesID:   catalog.ForeignID,
+		HardcoverProviderID: catalog.ProviderID,
+		HardcoverTitle:      catalog.Title,
+		HardcoverAuthorName: catalog.AuthorName,
+		HardcoverBookCount:  catalog.BookCount,
+		Confidence:          1,
+		LinkedBy:            "manual",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.DeleteHardcoverLink(rec, withURLParam(httptest.NewRequest(http.MethodDelete, "/api/v1/series/1/hardcover-link", nil), "id", strconv.FormatInt(series.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	link, err := seriesRepo.GetHardcoverLink(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link != nil {
+		t.Fatalf("expected link to be deleted, got %+v", link)
+	}
+}
+
+func TestSeriesHardcoverDiffEndpoint(t *testing.T) {
+	catalog := stormlightCatalog()
+	catalog.Books = append(catalog.Books,
+		metadata.SeriesCatalogBook{
+			ForeignID:  "hc:words-of-radiance",
+			ProviderID: "102",
+			Title:      "Words of Radiance",
+			Position:   "2",
+			Book: models.Book{
+				ForeignID: "hc:words-of-radiance",
+				Title:     "Words of Radiance",
+				Author:    catalog.Books[0].Book.Author,
+			},
+		},
+		metadata.SeriesCatalogBook{
+			ForeignID:  "hc:oathbringer",
+			ProviderID: "103",
+			Title:      "Oathbringer",
+			Position:   "3",
+			Book: models.Book{
+				ForeignID: "hc:oathbringer",
+				Title:     "Oathbringer",
+				Author:    catalog.Books[0].Book.Author,
+			},
+		},
+	)
+	catalog.BookCount = len(catalog.Books)
+	h, seriesRepo, authorRepo, bookRepo := seriesFixtureWithProvider(t, &stubSeriesProvider{
+		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+	}, nil)
+	ctx := contextBackground()
+	series := &models.Series{ForeignID: "manual:series:stormlight", Title: "Stormlight"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+	if err := seriesRepo.UpsertHardcoverLink(ctx, &models.SeriesHardcoverLink{
+		SeriesID:            series.ID,
+		HardcoverSeriesID:   catalog.ForeignID,
+		HardcoverProviderID: catalog.ProviderID,
+		HardcoverTitle:      catalog.Title,
+		HardcoverAuthorName: catalog.AuthorName,
+		HardcoverBookCount:  catalog.BookCount,
+		Confidence:          1,
+		LinkedBy:            "manual",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	author := &models.Author{ForeignID: "hc:brandon-sanderson", Name: "Brandon Sanderson", SortName: "Sanderson, Brandon"}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	books := []struct {
+		foreignID string
+		title     string
+		position  string
+	}{
+		{foreignID: "hc:the-way-of-kings", title: "The Way of Kings", position: "1"},
+		{foreignID: "local:radiant-words", title: "Radiant Words", position: ""},
+		{foreignID: "local:unrelated", title: "Completely Different Local Book", position: ""},
+	}
+	for _, item := range books {
+		book := &models.Book{
+			ForeignID: item.foreignID,
+			AuthorID:  author.ID,
+			Title:     item.title,
+			SortTitle: item.title,
+			Status:    models.BookStatusWanted,
+			Genres:    []string{},
+		}
+		if err := bookRepo.Create(ctx, book); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := seriesRepo.LinkBookIfMissing(ctx, series.ID, book.ID, item.position, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	h.HardcoverDiff(rec, withURLParam(httptest.NewRequest(http.MethodGet, "/api/v1/series/1/hardcover-diff", nil), "id", strconv.FormatInt(series.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got seriesHardcoverDiffResponse
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Present) != 1 || got.Present[0].ForeignBookID != "hc:the-way-of-kings" {
+		t.Fatalf("present = %+v, want The Way of Kings", got.Present)
+	}
+	if len(got.Uncertain) != 1 || got.Uncertain[0].ForeignBookID != "hc:words-of-radiance" {
+		t.Fatalf("uncertain = %+v, want Words of Radiance", got.Uncertain)
+	}
+	if len(got.LocalOnly) != 1 || got.LocalOnly[0].LocalTitle != "Completely Different Local Book" {
+		t.Fatalf("localOnly = %+v, want unrelated local book", got.LocalOnly)
+	}
+	if len(got.Missing) != 1 || got.Missing[0].ForeignBookID != "hc:oathbringer" || got.PresentCount != 1 || got.MissingCount != 1 {
+		t.Fatalf("missing/counts = %+v present=%d missing=%d, want Oathbringer and counts 1/1", got.Missing, got.PresentCount, got.MissingCount)
+	}
+}
+
+func TestSeriesHardcoverDiffEndpointErrors(t *testing.T) {
+	catalog := stormlightCatalog()
+	h, seriesRepo, _, _ := seriesFixtureWithProvider(t, &stubSeriesProvider{
+		catalogs:   map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+		catalogErr: errors.New("hardcover unavailable"),
+	}, nil)
+	ctx := contextBackground()
+	linked := &models.Series{ForeignID: "manual:series:linked", Title: "Linked"}
+	if err := seriesRepo.Create(ctx, linked); err != nil {
+		t.Fatal(err)
+	}
+	if err := seriesRepo.UpsertHardcoverLink(ctx, &models.SeriesHardcoverLink{
+		SeriesID:            linked.ID,
+		HardcoverSeriesID:   catalog.ForeignID,
+		HardcoverProviderID: catalog.ProviderID,
+		HardcoverTitle:      catalog.Title,
+		HardcoverBookCount:  catalog.BookCount,
+		Confidence:          1,
+		LinkedBy:            "manual",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	unlinked := &models.Series{ForeignID: "manual:series:unlinked", Title: "Unlinked"}
+	if err := seriesRepo.Create(ctx, unlinked); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		id   string
+		code int
+	}{
+		{name: "missing series", id: "999", code: http.StatusNotFound},
+		{name: "missing link", id: strconv.FormatInt(unlinked.ID, 10), code: http.StatusNotFound},
+		{name: "provider failure", id: strconv.FormatInt(linked.ID, 10), code: http.StatusBadGateway},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.HardcoverDiff(rec, withURLParam(httptest.NewRequest(http.MethodGet, "/api/v1/series/1/hardcover-diff", nil), "id", tt.id))
+			if rec.Code != tt.code {
+				t.Fatalf("expected %d, got %d: %s", tt.code, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestSeriesFillSkipsHardcoverCatalogWhenFeatureDisabled(t *testing.T) {
 	catalog := stormlightCatalog()
 	provider := &stubSeriesProvider{
