@@ -226,6 +226,41 @@ Bindery caches the IdP's JWKS (public keys) to avoid a round-trip to the identit
 - Token validation is fast and does not hit the IdP per-request.
 - If you rotate IdP signing keys, Bindery will re-fetch on the next cache miss (typically within minutes).
 
+## Provider load status and on-demand recovery
+
+Bindery performs OIDC discovery (`<issuer>/.well-known/openid-configuration`) when providers are loaded — at startup and whenever an admin saves the provider list. If discovery fails for a provider (e.g. the IdP is briefly unreachable while Bindery's pod is starting), the provider is recorded as **failed** instead of being dropped silently. Two consequences:
+
+1. `GET /api/v1/auth/oidc/providers` returns a `status` block per provider:
+
+    ```json
+    [
+      {
+        "id": "authentik",
+        "name": "Authentik",
+        "issuer": "https://auth.example.com/application/o/bindery/",
+        "client_id": "...",
+        "scopes": ["openid", "email", "profile"],
+        "status": { "state": "ok" }
+      },
+      {
+        "id": "google",
+        "name": "Google",
+        "issuer": "https://accounts.google.com",
+        "client_id": "...",
+        "scopes": ["openid", "email", "profile"],
+        "status": {
+          "state": "failed",
+          "last_error": "oidc discovery for \"https://accounts.google.com\": context canceled",
+          "last_attempt": "2026-05-05T22:25:42Z"
+        }
+      }
+    ]
+    ```
+
+2. The **first login attempt** for a failed provider triggers an on-demand re-discovery, rate-limited to once per 30 seconds per provider. If discovery now succeeds, the provider transitions to `ok` and the login flow continues normally. If it still fails, the user gets the same `unknown oidc provider` error as before, and the failed entry's `last_error` and `last_attempt` are updated for the admin to inspect.
+
+The login page only renders **Sign in with X** buttons for providers in `ok` state — failed providers are intentionally hidden so users don't click into a flow that's guaranteed to error.
+
 ## Multi-provider note: sub re-use
 
 Two different IdPs can emit the same `sub` value for different users. Bindery's user mapping key is `(issuer, sub)`, not `sub` alone — so collisions across providers are impossible by design.

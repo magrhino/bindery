@@ -57,7 +57,7 @@ func (h *OIDCHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	authURL, err := h.mgr.AuthURL(providerID, state, nonce, verifier)
+	authURL, err := h.mgr.AuthURL(r.Context(), providerID, state, nonce, verifier)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -167,8 +167,19 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
+// providerWithStatus pairs the public config of a configured provider with
+// its current runtime status (loaded vs failed-discovery). Status is decided
+// from the in-memory manager state, not the DB — a provider configured in the
+// DB but missing from the manager is "failed" and unusable for login until it
+// recovers (see EnsureLoaded).
+type providerWithStatus struct {
+	oidc.ProviderPublicConfig
+	Status *oidc.Status `json:"status,omitempty"`
+}
+
 // GetProviders returns the configured OIDC provider list (id + name only,
-// no secrets). Used by the login page to render "Sign in with X" buttons.
+// no secrets) with a per-provider runtime status block. Used by the admin
+// settings UI; the public login page only needs id+name and ignores the rest.
 // GET /api/v1/auth/oidc/providers
 func (h *OIDCHandler) GetProviders(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -182,9 +193,12 @@ func (h *OIDCHandler) GetProviders(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "parse providers: "+err.Error())
 		return
 	}
-	out := make([]oidc.ProviderPublicConfig, 0, len(ps))
+	out := make([]providerWithStatus, 0, len(ps))
 	for _, p := range ps {
-		out = append(out, p.Public())
+		out = append(out, providerWithStatus{
+			ProviderPublicConfig: p.Public(),
+			Status:               h.mgr.Status(p.ID),
+		})
 	}
 	writeOK(w, out)
 }

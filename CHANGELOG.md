@@ -12,6 +12,7 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ### Fixed
 
+- **OIDC providers no longer silently dropped after failed startup discovery** (#461) — Providers whose discovery fails during `Reload()` are now tracked in a separate failed-providers map instead of being silently logged-and-forgotten. `GET /api/v1/auth/oidc/providers` returns a per-provider `status` block (`"ok"` / `"failed"` with the last error and timestamp) so admins can diagnose without grepping logs. The first login attempt for a failed provider triggers an on-demand re-discovery (rate-limited to once per 30s), so transient startup failures (e.g. pod recreated before IdP is reachable) recover automatically without an admin restart.
 - **ABS imports require saved source configuration** — import and dry-run starts now use only the stored ABS configuration, and the UI blocks runs while ABS settings contain unsaved changes so previews and imports cannot run against one-off request overrides.
 - **Hardcover auto-linking requires local evidence** — automatic series linking now requires local book overlap or author agreement before accepting a high-confidence Hardcover candidate, and missing-book fill skips books that already exist as excluded titles.
 

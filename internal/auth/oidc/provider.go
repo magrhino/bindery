@@ -19,6 +19,12 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// retryMinInterval is the minimum gap between on-demand re-discovery attempts
+// for a single provider. Shorter gives faster recovery; longer protects the
+// IdP from a hammered login button. Exposed as a package var so tests can
+// override it without sleeping.
+var retryMinInterval = 30 * time.Second
+
 // ProviderConfig is the internal representation persisted to the settings
 // table. It includes the client secret and must never be marshalled directly
 // to an API response — use ProviderPublicConfig for that.
@@ -77,11 +83,24 @@ type Claims struct {
 	Groups            []string
 }
 
+// Status is the runtime state of a configured provider as far as the manager
+// knows. "ok" means the provider's verifier and oauth2 config are loaded and
+// ready; "failed" means OIDC discovery did not succeed and the provider is
+// not currently usable for login.
+type Status struct {
+	State       string    `json:"state"`                  // "ok" | "failed"
+	LastError   string    `json:"last_error,omitempty"`   // populated when state=="failed"
+	LastAttempt time.Time `json:"last_attempt,omitempty"` // last time discovery was tried
+}
+
 // Manager holds per-provider OIDC verifiers and oauth2 configs, keyed by
-// provider ID. It is rebuilt when the settings change.
+// provider ID. It is rebuilt when the settings change. Providers whose
+// initial discovery fails are kept in `failed` so admins can see them and
+// so login attempts can trigger an on-demand retry.
 type Manager struct {
 	mu           sync.RWMutex
 	providers    map[string]*entry
+	failed       map[string]*failedEntry
 	redirectBase string
 }
 
@@ -91,20 +110,30 @@ type entry struct {
 	oauth2   oauth2.Config
 }
 
+type failedEntry struct {
+	cfg         ProviderConfig
+	lastErr     error
+	lastAttempt time.Time
+}
+
 func NewManager(redirectBase string) *Manager {
 	return &Manager{
 		providers:    make(map[string]*entry),
+		failed:       make(map[string]*failedEntry),
 		redirectBase: redirectBase,
 	}
 }
 
 // Reload replaces the provider set from a fresh config slice. Providers that
-// haven't changed keep their verifier (and therefore JWKS cache).
+// haven't changed keep their verifier (and therefore JWKS cache). Providers
+// whose discovery fails are recorded in the failed map (instead of silently
+// dropped) so the admin UI can surface them and EnsureLoaded can retry.
 func (m *Manager) Reload(ctx context.Context, cfgs []ProviderConfig) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	next := make(map[string]*entry, len(cfgs))
+	nextFailed := make(map[string]*failedEntry)
 	for _, cfg := range cfgs {
 		// Re-use the existing entry if config is identical (preserves JWKS cache).
 		if e, ok := m.providers[cfg.ID]; ok && configEqual(e.cfg, cfg) {
@@ -113,12 +142,14 @@ func (m *Manager) Reload(ctx context.Context, cfgs []ProviderConfig) {
 		}
 		e, err := m.buildEntry(ctx, cfg)
 		if err != nil {
-			slog.Error("oidc: failed to initialise provider, skipping", "id", cfg.ID, "error", err)
+			slog.Error("oidc: failed to initialise provider", "id", cfg.ID, "error", err)
+			nextFailed[cfg.ID] = &failedEntry{cfg: cfg, lastErr: err, lastAttempt: time.Now()}
 			continue
 		}
 		next[cfg.ID] = e
 	}
 	m.providers = next
+	m.failed = nextFailed
 }
 
 func (m *Manager) buildEntry(ctx context.Context, cfg ProviderConfig) (*entry, error) {
@@ -141,6 +172,67 @@ func (m *Manager) buildEntry(ctx context.Context, cfg ProviderConfig) (*entry, e
 	return &entry{cfg: cfg, verifier: verifier, oauth2: oc}, nil
 }
 
+// EnsureLoaded attempts on-demand re-discovery for a provider that is in the
+// failed map, rate-limited by retryMinInterval to protect the IdP from a
+// hammered login button. No-op if the provider is already loaded or unknown.
+// Errors are recorded on the failed entry; this function never returns one.
+func (m *Manager) EnsureLoaded(ctx context.Context, id string) {
+	m.mu.RLock()
+	if _, ok := m.providers[id]; ok {
+		m.mu.RUnlock()
+		return
+	}
+	f, isFailed := m.failed[id]
+	m.mu.RUnlock()
+	if !isFailed {
+		return
+	}
+	if time.Since(f.lastAttempt) < retryMinInterval {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Re-check after acquiring the write lock — another goroutine may have
+	// won the race and either loaded the provider or just attempted retry.
+	if _, ok := m.providers[id]; ok {
+		return
+	}
+	f, isFailed = m.failed[id]
+	if !isFailed || time.Since(f.lastAttempt) < retryMinInterval {
+		return
+	}
+
+	f.lastAttempt = time.Now()
+	e, err := m.buildEntry(ctx, f.cfg)
+	if err != nil {
+		f.lastErr = err
+		slog.Warn("oidc: on-demand re-discovery failed", "id", id, "error", err)
+		return
+	}
+	m.providers[id] = e
+	delete(m.failed, id)
+	slog.Info("oidc: provider recovered via on-demand re-discovery", "id", id)
+}
+
+// Status returns the runtime status of a configured provider. For providers
+// that aren't configured at all, returns nil.
+func (m *Manager) Status(id string) *Status {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.providers[id]; ok {
+		return &Status{State: "ok"}
+	}
+	if f, ok := m.failed[id]; ok {
+		s := &Status{State: "failed", LastAttempt: f.lastAttempt}
+		if f.lastErr != nil {
+			s.LastError = f.lastErr.Error()
+		}
+		return s
+	}
+	return nil
+}
+
 // Get returns the entry for a provider ID, or nil if not found.
 func (m *Manager) Get(id string) *entry {
 	m.mu.RLock()
@@ -148,7 +240,9 @@ func (m *Manager) Get(id string) *entry {
 	return m.providers[id]
 }
 
-// List returns all configured provider configs (for the login page).
+// List returns all configured provider configs (for the login page). Includes
+// only providers that successfully loaded — failed providers are intentionally
+// hidden from the login page since clicking their button would error out.
 func (m *Manager) List() []ProviderConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -161,7 +255,10 @@ func (m *Manager) List() []ProviderConfig {
 
 // AuthURL returns the Authorization Code + PKCE redirect URL for the provider.
 // state and codeVerifier are caller-generated; nonce is embedded in the URL.
-func (m *Manager) AuthURL(id, state, nonce, codeVerifier string) (string, error) {
+// If the provider is in the failed map, AuthURL first triggers an on-demand
+// re-discovery attempt (rate-limited) before checking again.
+func (m *Manager) AuthURL(ctx context.Context, id, state, nonce, codeVerifier string) (string, error) {
+	m.EnsureLoaded(ctx, id)
 	e := m.Get(id)
 	if e == nil {
 		return "", fmt.Errorf("unknown oidc provider %q", id)
@@ -177,6 +274,7 @@ func (m *Manager) AuthURL(id, state, nonce, codeVerifier string) (string, error)
 // Exchange completes the code exchange and validates the ID token.
 // Returns the verified Claims on success.
 func (m *Manager) Exchange(ctx context.Context, id, code, nonce, codeVerifier string) (*Claims, error) {
+	m.EnsureLoaded(ctx, id)
 	e := m.Get(id)
 	if e == nil {
 		return nil, fmt.Errorf("unknown oidc provider %q", id)

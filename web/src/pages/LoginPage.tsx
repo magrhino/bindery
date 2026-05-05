@@ -14,7 +14,12 @@ export default function LoginPage() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    api.oidcProviders().then(setOidcProviders).catch(() => setOidcProviders([]))
+    api.oidcProviders()
+      // Hide providers that failed startup discovery so users don't click
+      // into a flow that's guaranteed to error. Older backends omit `status`
+      // entirely — fall through and show those buttons unfiltered.
+      .then(ps => setOidcProviders(ps.filter(p => !p.status || p.status.state === 'ok')))
+      .catch(() => setOidcProviders([]))
   }, [])
 
   // Read values from the form at submit time instead of React state.

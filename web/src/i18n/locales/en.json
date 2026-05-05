@@ -410,7 +410,9 @@
       "fieldIssuer": "Issuer URL",
       "fieldClientId": "Client ID",
       "fieldClientSecret": "Client Secret",
-      "fieldScopes": "Scopes"
+      "fieldScopes": "Scopes",
+      "statusOk": "Ready",
+      "statusFailed": "Discovery failed"
     }
   },
   "addAuthorModal": {

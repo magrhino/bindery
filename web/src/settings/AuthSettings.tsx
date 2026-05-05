@@ -47,7 +47,10 @@ export default function AuthSettings() {
       const nextIds = [...displayed.map(p => p.id), cfg.id]
       const nextConfigs = new Map(fullConfigs).set(cfg.id, cfg)
       await api.oidcSetProviders(buildPutPayload(nextIds).map(p => nextConfigs.get(p.id) ?? p))
+      // Status will populate on next GET; the row briefly renders without a
+      // badge until then, which is acceptable. Re-fetch async to refresh it.
       setDisplayed(ps => [...ps, { id: cfg.id, name: cfg.name }])
+      api.oidcProviders().then(setDisplayed).catch(() => {})
       setFullConfigs(nextConfigs)
       setShowAdd(false)
     } catch (e) {
@@ -72,14 +75,33 @@ export default function AuthSettings() {
         )}
 
         {displayed.map(p => (
-          <div key={p.id} className="flex items-center justify-between py-2 border-b border-slate-200 dark:border-zinc-800 last:border-0">
-            <div>
-              <span className="text-sm font-medium text-slate-800 dark:text-zinc-200">{p.name}</span>
+          <div key={p.id} className="flex items-start justify-between py-2 border-b border-slate-200 dark:border-zinc-800 last:border-0 gap-3">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-slate-800 dark:text-zinc-200">{p.name}</span>
+                {p.status?.state === 'failed' ? (
+                  <span
+                    title={p.status.last_error}
+                    className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300"
+                  >
+                    {t('settings.oidc.statusFailed')}
+                  </span>
+                ) : p.status?.state === 'ok' ? (
+                  <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">
+                    {t('settings.oidc.statusOk')}
+                  </span>
+                ) : null}
+              </div>
+              {p.status?.state === 'failed' && p.status.last_error && (
+                <p className="text-xs text-red-600 dark:text-red-400 mt-1 break-all">
+                  {p.status.last_error}
+                </p>
+              )}
             </div>
             <button
               onClick={() => remove(p.id)}
               disabled={saving}
-              className="text-xs text-red-600 dark:text-red-400 hover:underline disabled:opacity-50"
+              className="text-xs text-red-600 dark:text-red-400 hover:underline disabled:opacity-50 shrink-0"
             >
               {t('common.remove')}
             </button>

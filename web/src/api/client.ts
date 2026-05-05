@@ -97,9 +97,18 @@ export interface AuthConfig {
   username: string
 }
 
+export interface OidcProviderStatus {
+  state: 'ok' | 'failed'
+  last_error?: string
+  last_attempt?: string
+}
+
 export interface OidcProvider {
   id: string
   name: string
+  // Optional runtime status. Present on responses from a backend that
+  // tracks failed-discovery state; absent for older backends.
+  status?: OidcProviderStatus
 }
 
 export interface OidcProviderConfig {
