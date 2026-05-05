@@ -6,12 +6,24 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **Enhanced series data via Hardcover** — Series can now be managed manually, linked to Hardcover series, and compared against the Hardcover catalog. The Series page shows present, missing, local-only, and uncertain books; missing catalog entries can be filled all at once or one row at a time, creating wanted/monitored book rows and queuing searches. The enhanced controls are gated behind `BINDERY_ENHANCED_HARDCOVER_API`, a saved Hardcover API token, and the admin setting in **Settings -> General**.
+
+### Fixed
+
+- **ABS imports require saved source configuration** — import and dry-run starts now use only the stored ABS configuration, and the UI blocks runs while ABS settings contain unsaved changes so previews and imports cannot run against one-off request overrides.
+- **Hardcover auto-linking requires local evidence** — automatic series linking now requires local book overlap or author agreement before accepting a high-confidence Hardcover candidate, and missing-book fill skips books that already exist as excluded titles.
+
+### Docs
+
+- Added user-facing Hardcover series wiki documentation and documented the enhanced Hardcover series migration, feature flag, token requirement, admin toggle, and production network expectations in the deployment guide.
+
 ## [v1.3.0] — 2026-05-05
 
 ### Added
 
 - **Audiobookshelf (ABS) import workflow** (#371) — Bindery can now connect to one ABS source, validate an API key, discover visible book libraries, and import ABS catalog metadata into shared authors, books, series, and ebook/audiobook editions. Imports support dry runs, persisted run history, rollback preview/rollback, low-confidence review queues, metadata conflict resolution, and path remaps when ABS and Bindery see the same files under different mount prefixes. Import quality is best when the ABS library already has strong metadata, especially ASIN coverage.
-- **Enhanced series data via Hardcover** — Series can now be managed manually, linked to Hardcover series, and compared against the Hardcover catalog. The Series page shows present, missing, local-only, and uncertain books; missing catalog entries can be filled all at once or one row at a time, creating wanted/monitored book rows and queuing searches. The enhanced controls are gated behind `BINDERY_ENHANCED_HARDCOVER_API`, a saved Hardcover API token, and the admin setting in **Settings -> General**.
 
 ### Changed
 
@@ -31,7 +43,6 @@ All notable changes to Bindery are documented here. Format loosely follows
 ### Docs
 
 - Added an ABS import guide and user-facing wiki documentation covering setup, required API-key access, path remaps, review flow, conflicts, rollback, and import-quality expectations.
-- Documented the enhanced Hardcover series data migration, feature flag, token requirement, admin toggle, and production network expectations in the deployment guide.
 
 ## [v1.2.7] — 2026-05-04
 
