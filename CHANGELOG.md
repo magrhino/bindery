@@ -4,7 +4,7 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [v1.4.0] — 2026-05-05
 
 ### Added
 
