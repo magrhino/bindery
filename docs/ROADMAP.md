@@ -26,9 +26,7 @@ The short version lives in the [README](../README.md#roadmap). ✅ items have la
 
 - ✅ **CSRF tokens** (v1.0.0) — double-submit token via `GET /auth/csrf`; all session-cookie mutations require matching `X-CSRF-Token` header. API-key clients exempt. See [Use CSRF tokens in scripts](https://github.com/vavallee/bindery/wiki/Howto-CSRF-tokens).
 
-- ⬜ **External database support (MySQL / Postgres)** ([#86](https://github.com/vavallee/bindery/issues/86)) — optional settings for DB host, credentials, and connection path so Bindery can run against a shared MySQL/Postgres instance instead of the bundled SQLite file.
-
-  Useful for multi-replica HA deployments. Planned to ship alongside multi-user support — a single-user instance has no concurrency pressure that justifies leaving SQLite, and bundling both avoids two separate schema migrations.
+- ~~**External database support (MySQL / Postgres)** ([#86](https://github.com/vavallee/bindery/issues/86))~~ — **Won't do.** SQLite with WAL mode handles all realistic single-instance and multi-user load. Introducing an external database server adds operational burden (credentials, backups, version management, connection pooling) with no concrete benefit for the homelab use case. Closed.
 
 - **UI localization (i18n)** — translate the web UI into French, Dutch, and German (starting point; more languages welcome as contributors show up).
   - ✅ Translation-catalogue extraction pass (landed in v0.12.0).
@@ -76,9 +74,7 @@ These items are too large or architectural for a minor release. They define the 
 
 - ✅ **Native OIDC / SSO with multi-provider discovery** — shipped in v1.0.0.
 
-- **External database (MySQL / Postgres)** ([#86](https://github.com/vavallee/bindery/issues/86)) — The current `modernc.org/sqlite` driver is zero-CGO and ships inside the binary, which is excellent for single-instance homelabs. Multi-replica HA requires a shared external store. SQLite WAL is not a substitute for row-level locking under concurrent writers. The schema is already designed with foreign keys and explicit transactions; porting to `database/sql` + a MySQL/Postgres driver is feasible but requires end-to-end testing against both engines, a migration planner that works per-engine, and probably a connection-pool configurator in Settings.
-
-  > **Ships with multi-user.** External DB support only makes sense alongside multi-user (#73 above) — a single-user instance has no concurrency pressure that justifies leaving SQLite. Plan to deliver both in the same release so the migration path is tested once, not twice.
+- ~~**External database (MySQL / Postgres)** ([#86](https://github.com/vavallee/bindery/issues/86))~~ — **Won't do.** Closed as won't-fix; see the Planned section above.
 
 - ✅ **Persistent structured log store** ([#241](https://github.com/vavallee/bindery/issues/241), landed in development) — Persists log entries to SQLite (migration 026), survives restarts, queryable by date range / level / component / full-text. Retention defaults to 14 days and is configurable. The ring buffer remains as a fast in-process fallback when no DB is available.
 

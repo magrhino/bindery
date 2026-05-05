@@ -270,7 +270,7 @@ Bindery is a single Go binary with the React frontend embedded via `go:embed`:
          │
          ▼
 ┌────────────────────────────┐
-│         Bindery            │──► SABnzbd / qBittorrent
+│         Bindery            │──► SABnzbd / NZBGet / qBittorrent / Transmission / Deluge
 │  Go backend + React SPA    │──► /books/ library
 │  SQLite (WAL mode)         │──► Webhook notifications
 └────────────────────────────┘
