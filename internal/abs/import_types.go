@@ -117,6 +117,7 @@ type ImportStats struct {
 
 	dryRunSeriesExternalIDs map[string]struct{}
 	dryRunSeriesTitles      map[string]struct{}
+	dryRunSeriesMemberships map[string]struct{}
 }
 
 type ImportSourceSnapshot struct {

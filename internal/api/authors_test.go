@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -37,6 +38,35 @@ func (s *searcherSpy) titles() []string {
 	out := make([]string, len(s.calls))
 	copy(out, s.calls)
 	return out
+}
+
+type concurrentSearcherSpy struct {
+	mu     sync.Mutex
+	calls  int
+	active int
+	max    int
+}
+
+func (s *concurrentSearcherSpy) SearchAndGrabBook(_ context.Context, _ models.Book) {
+	s.mu.Lock()
+	s.calls++
+	s.active++
+	if s.active > s.max {
+		s.max = s.active
+	}
+	s.mu.Unlock()
+
+	time.Sleep(20 * time.Millisecond)
+
+	s.mu.Lock()
+	s.active--
+	s.mu.Unlock()
+}
+
+func (s *concurrentSearcherSpy) stats() (int, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls, s.max
 }
 
 // stubMetaProvider is a fake metadata.Provider whose GetAuthorWorks returns
@@ -255,6 +285,57 @@ func TestFetchAuthorBooks_FiresSearchForMonitoredAuthor(t *testing.T) {
 	titles := spy.titles()
 	if len(titles) != 2 {
 		t.Fatalf("expected 2 searcher calls, got %d: %v", len(titles), titles)
+	}
+}
+
+func TestFetchAuthorBooks_AutoSearchUsesBoundedConcurrency(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+
+	ctx := context.Background()
+	author := &models.Author{
+		ForeignID: "OL800A", Name: "Parallel Author", SortName: "Author, Parallel",
+		MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+
+	works := make([]models.Book, 8)
+	for i := range works {
+		works[i] = models.Book{
+			ForeignID:        "OL80" + strconv.Itoa(i) + "W",
+			Title:            "Book " + strconv.Itoa(i),
+			SortTitle:        "book " + strconv.Itoa(i),
+			Language:         "eng",
+			Status:           models.BookStatusWanted,
+			Genres:           []string{},
+			MetadataProvider: "openlibrary",
+		}
+	}
+	stub := &stubMetaProvider{works: works}
+	agg := metadata.NewAggregator(stub)
+	spy := &concurrentSearcherSpy{}
+
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, agg, nil, profileRepo, spy)
+	h.FetchAuthorBooks(author, true, "")
+
+	calls, maxActive := spy.stats()
+	if calls != len(works) {
+		t.Fatalf("expected %d search calls, got %d", len(works), calls)
+	}
+	if maxActive > authorAutoSearchConcurrency {
+		t.Fatalf("max concurrent searches = %d, want <= %d", maxActive, authorAutoSearchConcurrency)
+	}
+	if maxActive < 2 {
+		t.Fatalf("expected searches to run concurrently, max active = %d", maxActive)
 	}
 }
 

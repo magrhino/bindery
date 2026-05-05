@@ -12,12 +12,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
 )
 
 const (
 	graphqlURL = "https://api.hardcover.app/v1/graphql"
 	idPrefix   = "hc:"
+
+	authorWorksPageSize = 100
+	authorWorksMaxBooks = 500
 )
 
 // Client implements metadata.Provider for Hardcover.app using its public GraphQL API.
@@ -138,6 +142,73 @@ func (c *Client) SearchBooks(ctx context.Context, query string) ([]models.Book, 
 	books := make([]models.Book, 0, len(resp.Data.Books))
 	for _, b := range resp.Data.Books {
 		books = append(books, c.toBook(b))
+	}
+	return books, nil
+}
+
+// GetAuthorWorksByName fetches canonical Hardcover books for an author in
+// page-sized batches. It requires a configured API token because Hardcover's
+// schema endpoints are token-backed in production; an unconfigured client
+// returns no supplemental results.
+func (c *Client) GetAuthorWorksByName(ctx context.Context, authorName string) ([]models.Book, error) {
+	authorName = strings.TrimSpace(authorName)
+	if authorName == "" {
+		return nil, nil
+	}
+	if c.authorizationToken(ctx) == "" {
+		return nil, metadata.ErrProviderNotConfigured
+	}
+
+	gql := `query GetAuthorWorksByName($author: String!, $limit: Int!, $offset: Int!) {
+		books(
+			where: {
+				canonical_id: {_is_null: true},
+				contributions: {author: {name: {_eq: $author}}}
+			},
+			limit: $limit,
+			offset: $offset,
+			order_by: {users_count: desc}
+		) {
+			id
+			title
+			subtitle
+			slug
+			description
+			image { url }
+			release_year
+			ratings_count
+			rating
+			users_count
+			genres
+			has_audiobook
+			has_ebook
+			audio_seconds
+			contributions {
+				author { id name slug }
+			}
+		}
+	}`
+
+	books := make([]models.Book, 0, authorWorksPageSize)
+	for offset := 0; offset < authorWorksMaxBooks; offset += authorWorksPageSize {
+		var resp struct {
+			Data struct {
+				Books []hcBook `json:"books"`
+			} `json:"data"`
+		}
+		if err := c.query(ctx, gql, map[string]any{
+			"author": authorName,
+			"limit":  authorWorksPageSize,
+			"offset": offset,
+		}, &resp); err != nil {
+			return nil, fmt.Errorf("hardcover get author works: %w", err)
+		}
+		for _, b := range resp.Data.Books {
+			books = append(books, c.toBook(b))
+		}
+		if len(resp.Data.Books) < authorWorksPageSize {
+			break
+		}
 	}
 	return books, nil
 }
@@ -518,6 +589,10 @@ type hcBook struct {
 	RatingsCount  int              `json:"ratings_count"`
 	Rating        float64          `json:"rating"`
 	UsersCount    int              `json:"users_count"`
+	Genres        []string         `json:"genres"`
+	HasAudiobook  bool             `json:"has_audiobook"`
+	HasEbook      bool             `json:"has_ebook"`
+	AudioSeconds  *int             `json:"audio_seconds"`
 	Contributions []hcContribution `json:"contributions"`
 }
 
@@ -558,12 +633,18 @@ func (c *Client) toBook(b hcBook) models.Book {
 		Status:           models.BookStatusWanted,
 		Genres:           []string{},
 	}
+	if len(b.Genres) > 0 {
+		bk.Genres = b.Genres
+	}
 	if b.Image != nil {
 		bk.ImageURL = b.Image.URL
 	}
 	if b.ReleaseYear != nil && *b.ReleaseYear > 0 {
 		t := time.Date(*b.ReleaseYear, 1, 1, 0, 0, 0, 0, time.UTC)
 		bk.ReleaseDate = &t
+	}
+	if b.AudioSeconds != nil && *b.AudioSeconds > 0 {
+		bk.DurationSeconds = *b.AudioSeconds
 	}
 	if len(b.Contributions) > 0 {
 		a := c.toAuthor(b.Contributions[0].Author)

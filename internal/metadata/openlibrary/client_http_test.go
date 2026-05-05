@@ -6,7 +6,10 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // pathTransport routes HTTP calls by URL path to a handler map.
@@ -646,6 +649,52 @@ func TestGetAuthorWorks_HTTP(t *testing.T) {
 	}
 	if books[0].Author == nil || books[0].Author.ForeignID != "OL123A" {
 		t.Errorf("author reference not populated: %+v", books[0].Author)
+	}
+}
+
+func TestGetAuthorWorks_HTTP_FetchesSourcesConcurrently(t *testing.T) {
+	searchResp := searchRespForAuthor{Docs: []searchDocForAuthor{{Key: "/works/OL1W", Title: "Primary"}}}
+	worksResp := authorWorksResponse{Entries: []authorWorkEntry{{Key: "/works/OL1W", Title: "Primary"}}}
+
+	var mu sync.Mutex
+	var once sync.Once
+	var timedOut atomic.Bool
+	started := map[string]bool{}
+	bothStarted := make(chan struct{})
+	markStarted := func(path string) {
+		mu.Lock()
+		defer mu.Unlock()
+		started[path] = true
+		if started["/search"] && started["/authors/OL123A/works.json"] {
+			once.Do(func() { close(bothStarted) })
+		}
+	}
+	waitForPeer := func(path, body string) func(*http.Request) string {
+		return func(r *http.Request) string {
+			markStarted(path)
+			select {
+			case <-bothStarted:
+			case <-time.After(500 * time.Millisecond):
+				timedOut.Store(true)
+			}
+			return body
+		}
+	}
+
+	c := newClientWithPaths(t, map[string]interface{}{
+		"/search":                    waitForPeer("/search", jsonStr(searchResp)),
+		"/authors/OL123A/works.json": waitForPeer("/authors/OL123A/works.json", jsonStr(worksResp)),
+	})
+
+	books, err := c.GetAuthorWorks(context.Background(), "OL123A")
+	if err != nil {
+		t.Fatalf("GetAuthorWorks: %v", err)
+	}
+	if timedOut.Load() {
+		t.Fatal("expected search and works requests to overlap")
+	}
+	if len(books) != 1 || books[0].Title != "Primary" {
+		t.Fatalf("unexpected books: %+v", books)
 	}
 }
 

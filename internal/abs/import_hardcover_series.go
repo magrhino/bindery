@@ -29,13 +29,13 @@ type hardcoverSeriesCandidate struct {
 	TitleScore  int
 }
 
-func (i *Importer) matchHardcoverSeries(ctx context.Context, cfg ImportConfig, runID int64, author *models.Author, book *models.Book, item NormalizedLibraryItem, stats *ImportStats) (metadataMergeResult, int) {
+func (i *Importer) matchHardcoverSeries(ctx context.Context, cfg ImportConfig, runID int64, author *models.Author, book *models.Book, item NormalizedLibraryItem, stats *ImportStats) (metadataMergeResult, seriesUpsertResult) {
 	if i.meta == nil || i.series == nil || i.books == nil || book == nil {
-		return metadataMergeResult{}, 0
+		return metadataMergeResult{}, seriesUpsertResult{}
 	}
 	queries := hardcoverSeriesQueries(item)
 	if len(queries) == 0 {
-		return metadataMergeResult{}, 0
+		return metadataMergeResult{}, seriesUpsertResult{}
 	}
 	authorName := primaryAuthorName(item)
 	if author != nil && strings.TrimSpace(author.Name) != "" {
@@ -69,23 +69,16 @@ func (i *Importer) matchHardcoverSeries(ctx context.Context, cfg ImportConfig, r
 	}
 	selected, ambiguous := selectHardcoverSeriesCandidate(candidates)
 	if ambiguous {
-		return metadataMergeResult{Messages: []string{"hardcover series link skipped: match was ambiguous"}}, 0
+		return metadataMergeResult{Messages: []string{"hardcover series link skipped: match was ambiguous"}}, seriesUpsertResult{}
 	}
 	if selected == nil {
-		return metadataMergeResult{}, 0
+		return metadataMergeResult{}, seriesUpsertResult{}
 	}
 
-	created, matchedBy, err := i.upsertHardcoverSeries(ctx, cfg, runID, book.ID, selected.Catalog, selected.Book)
+	seriesResult, err := i.upsertHardcoverSeries(ctx, cfg, runID, book.ID, item.ItemID, selected.Catalog, selected.Book, stats)
 	if err != nil {
 		slog.Warn("abs import: hardcover series link failed", "itemID", item.ItemID, "series", selected.Catalog.ForeignID, "error", err)
-		return metadataMergeResult{}, 0
-	}
-	if stats != nil {
-		if created {
-			stats.SeriesCreated++
-		} else if matchedBy != "" {
-			stats.SeriesLinked++
-		}
+		return metadataMergeResult{}, seriesUpsertResult{}
 	}
 
 	metaResult := metadataMergeResult{}
@@ -97,17 +90,17 @@ func (i *Importer) matchHardcoverSeries(ctx context.Context, cfg ImportConfig, r
 		}
 	}
 	if !cfg.DryRun {
-		extra, err := i.linkExistingHardcoverCatalogBooks(ctx, cfg, runID, author, selected.Catalog, book.ID, created)
+		extra, err := i.linkExistingHardcoverCatalogBooks(ctx, cfg, runID, author, selected.Catalog, book.ID, seriesResult.CreatedSeries)
 		if err != nil {
 			slog.Warn("abs import: hardcover catalog existing-book linking failed", "itemID", item.ItemID, "series", selected.Catalog.ForeignID, "error", err)
 		} else if stats != nil {
 			stats.SeriesLinked += extra
 		}
 	}
-	if matchedBy != "" {
+	if seriesResult.MatchedBy != "" {
 		metaResult.Messages = append(metaResult.Messages, fmt.Sprintf("hardcover series linked by %s", selected.MatchedBy))
 	}
-	return metaResult, 1
+	return metaResult, seriesResult
 }
 
 func hardcoverSeriesQueries(item NormalizedLibraryItem) []hardcoverSeriesQuery {
@@ -243,33 +236,33 @@ func selectHardcoverSeriesCandidate(candidates map[string]hardcoverSeriesCandida
 	return &ordered[0], false
 }
 
-func (i *Importer) upsertHardcoverSeries(ctx context.Context, cfg ImportConfig, runID, bookID int64, catalog *metadata.SeriesCatalog, matchedBook metadata.SeriesCatalogBook) (bool, string, error) {
+func (i *Importer) upsertHardcoverSeries(ctx context.Context, cfg ImportConfig, runID, bookID int64, itemID string, catalog *metadata.SeriesCatalog, matchedBook metadata.SeriesCatalogBook, stats *ImportStats) (seriesUpsertResult, error) {
 	if catalog == nil || strings.TrimSpace(catalog.Title) == "" || strings.TrimSpace(catalog.ForeignID) == "" {
-		return false, "", nil
+		return seriesUpsertResult{}, nil
 	}
 	existing, err := i.series.GetByForeignID(ctx, catalog.ForeignID)
 	if err != nil {
-		return false, "", err
+		return seriesUpsertResult{}, err
 	}
 	matchedBy := ""
 	if existing == nil {
 		match, ambiguous, err := i.findSeriesByTitle(ctx, catalog.Title)
 		if err != nil {
-			return false, "", err
+			return seriesUpsertResult{}, err
 		}
 		if ambiguous {
-			return false, "", fmt.Errorf("ambiguous existing series match for %q", catalog.Title)
+			return seriesUpsertResult{}, fmt.Errorf("ambiguous existing series match for %q", catalog.Title)
 		}
 		if match != nil {
 			existing = match
 			matchedBy = "normalized_title"
 			if shouldPromoteSeriesToHardcover(match, catalog) {
 				if prior, err := i.series.GetByForeignID(ctx, catalog.ForeignID); err != nil {
-					return false, "", err
+					return seriesUpsertResult{}, err
 				} else if prior == nil {
 					if !cfg.DryRun {
 						if err := i.series.UpdateForeignID(ctx, existing.ID, catalog.ForeignID); err != nil {
-							return false, "", err
+							return seriesUpsertResult{}, err
 						}
 					}
 					existing.ForeignID = catalog.ForeignID
@@ -280,6 +273,28 @@ func (i *Importer) upsertHardcoverSeries(ctx context.Context, cfg ImportConfig, 
 	}
 	created := false
 	if existing == nil {
+		if cfg.DryRun && stats != nil && stats.dryRunSeriesAlreadyPlanned(catalog.ForeignID, catalog.Title) {
+			countKey := seriesMembershipCountKey(0, catalog.Title, catalog.ForeignID, bookID, itemID)
+			membershipCreated := !stats.dryRunSeriesMembershipAlreadyPlanned(countKey)
+			membershipExternalID := seriesMembershipExternalID(catalog.ForeignID, bookID, itemID)
+			if membershipCreated {
+				_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, itemID, entityTypeSeries, membershipExternalID, 0, itemOutcomeLinked, map[string]any{
+					"bookId":          bookID,
+					"sequence":        strings.TrimSpace(matchedBook.Position),
+					"matchedBy":       "hardcover_series",
+					"hardcoverBookId": strings.TrimSpace(matchedBook.ForeignID),
+				})
+				stats.rememberDryRunSeriesMembership(countKey)
+			}
+			return seriesUpsertResult{
+				IdentityExternalID:   catalog.ForeignID,
+				MembershipExternalID: membershipExternalID,
+				CountKey:             countKey,
+				MembershipCreated:    membershipCreated,
+				Linked:               true,
+				MatchedBy:            "planned",
+			}, nil
+		}
 		existing = &models.Series{
 			ForeignID:   catalog.ForeignID,
 			Title:       strings.TrimSpace(catalog.Title),
@@ -287,7 +302,7 @@ func (i *Importer) upsertHardcoverSeries(ctx context.Context, cfg ImportConfig, 
 		}
 		if !cfg.DryRun {
 			if err := i.series.CreateOrGet(ctx, existing); err != nil {
-				return false, "", err
+				return seriesUpsertResult{}, err
 			}
 		}
 		created = true
@@ -297,9 +312,11 @@ func (i *Importer) upsertHardcoverSeries(ctx context.Context, cfg ImportConfig, 
 	if cfg.DryRun && created {
 		localID = 0
 	}
+	countKey := seriesMembershipCountKey(localID, catalog.Title, catalog.ForeignID, bookID, itemID)
+	membershipExternalID := seriesMembershipExternalID(catalog.ForeignID, bookID, itemID)
 	if !cfg.DryRun {
 		if err := i.ensureHardcoverSeriesLink(ctx, existing.ID, catalog); err != nil {
-			return false, "", err
+			return seriesUpsertResult{}, err
 		}
 	}
 	metadata := map[string]any{
@@ -308,25 +325,39 @@ func (i *Importer) upsertHardcoverSeries(ctx context.Context, cfg ImportConfig, 
 		"matchedBy":       "hardcover_series",
 		"hardcoverBookId": strings.TrimSpace(matchedBook.ForeignID),
 	}
-	linkExternalID := hardcoverSeriesLinkExternalID(catalog.ForeignID, bookID)
-	linkCreated := cfg.DryRun
-	if !cfg.DryRun {
+	linkCreated := false
+	if cfg.DryRun {
+		if stats == nil || !stats.dryRunSeriesMembershipAlreadyPlanned(countKey) {
+			linkCreated = true
+			outcome := itemOutcomeLinked
+			if created {
+				outcome = itemOutcomeCreated
+			}
+			_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, itemID, entityTypeSeries, membershipExternalID, localID, outcome, metadata)
+			if stats != nil {
+				stats.rememberDryRunSeriesMembership(countKey)
+			}
+		}
+		if created && stats != nil {
+			stats.rememberDryRunSeries(catalog.ForeignID, catalog.Title)
+		}
+	} else {
 		var err error
 		linkCreated, err = i.series.LinkBookIfMissing(ctx, existing.ID, bookID, strings.TrimSpace(matchedBook.Position), true)
 		if err != nil {
-			return false, "", err
+			return seriesUpsertResult{}, err
 		}
 		if linkCreated {
 			if err := i.upsertProvenance(ctx, &models.ABSProvenance{
 				SourceID:    cfg.SourceID,
 				LibraryID:   cfg.LibraryID,
 				EntityType:  entityTypeSeries,
-				ExternalID:  linkExternalID,
+				ExternalID:  membershipExternalID,
 				LocalID:     existing.ID,
-				ItemID:      "",
+				ItemID:      itemID,
 				ImportRunID: ptrInt64(runID),
 			}); err != nil {
-				return false, "", err
+				return seriesUpsertResult{}, err
 			}
 		}
 	}
@@ -334,10 +365,19 @@ func (i *Importer) upsertHardcoverSeries(ctx context.Context, cfg ImportConfig, 
 	if created {
 		outcome = itemOutcomeCreated
 	}
-	if linkCreated {
-		_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, "", entityTypeSeries, linkExternalID, localID, outcome, metadata)
+	if !cfg.DryRun && linkCreated {
+		_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, itemID, entityTypeSeries, membershipExternalID, localID, outcome, metadata)
 	}
-	return created, matchedBy, nil
+	return seriesUpsertResult{
+		SeriesID:             localID,
+		IdentityExternalID:   catalog.ForeignID,
+		MembershipExternalID: membershipExternalID,
+		CountKey:             countKey,
+		CreatedSeries:        created,
+		MembershipCreated:    linkCreated,
+		Linked:               true,
+		MatchedBy:            matchedBy,
+	}, nil
 }
 
 func (i *Importer) ensureHardcoverSeriesLink(ctx context.Context, seriesID int64, catalog *metadata.SeriesCatalog) error {
@@ -404,7 +444,7 @@ func (i *Importer) linkExistingHardcoverCatalogBooks(ctx context.Context, cfg Im
 		if !linkCreated {
 			continue
 		}
-		linkExternalID := hardcoverSeriesLinkExternalID(catalog.ForeignID, localBook.ID)
+		linkExternalID := seriesMembershipExternalID(catalog.ForeignID, localBook.ID, "")
 		if err := i.upsertProvenance(ctx, &models.ABSProvenance{
 			SourceID:    cfg.SourceID,
 			LibraryID:   cfg.LibraryID,
@@ -457,14 +497,6 @@ func shouldPromoteSeriesToHardcover(existing *models.Series, catalog *metadata.S
 		return false
 	}
 	return normalizeSeriesName(existing.Title) == normalizeSeriesName(catalog.Title)
-}
-
-func hardcoverSeriesLinkExternalID(seriesForeignID string, bookID int64) string {
-	seriesForeignID = strings.TrimSpace(seriesForeignID)
-	if bookID <= 0 {
-		return seriesForeignID + ":book:planned"
-	}
-	return fmt.Sprintf("%s:book:%d", seriesForeignID, bookID)
 }
 
 func hardcoverAuthorScore(absAuthor, hcAuthor string) int {

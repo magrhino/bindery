@@ -134,9 +134,32 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 	type set map[int64]struct{}
 	deletedBooks := make(set)
 	createdBookEntities := make(map[int64]models.ABSImportRunEntity)
+	runCreatedSeries := make(set)
+	seriesIdentityEntities := make(set)
+	runSeriesMemberships := make(map[int64]set)
+	seriesDeleteMembershipEntityID := make(map[int64]int64)
 	for _, entity := range entities {
 		if entity.EntityType == entityTypeBook && entity.Outcome == itemOutcomeCreated && entity.LocalID != 0 {
 			createdBookEntities[entity.LocalID] = entity
+		}
+		if entity.EntityType != entityTypeSeries || entity.LocalID == 0 {
+			continue
+		}
+		metadata := runEntityMetadataData(entity.MetadataJSON)
+		bookID := metadataBookID(metadata)
+		if entity.Outcome == itemOutcomeCreated {
+			runCreatedSeries[entity.LocalID] = struct{}{}
+		}
+		if bookID > 0 {
+			if runSeriesMemberships[entity.LocalID] == nil {
+				runSeriesMemberships[entity.LocalID] = make(set)
+			}
+			runSeriesMemberships[entity.LocalID][bookID] = struct{}{}
+			if entity.Outcome == itemOutcomeCreated && entity.ID > seriesDeleteMembershipEntityID[entity.LocalID] {
+				seriesDeleteMembershipEntityID[entity.LocalID] = entity.ID
+			}
+		} else {
+			seriesIdentityEntities[entity.LocalID] = struct{}{}
 		}
 	}
 	for _, entity := range entities {
@@ -452,10 +475,27 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 				result.Actions = append(result.Actions, action)
 				continue
 			}
-			bookID, _ := metadata["bookId"].(float64)
+			bookID := metadataBookID(metadata)
 			if bookID > 0 {
 				action.Action = "unlink_series"
 				result.Stats.ActionsPlanned++
+				_, createdByRun := runCreatedSeries[entity.LocalID]
+				_, hasIdentityEntity := seriesIdentityEntities[entity.LocalID]
+				deleteSeries := false
+				if createdByRun && !hasIdentityEntity && seriesDeleteMembershipEntityID[entity.LocalID] == entity.ID {
+					remaining, err := i.remainingSeriesBooksAfterRunRollback(ctx, entity.LocalID, runSeriesMemberships[entity.LocalID])
+					if err != nil {
+						action.Action = "skip"
+						action.Reason = err.Error()
+						result.Stats.Failed++
+						result.Actions = append(result.Actions, action)
+						continue
+					}
+					if remaining <= 0 {
+						action.Action = "delete_series"
+						deleteSeries = true
+					}
+				}
 				if !preview {
 					if err := i.series.UnlinkBook(ctx, entity.LocalID, int64(bookID)); err != nil {
 						action.Action = "skip"
@@ -464,31 +504,14 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 						result.Actions = append(result.Actions, action)
 						continue
 					}
-				}
-				if entity.Outcome == itemOutcomeCreated {
-					books, err := i.series.ListBooksInSeries(ctx, entity.LocalID)
-					if err == nil {
-						remaining := len(books)
-						if bookID > 0 && remaining > 0 {
-							remaining--
+					if deleteSeries {
+						if err := i.series.Delete(ctx, entity.LocalID); err != nil {
+							action.Action = "skip"
+							action.Reason = err.Error()
+							result.Stats.Failed++
+							result.Actions = append(result.Actions, action)
+							continue
 						}
-						if remaining <= 0 {
-							if !preview {
-								if err := i.series.Delete(ctx, entity.LocalID); err != nil {
-									action.Action = "skip"
-									action.Reason = err.Error()
-									result.Stats.Failed++
-									result.Actions = append(result.Actions, action)
-									continue
-								}
-								result.Stats.EntitiesDeleted++
-							}
-							action.Action = "delete_series"
-						}
-					}
-				}
-				if !preview {
-					if action.Action == "delete_series" {
 						unlinked, err := i.deleteProvenanceByLocal(ctx, entity.EntityType, entity.LocalID)
 						if err != nil {
 							action.Action = "skip"
@@ -497,23 +520,62 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 							result.Actions = append(result.Actions, action)
 							continue
 						}
+						result.Stats.EntitiesDeleted++
 						result.Stats.ProvenanceUnlinked += unlinked
-					} else if err := i.provenance.DeleteByExternal(ctx, entity.SourceID, entity.LibraryID, entity.EntityType, entity.ExternalID); err == nil {
+					} else if err := i.provenance.DeleteByExternal(ctx, entity.SourceID, entity.LibraryID, entity.EntityType, entity.ExternalID); err != nil {
+						action.Action = "skip"
+						action.Reason = err.Error()
+						result.Stats.Failed++
+						result.Actions = append(result.Actions, action)
+						continue
+					} else {
 						result.Stats.ProvenanceUnlinked++
 					}
 				}
 			} else {
 				action.Action = "unlink_provenance"
-				result.Stats.ActionsPlanned++
-				if !preview {
-					if err := i.provenance.DeleteByExternal(ctx, entity.SourceID, entity.LibraryID, entity.EntityType, entity.ExternalID); err != nil {
+				if entity.Outcome == itemOutcomeCreated {
+					remaining, err := i.remainingSeriesBooksAfterRunRollback(ctx, entity.LocalID, runSeriesMemberships[entity.LocalID])
+					if err != nil {
 						action.Action = "skip"
 						action.Reason = err.Error()
 						result.Stats.Failed++
 						result.Actions = append(result.Actions, action)
 						continue
 					}
-					result.Stats.ProvenanceUnlinked++
+					if remaining <= 0 {
+						action.Action = "delete_series"
+					}
+				}
+				result.Stats.ActionsPlanned++
+				if !preview {
+					if action.Action == "delete_series" {
+						if err := i.series.Delete(ctx, entity.LocalID); err != nil {
+							action.Action = "skip"
+							action.Reason = err.Error()
+							result.Stats.Failed++
+							result.Actions = append(result.Actions, action)
+							continue
+						}
+						unlinked, err := i.deleteProvenanceByLocal(ctx, entity.EntityType, entity.LocalID)
+						if err != nil {
+							action.Action = "skip"
+							action.Reason = err.Error()
+							result.Stats.Failed++
+							result.Actions = append(result.Actions, action)
+							continue
+						}
+						result.Stats.EntitiesDeleted++
+						result.Stats.ProvenanceUnlinked += unlinked
+					} else if err := i.provenance.DeleteByExternal(ctx, entity.SourceID, entity.LibraryID, entity.EntityType, entity.ExternalID); err != nil {
+						action.Action = "skip"
+						action.Reason = err.Error()
+						result.Stats.Failed++
+						result.Actions = append(result.Actions, action)
+						continue
+					} else {
+						result.Stats.ProvenanceUnlinked++
+					}
 				}
 			}
 		default:
@@ -750,6 +812,37 @@ func (i *Importer) rollbackActionDisplayName(ctx context.Context, entity models.
 	}
 }
 
+func metadataBookID(metadata map[string]any) int64 {
+	switch value := metadata["bookId"].(type) {
+	case float64:
+		return int64(value)
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	case json.Number:
+		parsed, _ := value.Int64()
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func (i *Importer) remainingSeriesBooksAfterRunRollback(ctx context.Context, seriesID int64, runOwnedBookIDs map[int64]struct{}) (int, error) {
+	books, err := i.series.ListBooksInSeries(ctx, seriesID)
+	if err != nil {
+		return 0, err
+	}
+	remaining := 0
+	for _, book := range books {
+		if _, ok := runOwnedBookIDs[book.ID]; ok {
+			continue
+		}
+		remaining++
+	}
+	return remaining, nil
+}
+
 // rollbackEntityRank orders entities for rollback so children (editions) are
 // unwound before parents (books, series, authors). Editions first avoids
 // leaving dangling edition→book FK references while we restore the book;
@@ -762,10 +855,13 @@ func rollbackEntityRank(entity models.ABSImportRunEntity) int {
 	case entityTypeBook:
 		return 1
 	case entityTypeSeries:
-		return 2
-	case entityTypeAuthor:
+		if metadataBookID(runEntityMetadataData(entity.MetadataJSON)) > 0 {
+			return 2
+		}
 		return 3
-	default:
+	case entityTypeAuthor:
 		return 4
+	default:
+		return 5
 	}
 }

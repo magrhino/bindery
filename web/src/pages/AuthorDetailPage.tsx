@@ -13,6 +13,8 @@ const statusColors: Record<string, string> = {
   skipped: 'bg-slate-300 dark:bg-zinc-700 text-slate-600 dark:text-zinc-400',
 }
 
+const fallbackStatusColor = 'bg-slate-300 dark:bg-zinc-700 text-slate-600 dark:text-zinc-400'
+
 const statusLabel: Record<string, string> = {
   wanted: 'Wanted',
   downloading: 'Downloading',
@@ -28,9 +30,19 @@ type DateSort = 'none' | 'asc' | 'desc'
 
 const TODAY = new Date().toISOString().slice(0, 10)
 
-function fmtDate(d?: string): string {
+function fmtPublishedYear(d?: string): string {
   if (!d) return '—'
-  return d.slice(0, 10)
+  return d.slice(0, 4)
+}
+
+function statusBadgeClass(status: string, base = 'inline-block px-2 py-0.5 rounded text-[10px] font-medium'): string {
+  return `${base} ${statusColors[status] || fallbackStatusColor}`
+}
+
+function mediaLabel(mediaType?: Book['mediaType']): string {
+  if (mediaType === 'audiobook') return '🎧 Audiobook'
+  if (mediaType === 'both') return '📖🎧 Both'
+  return '📖 Ebook'
 }
 
 export default function AuthorDetailPage() {
@@ -377,19 +389,19 @@ export default function AuthorDetailPage() {
         ) : view === 'table' ? (
           <div className="border border-slate-200 dark:border-zinc-800 rounded-lg overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full table-fixed text-sm">
                 <thead>
                   <tr className="bg-slate-100 dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800">
-                    <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">Title</th>
+                    <th className="w-full sm:w-[46%] text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">Title</th>
                     <th
-                      className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase cursor-pointer select-none hover:text-slate-900 dark:hover:text-white whitespace-nowrap"
+                      className="hidden sm:table-cell sm:w-28 text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase cursor-pointer select-none hover:text-slate-900 dark:hover:text-white whitespace-nowrap"
                       onClick={toggleDateSort}
                       title="Sort by publication date"
                     >
                       Published{dateSortIcon}
                     </th>
-                    <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase hidden sm:table-cell">Type</th>
-                    <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">Status</th>
+                    <th className="hidden sm:table-cell sm:w-36 text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">Type</th>
+                    <th className="hidden sm:table-cell sm:w-36 text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-zinc-800">
@@ -399,22 +411,40 @@ export default function AuthorDetailPage() {
                       className="bg-slate-100/50 dark:bg-zinc-900/50 hover:bg-slate-200/50 dark:hover:bg-zinc-800/50 cursor-pointer"
                       onClick={() => (window.location.href = `/book/${book.id}`)}
                     >
-                      <td className="px-3 py-2">
-                        <Link to={`/book/${book.id}`} className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+                      <td className="px-3 py-2 align-middle">
+                        <Link to={`/book/${book.id}`} className="flex items-center gap-2 min-w-0" onClick={e => e.stopPropagation()}>
                           {book.imageUrl ? (
                             <img src={book.imageUrl} alt="" className="w-6 h-9 object-cover rounded flex-shrink-0" />
                           ) : (
                             <div className="w-6 h-9 bg-slate-200 dark:bg-zinc-800 rounded flex-shrink-0" />
                           )}
-                          <span className="text-slate-800 dark:text-zinc-200 truncate">{book.title}</span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-slate-800 dark:text-zinc-200 truncate">{book.title}</span>
+                            <span className="mt-1 flex flex-wrap items-center gap-1 sm:hidden">
+                              <span className={statusBadgeClass(book.status, 'inline-block px-1.5 py-0.5 rounded text-[10px] font-medium')}>
+                                {statusLabel[book.status] ?? book.status}
+                              </span>
+                              <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400">
+                                {mediaLabel(book.mediaType)}
+                              </span>
+                              <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400">
+                                {fmtPublishedYear(book.releaseDate)}
+                              </span>
+                              {book.excluded && (
+                                <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/20 text-amber-700 dark:text-amber-400">
+                                  Excluded
+                                </span>
+                              )}
+                            </span>
+                          </span>
                         </Link>
                       </td>
-                      <td className="px-3 py-2 text-slate-600 dark:text-zinc-400 whitespace-nowrap">{fmtDate(book.releaseDate)}</td>
-                      <td className="px-3 py-2 text-xs whitespace-nowrap hidden sm:table-cell">
-                        {book.mediaType === 'audiobook' ? '🎧 Audiobook' : '📖 Ebook'}
+                      <td className="hidden sm:table-cell px-3 py-2 text-slate-600 dark:text-zinc-400 whitespace-nowrap align-middle">{fmtPublishedYear(book.releaseDate)}</td>
+                      <td className="hidden sm:table-cell px-3 py-2 text-xs whitespace-nowrap align-middle">
+                        {mediaLabel(book.mediaType)}
                       </td>
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-medium ${statusColors[book.status] || 'bg-slate-300 dark:bg-zinc-700 text-slate-600 dark:text-zinc-400'}`}>
+                      <td className="hidden sm:table-cell px-3 py-2 whitespace-nowrap align-middle">
+                        <span className={statusBadgeClass(book.status)}>
                           {statusLabel[book.status] ?? book.status}
                         </span>
                         {book.excluded && (
@@ -449,7 +479,7 @@ export default function AuthorDetailPage() {
                 <div className="p-2">
                   <h4 className="text-xs font-medium truncate" title={book.title}>{book.title}</h4>
                   <div className="flex items-center gap-1 mt-1 flex-wrap">
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${statusColors[book.status] || 'bg-slate-300 dark:bg-zinc-700 text-slate-600 dark:text-zinc-400'}`}>
+                    <span className={statusBadgeClass(book.status, 'px-1.5 py-0.5 rounded text-[10px] font-medium')}>
                       {statusLabel[book.status] ?? book.status}
                     </span>
                     {book.mediaType === 'audiobook' && (
@@ -460,7 +490,7 @@ export default function AuthorDetailPage() {
                     )}
                   </div>
                   {book.releaseDate && (
-                    <p className="text-[10px] text-slate-600 dark:text-zinc-500 mt-0.5">{fmtDate(book.releaseDate)}</p>
+                    <p className="text-[10px] text-slate-600 dark:text-zinc-500 mt-0.5">{fmtPublishedYear(book.releaseDate)}</p>
                   )}
                 </div>
               </Link>

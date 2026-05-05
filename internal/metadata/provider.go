@@ -2,9 +2,14 @@ package metadata
 
 import (
 	"context"
+	"errors"
 
 	"github.com/vavallee/bindery/internal/models"
 )
+
+// ErrProviderNotConfigured signals that an optional provider capability was
+// skipped because credentials or runtime configuration are missing.
+var ErrProviderNotConfigured = errors.New("metadata provider not configured")
 
 // Provider defines the interface that all metadata sources must implement.
 type Provider interface {

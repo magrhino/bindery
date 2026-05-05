@@ -2,6 +2,8 @@ package scheduler
 
 import (
 	"context"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -148,6 +150,41 @@ func TestSearchWanted_EmptyDB(t *testing.T) {
 	}
 	// Must not panic; returns immediately when no wanted books.
 	s.searchWanted()
+}
+
+func TestRunBoundedBookTasks_LimitsConcurrency(t *testing.T) {
+	books := make([]models.Book, 6)
+	for i := range books {
+		books[i] = models.Book{Title: "Book " + strconv.Itoa(i)}
+	}
+
+	var mu sync.Mutex
+	var calls, active, maxActive int
+	runBoundedBookTasks(context.Background(), books, 2, func(_ context.Context, _ models.Book) {
+		mu.Lock()
+		calls++
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		mu.Unlock()
+
+		time.Sleep(20 * time.Millisecond)
+
+		mu.Lock()
+		active--
+		mu.Unlock()
+	})
+
+	if calls != len(books) {
+		t.Fatalf("calls = %d, want %d", calls, len(books))
+	}
+	if maxActive > 2 {
+		t.Fatalf("maxActive = %d, want <= 2", maxActive)
+	}
+	if maxActive < 2 {
+		t.Fatalf("expected parallel execution, maxActive = %d", maxActive)
+	}
 }
 
 // TestSearchWanted_ErrorPath exercises the error-return when the books repo

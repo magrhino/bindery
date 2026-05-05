@@ -1996,6 +1996,190 @@ func TestImporter_DryRunCountsPlannedSeriesOnce(t *testing.T) {
 	}
 }
 
+func TestImporter_RepeatedABSSeriesRollbackUnlinksAllRunMemberships(t *testing.T) {
+	t.Parallel()
+
+	importer, authorRepo, bookRepo, seriesRepo, _, provenanceRepo, _, _, _, _ := newABSImporterFixture(t)
+	ctx := context.Background()
+	author := &models.Author{Name: "Repeat Author", SortName: "Author, Repeat", Monitored: true}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatalf("Create author: %v", err)
+	}
+	firstBook := &models.Book{
+		ForeignID:        "local:repeat:1",
+		AuthorID:         author.ID,
+		Title:            "Repeat One",
+		SortTitle:        "Repeat One",
+		Status:           models.BookStatusWanted,
+		AnyEditionOK:     true,
+		Language:         "eng",
+		MediaType:        models.MediaTypeAudiobook,
+		MetadataProvider: "local",
+	}
+	secondBook := &models.Book{
+		ForeignID:        "local:repeat:2",
+		AuthorID:         author.ID,
+		Title:            "Repeat Two",
+		SortTitle:        "Repeat Two",
+		Status:           models.BookStatusWanted,
+		AnyEditionOK:     true,
+		Language:         "eng",
+		MediaType:        models.MediaTypeAudiobook,
+		MetadataProvider: "local",
+	}
+	if err := bookRepo.Create(ctx, firstBook); err != nil {
+		t.Fatalf("Create first book: %v", err)
+	}
+	if err := bookRepo.Create(ctx, secondBook); err != nil {
+		t.Fatalf("Create second book: %v", err)
+	}
+
+	first := sampleABSItem()
+	first.ItemID = "li-repeat-series-1"
+	first.Title = firstBook.Title
+	first.Authors = []NormalizedAuthor{{ID: "author-repeat", Name: author.Name}}
+	first.Series = []NormalizedSeries{{ID: "series-repeat", Name: "Repeat Saga", Sequence: "1"}}
+	first.AudioFiles = []NormalizedAudioFile{{INO: "audio-repeat-series-1", Path: "/abs/repeat/one.m4b"}}
+	first.EbookPath = ""
+	first.EbookINO = ""
+	second := first
+	second.ItemID = "li-repeat-series-2"
+	second.Title = secondBook.Title
+	second.Series = []NormalizedSeries{{ID: "series-repeat", Name: "Repeat Saga", Sequence: "2"}}
+	second.AudioFiles = []NormalizedAudioFile{{INO: "audio-repeat-series-2", Path: "/abs/repeat/two.m4b"}}
+	items := []NormalizedLibraryItem{first, second}
+	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		for _, item := range items {
+			if err := fn(ctx, item); err != nil {
+				return EnumerationStats{}, err
+			}
+		}
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: len(items), ItemsNormalized: len(items)}, nil
+	}
+
+	stats, err := importer.Run(ctx, ImportConfig{
+		SourceID:  DefaultSourceID,
+		BaseURL:   "https://abs.example.com",
+		APIKey:    "secret",
+		LibraryID: first.LibraryID,
+		Label:     "Shelf",
+		Enabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if stats.SeriesCreated != 1 || stats.SeriesLinked != 1 {
+		t.Fatalf("series stats = %+v, want one created series and one linked membership", stats)
+	}
+	runs, err := importer.RecentRuns(ctx, 1)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("RecentRuns = %d err=%v, want 1 run", len(runs), err)
+	}
+	series, err := seriesRepo.GetByForeignID(ctx, absForeignID("series", first.LibraryID, "series-repeat"))
+	if err != nil {
+		t.Fatalf("GetByForeignID: %v", err)
+	}
+	if series == nil {
+		t.Fatal("expected imported series")
+	}
+	hydrated, err := seriesRepo.GetByID(ctx, series.ID)
+	if err != nil {
+		t.Fatalf("GetByID before rollback: %v", err)
+	}
+	if len(hydrated.Books) != 2 {
+		t.Fatalf("series books before rollback = %+v, want two run-owned memberships", hydrated.Books)
+	}
+
+	result, err := importer.Rollback(ctx, runs[0].ID)
+	if err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if result.Stats.Failed != 0 {
+		t.Fatalf("rollback result = %+v, want no failures", result)
+	}
+	books, err := bookRepo.ListIncludingExcluded(ctx)
+	if err != nil {
+		t.Fatalf("List books after rollback: %v", err)
+	}
+	if len(books) != 2 {
+		t.Fatalf("books after rollback = %d, want existing books preserved", len(books))
+	}
+	allSeries, err := seriesRepo.List(ctx)
+	if err != nil {
+		t.Fatalf("List series after rollback: %v", err)
+	}
+	if len(allSeries) != 0 {
+		t.Fatalf("series after rollback = %+v, want empty imported series deleted", allSeries)
+	}
+	itemBookIDs := map[string]int64{
+		first.ItemID:  firstBook.ID,
+		second.ItemID: secondBook.ID,
+	}
+	for _, item := range items {
+		link, err := provenanceRepo.GetByExternal(ctx, DefaultSourceID, item.LibraryID, entityTypeSeries, seriesMembershipExternalID("series-repeat", itemBookIDs[item.ItemID], item.ItemID))
+		if err != nil {
+			t.Fatalf("GetByExternal membership: %v", err)
+		}
+		if link != nil {
+			t.Fatalf("series membership provenance for %s = %+v, want nil", item.ItemID, link)
+		}
+	}
+}
+
+func TestImporter_ABSSeriesRerunRollbackPreservesOriginalMembership(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, seriesRepo, _, _, _, _, _, _ := newABSImporterFixture(t)
+	ctx := context.Background()
+	item := sampleABSItem()
+	firstRunID := runSingleABSImport(t, importer, item)
+	if firstRunID == 0 {
+		t.Fatal("first run id is required")
+	}
+
+	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		if err := fn(ctx, item); err != nil {
+			return EnumerationStats{}, err
+		}
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+	stats, err := importer.Run(ctx, ImportConfig{
+		SourceID:  DefaultSourceID,
+		BaseURL:   "https://abs.example.com",
+		APIKey:    "secret",
+		LibraryID: item.LibraryID,
+		Label:     "Shelf",
+		Enabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if stats.SeriesCreated != 0 || stats.SeriesLinked != 0 {
+		t.Fatalf("second run series stats = %+v, want no new series ownership", stats)
+	}
+	runs, err := importer.RecentRuns(ctx, 1)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("RecentRuns = %d err=%v, want second run", len(runs), err)
+	}
+	if _, err := importer.Rollback(ctx, runs[0].ID); err != nil {
+		t.Fatalf("Rollback second run: %v", err)
+	}
+	series, err := seriesRepo.GetByForeignID(ctx, absForeignID("series", item.LibraryID, item.Series[0].ID))
+	if err != nil {
+		t.Fatalf("GetByForeignID after rollback: %v", err)
+	}
+	if series == nil {
+		t.Fatal("series after second rollback = nil, want original series preserved")
+	}
+	hydrated, err := seriesRepo.GetByID(ctx, series.ID)
+	if err != nil {
+		t.Fatalf("GetByID after rollback: %v", err)
+	}
+	if len(hydrated.Books) != 1 {
+		t.Fatalf("series books after rollback = %+v, want original membership preserved", hydrated.Books)
+	}
+}
+
 func hardcoverSeriesABSItem() NormalizedLibraryItem {
 	item := sampleABSItem()
 	item.ItemID = "li-different-seasons"
@@ -2268,7 +2452,30 @@ func TestImporter_HardcoverSeriesMatchPromotesExactABSSeries(t *testing.T) {
 		Title:      "The Murderbot Diaries",
 		AuthorName: "Martha Wells",
 	}, catalog)))
-	runSingleABSImport(t, importer, item)
+	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		if err := fn(ctx, item); err != nil {
+			return EnumerationStats{}, err
+		}
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+	stats, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:  DefaultSourceID,
+		BaseURL:   "https://abs.example.com",
+		APIKey:    "secret",
+		LibraryID: item.LibraryID,
+		Label:     "Shelf",
+		Enabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if stats.SeriesCreated != 1 || stats.SeriesLinked != 0 {
+		t.Fatalf("series stats = %+v, want one created row and no duplicate Hardcover link count", stats)
+	}
+	progress := importer.Progress()
+	if len(progress.Results) != 1 || progress.Results[0].SeriesCount != 1 {
+		t.Fatalf("progress results = %+v, want one final series membership", progress.Results)
+	}
 
 	series, err := seriesRepo.GetByForeignID(context.Background(), "hc-series:200")
 	if err != nil {
@@ -2552,6 +2759,71 @@ func TestImporter_RollbackRemovesCreatedBatch(t *testing.T) {
 	}
 	if link != nil {
 		t.Fatalf("book provenance = %+v, want nil after rollback", link)
+	}
+}
+
+func TestImporter_RollbackKeepsRunCreatedSeriesWithUserMembership(t *testing.T) {
+	t.Parallel()
+
+	importer, authorRepo, bookRepo, seriesRepo, _, provenanceRepo, _, _, _, _ := newABSImporterFixture(t)
+	ctx := context.Background()
+	item := sampleABSItem()
+	runID := runSingleABSImport(t, importer, item)
+	series, err := seriesRepo.GetByForeignID(ctx, absForeignID("series", item.LibraryID, item.Series[0].ID))
+	if err != nil {
+		t.Fatalf("GetByForeignID before rollback: %v", err)
+	}
+	if series == nil {
+		t.Fatal("expected imported series before rollback")
+	}
+	authors, err := authorRepo.List(ctx)
+	if err != nil {
+		t.Fatalf("List authors: %v", err)
+	}
+	if len(authors) != 1 {
+		t.Fatalf("authors = %d, want imported author", len(authors))
+	}
+	userBook := &models.Book{
+		ForeignID:        "manual:user-series-book",
+		AuthorID:         authors[0].ID,
+		Title:            "User Added Sequel",
+		SortTitle:        "User Added Sequel",
+		Status:           models.BookStatusWanted,
+		AnyEditionOK:     true,
+		Language:         "eng",
+		MediaType:        models.MediaTypeAudiobook,
+		MetadataProvider: "manual",
+	}
+	if err := bookRepo.Create(ctx, userBook); err != nil {
+		t.Fatalf("Create user book: %v", err)
+	}
+	if err := seriesRepo.LinkBook(ctx, series.ID, userBook.ID, "99", false); err != nil {
+		t.Fatalf("Link user book: %v", err)
+	}
+
+	result, err := importer.Rollback(ctx, runID)
+	if err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if result.Stats.Failed != 0 {
+		t.Fatalf("rollback result = %+v, want no failures", result)
+	}
+	surviving, err := seriesRepo.GetByID(ctx, series.ID)
+	if err != nil {
+		t.Fatalf("GetByID after rollback: %v", err)
+	}
+	if surviving == nil {
+		t.Fatal("series after rollback = nil, want kept because user membership remains")
+	}
+	if len(surviving.Books) != 1 || surviving.Books[0].BookID != userBook.ID {
+		t.Fatalf("series books after rollback = %+v, want only user-added membership", surviving.Books)
+	}
+	identity, err := provenanceRepo.GetByExternal(ctx, DefaultSourceID, item.LibraryID, entityTypeSeries, item.Series[0].ID)
+	if err != nil {
+		t.Fatalf("GetByExternal identity after rollback: %v", err)
+	}
+	if identity != nil {
+		t.Fatalf("series identity provenance = %+v, want nil after rollback keeps row", identity)
 	}
 }
 
