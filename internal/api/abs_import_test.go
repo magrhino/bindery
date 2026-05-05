@@ -74,7 +74,7 @@ func TestABSImportHandler_Start(t *testing.T) {
 	}
 }
 
-func TestABSImportHandler_StartUsesRequestOverridesAndStoredKeyFallback(t *testing.T) {
+func TestABSImportHandler_StartUsesStoredConfigAndIgnoresDraftOverrides(t *testing.T) {
 	t.Parallel()
 
 	stub := &stubABSImporter{progress: abs.ImportProgress{Running: true}}
@@ -83,28 +83,35 @@ func TestABSImportHandler_StartUsesRequestOverridesAndStoredKeyFallback(t *testi
 			BaseURL:   "https://stored.example.com",
 			APIKey:    "stored-secret",
 			Label:     "Stored Shelf",
-			LibraryID: "",
+			LibraryID: "lib-stored",
+			PathRemap: "/abs:/books",
 			Enabled:   true,
 		}
 	})
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/abs/import", bytes.NewBufferString(`{"baseUrl":"https://draft.example.com","libraryId":"lib-draft","label":"Draft Shelf","enabled":true}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/abs/import", bytes.NewBufferString(`{"baseUrl":"https://draft.example.com","apiKey":"draft-secret","libraryId":"lib-draft","label":"Draft Shelf","pathRemap":"/draft:/books","enabled":false}`))
 	h.Start(rec, req)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
 	}
-	if stub.lastCfg.BaseURL != "https://draft.example.com" {
-		t.Fatalf("baseURL = %q, want draft override", stub.lastCfg.BaseURL)
+	if stub.lastCfg.BaseURL != "https://stored.example.com" {
+		t.Fatalf("baseURL = %q, want stored config", stub.lastCfg.BaseURL)
 	}
-	if stub.lastCfg.LibraryID != "lib-draft" {
-		t.Fatalf("libraryID = %q, want draft override", stub.lastCfg.LibraryID)
+	if stub.lastCfg.LibraryID != "lib-stored" {
+		t.Fatalf("libraryID = %q, want stored config", stub.lastCfg.LibraryID)
 	}
-	if stub.lastCfg.Label != "Draft Shelf" {
-		t.Fatalf("label = %q, want draft override", stub.lastCfg.Label)
+	if stub.lastCfg.Label != "Stored Shelf" {
+		t.Fatalf("label = %q, want stored config", stub.lastCfg.Label)
 	}
 	if stub.lastCfg.APIKey != "stored-secret" {
-		t.Fatalf("apiKey = %q, want stored fallback", stub.lastCfg.APIKey)
+		t.Fatalf("apiKey = %q, want stored config", stub.lastCfg.APIKey)
+	}
+	if stub.lastCfg.PathRemap != "/abs:/books" {
+		t.Fatalf("pathRemap = %q, want stored config", stub.lastCfg.PathRemap)
+	}
+	if !stub.lastCfg.Enabled {
+		t.Fatal("enabled = false, want stored config")
 	}
 }
 

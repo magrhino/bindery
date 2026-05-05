@@ -11,7 +11,23 @@ type Series struct {
 	CreatedAt   time.Time `json:"createdAt"`
 
 	// Joined data
-	Books []SeriesBook `json:"books,omitempty"`
+	Books         []SeriesBook         `json:"books,omitempty"`
+	HardcoverLink *SeriesHardcoverLink `json:"hardcoverLink,omitempty"`
+}
+
+type SeriesHardcoverLink struct {
+	ID                  int64     `json:"id"`
+	SeriesID            int64     `json:"seriesId"`
+	HardcoverSeriesID   string    `json:"hardcoverSeriesId"`
+	HardcoverProviderID string    `json:"hardcoverProviderId"`
+	HardcoverTitle      string    `json:"hardcoverTitle"`
+	HardcoverAuthorName string    `json:"hardcoverAuthorName"`
+	HardcoverBookCount  int       `json:"hardcoverBookCount"`
+	Confidence          float64   `json:"confidence"`
+	LinkedBy            string    `json:"linkedBy"`
+	LinkedAt            time.Time `json:"linkedAt"`
+	CreatedAt           time.Time `json:"createdAt"`
+	UpdatedAt           time.Time `json:"updatedAt"`
 }
 
 type SeriesBook struct {

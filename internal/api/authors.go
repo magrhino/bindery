@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -26,6 +27,8 @@ var (
 	errNoMetadataMatch        = errors.New("no exact-name match in metadata provider")
 	errAmbiguousMetadataMatch = errors.New("multiple exact-name matches in metadata provider")
 )
+
+const authorAutoSearchConcurrency = 4
 
 type AuthorHandler struct {
 	authors  *db.AuthorRepo
@@ -159,7 +162,7 @@ func (h *AuthorHandler) Create(w http.ResponseWriter, r *http.Request) {
 			if mediaType == "" {
 				mediaType = h.resolveDefaultMediaType(r.Context())
 			}
-			go h.FetchAuthorBooks(canonical, req.SearchOnAdd, mediaType)
+			h.fetchAuthorBooksAsync(canonical, req.SearchOnAdd, mediaType)
 			cleanAuthorDescription(canonical)
 			writeJSON(w, http.StatusOK, canonical)
 			return
@@ -195,7 +198,7 @@ func (h *AuthorHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch and store books for this author. Always populate the catalogue;
 	// pass searchOnAdd so FetchAuthorBooks knows whether to also queue grabs.
-	go h.FetchAuthorBooks(author, req.SearchOnAdd, mediaType)
+	h.fetchAuthorBooksAsync(author, req.SearchOnAdd, mediaType)
 
 	cleanAuthorDescription(author)
 	writeJSON(w, http.StatusCreated, author)
@@ -205,6 +208,14 @@ func cleanAuthorDescription(author *models.Author) {
 	if author != nil {
 		author.Description = textutil.CleanDescription(author.Description)
 	}
+}
+
+func (h *AuthorHandler) fetchAuthorBooksAsync(author *models.Author, autoSearch bool, mediaType string) {
+	if author == nil {
+		return
+	}
+	snapshot := *author
+	go h.FetchAuthorBooks(&snapshot, autoSearch, mediaType)
 }
 
 func (h *AuthorHandler) fetchAuthorForCreate(ctx context.Context, foreignID, fallbackName string) (*models.Author, error) {
@@ -628,7 +639,7 @@ func (h *AuthorHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	// the user triggered it to refresh metadata, not to queue downloads.
 	// Newly-discovered books inherit the global default media type; rows
 	// that already exist keep whatever value they were created with.
-	go h.FetchAuthorBooks(author, false, h.resolveDefaultMediaType(r.Context()))
+	h.fetchAuthorBooksAsync(author, false, h.resolveDefaultMediaType(r.Context()))
 	writeJSON(w, http.StatusAccepted, map[string]string{"message": "refresh started"})
 }
 
@@ -754,8 +765,9 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool,
 		}
 	}
 
-	// Use the dedicated author works endpoint for accurate results
-	books, err := h.meta.GetAuthorWorks(ctx, author.ForeignID)
+	// Use the dedicated author works endpoint for accurate results, with
+	// author-scoped supplemental providers when available.
+	books, err := h.meta.GetAuthorWorksForAuthor(ctx, *author)
 	if err != nil {
 		slog.Error("failed to fetch books", "author", author.Name, "error", err)
 		return
@@ -795,6 +807,9 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool,
 	}
 
 	normalizedAuthor := strings.ToLower(strings.TrimSpace(author.Name))
+
+	searchQueue := make([]models.Book, 0)
+	autoSearchEnabled := autoSearch && h.searcher != nil && author.Monitored && h.isAutoGrabEnabled(ctx)
 
 	var added, skippedLang, skippedJunk int
 	for _, b := range books {
@@ -905,11 +920,40 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool,
 
 		// Auto-search the freshly-added wanted book only when the per-add
 		// flag AND the global auto-grab kill-switch both say yes.
-		if autoSearch && h.searcher != nil && author.Monitored && h.isAutoGrabEnabled(ctx) {
-			h.searcher.SearchAndGrabBook(ctx, b)
+		if autoSearchEnabled {
+			searchQueue = append(searchQueue, b)
 		}
 	}
+	runBookSearches(ctx, h.searcher, searchQueue, authorAutoSearchConcurrency)
 	slog.Info("author books synced", "author", author.Name, "added", added, "skipped_language", skippedLang, "skipped_junk", skippedJunk, "total", len(books))
+}
+
+func runBookSearches(ctx context.Context, searcher BookSearcher, books []models.Book, concurrency int) {
+	if searcher == nil || len(books) == 0 {
+		return
+	}
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for _, book := range books {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			wg.Wait()
+			return
+		}
+		book := book
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			searcher.SearchAndGrabBook(ctx, book)
+		}()
+	}
+	wg.Wait()
 }
 
 func (h *AuthorHandler) lookupUpstreamAuthorByName(ctx context.Context, name string) (*models.Author, error) {
@@ -1098,7 +1142,7 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 			author, _ = h.authors.GetByForeignID(ctx, req.ForeignAuthorID)
 		} else {
 			author = fetched
-			go h.FetchAuthorBooks(author, false, h.resolveDefaultMediaType(ctx))
+			h.fetchAuthorBooksAsync(author, false, h.resolveDefaultMediaType(ctx))
 		}
 	}
 	if author == nil {

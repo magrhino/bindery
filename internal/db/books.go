@@ -167,6 +167,19 @@ func (r *BookRepo) Update(ctx context.Context, b *models.Book) error {
 	return nil
 }
 
+// MarkWantedMonitored updates only the fields needed to queue a book for
+// searching, preserving metadata that may not be present on sparse callers.
+func (r *BookRepo) MarkWantedMonitored(ctx context.Context, id int64) error {
+	now := time.Now().UTC()
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE books SET status = ?, monitored = 1, updated_at = ? WHERE id = ?`,
+		models.BookStatusWanted, now, id)
+	if err != nil {
+		return fmt.Errorf("mark book %d wanted: %w", id, err)
+	}
+	return nil
+}
+
 // AddBookFile records a new on-disk file in book_files and refreshes the
 // book's aggregate status. Multiple files for the same format are all tracked
 // (e.g. epub + mobi + pdf from a multi-file download).

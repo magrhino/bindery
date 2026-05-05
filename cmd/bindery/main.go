@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"io/fs"
 	"log/slog"
 	"net"
@@ -170,7 +170,10 @@ func main() {
 		enrichers = append(enrichers, googlebooks.New(setting.Value))
 		slog.Info("google books enrichment enabled")
 	}
-	enrichers = append(enrichers, hardcover.New())
+	hcClient := hardcover.New().WithTokenSource(func(ctx context.Context) string {
+		return api.GetHardcoverAPIToken(ctx, settingsRepo)
+	})
+	enrichers = append(enrichers, hcClient)
 	slog.Info("hardcover enrichment enabled")
 	enrichers = append(enrichers, dnb.New())
 	slog.Info("dnb enrichment enabled")
@@ -229,7 +232,10 @@ func main() {
 	absImporter := abs.NewImporter(authorRepo, authorAliasRepo, bookRepo, editionRepo, seriesRepo, settingsRepo, absImportRunRepo, absImportRunEntityRepo, absProvenanceRepo, absReviewRepo, absConflictRepo).
 		WithVersion(version).
 		WithStoragePaths(cfg.LibraryDir, cfg.AudiobookDir, rootFolderRepo).
-		WithMetadata(metaAgg)
+		WithMetadata(metaAgg).
+		WithEnhancedHardcoverSeriesEnabled(func(ctx context.Context) bool {
+			return api.HardcoverFeatureStateFor(ctx, settingsRepo, cfg.EnhancedHardcoverAPI).EnhancedHardcoverAPI
+		})
 	if cfg.ABSFeatureEnabled {
 		storedABS := api.LoadABSConfig(ctxBoot, settingsRepo)
 		resumeCfg := abs.ImportConfig{
@@ -295,7 +301,7 @@ func main() {
 	recRepo := db.NewRecommendationRepo(database)
 	recEngine := recommender.New(bookRepo, authorRepo, seriesRepo, recRepo, settingsRepo)
 	recEngine.WithOLClient(olClient)
-	if s, _ := settingsRepo.Get(context.Background(), "hardcover.api_token"); s != nil && s.Value != "" {
+	if s, _ := settingsRepo.Get(context.Background(), api.SettingHardcoverAPIToken); s != nil && s.Value != "" {
 		recEngine.WithHCClient(hardcover.New().WithToken(s.Value))
 		slog.Info("hardcover wishlist integration enabled for recommendations")
 	}
@@ -359,7 +365,8 @@ func main() {
 	notificationHandler := api.NewNotificationHandler(notificationRepo, notif)
 	qualityProfileHandler := api.NewQualityProfileHandler(qualityProfileRepo)
 	settingsHandler := api.NewSettingsHandler(settingsRepo)
-	seriesHandler := api.NewSeriesHandler(seriesRepo, bookRepo, sched)
+	seriesHandler := api.NewSeriesHandler(seriesRepo, bookRepo, authorRepo, metaAgg, sched).
+		WithHardcoverFeatureSettings(settingsRepo, cfg.EnhancedHardcoverAPI)
 	tagHandler := api.NewTagHandler(tagRepo)
 	importListHandler := api.NewImportListHandler(importListRepo)
 	metadataProfileHandler := api.NewMetadataProfileHandler(metadataProfileRepo)
@@ -440,13 +447,27 @@ func main() {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"status":"ok","version":"` + version + `"}`))
 		})
-		r.Get("/system/status", func(w http.ResponseWriter, _ *http.Request) {
+		r.Get("/system/status", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			cacheBytes, _ := imageProxyHandler.CacheSize()
-			_, _ = fmt.Fprintf(w,
-				`{"version":"%s","commit":"%s","buildDate":"%s","imageCacheBytes":%d}`,
-				version, commit, date, cacheBytes,
-			)
+			hardcoverState := api.HardcoverFeatureStateFor(r.Context(), settingsRepo, cfg.EnhancedHardcoverAPI)
+			_ = json.NewEncoder(w).Encode(struct {
+				Version                         string `json:"version"`
+				Commit                          string `json:"commit"`
+				BuildDate                       string `json:"buildDate"`
+				ImageCacheBytes                 int64  `json:"imageCacheBytes"`
+				EnhancedHardcoverAPI            bool   `json:"enhancedHardcoverApi"`
+				HardcoverTokenConfigured        bool   `json:"hardcoverTokenConfigured"`
+				EnhancedHardcoverDisabledReason string `json:"enhancedHardcoverDisabledReason,omitempty"`
+			}{
+				Version:                         version,
+				Commit:                          commit,
+				BuildDate:                       date,
+				ImageCacheBytes:                 cacheBytes,
+				EnhancedHardcoverAPI:            hardcoverState.EnhancedHardcoverAPI,
+				HardcoverTokenConfigured:        hardcoverState.HardcoverTokenConfigured,
+				EnhancedHardcoverDisabledReason: hardcoverState.EnhancedHardcoverDisabledReason,
+			})
 		})
 
 		// Auth — status/login/logout/setup are always allowed through the
@@ -585,6 +606,7 @@ func main() {
 			r.Use(auth.RequireAdmin)
 			r.Put("/setting/{key}", settingsHandler.Set)
 			r.Delete("/setting/{key}", settingsHandler.Delete)
+			r.Post("/hardcover/test", settingsHandler.TestHardcover)
 			r.Get("/abs/config", absHandler.GetConfig)
 			if cfg.ABSFeatureEnabled {
 				r.Put("/abs/config", absHandler.SetConfig)
@@ -607,9 +629,19 @@ func main() {
 
 		// Series
 		r.Get("/series", seriesHandler.List)
+		r.Post("/series", seriesHandler.Create)
+		r.Get("/series/hardcover/search", seriesHandler.SearchHardcover)
 		r.Get("/series/{id}", seriesHandler.Get)
+		r.Put("/series/{id}", seriesHandler.Update)
 		r.Patch("/series/{id}", seriesHandler.Monitor)
+		r.Delete("/series/{id}", seriesHandler.Delete)
+		r.Post("/series/{id}/books", seriesHandler.AddBook)
 		r.Post("/series/{id}/fill", seriesHandler.Fill)
+		r.Get("/series/{id}/hardcover-link", seriesHandler.GetHardcoverLink)
+		r.Post("/series/{id}/hardcover-link/auto", seriesHandler.AutoLinkHardcover)
+		r.Put("/series/{id}/hardcover-link", seriesHandler.PutHardcoverLink)
+		r.Delete("/series/{id}/hardcover-link", seriesHandler.DeleteHardcoverLink)
+		r.Get("/series/{id}/hardcover-diff", seriesHandler.HardcoverDiff)
 
 		// Recommendations
 		r.Get("/recommendations", recHandler.List)

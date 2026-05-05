@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -110,10 +109,11 @@ func (h *ImportListHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 // HardcoverLists returns the authenticated user's Hardcover reading lists.
 // GET /api/v1/importlist/hardcover/lists  (Authorization: Bearer <tok>)
+// The Hardcover client normalizes the token before forwarding it upstream.
 func (h *ImportListHandler) HardcoverLists(w http.ResponseWriter, r *http.Request) {
 	authHeader := r.Header.Get("Authorization")
-	token := strings.TrimPrefix(authHeader, "Bearer ")
-	if token == "" || token == authHeader {
+	token := hardcover.NormalizeAPIToken(authHeader)
+	if token == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing authorization header"})
 		return
 	}

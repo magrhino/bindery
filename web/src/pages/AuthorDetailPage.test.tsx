@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import AuthorDetailPage from './AuthorDetailPage'
-import { api, Author, Book } from '../api/client'
+import { api } from '../api/client'
+import type { Author, Book } from '../api/client'
 
 vi.mock('../api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('../api/client')>()
@@ -12,22 +13,20 @@ vi.mock('../api/client', async importOriginal => {
       ...actual.api,
       getAuthor: vi.fn(),
       listBooks: vi.fn(),
+      listAuthors: vi.fn(),
+      refreshAuthor: vi.fn(),
+      updateAuthor: vi.fn(),
+      deleteAuthor: vi.fn(),
       searchAuthorWanted: vi.fn(),
     },
   }
 })
 
-vi.mock('../components/ViewToggle', () => ({ default: () => null }))
-
-vi.mock('../components/useView', () => ({
-  useView: () => ['grid', vi.fn()],
-}))
-
 const author: Author = {
   id: 42,
-  foreignAuthorId: 'OL1A',
-  authorName: 'Test Author',
-  sortName: 'Author, Test',
+  foreignAuthorId: 'OL123A',
+  authorName: 'Brandon Sanderson',
+  sortName: 'Sanderson, Brandon',
   description: '',
   imageUrl: '',
   disambiguation: '',
@@ -36,27 +35,53 @@ const author: Author = {
   monitored: true,
 }
 
-function book(overrides: Partial<Book>): Book {
+function makeBook(overrides: Partial<Book> & Pick<Book, 'id' | 'title' | 'status'>): Book {
+  const { id, title, status, ...rest } = overrides
   return {
-    id: 1,
-    foreignBookId: 'OL1W',
+    id,
+    foreignBookId: `book-${id}`,
     authorId: 42,
-    title: 'Wanted Book',
+    title,
     description: '',
     imageUrl: '',
+    releaseDate: undefined,
     genres: [],
     monitored: true,
-    status: 'wanted',
+    status,
     filePath: '',
     mediaType: 'ebook',
     ebookFilePath: '',
     audiobookFilePath: '',
     excluded: false,
-    ...overrides,
+    ...rest,
   }
 }
 
-function renderPage() {
+function installLocalStorageMock() {
+  const values = new Map<string, string>()
+  const storage = {
+    get length() {
+      return values.size
+    },
+    clear: vi.fn(() => values.clear()),
+    getItem: vi.fn((key: string) => values.get(key) ?? null),
+    key: vi.fn((index: number) => Array.from(values.keys())[index] ?? null),
+    removeItem: vi.fn((key: string) => {
+      values.delete(key)
+    }),
+    setItem: vi.fn((key: string, value: string) => {
+      values.set(key, value)
+    }),
+  } as Storage
+  Object.defineProperty(globalThis, 'localStorage', { value: storage, configurable: true })
+  Object.defineProperty(window, 'localStorage', { value: storage, configurable: true })
+}
+
+function renderAuthorDetailPage(books: Book[], view: 'grid' | 'table' = 'grid') {
+  localStorage.setItem('bindery.view.author-detail', view)
+  vi.mocked(api.getAuthor).mockResolvedValue(author)
+  vi.mocked(api.listBooks).mockResolvedValue(books)
+
   return render(
     <MemoryRouter initialEntries={['/author/42']}>
       <Routes>
@@ -66,22 +91,26 @@ function renderPage() {
   )
 }
 
+function rowForTitle(title: string): HTMLElement {
+  const row = screen.getByText(title).closest('tr')
+  if (!row) throw new Error(`No row found for ${title}`)
+  return row
+}
+
 describe('AuthorDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(api.getAuthor).mockResolvedValue(author)
+    installLocalStorageMock()
     vi.mocked(api.searchAuthorWanted).mockResolvedValue({
       results: { '42': { ok: true } },
     })
   })
 
   it('searches all wanted books for the current author', async () => {
-    vi.mocked(api.listBooks).mockResolvedValue([
-      book({ id: 10, title: 'Wanted Book' }),
-      book({ id: 11, title: 'Imported Book', status: 'imported' }),
+    renderAuthorDetailPage([
+      makeBook({ id: 10, title: 'Wanted Book', status: 'wanted' }),
+      makeBook({ id: 11, title: 'Imported Book', status: 'imported' }),
     ])
-
-    renderPage()
 
     const button = await screen.findByRole('button', { name: 'Search all wanted' })
     expect(button).toBeEnabled()
@@ -92,12 +121,10 @@ describe('AuthorDetailPage', () => {
   })
 
   it('disables author search when there are no monitored wanted books', async () => {
-    vi.mocked(api.listBooks).mockResolvedValue([
-      book({ id: 10, title: 'Unmonitored Wanted Book', monitored: false }),
-      book({ id: 11, title: 'Imported Book', status: 'imported' }),
+    renderAuthorDetailPage([
+      makeBook({ id: 10, title: 'Unmonitored Wanted Book', status: 'wanted', monitored: false }),
+      makeBook({ id: 11, title: 'Imported Book', status: 'imported' }),
     ])
-
-    renderPage()
 
     const button = await screen.findByRole('button', { name: 'Search all wanted' })
     expect(button).toBeDisabled()
@@ -105,5 +132,73 @@ describe('AuthorDetailPage', () => {
     fireEvent.click(button)
 
     expect(api.searchAuthorWanted).not.toHaveBeenCalled()
+  })
+
+  it('keeps table metadata visible and repeats it in compact title rows', async () => {
+    renderAuthorDetailPage(
+      [
+        makeBook({
+          id: 101,
+          title: 'Firefight',
+          status: 'wanted',
+          mediaType: 'ebook',
+          releaseDate: '2008-01-01T00:00:00Z',
+        }),
+        makeBook({
+          id: 102,
+          title: 'Snapshot',
+          status: 'downloaded',
+          mediaType: 'audiobook',
+          releaseDate: '2023-10-10',
+        }),
+        makeBook({
+          id: 103,
+          title: 'Dual Format',
+          status: 'imported',
+          mediaType: 'both',
+          releaseDate: '2022-05-05',
+          excluded: true,
+        }),
+      ],
+      'table',
+    )
+
+    await screen.findByText('Firefight')
+    const table = screen.getByRole('table')
+
+    expect(table).toHaveClass('table-fixed')
+    expect(within(table).getByRole('columnheader', { name: 'Title' })).toHaveClass('sm:w-[46%]')
+    expect(within(table).getByRole('columnheader', { name: /Published/ })).toBeInTheDocument()
+    expect(within(table).getByRole('columnheader', { name: 'Type' })).toBeInTheDocument()
+    expect(within(table).getByRole('columnheader', { name: 'Status' })).toBeInTheDocument()
+
+    const firefightCells = within(rowForTitle('Firefight')).getAllByRole('cell')
+    expect(firefightCells).toHaveLength(4)
+    expect(firefightCells[0]).toHaveTextContent('Wanted')
+    expect(firefightCells[0]).toHaveTextContent('📖 Ebook')
+    expect(firefightCells[0]).toHaveTextContent('2008')
+    expect(firefightCells[0]).not.toHaveTextContent('2008-01-01')
+    expect(firefightCells[1]).toHaveTextContent('2008')
+    expect(firefightCells[1]).not.toHaveTextContent('2008-01-01')
+    expect(firefightCells[2]).toHaveTextContent('📖 Ebook')
+    expect(firefightCells[3]).toHaveTextContent('Wanted')
+
+    const snapshotCells = within(rowForTitle('Snapshot')).getAllByRole('cell')
+    expect(snapshotCells[0]).toHaveTextContent('Downloaded')
+    expect(snapshotCells[0]).toHaveTextContent('🎧 Audiobook')
+    expect(snapshotCells[0]).toHaveTextContent('2023')
+    expect(snapshotCells[1]).toHaveTextContent('2023')
+    expect(snapshotCells[2]).toHaveTextContent('🎧 Audiobook')
+    expect(snapshotCells[3]).toHaveTextContent('Downloaded')
+
+    const dualFormatCells = within(rowForTitle('Dual Format')).getAllByRole('cell')
+    expect(dualFormatCells[0]).toHaveTextContent('In Library')
+    expect(dualFormatCells[0]).toHaveTextContent('📖🎧 Both')
+    expect(dualFormatCells[0]).toHaveTextContent('2022')
+    expect(dualFormatCells[0]).toHaveTextContent('Excluded')
+    expect(dualFormatCells[1]).toHaveTextContent('2022')
+    expect(dualFormatCells[2]).toHaveTextContent('📖🎧 Both')
+    expect(dualFormatCells[3]).toHaveTextContent('In Library')
+    expect(dualFormatCells[3]).toHaveTextContent('Excluded')
   })
 })

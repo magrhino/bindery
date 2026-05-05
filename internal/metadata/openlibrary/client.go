@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vavallee/bindery/internal/models"
@@ -212,11 +213,28 @@ func (c *Client) GetBook(ctx context.Context, foreignID string) (*models.Book, e
 // Both upstream calls are best-effort: as long as one returns, we proceed —
 // the other's failure is logged.
 func (c *Client) GetAuthorWorks(ctx context.Context, authorForeignID string) ([]models.Book, error) {
-	primary, primaryErr := c.authorWorksBackfill(ctx, authorForeignID)
+	var (
+		primary    []authorWorkEntry
+		primaryErr error
+		enrichment []models.Book
+		enrichErr  error
+		wg         sync.WaitGroup
+	)
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		primary, primaryErr = c.authorWorksBackfill(ctx, authorForeignID)
+	}()
+	go func() {
+		defer wg.Done()
+		enrichment, enrichErr = c.searchAuthorWorks(ctx, authorForeignID)
+	}()
+	wg.Wait()
+
 	if primaryErr != nil {
 		slog.Warn("openlibrary: author works endpoint failed", "author", authorForeignID, "error", primaryErr)
 	}
-	enrichment, enrichErr := c.searchAuthorWorks(ctx, authorForeignID)
 	if enrichErr != nil {
 		slog.Debug("openlibrary: author search enrichment failed", "author", authorForeignID, "error", enrichErr)
 	}

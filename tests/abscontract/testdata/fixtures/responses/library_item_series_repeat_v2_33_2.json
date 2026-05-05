@@ -1,0 +1,53 @@
+{
+  "id": "li_series_repeat",
+  "libraryId": "lib-books",
+  "folderId": "fol-books",
+  "path": "/audiobooks/Martha Wells/Artificial Condition.m4b",
+  "relPath": "Martha Wells/Artificial Condition.m4b",
+  "isFile": true,
+  "mediaType": "book",
+  "media": {
+    "libraryItemId": "li_series_repeat",
+    "metadata": {
+      "title": "Artificial Condition",
+      "authors": [
+        {
+          "id": "au_martha_wells",
+          "name": "Martha Wells"
+        }
+      ],
+      "series": [
+        {
+          "id": "series_murderbot",
+          "name": "The Murderbot Diaries",
+          "sequence": "2"
+        }
+      ],
+      "genres": [
+        "Science Fiction"
+      ],
+      "publishedYear": "2018",
+      "publishedDate": "2018-05-08",
+      "publisher": "Tor.com",
+      "description": "A repeated-series audiobook fixture item for the ABS contract harness.",
+      "language": "en",
+      "isbn": "9781250186928",
+      "asin": "B07B2SG6H5"
+    },
+    "duration": 11987,
+    "size": 367890123,
+    "audioFiles": [
+      {
+        "ino": "ino_series_repeat",
+        "index": 1,
+        "path": "/audiobooks/Martha Wells/Artificial Condition.m4b",
+        "duration": 11987,
+        "size": 367890123,
+        "metadata": {
+          "filename": "Artificial Condition.m4b",
+          "ext": "m4b"
+        }
+      }
+    ]
+  }
+}

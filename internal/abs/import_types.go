@@ -24,6 +24,7 @@ const (
 	entityTypeSeries            = "series"
 	entityTypeEdition           = "edition"
 	providerAudiobookshelf      = "audiobookshelf"
+	providerHardcover           = "hardcover"
 	runStatusRunning            = "running"
 	runStatusCompleted          = "completed"
 	runStatusFailed             = "failed"
@@ -42,6 +43,8 @@ const (
 type importClientFactory func(baseURL, apiKey string) (enumerationClient, error)
 
 type enumerateFunc func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error)
+
+type enhancedHardcoverSeriesEnabledFunc func(context.Context) bool
 
 type ImportConfig struct {
 	SourceID  string
@@ -116,6 +119,7 @@ type ImportStats struct {
 
 	dryRunSeriesExternalIDs map[string]struct{}
 	dryRunSeriesTitles      map[string]struct{}
+	dryRunSeriesMemberships map[string]struct{}
 }
 
 type ImportSourceSnapshot struct {
@@ -191,24 +195,25 @@ type metadataMergeResult struct {
 }
 
 type Importer struct {
-	authors      *db.AuthorRepo
-	aliases      *db.AuthorAliasRepo
-	books        *db.BookRepo
-	editions     *db.EditionRepo
-	series       *db.SeriesRepo
-	settings     *db.SettingsRepo
-	runs         *db.ABSImportRunRepo
-	runEntities  *db.ABSImportRunEntityRepo
-	provenance   *db.ABSProvenanceRepo
-	reviews      *db.ABSReviewItemRepo
-	conflicts    *db.ABSMetadataConflictRepo
-	meta         *metadata.Aggregator
-	newClient    importClientFactory
-	userAgent    string
-	enumerateFn  enumerateFunc
-	rootFolders  *db.RootFolderRepo
-	libraryDir   string
-	audiobookDir string
+	authors                *db.AuthorRepo
+	aliases                *db.AuthorAliasRepo
+	books                  *db.BookRepo
+	editions               *db.EditionRepo
+	series                 *db.SeriesRepo
+	settings               *db.SettingsRepo
+	runs                   *db.ABSImportRunRepo
+	runEntities            *db.ABSImportRunEntityRepo
+	provenance             *db.ABSProvenanceRepo
+	reviews                *db.ABSReviewItemRepo
+	conflicts              *db.ABSMetadataConflictRepo
+	meta                   *metadata.Aggregator
+	newClient              importClientFactory
+	hardcoverSeriesEnabled enhancedHardcoverSeriesEnabledFunc
+	userAgent              string
+	enumerateFn            enumerateFunc
+	rootFolders            *db.RootFolderRepo
+	libraryDir             string
+	audiobookDir           string
 
 	mu       sync.Mutex
 	running  bool

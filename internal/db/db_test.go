@@ -56,7 +56,7 @@ func TestOpenMemory(t *testing.T) {
 	// Verify tables exist
 	tables := []string{"authors", "books", "series", "editions", "indexers",
 		"download_clients", "downloads", "root_folders", "quality_profiles",
-		"settings", "history", "abs_import_runs", "abs_provenance", "abs_metadata_conflicts", "schema_migrations"}
+		"settings", "history", "abs_import_runs", "abs_provenance", "abs_metadata_conflicts", "series_hardcover_links", "schema_migrations"}
 	for _, table := range tables {
 		var name string
 		err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&name)
@@ -115,7 +115,8 @@ func TestMigrate033ABSReviewResolutionIdempotent(t *testing.T) {
 		t.Fatalf("seed abs review queue row: %v", err)
 	}
 
-	if _, err := database.Exec(`DELETE FROM schema_migrations WHERE version = 33`); err != nil {
+	version := migrationVersionForTest(t, "033_abs_review_resolution.sql")
+	if _, err := database.Exec(`DELETE FROM schema_migrations WHERE version = ?`, version); err != nil {
 		t.Fatalf("clear migration 033 marker: %v", err)
 	}
 	if err := migrate(database); err != nil {
@@ -134,6 +135,21 @@ func TestMigrate033ABSReviewResolutionIdempotent(t *testing.T) {
 	if authorID != "author-1" || bookID != "book-1" || editedTitle != "Edited Title" {
 		t.Fatalf("resolution fields changed after rerun: author=%q book=%q edited=%q", authorID, bookID, editedTitle)
 	}
+}
+
+func migrationVersionForTest(t *testing.T, filename string) int {
+	t.Helper()
+	entries, err := migrationsFS.ReadDir("migrations")
+	if err != nil {
+		t.Fatalf("read migrations: %v", err)
+	}
+	for i, entry := range entries {
+		if entry.Name() == filename {
+			return i + 1
+		}
+	}
+	t.Fatalf("migration %s not found", filename)
+	return 0
 }
 
 // TestMigrate008_CalibreOnFreshDB verifies the v0.8.0 Calibre migration

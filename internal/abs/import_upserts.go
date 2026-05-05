@@ -18,6 +18,17 @@ type bookUpsertResult struct {
 	matchedBy string
 }
 
+type seriesUpsertResult struct {
+	SeriesID             int64
+	IdentityExternalID   string
+	MembershipExternalID string
+	CountKey             string
+	CreatedSeries        bool
+	MembershipCreated    bool
+	Linked               bool
+	MatchedBy            string
+}
+
 func (i *Importer) resolveAuthor(ctx context.Context, cfg ImportConfig, runID int64, item NormalizedLibraryItem, allowCreate bool, matcher *authorMatcher) (*models.Author, bool, string, metadataMergeResult, error) {
 	if len(item.Authors) == 0 {
 		return nil, false, "", metadataMergeResult{}, errors.New("item has no authors")
@@ -379,6 +390,13 @@ func (i *Importer) enrichBook(ctx context.Context, cfg ImportConfig, item Normal
 		return metadataMergeResult{}, nil
 	}
 
+	return i.mergeUpstreamBook(ctx, cfg, item, book, full, matchedBy)
+}
+
+func (i *Importer) mergeUpstreamBook(ctx context.Context, cfg ImportConfig, item NormalizedLibraryItem, book *models.Book, full *models.Book, matchedBy string) (metadataMergeResult, error) {
+	if book == nil || full == nil {
+		return metadataMergeResult{}, nil
+	}
 	result := metadataMergeResult{Matched: 1}
 	changed := false
 	if full.ForeignID != "" && book.ForeignID != full.ForeignID {
@@ -792,20 +810,22 @@ func (i *Importer) applyBookFields(ctx context.Context, book *models.Book, autho
 	return i.books.Update(ctx, book)
 }
 
-func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bookID int64, ref NormalizedSeries, stats *ImportStats) (bool, string, error) {
+func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bookID int64, itemID string, ref NormalizedSeries, stats *ImportStats) (seriesUpsertResult, error) {
 	title := strings.TrimSpace(ref.Name)
 	if title == "" {
-		return false, "", nil
+		return seriesUpsertResult{}, nil
 	}
 	externalID := seriesExternalID(ref)
 	var existing *models.Series
+	var identityLink *models.ABSProvenance
 	if i.provenance != nil {
 		if link, err := i.provenance.GetByExternal(ctx, cfg.SourceID, cfg.LibraryID, entityTypeSeries, externalID); err != nil {
-			return false, "", err
+			return seriesUpsertResult{}, err
 		} else if link != nil {
+			identityLink = link
 			existing, err = i.series.GetByID(ctx, link.LocalID)
 			if err != nil {
-				return false, "", err
+				return seriesUpsertResult{}, err
 			}
 		}
 	}
@@ -813,10 +833,10 @@ func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bo
 	if existing == nil {
 		match, ambiguous, err := i.findSeriesByTitle(ctx, title)
 		if err != nil {
-			return false, "", err
+			return seriesUpsertResult{}, err
 		}
 		if ambiguous {
-			return false, "", fmt.Errorf("ambiguous existing series match for %q", title)
+			return seriesUpsertResult{}, fmt.Errorf("ambiguous existing series match for %q", title)
 		}
 		if match != nil {
 			existing = match
@@ -826,7 +846,25 @@ func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bo
 	created := false
 	if existing == nil {
 		if cfg.DryRun && stats != nil && stats.dryRunSeriesAlreadyPlanned(externalID, title) {
-			return i.recordPlannedSeries(ctx, cfg, runID, bookID, externalID, ref, false, "planned")
+			countKey := seriesMembershipCountKey(0, title, externalID, bookID, itemID)
+			membershipCreated := !stats.dryRunSeriesMembershipAlreadyPlanned(countKey)
+			membershipExternalID := seriesMembershipExternalID(externalID, bookID, itemID)
+			if membershipCreated {
+				metadata := map[string]any{
+					"bookId":   bookID,
+					"sequence": strings.TrimSpace(ref.Sequence),
+				}
+				_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, itemID, entityTypeSeries, membershipExternalID, 0, itemOutcomeLinked, metadata)
+				stats.rememberDryRunSeriesMembership(countKey)
+			}
+			return seriesUpsertResult{
+				IdentityExternalID:   externalID,
+				MembershipExternalID: membershipExternalID,
+				CountKey:             countKey,
+				MembershipCreated:    membershipCreated,
+				Linked:               true,
+				MatchedBy:            "planned",
+			}, nil
 		}
 		existing = &models.Series{
 			ForeignID:   absForeignID("series", cfg.LibraryID, externalID),
@@ -835,20 +873,51 @@ func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bo
 		}
 		if !cfg.DryRun {
 			if err := i.series.CreateOrGet(ctx, existing); err != nil {
-				return false, "", err
+				return seriesUpsertResult{}, err
 			}
 		}
 		created = true
 		matchedBy = "created"
 	}
+	localID := existing.ID
+	if cfg.DryRun && created {
+		localID = 0
+	}
+	countKey := seriesMembershipCountKey(localID, title, externalID, bookID, itemID)
+	membershipExternalID := seriesMembershipExternalID(externalID, bookID, itemID)
 	metadata := map[string]any{
 		"bookId":   bookID,
 		"sequence": strings.TrimSpace(ref.Sequence),
 	}
-	if !cfg.DryRun {
-		if err := i.series.LinkBook(ctx, existing.ID, bookID, strings.TrimSpace(ref.Sequence), true); err != nil {
-			return false, "", err
+	membershipCreated := false
+	if cfg.DryRun {
+		if stats == nil || !stats.dryRunSeriesMembershipAlreadyPlanned(countKey) {
+			membershipCreated = true
+			outcome := itemOutcomeLinked
+			if created {
+				outcome = itemOutcomeCreated
+			}
+			_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, itemID, entityTypeSeries, membershipExternalID, localID, outcome, metadata)
+			if stats != nil {
+				stats.rememberDryRunSeriesMembership(countKey)
+			}
 		}
+		if created && stats != nil {
+			stats.rememberDryRunSeries(externalID, title)
+		}
+		return seriesUpsertResult{
+			SeriesID:             localID,
+			IdentityExternalID:   externalID,
+			MembershipExternalID: membershipExternalID,
+			CountKey:             countKey,
+			CreatedSeries:        created,
+			MembershipCreated:    membershipCreated,
+			Linked:               true,
+			MatchedBy:            matchedBy,
+		}, nil
+	}
+	identityChanged := identityLink == nil || identityLink.LocalID != existing.ID
+	if identityChanged {
 		if err := i.upsertProvenance(ctx, &models.ABSProvenance{
 			SourceID:    cfg.SourceID,
 			LibraryID:   cfg.LibraryID,
@@ -858,35 +927,79 @@ func (i *Importer) upsertSeries(ctx context.Context, cfg ImportConfig, runID, bo
 			ItemID:      "",
 			ImportRunID: ptrInt64(runID),
 		}); err != nil {
-			return false, "", err
+			return seriesUpsertResult{}, err
 		}
+		outcome := itemOutcomeLinked
+		if created {
+			outcome = itemOutcomeCreated
+		}
+		_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, "", entityTypeSeries, externalID, existing.ID, outcome, map[string]any{
+			"matchedBy": matchedBy,
+			"identity":  true,
+		})
 	}
-	localID := existing.ID
-	if cfg.DryRun && created {
-		localID = 0
+	membershipCreated, err := i.series.LinkBookIfMissing(ctx, existing.ID, bookID, strings.TrimSpace(ref.Sequence), true)
+	if err != nil {
+		return seriesUpsertResult{}, err
 	}
-	outcome := itemOutcomeLinked
-	if created {
-		outcome = itemOutcomeCreated
+	if membershipCreated {
+		if err := i.upsertProvenance(ctx, &models.ABSProvenance{
+			SourceID:    cfg.SourceID,
+			LibraryID:   cfg.LibraryID,
+			EntityType:  entityTypeSeries,
+			ExternalID:  membershipExternalID,
+			LocalID:     existing.ID,
+			ItemID:      itemID,
+			ImportRunID: ptrInt64(runID),
+		}); err != nil {
+			return seriesUpsertResult{}, err
+		}
+		outcome := itemOutcomeLinked
+		if created {
+			outcome = itemOutcomeCreated
+		}
+		_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, itemID, entityTypeSeries, membershipExternalID, existing.ID, outcome, metadata)
 	}
-	_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, "", entityTypeSeries, externalID, localID, outcome, metadata)
-	if cfg.DryRun && created && stats != nil {
-		stats.rememberDryRunSeries(externalID, title)
-	}
-	return created, matchedBy, nil
+	return seriesUpsertResult{
+		SeriesID:             existing.ID,
+		IdentityExternalID:   externalID,
+		MembershipExternalID: membershipExternalID,
+		CountKey:             countKey,
+		CreatedSeries:        created,
+		MembershipCreated:    membershipCreated,
+		Linked:               true,
+		MatchedBy:            matchedBy,
+	}, nil
 }
 
-func (i *Importer) recordPlannedSeries(ctx context.Context, cfg ImportConfig, runID, bookID int64, externalID string, ref NormalizedSeries, created bool, matchedBy string) (bool, string, error) {
-	metadata := map[string]any{
-		"bookId":   bookID,
-		"sequence": strings.TrimSpace(ref.Sequence),
+func seriesMembershipExternalID(seriesExternalID string, bookID int64, itemID string) string {
+	seriesExternalID = strings.TrimSpace(seriesExternalID)
+	if bookID <= 0 {
+		itemID = strings.TrimSpace(itemID)
+		if itemID == "" {
+			return seriesExternalID + ":book:planned"
+		}
+		return seriesExternalID + ":item:" + itemID
 	}
-	outcome := itemOutcomeLinked
-	if created {
-		outcome = itemOutcomeCreated
+	return fmt.Sprintf("%s:book:%d", seriesExternalID, bookID)
+}
+
+func seriesMembershipCountKey(seriesID int64, title, externalID string, bookID int64, itemID string) string {
+	bookKey := strings.TrimSpace(itemID)
+	if bookID > 0 {
+		bookKey = fmt.Sprintf("book:%d", bookID)
+	} else if bookKey != "" {
+		bookKey = "item:" + bookKey
+	} else {
+		bookKey = "book:planned"
 	}
-	_ = i.recordRunEntity(ctx, runID, cfg, cfg.LibraryID, "", entityTypeSeries, externalID, 0, outcome, metadata)
-	return created, matchedBy, nil
+	if seriesID > 0 {
+		return fmt.Sprintf("series:%d:%s", seriesID, bookKey)
+	}
+	if titleKey := normalizeSeriesName(title); titleKey != "" {
+		return "title:" + titleKey + ":" + bookKey
+	}
+	return "external:" + strings.TrimSpace(externalID) + ":" + bookKey
 }
 
 func (s *ImportStats) dryRunSeriesAlreadyPlanned(externalID, title string) bool {
@@ -911,6 +1024,21 @@ func (s *ImportStats) rememberDryRunSeries(externalID, title string) {
 	}
 	s.dryRunSeriesExternalIDs[strings.TrimSpace(externalID)] = struct{}{}
 	s.dryRunSeriesTitles[normalizeTitle(title)] = struct{}{}
+}
+
+func (s *ImportStats) dryRunSeriesMembershipAlreadyPlanned(key string) bool {
+	if s == nil {
+		return false
+	}
+	_, ok := s.dryRunSeriesMemberships[strings.TrimSpace(key)]
+	return ok
+}
+
+func (s *ImportStats) rememberDryRunSeriesMembership(key string) {
+	if s.dryRunSeriesMemberships == nil {
+		s.dryRunSeriesMemberships = make(map[string]struct{})
+	}
+	s.dryRunSeriesMemberships[strings.TrimSpace(key)] = struct{}{}
 }
 
 func (i *Importer) findSeriesByTitle(ctx context.Context, title string) (*models.Series, bool, error) {

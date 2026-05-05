@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/vavallee/bindery/internal/models"
@@ -133,6 +134,80 @@ func TestSeriesLinkBook(t *testing.T) {
 	}
 }
 
+func TestSeriesManualManagement(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	authorRepo := NewAuthorRepo(database)
+	bookRepo := NewBookRepo(database)
+	seriesRepo := NewSeriesRepo(database)
+
+	author := &models.Author{
+		ForeignID: "OL1A", Name: "Frank Herbert", SortName: "Herbert, Frank",
+		MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	book := &models.Book{
+		ForeignID: "OL1W", AuthorID: author.ID, Title: "Dune", SortTitle: "Dune",
+		Status: models.BookStatusImported, Genres: []string{}, MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	series, err := seriesRepo.CreateManual(ctx, "  Dune Chronicles  ")
+	if err != nil {
+		t.Fatalf("CreateManual: %v", err)
+	}
+	if series.ID == 0 || series.Title != "Dune Chronicles" {
+		t.Fatalf("unexpected manual series: %+v", series)
+	}
+	if !strings.HasPrefix(series.ForeignID, "manual:series:") {
+		t.Fatalf("foreign id prefix: got %q, want manual:series:", series.ForeignID)
+	}
+
+	if err := seriesRepo.UpdateTitle(ctx, series.ID, "Dune Saga"); err != nil {
+		t.Fatalf("UpdateTitle: %v", err)
+	}
+	got, err := seriesRepo.GetByID(ctx, series.ID)
+	if err != nil {
+		t.Fatalf("GetByID after update: %v", err)
+	}
+	if got.Title != "Dune Saga" {
+		t.Fatalf("title = %q, want Dune Saga", got.Title)
+	}
+
+	if err := seriesRepo.UpsertBookLink(ctx, series.ID, book.ID, "1", true); err != nil {
+		t.Fatalf("first UpsertBookLink: %v", err)
+	}
+	if err := seriesRepo.UpsertBookLink(ctx, series.ID, book.ID, "1.5", false); err != nil {
+		t.Fatalf("second UpsertBookLink: %v", err)
+	}
+	got, err = seriesRepo.GetByID(ctx, series.ID)
+	if err != nil {
+		t.Fatalf("GetByID after link: %v", err)
+	}
+	if len(got.Books) != 1 {
+		t.Fatalf("expected one linked book, got %+v", got.Books)
+	}
+	if got.Books[0].PositionInSeries != "1.5" || got.Books[0].PrimarySeries {
+		t.Fatalf("expected updated link metadata, got %+v", got.Books[0])
+	}
+
+	if err := seriesRepo.Delete(ctx, series.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if got, err := bookRepo.GetByID(ctx, book.ID); err != nil || got == nil {
+		t.Fatalf("delete series should preserve book, got book=%+v err=%v", got, err)
+	}
+}
+
 func TestSeriesList(t *testing.T) {
 	database, err := OpenMemory()
 	if err != nil {
@@ -166,5 +241,78 @@ func TestSeriesList(t *testing.T) {
 	}
 	if len(list) != 2 {
 		t.Errorf("expected 2 series, got %d", len(list))
+	}
+}
+
+func TestSeriesHardcoverLinkCRUD(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	repo := NewSeriesRepo(database)
+	series := &models.Series{ForeignID: "ol-series:stormlight", Title: "Stormlight Archive"}
+	if err := repo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+
+	link := &models.SeriesHardcoverLink{
+		SeriesID:            series.ID,
+		HardcoverSeriesID:   "hc-series:1",
+		HardcoverProviderID: "1",
+		HardcoverTitle:      "The Stormlight Archive",
+		HardcoverAuthorName: "Brandon Sanderson",
+		HardcoverBookCount:  10,
+		Confidence:          0.82,
+		LinkedBy:            "auto",
+	}
+	if err := repo.UpsertHardcoverLink(ctx, link); err != nil {
+		t.Fatalf("upsert link: %v", err)
+	}
+	if link.ID == 0 {
+		t.Fatal("expected stored link id")
+	}
+
+	got, err := repo.GetHardcoverLink(ctx, series.ID)
+	if err != nil {
+		t.Fatalf("get link: %v", err)
+	}
+	if got == nil || got.HardcoverTitle != "The Stormlight Archive" || got.LinkedBy != "auto" {
+		t.Fatalf("unexpected link: %+v", got)
+	}
+
+	list, err := repo.List(ctx)
+	if err != nil {
+		t.Fatalf("list series: %v", err)
+	}
+	if list[0].HardcoverLink == nil || list[0].HardcoverLink.HardcoverSeriesID != "hc-series:1" {
+		t.Fatalf("expected hydrated link in list, got %+v", list[0].HardcoverLink)
+	}
+
+	link.HardcoverTitle = "Stormlight Archive"
+	link.LinkedBy = "manual"
+	link.Confidence = 1
+	if err := repo.UpsertHardcoverLink(ctx, link); err != nil {
+		t.Fatalf("update link: %v", err)
+	}
+	got, err = repo.GetHardcoverLink(ctx, series.ID)
+	if err != nil {
+		t.Fatalf("get updated link: %v", err)
+	}
+	if got.HardcoverTitle != "Stormlight Archive" || got.LinkedBy != "manual" || got.Confidence != 1 {
+		t.Fatalf("unexpected updated link: %+v", got)
+	}
+
+	if err := repo.DeleteHardcoverLink(ctx, series.ID); err != nil {
+		t.Fatalf("delete link: %v", err)
+	}
+	got, err = repo.GetHardcoverLink(ctx, series.ID)
+	if err != nil {
+		t.Fatalf("get deleted link: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected deleted link, got %+v", got)
 	}
 }

@@ -223,6 +223,7 @@ Bindery is configured through the web UI under **Settings**. Core env vars:
 | `BINDERY_DOWNLOAD_DIR` | `/downloads` | Where the download client places completed downloads |
 | `BINDERY_LIBRARY_DIR` | `/books` | Destination for imported ebook files |
 | `BINDERY_AUDIOBOOK_DIR` | falls back to `BINDERY_LIBRARY_DIR` | Destination for imported audiobook folders |
+| `BINDERY_ENHANCED_HARDCOVER_API` | `false` | Enables Hardcover-token-backed series search, linking, catalog diffs, and missing-book fill when also enabled in Settings |
 
 The full variable reference (path remapping, API key seeding, `BINDERY_PUID` / `BINDERY_PGID` sanity checks) is in **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#environment-variables)**.
 
@@ -324,6 +325,7 @@ Otherwise the server responds with `401`. The API key lives in **Settings → Ge
 | **Quickstart** — first author to first grab in 10 minutes | [Wiki](https://github.com/vavallee/bindery/wiki/Quickstart) |
 | **Deployment** — Docker, Compose, k8s/Helm, binary, UID/GID, upgrades | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
 | **ABS import** — setup, path remap, review queue, rollback, and matching behavior | [docs/abs_import.md](docs/abs_import.md) |
+| **Enhanced Hardcover series** — token setup, series linking, catalog diffs, and missing-book fill | [docs/Hardcover-Series-Wiki.md](docs/Hardcover-Series-Wiki.md) |
 | **Calibre plugin bridge** — cross-container Calibre integration via the Bindery Bridge plugin | [docs/CALIBRE-PLUGIN.md](docs/CALIBRE-PLUGIN.md) |
 | **Roadmap** — planned work, scope notes, and explicitly-out-of-scope items (Z-Library, OpenBooks, etc.) | [docs/ROADMAP.md](docs/ROADMAP.md) |
 | **Contributing & CI checks** — dev setup, full quality/security matrix, local check suite | [CONTRIBUTING.md](CONTRIBUTING.md) |

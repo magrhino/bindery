@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { api, Author, MediaType } from '../api/client'
 import AddAuthorModal from '../components/AddAuthorModal'
 import AddBookModal from '../components/AddBookModal'
 import MergeAuthorsModal from '../components/MergeAuthorsModal'
+import SeriesNameModal from '../components/SeriesNameModal'
 import BulkActionBar from '../components/BulkActionBar'
 import Pagination from '../components/Pagination'
 import { usePagination } from '../components/usePagination'
@@ -16,10 +17,12 @@ type MonitoredFilter = '' | 'monitored' | 'unmonitored'
 
 export default function AuthorsPage() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const [authors, setAuthors] = useState<Author[]>([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
   const [showAddBook, setShowAddBook] = useState(false)
+  const [showAddSeries, setShowAddSeries] = useState(false)
   const [showMerge, setShowMerge] = useState(false)
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<SortMode>('az')
@@ -146,6 +149,12 @@ export default function AuthorsPage() {
     }
   }
 
+  const handleCreateSeries = async (title: string) => {
+    const series = await api.createSeries({ title })
+    setShowAddSeries(false)
+    navigate('/series', { state: { seriesId: series.id } })
+  }
+
   const sortBtnCls = (active: boolean) =>
     `px-3 py-1 rounded-md text-xs font-medium transition-colors ${active ? 'bg-slate-300 dark:bg-zinc-700 text-slate-900 dark:text-white' : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/50 dark:hover:bg-zinc-800/50'}`
 
@@ -153,7 +162,7 @@ export default function AuthorsPage() {
     <div className={selectedIds.size > 0 ? 'pb-16' : ''}>
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold">{t('authors.title')}</h2>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           <ViewToggle view={view} onChange={setView} />
           <button
             onClick={() => setShowMerge(true)}
@@ -168,6 +177,12 @@ export default function AuthorsPage() {
             className="px-4 py-2 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 rounded-md text-sm font-medium transition-colors"
           >
             Add Book
+          </button>
+          <button
+            onClick={() => setShowAddSeries(true)}
+            className="px-4 py-2 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 rounded-md text-sm font-medium transition-colors"
+          >
+            Add Series
           </button>
           <button
             onClick={() => setShowAdd(true)}
@@ -372,6 +387,14 @@ export default function AuthorsPage() {
 
       {showAdd && <AddAuthorModal onClose={() => setShowAdd(false)} onAdded={load} />}
       {showAddBook && <AddBookModal onClose={() => setShowAddBook(false)} onAdded={() => setShowAddBook(false)} />}
+      {showAddSeries && (
+        <SeriesNameModal
+          title="Add Series"
+          submitLabel="Add Series"
+          onClose={() => setShowAddSeries(false)}
+          onSubmit={handleCreateSeries}
+        />
+      )}
       {showMerge && (
         <MergeAuthorsModal
           authors={authors}

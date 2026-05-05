@@ -62,6 +62,11 @@ func (i *Importer) WithMetadata(meta *metadata.Aggregator) *Importer {
 	return i
 }
 
+func (i *Importer) WithEnhancedHardcoverSeriesEnabled(enabled func(context.Context) bool) *Importer {
+	i.hardcoverSeriesEnabled = enabled
+	return i
+}
+
 func (i *Importer) WithVersion(version string) *Importer {
 	i.userAgent = UserAgent(version)
 	return i
@@ -84,6 +89,10 @@ func (i *Importer) WithStoragePaths(libraryDir, audiobookDir string, rootFolders
 	}
 	i.rootFolders = rootFolders
 	return i
+}
+
+func (i *Importer) enhancedHardcoverSeriesEnabled(ctx context.Context) bool {
+	return i.hardcoverSeriesEnabled != nil && i.hardcoverSeriesEnabled(ctx)
 }
 
 func (i *Importer) Progress() ImportProgress {
@@ -503,21 +512,40 @@ func (i *Importer) importOne(ctx context.Context, cfg ImportConfig, runID int64,
 		i.enrichAudiobookFromASIN(ctx, bookResult.row)
 	}
 
-	seriesCount := 0
+	seriesMemberships := map[string]struct{}{}
 	for _, series := range item.Series {
-		created, matchedBy, err := i.upsertSeries(ctx, cfg, runID, bookResult.row.ID, series, stats)
+		seriesResult, err := i.upsertSeries(ctx, cfg, runID, bookResult.row.ID, item.ItemID, series, stats)
 		if err != nil {
 			slog.Warn("abs import: series upsert failed", "itemID", item.ItemID, "series", series.Name, "error", err)
 			continue
 		}
-		seriesCount++
-		if created {
+		if seriesResult.Linked && seriesResult.CountKey != "" {
+			seriesMemberships[seriesResult.CountKey] = struct{}{}
+		}
+		if seriesResult.CreatedSeries {
 			stats.SeriesCreated++
-		} else if matchedBy != "" {
+		} else if seriesResult.MembershipCreated {
 			stats.SeriesLinked++
 		}
 	}
-	result.SeriesCount = seriesCount
+	seriesMeta := metadataMergeResult{}
+	if i.enhancedHardcoverSeriesEnabled(ctx) {
+		var hardcoverSeriesResult seriesUpsertResult
+		seriesMeta, hardcoverSeriesResult = i.matchHardcoverSeries(ctx, cfg, runID, author, bookResult.row, item, stats)
+		stats.MetadataMatched += seriesMeta.Matched
+		stats.MetadataRelinked += seriesMeta.Relinked
+		stats.MetadataConflicts += seriesMeta.Conflicts
+		stats.MetadataAutoResolved += seriesMeta.AutoResolved
+		if hardcoverSeriesResult.Linked && hardcoverSeriesResult.CountKey != "" {
+			seriesMemberships[hardcoverSeriesResult.CountKey] = struct{}{}
+		}
+		if hardcoverSeriesResult.CreatedSeries {
+			stats.SeriesCreated++
+		} else if hardcoverSeriesResult.MembershipCreated {
+			stats.SeriesLinked++
+		}
+	}
+	result.SeriesCount = len(seriesMemberships)
 
 	addedEditions, err := i.upsertEditions(ctx, cfg, runID, bookResult.row.ID, item)
 	if err != nil {
@@ -531,6 +559,7 @@ func (i *Importer) importOne(ctx context.Context, cfg ImportConfig, runID int64,
 	stats.PendingManual += reconcile.PendingManual
 	messages := append([]string{}, authorMeta.Messages...)
 	messages = append(messages, bookMeta.Messages...)
+	messages = append(messages, seriesMeta.Messages...)
 	if reconcile.Message != "" {
 		messages = append(messages, reconcile.Message)
 	}

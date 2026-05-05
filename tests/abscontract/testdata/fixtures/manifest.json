@@ -45,6 +45,15 @@
       "expectsSeries": true
     },
     {
+      "id": "series-repeat-item",
+      "seedPath": "seed/series-repeat-item",
+      "expectedItemId": "li_series_repeat",
+      "expectedMediaType": "book",
+      "requiresDetail": false,
+      "accessibleToLimitedAccount": true,
+      "expectsSeries": true
+    },
+    {
       "id": "permission-limited-account",
       "seedPath": "seed/permission-limited-account",
       "expectedMediaType": "book",

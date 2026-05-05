@@ -12,19 +12,51 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
 )
 
 const (
 	graphqlURL = "https://api.hardcover.app/v1/graphql"
 	idPrefix   = "hc:"
+
+	authorWorksPageSize = 100
+	authorWorksMaxBooks = 500
 )
 
 // Client implements metadata.Provider for Hardcover.app using its public GraphQL API.
-// Set a Bearer token via WithToken or NewAuthenticated to enable authenticated queries.
+// Set an API token via WithToken or NewAuthenticated to enable authenticated queries.
 type Client struct {
-	http  *http.Client
-	token string // optional Bearer token; required for user-specific queries
+	http        *http.Client
+	token       string // optional API token; required for user-specific queries
+	tokenSource func(context.Context) string
+}
+
+// NormalizeAPIToken accepts either the raw token copied from Hardcover or an
+// Authorization-style value such as "Bearer <token>" and returns the raw token.
+func NormalizeAPIToken(value string) string {
+	token := strings.TrimSpace(value)
+	for {
+		token = strings.Trim(strings.TrimSpace(token), `"'`+"`")
+		lower := strings.ToLower(token)
+		switch {
+		case strings.HasPrefix(lower, "authorization:"):
+			token = strings.TrimSpace(token[len("authorization:"):])
+			continue
+		case strings.HasPrefix(lower, "authorization="):
+			token = strings.TrimSpace(token[len("authorization="):])
+			continue
+		}
+		if strings.EqualFold(token, "Bearer") {
+			return ""
+		}
+		fields := strings.Fields(token)
+		if len(fields) < 2 || !strings.EqualFold(fields[0], "Bearer") {
+			break
+		}
+		token = strings.TrimSpace(token[len(fields[0]):])
+	}
+	return token
 }
 
 // New creates a new Hardcover client.
@@ -34,10 +66,17 @@ func New() *Client {
 	}
 }
 
-// WithToken returns a copy of the client configured to use the given Bearer token.
+// WithToken returns a copy of the client configured to use the given API token.
 // Required for authenticated queries such as GetUserWishlist.
 func (c *Client) WithToken(token string) *Client {
 	return &Client{http: c.http, token: token}
+}
+
+// WithTokenSource returns a copy of the client that resolves an API token
+// for each request. It is used for UI-managed credentials that can change
+// while the process is running.
+func (c *Client) WithTokenSource(source func(context.Context) string) *Client {
+	return &Client{http: c.http, token: c.token, tokenSource: source}
 }
 
 // NewAuthenticated creates a new client that sends Authorization: Bearer <token>
@@ -103,6 +142,73 @@ func (c *Client) SearchBooks(ctx context.Context, query string) ([]models.Book, 
 	books := make([]models.Book, 0, len(resp.Data.Books))
 	for _, b := range resp.Data.Books {
 		books = append(books, c.toBook(b))
+	}
+	return books, nil
+}
+
+// GetAuthorWorksByName fetches canonical Hardcover books for an author in
+// page-sized batches. It requires a configured API token because Hardcover's
+// schema endpoints are token-backed in production; an unconfigured client
+// returns no supplemental results.
+func (c *Client) GetAuthorWorksByName(ctx context.Context, authorName string) ([]models.Book, error) {
+	authorName = strings.TrimSpace(authorName)
+	if authorName == "" {
+		return nil, nil
+	}
+	if c.authorizationToken(ctx) == "" {
+		return nil, metadata.ErrProviderNotConfigured
+	}
+
+	gql := `query GetAuthorWorksByName($author: String!, $limit: Int!, $offset: Int!) {
+		books(
+			where: {
+				canonical_id: {_is_null: true},
+				contributions: {author: {name: {_eq: $author}}}
+			},
+			limit: $limit,
+			offset: $offset,
+			order_by: {users_count: desc}
+		) {
+			id
+			title
+			subtitle
+			slug
+			description
+			image { url }
+			release_year
+			ratings_count
+			rating
+			users_count
+			genres
+			has_audiobook
+			has_ebook
+			audio_seconds
+			contributions {
+				author { id name slug }
+			}
+		}
+	}`
+
+	books := make([]models.Book, 0, authorWorksPageSize)
+	for offset := 0; offset < authorWorksMaxBooks; offset += authorWorksPageSize {
+		var resp struct {
+			Data struct {
+				Books []hcBook `json:"books"`
+			} `json:"data"`
+		}
+		if err := c.query(ctx, gql, map[string]any{
+			"author": authorName,
+			"limit":  authorWorksPageSize,
+			"offset": offset,
+		}, &resp); err != nil {
+			return nil, fmt.Errorf("hardcover get author works: %w", err)
+		}
+		for _, b := range resp.Data.Books {
+			books = append(books, c.toBook(b))
+		}
+		if len(resp.Data.Books) < authorWorksPageSize {
+			break
+		}
 	}
 	return books, nil
 }
@@ -213,7 +319,7 @@ func (c *Client) GetBookByISBN(ctx context.Context, isbn string) (*models.Book, 
 
 // GetUserWishlist fetches the authenticated user's "Want to Read" books.
 // Returns candidates suitable for list-cross recommendations.
-// Requires the client to have a Bearer token set via WithToken; returns nil if not configured.
+// Requires the client to have an API token set via WithToken; returns nil if not configured.
 func (c *Client) GetUserWishlist(ctx context.Context, limit int) ([]models.RecommendationCandidate, error) {
 	if c.token == "" {
 		return nil, nil
@@ -375,6 +481,11 @@ type gqlRequest struct {
 	Variables map[string]any `json:"variables,omitempty"`
 }
 
+type gqlError struct {
+	Message    string         `json:"message"`
+	Extensions map[string]any `json:"extensions,omitempty"`
+}
+
 func (c *Client) query(ctx context.Context, q string, vars map[string]any, out interface{}) error {
 	body, err := json.Marshal(gqlRequest{Query: q, Variables: vars})
 	if err != nil {
@@ -387,8 +498,8 @@ func (c *Client) query(ctx context.Context, q string, vars map[string]any, out i
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Bindery/0.1 (https://github.com/vavallee/bindery)")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if token := c.authorizationToken(ctx); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := c.http.Do(req)
@@ -402,7 +513,47 @@ func (c *Client) query(ctx context.Context, q string, vars map[string]any, out i
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
 	}
 
-	return json.NewDecoder(resp.Body).Decode(out)
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	var envelope struct {
+		Errors []gqlError `json:"errors"`
+	}
+	if err := json.Unmarshal(b, &envelope); err == nil && len(envelope.Errors) > 0 {
+		return fmt.Errorf("GraphQL: %s", formatGraphQLErrors(envelope.Errors))
+	}
+	return json.Unmarshal(b, out)
+}
+
+func (c *Client) authorizationToken(ctx context.Context) string {
+	if c.tokenSource != nil {
+		if token := NormalizeAPIToken(c.tokenSource(ctx)); token != "" {
+			return token
+		}
+	}
+	return NormalizeAPIToken(c.token)
+}
+
+func formatGraphQLErrors(errors []gqlError) string {
+	if len(errors) == 0 {
+		return "unknown error"
+	}
+	parts := make([]string, 0, min(len(errors), 3))
+	for _, gqlErr := range errors {
+		msg := strings.TrimSpace(gqlErr.Message)
+		if msg == "" {
+			msg = "unknown error"
+		}
+		if code, ok := gqlErr.Extensions["code"].(string); ok && code != "" {
+			msg += " (" + code + ")"
+		}
+		parts = append(parts, msg)
+		if len(parts) == 3 {
+			break
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 // --- Internal types for JSON mapping ---
@@ -430,12 +581,18 @@ type hcContribution struct {
 type hcBook struct {
 	ID            int              `json:"id"`
 	Title         string           `json:"title"`
+	Subtitle      string           `json:"subtitle"`
 	Slug          string           `json:"slug"`
 	Description   string           `json:"description"`
 	Image         *hcImage         `json:"image"`
 	ReleaseYear   *int             `json:"release_year"`
 	RatingsCount  int              `json:"ratings_count"`
 	Rating        float64          `json:"rating"`
+	UsersCount    int              `json:"users_count"`
+	Genres        []string         `json:"genres"`
+	HasAudiobook  bool             `json:"has_audiobook"`
+	HasEbook      bool             `json:"has_ebook"`
+	AudioSeconds  *int             `json:"audio_seconds"`
 	Contributions []hcContribution `json:"contributions"`
 }
 
@@ -476,12 +633,18 @@ func (c *Client) toBook(b hcBook) models.Book {
 		Status:           models.BookStatusWanted,
 		Genres:           []string{},
 	}
+	if len(b.Genres) > 0 {
+		bk.Genres = b.Genres
+	}
 	if b.Image != nil {
 		bk.ImageURL = b.Image.URL
 	}
 	if b.ReleaseYear != nil && *b.ReleaseYear > 0 {
 		t := time.Date(*b.ReleaseYear, 1, 1, 0, 0, 0, 0, time.UTC)
 		bk.ReleaseDate = &t
+	}
+	if b.AudioSeconds != nil && *b.AudioSeconds > 0 {
+		bk.DurationSeconds = *b.AudioSeconds
 	}
 	if len(b.Contributions) > 0 {
 		a := c.toAuthor(b.Contributions[0].Author)

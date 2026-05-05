@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,11 +9,13 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vavallee/bindery/internal/abs"
 	"github.com/vavallee/bindery/internal/calibre"
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/metadata/hardcover"
 	"github.com/vavallee/bindery/internal/models"
 )
 
@@ -41,10 +44,14 @@ func NewSettingsHandler(settings *db.SettingsRepo) *SettingsHandler {
 // values are surfaced through the dedicated /auth/* endpoints instead.
 func isSecretSetting(key string) bool {
 	switch key {
-	case "auth.api_key", "auth.session_secret", "auth.mode", SettingABSAPIKey:
+	case "auth.api_key", "auth.session_secret", "auth.mode", SettingABSAPIKey, SettingHardcoverAPIToken:
 		return true
 	}
 	return false
+}
+
+func isWritableSecretSetting(key string) bool {
+	return key == SettingHardcoverAPIToken
 }
 
 func (h *SettingsHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +89,7 @@ func (h *SettingsHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 func (h *SettingsHandler) Set(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
-	if isSecretSetting(key) {
+	if isSecretSetting(key) && !isWritableSecretSetting(key) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "use /auth/* endpoints for auth settings"})
 		return
 	}
@@ -93,20 +100,91 @@ func (h *SettingsHandler) Set(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	if err := validateSettingValue(key, req.Value); err != nil {
+	value := normalizeSettingValue(key, req.Value)
+	if err := validateSettingValue(key, value); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := h.settings.Set(r.Context(), key, req.Value); err != nil {
+	if err := h.settings.Set(r.Context(), key, value); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if isSecretSetting(key) {
+		writeJSON(w, http.StatusOK, map[string]string{"key": key, "value": ""})
 		return
 	}
 	s, err := h.settings.Get(r.Context(), key)
 	if err != nil || s == nil {
-		writeJSON(w, http.StatusOK, map[string]string{"key": key, "value": req.Value})
+		writeJSON(w, http.StatusOK, map[string]string{"key": key, "value": value})
 		return
 	}
 	writeJSON(w, http.StatusOK, s)
+}
+
+func normalizeSettingValue(key, value string) string {
+	if key == SettingHardcoverAPIToken {
+		return hardcover.NormalizeAPIToken(value)
+	}
+	return value
+}
+
+type HardcoverTestResponse struct {
+	OK               bool   `json:"ok"`
+	TokenConfigured  bool   `json:"tokenConfigured"`
+	SearchResults    int    `json:"searchResults"`
+	SampleSeriesID   string `json:"sampleSeriesId,omitempty"`
+	SampleTitle      string `json:"sampleTitle,omitempty"`
+	CatalogOK        bool   `json:"catalogOk"`
+	CatalogBookCount int    `json:"catalogBookCount,omitempty"`
+	Message          string `json:"message,omitempty"`
+	Error            string `json:"error,omitempty"`
+}
+
+func (h *SettingsHandler) TestHardcover(w http.ResponseWriter, r *http.Request) {
+	token := GetHardcoverAPIToken(r.Context(), h.settings)
+	result := HardcoverTestResponse{TokenConfigured: token != ""}
+	if token == "" {
+		result.Error = "hardcover API token is not configured"
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	client := hardcover.New().WithToken(token)
+	series, err := client.SearchSeries(ctx, "Dune", 3)
+	if err != nil {
+		result.Error = err.Error()
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+	result.SearchResults = len(series)
+	if len(series) == 0 {
+		result.Error = "Hardcover search returned no series for Dune"
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+
+	result.SampleSeriesID = series[0].ForeignID
+	result.SampleTitle = series[0].Title
+	catalog, err := client.GetSeriesCatalog(ctx, series[0].ForeignID)
+	if err != nil {
+		result.Error = err.Error()
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+	if catalog == nil {
+		result.Error = "Hardcover catalog lookup returned no series"
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+
+	result.CatalogOK = true
+	result.CatalogBookCount = len(catalog.Books)
+	result.OK = true
+	result.Message = fmt.Sprintf("Found %d series; catalog %q has %d books", result.SearchResults, catalog.Title, len(catalog.Books))
+	writeJSON(w, http.StatusOK, result)
 }
 
 // validateSettingValue enforces per-key invariants on writes. We run this
@@ -116,6 +194,19 @@ func (h *SettingsHandler) Set(w http.ResponseWriter, r *http.Request) {
 // unchanged — the settings table stays schema-less for anything else.
 func validateSettingValue(key, value string) error {
 	switch key {
+	case SettingHardcoverAPIToken:
+		for _, r := range value {
+			if r < 0x20 || r == 0x7f {
+				return fmt.Errorf("hardcover.api_token contains invalid control characters")
+			}
+		}
+	case SettingHardcoverEnhancedSeriesEnabled:
+		if value == "" {
+			return nil
+		}
+		if !strings.EqualFold(value, "true") && !strings.EqualFold(value, "false") {
+			return fmt.Errorf("hardcover.enhanced_series_enabled %q is not one of: true, false", value)
+		}
 	case SettingCalibreLibraryPath:
 		// Empty = disabled / unset; reject only when the caller provided
 		// a non-empty string that doesn't resolve to an existing dir.
