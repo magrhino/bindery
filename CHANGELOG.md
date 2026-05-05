@@ -19,6 +19,16 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 - Added user-facing Hardcover series wiki documentation and documented the enhanced Hardcover series migration, feature flag, token requirement, admin toggle, and production network expectations in the deployment guide.
 
+## [v1.3.1] — 2026-05-05
+
+### Fixed
+
+- **Possessive author prefix stripped before release matching** (#446) — Search results for titles like *Tom Clancy's Rainbow Six* no longer require the release to carry "Clancy's"; the possessive prefix is stripped before keyword extraction. Handles both ASCII apostrophe and Unicode right-single-quotation-mark (U+2019).
+- **Readarr import returns structured error on failure** (#447) — The Readarr DB import handler now returns a JSON `{"error": "…"}` body with an appropriate HTTP status on failure instead of an empty 500.
+- **Edition deduplication upgrades existing row to dual-format** (#448) — When OpenLibrary returns both an ebook Work and an audiobook Work for the same title during an author sync, Bindery now upgrades the existing book row to `media_type: both` instead of inserting a duplicate entry.
+- **Library scanner searches both library and audiobook roots** (#456) — `FindExisting` now walks `BINDERY_AUDIOBOOK_DIR` alongside `BINDERY_LIBRARY_DIR` when checking for pre-existing files, and pre-filters by author folder to prevent cross-author mismatches. Previously only the ebook library was checked, leaving audiobook files undetected on rescan.
+- **Download client edge-case coverage** (#431) — Added hermetic matrix tests for RemoteID normalization, live status error mapping, poll failures, unreachable clients, context deadlines, and qBittorrent unfiltered hash polling. Transmission queue overlays now surface non-empty `errorString` values as error statuses.
+
 ## [v1.3.0] — 2026-05-05
 
 ### Added
@@ -865,6 +875,29 @@ Initial public release.
 - Single-binary distribution with embedded React frontend.
 - Distroless Docker image and Helm chart.
 
+[v1.3.1]: https://github.com/vavallee/bindery/releases/tag/v1.3.1
+[v1.3.0]: https://github.com/vavallee/bindery/releases/tag/v1.3.0
+[v1.2.7]: https://github.com/vavallee/bindery/releases/tag/v1.2.7
+[v1.2.6]: https://github.com/vavallee/bindery/releases/tag/v1.2.6
+[v1.2.5]: https://github.com/vavallee/bindery/releases/tag/v1.2.5
+[v1.2.4]: https://github.com/vavallee/bindery/releases/tag/v1.2.4
+[v1.2.3]: https://github.com/vavallee/bindery/releases/tag/v1.2.3
+[v1.2.2]: https://github.com/vavallee/bindery/releases/tag/v1.2.2
+[v1.2.1]: https://github.com/vavallee/bindery/releases/tag/v1.2.1
+[v1.2.0]: https://github.com/vavallee/bindery/releases/tag/v1.2.0
+[v0.19.0]: https://github.com/vavallee/bindery/releases/tag/v0.19.0
+[v0.18.3]: https://github.com/vavallee/bindery/releases/tag/v0.18.3
+[v0.18.2]: https://github.com/vavallee/bindery/releases/tag/v0.18.2
+[v0.18.1]: https://github.com/vavallee/bindery/releases/tag/v0.18.1
+[v0.18.0]: https://github.com/vavallee/bindery/releases/tag/v0.18.0
+[v0.17.0]: https://github.com/vavallee/bindery/releases/tag/v0.17.0
+[v0.16.0]: https://github.com/vavallee/bindery/releases/tag/v0.16.0
+[v0.8.0]: https://github.com/vavallee/bindery/releases/tag/v0.8.0
+[v0.7.2]: https://github.com/vavallee/bindery/releases/tag/v0.7.2
+[v0.7.1]: https://github.com/vavallee/bindery/releases/tag/v0.7.1
+[v0.7.0]: https://github.com/vavallee/bindery/releases/tag/v0.7.0
+[v0.6.4]: https://github.com/vavallee/bindery/releases/tag/v0.6.4
+[v0.6.3]: https://github.com/vavallee/bindery/releases/tag/v0.6.3
 [v0.6.2]: https://github.com/vavallee/bindery/releases/tag/v0.6.2
 [v0.6.1]: https://github.com/vavallee/bindery/releases/tag/v0.6.1
 [v0.6.0]: https://github.com/vavallee/bindery/releases/tag/v0.6.0
