@@ -210,6 +210,16 @@ func TestMigrate_ImportReadarr_InvalidDB(t *testing.T) {
 func TestMigrate_ImportReadarr_ConflictOnDoubleSubmit(t *testing.T) {
 	h := migrateFixture(t, &stubProvider{})
 
+	// Block the goroutine at goroutine start until we've sent the second
+	// request. Without this, the goroutine can fail on the bad SQLite payload
+	// and clear running=false before the second HTTP call arrives (race).
+	goroutineStarted := make(chan struct{})
+	goroutineRelease := make(chan struct{})
+	h.readarrImporter.SetTestStartHook(func() {
+		close(goroutineStarted)
+		<-goroutineRelease
+	})
+
 	sendRequest := func() *httptest.ResponseRecorder {
 		body, ct := multipartBody(t, "file", "readarr.db", "not a real sqlite file")
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/migrate/readarr", body)
@@ -225,11 +235,18 @@ func TestMigrate_ImportReadarr_ConflictOnDoubleSubmit(t *testing.T) {
 		t.Fatalf("first request: expected 202, got %d", first.Code)
 	}
 
-	// Immediately send a second — should hit the already-running guard.
+	// Wait until the goroutine has started (and is blocked at testHook) so
+	// running=true is guaranteed to be visible to the second request.
+	<-goroutineStarted
+
+	// Second request must be rejected while the first is still in progress.
 	second := sendRequest()
 	if second.Code != http.StatusConflict {
 		t.Errorf("second request: expected 409, got %d body=%s", second.Code, second.Body.String())
 	}
+
+	// Release the goroutine so it can finish and clean up.
+	close(goroutineRelease)
 }
 
 // TestMigrate_ImportReadarrStatus_BeforeFirstRun checks the status endpoint

@@ -42,6 +42,10 @@ type ReadarrImporter struct {
 	mu       sync.Mutex
 	running  bool
 	progress ReadarrProgress
+
+	// testStartHook, if set, is called at goroutine start before import work
+	// begins. Tests use it to block the goroutine and exercise the 409 guard.
+	testStartHook func()
 }
 
 // NewReadarrImporter wires the repos the import writes to.
@@ -62,6 +66,11 @@ func NewReadarrImporter(
 		onNewAuthor: onNewAuthor,
 	}
 }
+
+// SetTestStartHook registers a function to be called at goroutine start,
+// before any import work begins. Call before Start. Used only in tests to
+// synchronize the goroutine with the test's second HTTP request.
+func (imp *ReadarrImporter) SetTestStartHook(fn func()) { imp.testStartHook = fn }
 
 // Progress returns a snapshot of the current (or most recent) import.
 // Safe to call at any time.
@@ -94,6 +103,9 @@ func (imp *ReadarrImporter) Start(ctx context.Context, tmpPath string) error {
 	go func() {
 		defer os.Remove(tmpPath) // always clean up the spool file
 
+		if imp.testStartHook != nil {
+			imp.testStartHook()
+		}
 		slog.Info("readarr import: starting", "tmpPath", tmpPath)
 		res, err := ImportReadarr(ctx, tmpPath,
 			imp.authors, imp.indexers, imp.clients, imp.blocklist, imp.meta, imp.onNewAuthor)
