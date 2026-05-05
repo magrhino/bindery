@@ -6,9 +6,11 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [v1.3.0] — 2026-05-05
+
 ### Added
 
-- **Audiobookshelf (ABS) import workflow** — Bindery can now connect to one ABS source, validate an API key, discover visible book libraries, and import ABS catalog metadata into shared authors, books, series, and ebook/audiobook editions. Imports support dry runs, persisted run history, rollback preview/rollback, low-confidence review queues, metadata conflict resolution, and path remaps when ABS and Bindery see the same files under different mount prefixes. Import quality is best when the ABS library already has strong metadata, especially ASIN coverage.
+- **Audiobookshelf (ABS) import workflow** (#371) — Bindery can now connect to one ABS source, validate an API key, discover visible book libraries, and import ABS catalog metadata into shared authors, books, series, and ebook/audiobook editions. Imports support dry runs, persisted run history, rollback preview/rollback, low-confidence review queues, metadata conflict resolution, and path remaps when ABS and Bindery see the same files under different mount prefixes. Import quality is best when the ABS library already has strong metadata, especially ASIN coverage.
 
 ### Changed
 
@@ -19,6 +21,7 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 - **ABS imports reject non-book libraries before scanning** — import enumeration now validates that the selected ABS library page is `mediaType=book` and that each returned item is a book item before mapping catalog data.
 - **ABS API calls use a Bindery user agent** — config probes and import enumeration now send `User-Agent: bindery/<version>` (`bindery/dev` when no build version is available) instead of the Go default user agent.
+- **Docker image now published for linux/arm64** (#445) — the `image` CI job previously only built `linux/amd64`; both `linux/amd64` and `linux/arm64` are now built and pushed in a single multi-platform manifest, fixing image-pull failures on Apple Silicon and Raspberry Pi hosts.
 
 ### Chores
 
