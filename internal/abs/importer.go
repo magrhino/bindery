@@ -62,6 +62,11 @@ func (i *Importer) WithMetadata(meta *metadata.Aggregator) *Importer {
 	return i
 }
 
+func (i *Importer) WithEnhancedHardcoverSeriesEnabled(enabled func(context.Context) bool) *Importer {
+	i.hardcoverSeriesEnabled = enabled
+	return i
+}
+
 func (i *Importer) WithVersion(version string) *Importer {
 	i.userAgent = UserAgent(version)
 	return i
@@ -84,6 +89,10 @@ func (i *Importer) WithStoragePaths(libraryDir, audiobookDir string, rootFolders
 	}
 	i.rootFolders = rootFolders
 	return i
+}
+
+func (i *Importer) enhancedHardcoverSeriesEnabled(ctx context.Context) bool {
+	return i.hardcoverSeriesEnabled != nil && i.hardcoverSeriesEnabled(ctx)
 }
 
 func (i *Importer) Progress() ImportProgress {
@@ -519,18 +528,22 @@ func (i *Importer) importOne(ctx context.Context, cfg ImportConfig, runID int64,
 			stats.SeriesLinked++
 		}
 	}
-	seriesMeta, hardcoverSeriesResult := i.matchHardcoverSeries(ctx, cfg, runID, author, bookResult.row, item, stats)
-	stats.MetadataMatched += seriesMeta.Matched
-	stats.MetadataRelinked += seriesMeta.Relinked
-	stats.MetadataConflicts += seriesMeta.Conflicts
-	stats.MetadataAutoResolved += seriesMeta.AutoResolved
-	if hardcoverSeriesResult.Linked && hardcoverSeriesResult.CountKey != "" {
-		seriesMemberships[hardcoverSeriesResult.CountKey] = struct{}{}
-	}
-	if hardcoverSeriesResult.CreatedSeries {
-		stats.SeriesCreated++
-	} else if hardcoverSeriesResult.MembershipCreated {
-		stats.SeriesLinked++
+	seriesMeta := metadataMergeResult{}
+	if i.enhancedHardcoverSeriesEnabled(ctx) {
+		hardcoverSeriesResult := seriesUpsertResult{}
+		seriesMeta, hardcoverSeriesResult = i.matchHardcoverSeries(ctx, cfg, runID, author, bookResult.row, item, stats)
+		stats.MetadataMatched += seriesMeta.Matched
+		stats.MetadataRelinked += seriesMeta.Relinked
+		stats.MetadataConflicts += seriesMeta.Conflicts
+		stats.MetadataAutoResolved += seriesMeta.AutoResolved
+		if hardcoverSeriesResult.Linked && hardcoverSeriesResult.CountKey != "" {
+			seriesMemberships[hardcoverSeriesResult.CountKey] = struct{}{}
+		}
+		if hardcoverSeriesResult.CreatedSeries {
+			stats.SeriesCreated++
+		} else if hardcoverSeriesResult.MembershipCreated {
+			stats.SeriesLinked++
+		}
 	}
 	result.SeriesCount = len(seriesMemberships)
 

@@ -112,6 +112,11 @@ func runSingleABSImport(t *testing.T, importer *Importer, item NormalizedLibrary
 	return runs[0].ID
 }
 
+func enableHardcoverSeriesMatching(t *testing.T, importer *Importer) {
+	t.Helper()
+	importer.WithEnhancedHardcoverSeriesEnabled(func(context.Context) bool { return true })
+}
+
 func TestImporter_ProgressResultsKeepsLatestHundredItems(t *testing.T) {
 	t.Parallel()
 
@@ -484,6 +489,7 @@ type stubABSMetadataProvider struct {
 	works                map[string][]models.Book
 	series               map[string][]metadata.SeriesSearchResult
 	catalogs             map[string]*metadata.SeriesCatalog
+	searchSeriesCalls    int
 }
 
 func (p *stubABSMetadataProvider) Name() string { return "stub" }
@@ -524,6 +530,7 @@ func (p *stubABSMetadataProvider) GetAuthorWorks(_ context.Context, foreignID st
 	return append([]models.Book(nil), p.works[foreignID]...), nil
 }
 func (p *stubABSMetadataProvider) SearchSeries(_ context.Context, query string, limit int) ([]metadata.SeriesSearchResult, error) {
+	p.searchSeriesCalls++
 	if p.series == nil {
 		return nil, nil
 	}
@@ -2200,10 +2207,54 @@ func hardcoverSeriesProvider(query string, result metadata.SeriesSearchResult, c
 	}
 }
 
+func TestImporter_HardcoverSeriesMatchSkippedWhenFeatureDisabled(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, seriesRepo, _, _, _, _, _, _ := newABSImporterFixture(t)
+	item := hardcoverSeriesABSItem()
+	catalog := &metadata.SeriesCatalog{
+		ForeignID:  "hc-series:disabled",
+		ProviderID: "disabled",
+		Title:      "Different Seasons",
+		AuthorName: "Stephen King",
+		Books: []metadata.SeriesCatalogBook{{
+			ForeignID: "hc:different-seasons",
+			Title:     "Different Seasons",
+			Position:  "1",
+			Book: models.Book{
+				ForeignID:        "hc:different-seasons",
+				Title:            "Different Seasons",
+				MetadataProvider: providerHardcover,
+				Author:           &models.Author{Name: "Stephen King"},
+			},
+		}},
+	}
+	provider := hardcoverSeriesProvider(item.Title, metadata.SeriesSearchResult{
+		ForeignID:  catalog.ForeignID,
+		ProviderID: catalog.ProviderID,
+		Title:      catalog.Title,
+		AuthorName: catalog.AuthorName,
+	}, catalog)
+	importer.WithMetadata(metadata.NewAggregator(provider))
+	runSingleABSImport(t, importer, item)
+
+	if provider.searchSeriesCalls != 0 {
+		t.Fatalf("SearchSeries calls = %d, want 0 when enhanced Hardcover series is disabled", provider.searchSeriesCalls)
+	}
+	series, err := seriesRepo.List(context.Background())
+	if err != nil {
+		t.Fatalf("List series: %v", err)
+	}
+	if len(series) != 0 {
+		t.Fatalf("series = %+v, want no Hardcover series while feature is disabled", series)
+	}
+}
+
 func TestImporter_HardcoverSeriesMatchLinksItemWithoutABSSeries(t *testing.T) {
 	t.Parallel()
 
 	importer, _, bookRepo, seriesRepo, _, _, _, _, _, _ := newABSImporterFixture(t)
+	enableHardcoverSeriesMatching(t, importer)
 	item := hardcoverSeriesABSItem()
 	catalog := &metadata.SeriesCatalog{
 		ForeignID:  "hc-series:100",
@@ -2266,6 +2317,7 @@ func TestImporter_HardcoverSeriesLinksExistingCatalogBookWithRollback(t *testing
 	t.Parallel()
 
 	importer, authorRepo, bookRepo, seriesRepo, _, provenanceRepo, _, _, _, _ := newABSImporterFixture(t)
+	enableHardcoverSeriesMatching(t, importer)
 	ctx := context.Background()
 	author := &models.Author{
 		ForeignID:        "local:stephen-king",
@@ -2424,6 +2476,7 @@ func TestImporter_HardcoverSeriesMatchPromotesExactABSSeries(t *testing.T) {
 	t.Parallel()
 
 	importer, _, _, seriesRepo, _, _, _, _, _, _ := newABSImporterFixture(t)
+	enableHardcoverSeriesMatching(t, importer)
 	item := sampleABSItem()
 	item.ItemID = "li-all-systems-red"
 	item.Title = "All Systems Red"
@@ -2497,6 +2550,7 @@ func TestImporter_HardcoverSeriesAmbiguousCandidatesDoNotLink(t *testing.T) {
 	t.Parallel()
 
 	importer, _, _, seriesRepo, _, _, _, _, _, _ := newABSImporterFixture(t)
+	enableHardcoverSeriesMatching(t, importer)
 	item := hardcoverSeriesABSItem()
 	resultA := metadata.SeriesSearchResult{ForeignID: "hc-series:301", ProviderID: "301", Title: "Different Seasons", AuthorName: "Stephen King"}
 	resultB := metadata.SeriesSearchResult{ForeignID: "hc-series:302", ProviderID: "302", Title: "Different Seasons", AuthorName: "Stephen King"}
@@ -2555,6 +2609,7 @@ func TestImporter_HardcoverSeriesRerunIsIdempotent(t *testing.T) {
 	t.Parallel()
 
 	importer, _, _, seriesRepo, _, _, _, _, _, _ := newABSImporterFixture(t)
+	enableHardcoverSeriesMatching(t, importer)
 	item := hardcoverSeriesABSItem()
 	catalog := &metadata.SeriesCatalog{
 		ForeignID:  "hc-series:400",
@@ -2600,6 +2655,7 @@ func TestImporter_HardcoverSeriesDryRunPlansOnly(t *testing.T) {
 	t.Parallel()
 
 	importer, _, _, seriesRepo, _, _, _, _, _, _ := newABSImporterFixture(t)
+	enableHardcoverSeriesMatching(t, importer)
 	item := hardcoverSeriesABSItem()
 	catalog := &metadata.SeriesCatalog{
 		ForeignID:  "hc-series:500",
@@ -2649,6 +2705,7 @@ func TestImporter_HardcoverSeriesRollbackRemovesLinks(t *testing.T) {
 	t.Parallel()
 
 	importer, _, _, seriesRepo, _, _, _, _, _, _ := newABSImporterFixture(t)
+	enableHardcoverSeriesMatching(t, importer)
 	item := hardcoverSeriesABSItem()
 	catalog := &metadata.SeriesCatalog{
 		ForeignID:  "hc-series:600",

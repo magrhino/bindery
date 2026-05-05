@@ -232,7 +232,10 @@ func main() {
 	absImporter := abs.NewImporter(authorRepo, authorAliasRepo, bookRepo, editionRepo, seriesRepo, settingsRepo, absImportRunRepo, absImportRunEntityRepo, absProvenanceRepo, absReviewRepo, absConflictRepo).
 		WithVersion(version).
 		WithStoragePaths(cfg.LibraryDir, cfg.AudiobookDir, rootFolderRepo).
-		WithMetadata(metaAgg)
+		WithMetadata(metaAgg).
+		WithEnhancedHardcoverSeriesEnabled(func(ctx context.Context) bool {
+			return api.HardcoverFeatureStateFor(ctx, settingsRepo, cfg.EnhancedHardcoverAPI).EnhancedHardcoverAPI
+		})
 	if cfg.ABSFeatureEnabled {
 		storedABS := api.LoadABSConfig(ctxBoot, settingsRepo)
 		resumeCfg := abs.ImportConfig{
