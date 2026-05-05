@@ -2078,6 +2078,164 @@ func TestImporter_HardcoverSeriesMatchLinksItemWithoutABSSeries(t *testing.T) {
 	}
 }
 
+func TestImporter_HardcoverSeriesLinksExistingCatalogBookWithRollback(t *testing.T) {
+	t.Parallel()
+
+	importer, authorRepo, bookRepo, seriesRepo, _, provenanceRepo, _, _, _, _ := newABSImporterFixture(t)
+	ctx := context.Background()
+	author := &models.Author{
+		ForeignID:        "local:stephen-king",
+		Name:             "Stephen King",
+		SortName:         "King, Stephen",
+		Monitored:        true,
+		MetadataProvider: "manual",
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatalf("Create author: %v", err)
+	}
+	existingBook := &models.Book{
+		ForeignID:        "hc:skeleton-crew",
+		AuthorID:         author.ID,
+		Title:            "Skeleton Crew",
+		SortTitle:        "Skeleton Crew",
+		Status:           models.BookStatusWanted,
+		Monitored:        true,
+		AnyEditionOK:     true,
+		Language:         "eng",
+		MediaType:        models.MediaTypeEbook,
+		MetadataProvider: providerHardcover,
+	}
+	if err := bookRepo.Create(ctx, existingBook); err != nil {
+		t.Fatalf("Create existing book: %v", err)
+	}
+
+	item := hardcoverSeriesABSItem()
+	catalog := &metadata.SeriesCatalog{
+		ForeignID:  "hc-series:existing-catalog-book",
+		ProviderID: "700",
+		Title:      "Different Seasons",
+		AuthorName: "Stephen King",
+		BookCount:  2,
+		Books: []metadata.SeriesCatalogBook{
+			{
+				ForeignID: "hc:different-seasons",
+				Title:     "Different Seasons",
+				Position:  "1",
+				Book: models.Book{
+					ForeignID:        "hc:different-seasons",
+					Title:            "Different Seasons",
+					MetadataProvider: providerHardcover,
+					Author:           &models.Author{Name: "Stephen King"},
+				},
+			},
+			{
+				ForeignID: "hc:skeleton-crew",
+				Title:     "Skeleton Crew",
+				Position:  "2",
+				Book: models.Book{
+					ForeignID:        "hc:skeleton-crew",
+					Title:            "Skeleton Crew",
+					MetadataProvider: providerHardcover,
+					Author:           &models.Author{Name: "Stephen King"},
+				},
+			},
+		},
+	}
+	importer.WithMetadata(metadata.NewAggregator(hardcoverSeriesProvider(item.Title, metadata.SeriesSearchResult{
+		ForeignID:  catalog.ForeignID,
+		ProviderID: catalog.ProviderID,
+		Title:      catalog.Title,
+		AuthorName: catalog.AuthorName,
+		BookCount:  catalog.BookCount,
+	}, catalog)))
+	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		if err := fn(ctx, item); err != nil {
+			return EnumerationStats{}, err
+		}
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+	stats, err := importer.Run(ctx, ImportConfig{
+		SourceID:  DefaultSourceID,
+		BaseURL:   "https://abs.example.com",
+		APIKey:    "secret",
+		LibraryID: item.LibraryID,
+		Label:     "Shelf",
+		Enabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if stats.SeriesCreated != 1 || stats.SeriesLinked != 1 {
+		t.Fatalf("series stats = %+v, want created imported link and linked existing catalog book", stats)
+	}
+	runs, err := importer.RecentRuns(ctx, 1)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("RecentRuns = %d err=%v, want 1 run", len(runs), err)
+	}
+	runID := runs[0].ID
+	series, err := seriesRepo.GetByForeignID(ctx, catalog.ForeignID)
+	if err != nil {
+		t.Fatalf("GetByForeignID: %v", err)
+	}
+	if series == nil {
+		t.Fatal("expected Hardcover series")
+	}
+	hydrated, err := seriesRepo.GetByID(ctx, series.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if len(hydrated.Books) != 2 {
+		t.Fatalf("series books = %+v, want imported book and existing catalog book", hydrated.Books)
+	}
+	foundExisting := false
+	for _, seriesBook := range hydrated.Books {
+		if seriesBook.BookID == existingBook.ID && seriesBook.PositionInSeries == "2" {
+			foundExisting = true
+		}
+	}
+	if !foundExisting {
+		t.Fatalf("series books = %+v, want existing catalog book linked at position 2", hydrated.Books)
+	}
+
+	linkExternalID := hardcoverSeriesLinkExternalID(catalog.ForeignID, existingBook.ID)
+	link, err := provenanceRepo.GetByExternal(ctx, DefaultSourceID, item.LibraryID, entityTypeSeries, linkExternalID)
+	if err != nil {
+		t.Fatalf("GetByExternal: %v", err)
+	}
+	if link == nil || link.LocalID != series.ID || link.ImportRunID == nil || *link.ImportRunID != runID {
+		t.Fatalf("series membership provenance = %+v, want run-owned link to series", link)
+	}
+
+	result, err := importer.Rollback(ctx, runID)
+	if err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if result.Stats.Failed != 0 {
+		t.Fatalf("rollback result = %+v, want no failures", result)
+	}
+	remainingBook, err := bookRepo.GetByID(ctx, existingBook.ID)
+	if err != nil {
+		t.Fatalf("GetByID existing book after rollback: %v", err)
+	}
+	if remainingBook == nil {
+		t.Fatal("existing catalog book was deleted by rollback")
+	}
+	series, err = seriesRepo.GetByForeignID(ctx, catalog.ForeignID)
+	if err != nil {
+		t.Fatalf("GetByForeignID after rollback: %v", err)
+	}
+	if series != nil {
+		t.Fatalf("series after rollback = %+v, want deleted after run-owned links removed", series)
+	}
+	link, err = provenanceRepo.GetByExternal(ctx, DefaultSourceID, item.LibraryID, entityTypeSeries, linkExternalID)
+	if err != nil {
+		t.Fatalf("GetByExternal after rollback: %v", err)
+	}
+	if link != nil {
+		t.Fatalf("series membership provenance after rollback = %+v, want nil", link)
+	}
+}
+
 func TestImporter_HardcoverSeriesMatchPromotesExactABSSeries(t *testing.T) {
 	t.Parallel()
 

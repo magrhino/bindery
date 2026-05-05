@@ -19,6 +19,7 @@ import (
 	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
 	"github.com/vavallee/bindery/internal/seriesmatch"
+	"github.com/vavallee/bindery/internal/textutil"
 )
 
 type SeriesHandler struct {
@@ -30,6 +31,11 @@ type SeriesHandler struct {
 	settings                    *db.SettingsRepo
 	enhancedHardcoverEnvEnabled bool
 }
+
+const (
+	autoHardcoverLinkMinConfidence = 0.70
+	hardcoverNoEvidenceScoreCap    = autoHardcoverLinkMinConfidence - 0.01
+)
 
 func NewSeriesHandler(series *db.SeriesRepo, books *db.BookRepo, authors *db.AuthorRepo, meta *metadata.Aggregator, searcher BookSearcher) *SeriesHandler {
 	return &SeriesHandler{series: series, books: books, authors: authors, meta: meta, searcher: searcher}
@@ -534,7 +540,7 @@ func (h *SeriesHandler) AutoLinkHardcover(w http.ResponseWriter, r *http.Request
 	}
 	top := candidates[0]
 	ambiguous := len(candidates) > 1 && top.Confidence-candidates[1].Confidence < 0.05
-	if top.Confidence < 0.70 || ambiguous {
+	if top.Confidence < autoHardcoverLinkMinConfidence || ambiguous {
 		reason := "low confidence"
 		if ambiguous {
 			reason = "ambiguous candidates"
@@ -694,7 +700,6 @@ func (h *SeriesHandler) scoreHardcoverCandidates(ctx context.Context, series *mo
 		if err != nil {
 			return nil, err
 		}
-		result.Confidence = scoreHardcoverCandidate(series, result, catalog)
 		if catalog != nil {
 			if result.Title == "" {
 				result.Title = catalog.Title
@@ -706,12 +711,92 @@ func (h *SeriesHandler) scoreHardcoverCandidates(ctx context.Context, series *mo
 				result.BookCount = catalog.BookCount
 			}
 		}
+		result.Confidence = scoreHardcoverCandidate(series, result, catalog)
+		hasEvidence, err := h.hardcoverCandidateHasLocalEvidence(ctx, series, result, catalog)
+		if err != nil {
+			return nil, err
+		}
+		if !hasEvidence && result.Confidence >= autoHardcoverLinkMinConfidence {
+			result.Confidence = hardcoverNoEvidenceScoreCap
+		}
 		candidates = append(candidates, result)
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		return candidates[i].Confidence > candidates[j].Confidence
 	})
 	return candidates, nil
+}
+
+func (h *SeriesHandler) hardcoverCandidateHasLocalEvidence(ctx context.Context, series *models.Series, result seriesHardcoverSearchResult, catalog *metadata.SeriesCatalog) (bool, error) {
+	if series == nil {
+		return false, nil
+	}
+	if hardcoverCandidateHasBookOverlap(series, result, catalog) {
+		return true, nil
+	}
+	candidateAuthor := result.AuthorName
+	if catalog != nil && strings.TrimSpace(catalog.AuthorName) != "" {
+		candidateAuthor = catalog.AuthorName
+	}
+	if strings.TrimSpace(candidateAuthor) == "" {
+		return false, nil
+	}
+	return h.seriesHasAuthorAgreement(ctx, series, candidateAuthor)
+}
+
+func hardcoverCandidateHasBookOverlap(series *models.Series, result seriesHardcoverSearchResult, catalog *metadata.SeriesCatalog) bool {
+	if series == nil {
+		return false
+	}
+	for _, local := range series.Books {
+		if local.Book == nil {
+			continue
+		}
+		if catalog != nil && bestCatalogMatch(local, catalog.Books).score >= 85 {
+			return true
+		}
+		for _, title := range result.Books {
+			if seriesmatch.TitleScore(local.Book.Title, title) >= 85 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (h *SeriesHandler) seriesHasAuthorAgreement(ctx context.Context, series *models.Series, candidateAuthor string) (bool, error) {
+	if series == nil {
+		return false, nil
+	}
+	authorsByID := map[int64]string{}
+	for _, local := range series.Books {
+		if local.Book == nil {
+			continue
+		}
+		localAuthor := ""
+		if local.Book.Author != nil {
+			localAuthor = local.Book.Author.Name
+		}
+		if strings.TrimSpace(localAuthor) == "" && local.Book.AuthorID > 0 && h.authors != nil {
+			if cached, ok := authorsByID[local.Book.AuthorID]; ok {
+				localAuthor = cached
+			} else {
+				author, err := h.authors.GetByID(ctx, local.Book.AuthorID)
+				if err != nil {
+					return false, err
+				}
+				if author != nil {
+					localAuthor = author.Name
+				}
+				authorsByID[local.Book.AuthorID] = localAuthor
+			}
+		}
+		match := textutil.MatchAuthorName(localAuthor, candidateAuthor)
+		if match.Kind == textutil.AuthorMatchExact || match.Kind == textutil.AuthorMatchFuzzyAuto {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func scoreHardcoverCandidate(series *models.Series, result seriesHardcoverSearchResult, catalog *metadata.SeriesCatalog) float64 {
@@ -1017,6 +1102,9 @@ func (h *SeriesHandler) ensureHardcoverCatalogBook(ctx context.Context, seriesID
 	if existing, err := h.books.GetByForeignID(ctx, book.ForeignID); err != nil {
 		return nil, err
 	} else if existing != nil {
+		if existing.Excluded {
+			return nil, nil
+		}
 		_, err := h.series.LinkBookIfMissing(ctx, seriesID, existing.ID, catalogBook.Position, true)
 		return existing, err
 	}
@@ -1060,11 +1148,19 @@ func (h *SeriesHandler) ensureHardcoverCatalogBook(ctx context.Context, seriesID
 	if err != nil {
 		return nil, err
 	}
+	blockedByExcludedTitle := false
 	for _, existing := range existingByTitle {
 		if seriesmatch.TitleScore(existing.Title, firstNonEmpty(book.Title, catalogBook.Title)) >= 92 {
+			if existing.Excluded {
+				blockedByExcludedTitle = true
+				continue
+			}
 			_, err := h.series.LinkBookIfMissing(ctx, seriesID, existing.ID, catalogBook.Position, true)
 			return &existing, err
 		}
+	}
+	if blockedByExcludedTitle {
+		return nil, nil
 	}
 
 	book.AuthorID = storedAuthor.ID

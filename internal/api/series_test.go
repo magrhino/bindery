@@ -421,14 +421,39 @@ func TestSeriesAutoLinkHardcoverPersistsTopCandidate(t *testing.T) {
 		}},
 		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
 	}
-	h, seriesRepo, _, _ := seriesFixtureWithProvider(t, provider, nil)
+	h, seriesRepo, authorRepo, bookRepo := seriesFixtureWithProvider(t, provider, nil)
+	ctx := contextBackground()
 	series := &models.Series{ForeignID: "ol-series:stormlight", Title: "The Stormlight Archive"}
-	if err := seriesRepo.Create(contextBackground(), series); err != nil {
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+	author := &models.Author{
+		ForeignID:        "hc:brandon-sanderson",
+		Name:             "Brandon Sanderson",
+		SortName:         "Sanderson, Brandon",
+		MetadataProvider: "hardcover",
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	book := &models.Book{
+		ForeignID:        "hc:the-way-of-kings",
+		AuthorID:         author.ID,
+		Title:            "The Way of Kings",
+		SortTitle:        "The Way of Kings",
+		Status:           models.BookStatusWanted,
+		Genres:           []string{},
+		MetadataProvider: "hardcover",
+	}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seriesRepo.LinkBookIfMissing(ctx, series.ID, book.ID, "1", true); err != nil {
 		t.Fatal(err)
 	}
 
 	rec := httptest.NewRecorder()
-	h.AutoLinkHardcover(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/hardcover-link/auto", nil), "id", "1"))
+	h.AutoLinkHardcover(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/hardcover-link/auto", nil), "id", strconv.FormatInt(series.ID, 10)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -438,6 +463,85 @@ func TestSeriesAutoLinkHardcoverPersistsTopCandidate(t *testing.T) {
 	}
 	if !response.Linked || response.Link == nil || response.Link.HardcoverSeriesID != catalog.ForeignID {
 		t.Fatalf("expected persisted auto link, got %+v", response)
+	}
+}
+
+func TestSeriesAutoLinkHardcoverRejectsExactTitleWrongAuthorWithoutOverlap(t *testing.T) {
+	catalog := &metadata.SeriesCatalog{
+		ForeignID:  "hc-series:wrong-author",
+		ProviderID: "wrong-author",
+		Title:      "Shared Series Title",
+		AuthorName: "Wrong Author",
+		BookCount:  1,
+		Books: []metadata.SeriesCatalogBook{{
+			ForeignID: "hc:unrelated-book",
+			Title:     "Unrelated Book",
+			Position:  "1",
+			Book:      models.Book{ForeignID: "hc:unrelated-book", Title: "Unrelated Book", Author: &models.Author{Name: "Wrong Author"}},
+		}},
+	}
+	provider := &stubSeriesProvider{
+		searchResults: []metadata.SeriesSearchResult{{
+			ForeignID:  catalog.ForeignID,
+			ProviderID: catalog.ProviderID,
+			Title:      catalog.Title,
+			AuthorName: catalog.AuthorName,
+			BookCount:  catalog.BookCount,
+		}},
+		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+	}
+	h, seriesRepo, authorRepo, bookRepo := seriesFixtureWithProvider(t, provider, nil)
+	ctx := contextBackground()
+	series := &models.Series{ForeignID: "ol-series:shared", Title: "Shared Series Title"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+	author := &models.Author{
+		ForeignID:        "hc:right-author",
+		Name:             "Right Author",
+		SortName:         "Author, Right",
+		MetadataProvider: "hardcover",
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	book := &models.Book{
+		ForeignID:        "hc:right-book",
+		AuthorID:         author.ID,
+		Title:            "Right Book",
+		SortTitle:        "Right Book",
+		Status:           models.BookStatusWanted,
+		Genres:           []string{},
+		MetadataProvider: "hardcover",
+	}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seriesRepo.LinkBookIfMissing(ctx, series.ID, book.ID, "1", true); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.AutoLinkHardcover(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/hardcover-link/auto", nil), "id", strconv.FormatInt(series.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var response seriesHardcoverAutoResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Linked {
+		t.Fatalf("wrong-author exact-title result should not persist, got %+v", response)
+	}
+	if len(response.Candidates) != 1 || response.Candidates[0].Confidence >= autoHardcoverLinkMinConfidence {
+		t.Fatalf("candidate confidence = %+v, want capped below auto-link threshold", response.Candidates)
+	}
+	link, err := seriesRepo.GetHardcoverLink(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link != nil {
+		t.Fatalf("expected no Hardcover link, got %+v", link)
 	}
 }
 
@@ -625,6 +729,159 @@ func TestSeriesFillCreatesMissingHardcoverBook(t *testing.T) {
 	}
 	if len(books) != 1 || books[0].ForeignID != "hc:the-way-of-kings" {
 		t.Fatalf("expected created book linked to series, got %+v", books)
+	}
+}
+
+func TestSeriesFillSkipsExcludedHardcoverForeignIDMatch(t *testing.T) {
+	catalog := stormlightCatalog()
+	searcher := newMockBookSearcher()
+	h, seriesRepo, authorRepo, bookRepo := seriesFixtureWithProvider(t, &stubSeriesProvider{
+		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+	}, searcher)
+	ctx := contextBackground()
+	series := &models.Series{ForeignID: "ol-series:stormlight", Title: "The Stormlight Archive"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+	link := &models.SeriesHardcoverLink{
+		SeriesID:            series.ID,
+		HardcoverSeriesID:   catalog.ForeignID,
+		HardcoverProviderID: catalog.ProviderID,
+		HardcoverTitle:      catalog.Title,
+		HardcoverAuthorName: catalog.AuthorName,
+		HardcoverBookCount:  catalog.BookCount,
+		Confidence:          1,
+		LinkedBy:            "manual",
+	}
+	if err := seriesRepo.UpsertHardcoverLink(ctx, link); err != nil {
+		t.Fatal(err)
+	}
+	author := &models.Author{
+		ForeignID:        "hc:brandon-sanderson",
+		Name:             "Brandon Sanderson",
+		SortName:         "Sanderson, Brandon",
+		MetadataProvider: "hardcover",
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	book := &models.Book{
+		ForeignID:        "hc:the-way-of-kings",
+		AuthorID:         author.ID,
+		Title:            "The Way of Kings",
+		SortTitle:        "The Way of Kings",
+		Status:           models.BookStatusSkipped,
+		Genres:           []string{},
+		MetadataProvider: "hardcover",
+	}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	if err := bookRepo.SetExcluded(ctx, book.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	body := bytes.NewBufferString(`{"foreignBookId":"hc:the-way-of-kings","providerId":"101","position":"1"}`)
+	rec := httptest.NewRecorder()
+	h.Fill(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/fill", body), "id", strconv.FormatInt(series.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var response map[string]int
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["queued"] != 0 {
+		t.Fatalf("expected no queued excluded book, got %+v", response)
+	}
+	searcher.assertNoCall(t, 50*time.Millisecond)
+	books, err := seriesRepo.ListBooksInSeries(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(books) != 0 {
+		t.Fatalf("expected excluded foreign-id match to remain unlinked, got %+v", books)
+	}
+}
+
+func TestSeriesFillSkipsExcludedHardcoverTitleMatch(t *testing.T) {
+	catalog := stormlightCatalog()
+	catalog.Books[0].ForeignID = "hc:the-way-of-kings-new"
+	catalog.Books[0].Book.ForeignID = "hc:the-way-of-kings-new"
+	searcher := newMockBookSearcher()
+	h, seriesRepo, authorRepo, bookRepo := seriesFixtureWithProvider(t, &stubSeriesProvider{
+		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+	}, searcher)
+	ctx := contextBackground()
+	series := &models.Series{ForeignID: "ol-series:stormlight", Title: "The Stormlight Archive"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+	link := &models.SeriesHardcoverLink{
+		SeriesID:            series.ID,
+		HardcoverSeriesID:   catalog.ForeignID,
+		HardcoverProviderID: catalog.ProviderID,
+		HardcoverTitle:      catalog.Title,
+		HardcoverAuthorName: catalog.AuthorName,
+		HardcoverBookCount:  catalog.BookCount,
+		Confidence:          1,
+		LinkedBy:            "manual",
+	}
+	if err := seriesRepo.UpsertHardcoverLink(ctx, link); err != nil {
+		t.Fatal(err)
+	}
+	author := &models.Author{
+		ForeignID:        "hc:brandon-sanderson",
+		Name:             "Brandon Sanderson",
+		SortName:         "Sanderson, Brandon",
+		MetadataProvider: "hardcover",
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	book := &models.Book{
+		ForeignID:        "manual:excluded-way-of-kings",
+		AuthorID:         author.ID,
+		Title:            "The Way of Kings",
+		SortTitle:        "The Way of Kings",
+		Status:           models.BookStatusSkipped,
+		Genres:           []string{},
+		MetadataProvider: "manual",
+	}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	if err := bookRepo.SetExcluded(ctx, book.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	body := bytes.NewBufferString(`{"foreignBookId":"hc:the-way-of-kings-new","providerId":"101","position":"1"}`)
+	rec := httptest.NewRecorder()
+	h.Fill(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/fill", body), "id", strconv.FormatInt(series.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var response map[string]int
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["queued"] != 0 {
+		t.Fatalf("expected no queued excluded title match, got %+v", response)
+	}
+	searcher.assertNoCall(t, 50*time.Millisecond)
+	created, err := bookRepo.GetByForeignID(ctx, "hc:the-way-of-kings-new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != nil {
+		t.Fatalf("expected excluded title match to block duplicate creation, got %+v", created)
+	}
+	books, err := seriesRepo.ListBooksInSeries(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(books) != 0 {
+		t.Fatalf("expected excluded title match to remain unlinked, got %+v", books)
 	}
 }
 
