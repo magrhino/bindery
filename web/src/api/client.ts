@@ -359,7 +359,7 @@ export const api = {
     request<ABSTestResult>('/abs/test', { method: 'POST', body: JSON.stringify(data ?? {}) }),
   absLibraries: (data?: { baseUrl?: string; apiKey?: string }) =>
     request<ABSLibrary[]>('/abs/libraries', { method: 'POST', body: JSON.stringify(data ?? {}) }),
-  absImportStart: (data?: { baseUrl?: string; label?: string; enabled?: boolean; libraryId?: string; apiKey?: string; dryRun?: boolean }) =>
+  absImportStart: (data?: { dryRun?: boolean }) =>
     request<ABSImportProgress>('/abs/import', { method: 'POST', body: JSON.stringify(data ?? {}) }),
   absImportStatus: () => request<ABSImportProgress>('/abs/import/status'),
   absImportRuns: () => request<ABSImportRun[]>('/abs/import/runs'),

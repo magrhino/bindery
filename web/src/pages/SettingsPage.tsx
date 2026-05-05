@@ -1340,13 +1340,12 @@ function AudiobookshelfSection() {
     setImportError(null)
     setRollbackError(null)
     setRollbackResult(null)
+    if (hasUnsavedABSConfig) {
+      setImportError('Save Audiobookshelf settings before starting an import')
+      return
+    }
     try {
       const next = await api.absImportStart({
-        baseUrl: draft.baseUrl.trim(),
-        apiKey: draft.apiKey.trim() || undefined,
-        label: draft.label.trim() || 'Audiobookshelf',
-        enabled: draft.enabled,
-        libraryId: effectiveLibraryId,
         dryRun,
       })
       setImportProgress(next)
@@ -1528,7 +1527,19 @@ function AudiobookshelfSection() {
 
   const hasImportCredentials = Boolean(draft.apiKey.trim() || config?.apiKeyConfigured)
   const effectiveLibraryId = draft.libraryId || testResult?.defaultLibraryId || ''
-  const canStartImport = !importProgress?.running && draft.enabled && hasImportCredentials && Boolean(draft.baseUrl.trim()) && Boolean(effectiveLibraryId)
+  const savedBaseUrl = config?.baseUrl ?? ''
+  const savedLabel = config?.label || 'Audiobookshelf'
+  const savedLibraryId = config?.libraryId ?? ''
+  const savedPathRemap = config?.pathRemap ?? ''
+  const hasUnsavedABSConfig = Boolean(config) && (
+    draft.baseUrl.trim() !== savedBaseUrl.trim() ||
+    (draft.label.trim() || 'Audiobookshelf') !== savedLabel ||
+    draft.enabled !== config?.enabled ||
+    draft.libraryId !== savedLibraryId ||
+    draft.pathRemap.trim() !== savedPathRemap.trim() ||
+    Boolean(draft.apiKey.trim())
+  )
+  const canStartImport = !importProgress?.running && !hasUnsavedABSConfig && Boolean(config?.enabled) && Boolean(config?.apiKeyConfigured) && Boolean(savedBaseUrl.trim()) && Boolean(savedLibraryId)
   const absRunStatusLabel = (status: string) => {
     switch (status) {
       case 'rolled_back':
@@ -1729,6 +1740,7 @@ function AudiobookshelfSection() {
                 <button
                   onClick={() => startImport(true)}
                   disabled={!canStartImport}
+                  title={hasUnsavedABSConfig ? 'Save Audiobookshelf settings before starting an import' : undefined}
                   className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded text-sm font-medium disabled:opacity-50"
                 >
                   Preview changes
@@ -1736,6 +1748,7 @@ function AudiobookshelfSection() {
                 <button
                   onClick={() => startImport(importDryRun)}
                   disabled={!canStartImport}
+                  title={hasUnsavedABSConfig ? 'Save Audiobookshelf settings before starting an import' : undefined}
                   className="px-4 py-2 bg-sky-600 hover:bg-sky-500 rounded text-sm font-medium disabled:opacity-50"
                 >
                   {importProgress?.running ? 'Running…' : importDryRun ? 'Run selected mode' : 'Import library'}
@@ -1744,7 +1757,12 @@ function AudiobookshelfSection() {
             </div>
           </div>
 
-          {!effectiveLibraryId && hasImportCredentials && (
+          {hasUnsavedABSConfig && (
+            <p className="text-[11px] text-amber-700 dark:text-amber-300">
+              Save Audiobookshelf settings before starting an import so the run uses the stored source configuration.
+            </p>
+          )}
+          {!hasUnsavedABSConfig && !effectiveLibraryId && hasImportCredentials && (
             <p className="text-[11px] text-amber-700 dark:text-amber-300">
               Choose a library or use "Test connection" / "List libraries" to load an accessible default library before starting an import.
             </p>

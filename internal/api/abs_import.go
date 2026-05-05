@@ -28,12 +28,7 @@ type ABSImportHandler struct {
 }
 
 type absImportStartRequest struct {
-	BaseURL   *string `json:"baseUrl"`
-	APIKey    *string `json:"apiKey"`
-	Label     *string `json:"label"`
-	LibraryID *string `json:"libraryId"`
-	Enabled   *bool   `json:"enabled"`
-	DryRun    *bool   `json:"dryRun"`
+	DryRun *bool `json:"dryRun"`
 }
 
 func NewABSImportHandler(importer absImporterAPI, loadCfg func(context.Context) ABSStoredConfig) *ABSImportHandler {
@@ -48,21 +43,6 @@ func (h *ABSImportHandler) Start(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
-		}
-		if req.BaseURL != nil {
-			cfg.BaseURL = strings.TrimSpace(*req.BaseURL)
-		}
-		if req.APIKey != nil {
-			cfg.APIKey = strings.TrimSpace(*req.APIKey)
-		}
-		if req.Label != nil {
-			cfg.Label = strings.TrimSpace(*req.Label)
-		}
-		if req.LibraryID != nil {
-			cfg.LibraryID = strings.TrimSpace(*req.LibraryID)
-		}
-		if req.Enabled != nil {
-			cfg.Enabled = *req.Enabled
 		}
 	}
 	runCfg := abs.ImportConfig{

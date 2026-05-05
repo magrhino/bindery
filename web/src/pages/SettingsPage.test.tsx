@@ -25,6 +25,13 @@ vi.mock('../api/client', async importOriginal => {
       listDownloadClients: vi.fn(),
       listProwlarr: vi.fn(),
       absConfig: vi.fn(),
+      absSetConfig: vi.fn(),
+      absLibraries: vi.fn(),
+      absImportStart: vi.fn(),
+      absImportStatus: vi.fn(),
+      absImportRuns: vi.fn(),
+      absReviewItems: vi.fn(),
+      absConflicts: vi.fn(),
       listSettings: vi.fn(),
       listBackups: vi.fn(),
       libraryScanStatus: vi.fn(),
@@ -45,6 +52,13 @@ describe('SettingsPage Hardcover API keys', () => {
     vi.mocked(api.listDownloadClients).mockResolvedValue([])
     vi.mocked(api.listProwlarr).mockResolvedValue([])
     vi.mocked(api.absConfig).mockResolvedValue({ featureEnabled: false, baseUrl: '', label: '', enabled: false, libraryId: '', pathRemap: '', apiKeyConfigured: false })
+    vi.mocked(api.absSetConfig).mockResolvedValue({ featureEnabled: false, baseUrl: '', label: '', enabled: false, libraryId: '', pathRemap: '', apiKeyConfigured: false })
+    vi.mocked(api.absLibraries).mockResolvedValue([])
+    vi.mocked(api.absImportStart).mockResolvedValue({ running: true, dryRun: true, processed: 0 })
+    vi.mocked(api.absImportStatus).mockResolvedValue({ running: false, processed: 0 })
+    vi.mocked(api.absImportRuns).mockResolvedValue([])
+    vi.mocked(api.absReviewItems).mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
+    vi.mocked(api.absConflicts).mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
     vi.mocked(api.listSettings).mockResolvedValue([{ key: 'hardcover.enhanced_series_enabled', value: 'false' }])
     vi.mocked(api.listBackups).mockResolvedValue([])
     vi.mocked(api.libraryScanStatus).mockRejectedValue(new Error('no scan'))
@@ -115,5 +129,54 @@ describe('SettingsPage Hardcover API keys', () => {
     })
     expect(await screen.findByText('Found 2 series; catalog "Dune" has 8 books')).toBeInTheDocument()
     expect(screen.queryByText('hc-secret')).not.toBeInTheDocument()
+  })
+
+  it('requires saved Audiobookshelf settings before starting an import', async () => {
+    vi.mocked(api.absConfig).mockResolvedValue({
+      featureEnabled: true,
+      baseUrl: 'https://abs.example.com',
+      label: 'Shelf',
+      enabled: true,
+      libraryId: 'lib-books',
+      pathRemap: '/abs:/books',
+      apiKeyConfigured: true,
+    })
+    vi.mocked(api.absSetConfig).mockImplementation(async data => ({
+      featureEnabled: true,
+      baseUrl: data.baseUrl,
+      label: data.label,
+      enabled: data.enabled,
+      libraryId: data.libraryId,
+      pathRemap: data.pathRemap,
+      apiKeyConfigured: true,
+    }))
+
+    render(<SettingsPage />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.tabs.abs' }))
+    const preview = await screen.findByRole('button', { name: 'Preview changes' })
+    expect(preview).toBeEnabled()
+
+    fireEvent.change(screen.getByPlaceholderText('/audiobookshelf:/books/audiobookshelf,/abs:/books'), { target: { value: '/draft:/books' } })
+    expect(preview).toBeDisabled()
+    expect(screen.getByText('Save Audiobookshelf settings before starting an import so the run uses the stored source configuration.')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save source' }))
+    await waitFor(() => {
+      expect(api.absSetConfig).toHaveBeenCalledWith({
+        baseUrl: 'https://abs.example.com',
+        apiKey: undefined,
+        label: 'Shelf',
+        enabled: true,
+        libraryId: 'lib-books',
+        pathRemap: '/draft:/books',
+      })
+    })
+    await waitFor(() => expect(preview).toBeEnabled())
+
+    fireEvent.click(preview)
+    await waitFor(() => {
+      expect(api.absImportStart).toHaveBeenCalledWith({ dryRun: true })
+    })
   })
 })
