@@ -1,8 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import AuthorsPage from './AuthorsPage'
 import { api } from '../api/client'
+import type { Series } from '../api/client'
+
+const { navigateMock } = vi.hoisted(() => ({
+  navigateMock: vi.fn(),
+}))
+
+vi.mock('react-router-dom', async importOriginal => {
+  const actual = await importOriginal<typeof import('react-router-dom')>()
+  return {
+    ...actual,
+    useNavigate: () => navigateMock,
+  }
+})
 
 vi.mock('../api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('../api/client')>()
@@ -55,7 +68,17 @@ describe('AuthorsPage', () => {
     vi.mocked(api.listAuthors).mockResolvedValue([])
   })
 
-  it('opens the add series flow from the authors toolbar', async () => {
+  it('creates a series from the authors toolbar and opens it on the series page', async () => {
+    const created: Series = {
+      id: 44,
+      foreignSeriesId: 'manual:series:44',
+      title: 'Dune Chronicles',
+      description: '',
+      monitored: false,
+      books: [],
+    }
+    vi.mocked(api.createSeries).mockResolvedValue(created)
+
     render(
       <MemoryRouter>
         <AuthorsPage />
@@ -63,7 +86,12 @@ describe('AuthorsPage', () => {
     )
 
     fireEvent.click(await screen.findByRole('button', { name: 'Add Series' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Add Series' })
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Dune Chronicles' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add Series' }))
 
-    expect(await screen.findByRole('dialog', { name: 'Add Series' })).toBeInTheDocument()
+    await waitFor(() => expect(api.createSeries).toHaveBeenCalledWith({ title: 'Dune Chronicles' }))
+    expect(navigateMock).toHaveBeenCalledWith('/series', { state: { seriesId: created.id } })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add Series' })).not.toBeInTheDocument())
   })
 })

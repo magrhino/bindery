@@ -18,6 +18,7 @@ vi.mock('../api/client', async importOriginal => {
       createSeries: vi.fn(),
       updateSeries: vi.fn(),
       deleteSeries: vi.fn(),
+      deleteBook: vi.fn(),
       monitorSeries: vi.fn(),
       linkBookToSeries: vi.fn(),
       fillSeries: vi.fn(),
@@ -160,6 +161,71 @@ describe('SeriesPage', () => {
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
     expect(screen.getByText('The Stormlight Archive')).toBeInTheDocument()
     expect(screen.getByText('70% match')).toBeInTheDocument()
+  })
+
+  it('auto-links a matching Hardcover series and loads its diff', async () => {
+    const link: SeriesHardcoverLink = {
+      id: 4,
+      seriesId: 14,
+      hardcoverSeriesId: 'hc-series:77',
+      hardcoverProviderId: '77',
+      hardcoverTitle: 'Mistborn',
+      hardcoverAuthorName: 'Brandon Sanderson',
+      hardcoverBookCount: 3,
+      confidence: 0.94,
+      linkedBy: 'auto',
+      linkedAt: '2026-01-01T00:00:00Z',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    }
+    vi.mocked(api.autoLinkSeriesHardcover).mockResolvedValue({
+      linked: true,
+      link,
+      candidates: [],
+    })
+    vi.mocked(api.getSeriesHardcoverDiff).mockResolvedValue({
+      seriesId: 14,
+      link,
+      present: [],
+      missing: [
+        {
+          foreignBookId: 'hc:well-of-ascension',
+          providerId: '78',
+          title: 'The Well of Ascension',
+          position: '2',
+          authorName: 'Brandon Sanderson',
+        },
+      ],
+      localOnly: [],
+      uncertain: [],
+      presentCount: 2,
+      missingCount: 1,
+    })
+
+    renderSeriesPage([
+      {
+        id: 14,
+        foreignSeriesId: 'series-14',
+        title: 'Mistborn',
+        description: '',
+        monitored: true,
+        books: [],
+      },
+    ])
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Search' }))
+
+    await waitFor(() => expect(api.autoLinkSeriesHardcover).toHaveBeenCalledWith(14))
+    expect(await screen.findByRole('button', { name: 'Auto link' })).toBeInTheDocument()
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('Currently linked')).toBeInTheDocument()
+    expect(within(dialog).getByText('Brandon Sanderson')).toBeInTheDocument()
+    await waitFor(() => expect(api.getSeriesHardcoverDiff).toHaveBeenCalledWith(14))
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
+    fireEvent.click(screen.getByRole('heading', { name: 'Mistborn' }))
+
+    expect(await screen.findByText('2 matched · 1 missing')).toBeInTheDocument()
   })
 
   it('opens linked Hardcover series without auto-linking again', async () => {
@@ -308,34 +374,65 @@ describe('SeriesPage', () => {
     expect(await screen.findByRole('heading', { name: 'Dune Chronicles' })).toBeInTheDocument()
   })
 
-  it('renames and deletes a series without deleting books from the UI', async () => {
+  it('renames and deletes a series without deleting linked books', async () => {
     const initial: Series = {
       id: 20,
       foreignSeriesId: 'manual:series:20',
       title: 'Old Series',
       description: '',
       monitored: false,
-      books: [],
+      books: [
+        {
+          seriesId: 20,
+          bookId: 201,
+          positionInSeries: '1',
+          primarySeries: true,
+          book: {
+            id: 201,
+            foreignBookId: 'book-201',
+            authorId: 12,
+            title: 'Existing Linked Book',
+            description: '',
+            imageUrl: '',
+            genres: [],
+            monitored: true,
+            status: 'imported',
+            filePath: '',
+            mediaType: 'ebook',
+            ebookFilePath: '',
+            audiobookFilePath: '',
+            excluded: false,
+          },
+        },
+      ],
     }
     const renamed: Series = { ...initial, title: 'New Series' }
     vi.mocked(api.updateSeries).mockResolvedValue(renamed)
     vi.mocked(api.deleteSeries).mockResolvedValue(undefined)
+    vi.mocked(api.deleteBook).mockResolvedValue(undefined)
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
 
-    renderSeriesPage([initial])
+    try {
+      renderSeriesPage([initial])
 
-    expect(await screen.findByRole('heading', { name: 'Old Series' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
-    const dialog = await screen.findByRole('dialog', { name: 'Rename Series' })
-    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'New Series' } })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+      expect(await screen.findByRole('heading', { name: 'Old Series' })).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Rename Series' })
+      fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'New Series' } })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
 
-    expect(await screen.findByRole('heading', { name: 'New Series' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+      fireEvent.click(await screen.findByRole('heading', { name: 'New Series' }))
+      expect(await screen.findByRole('link', { name: /Existing Linked Book/ })).toHaveAttribute('href', '/book/201')
+      fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
 
-    await waitFor(() => expect(api.deleteSeries).toHaveBeenCalledWith(20))
-    expect(screen.queryByRole('heading', { name: 'New Series' })).not.toBeInTheDocument()
-    confirmSpy.mockRestore()
+      await waitFor(() => expect(api.deleteSeries).toHaveBeenCalledWith(20))
+      expect(api.deleteSeries).toHaveBeenCalledTimes(1)
+      expect(api.deleteBook).not.toHaveBeenCalled()
+      expect(confirmSpy).toHaveBeenCalledWith('Delete "New Series" from Series? Linked books will stay in your library.')
+      await waitFor(() => expect(screen.queryByRole('heading', { name: 'New Series' })).not.toBeInTheDocument())
+    } finally {
+      confirmSpy.mockRestore()
+    }
   })
 
   it('links an existing library book to an expanded series', async () => {
