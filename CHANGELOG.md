@@ -4,6 +4,13 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
+
+## [v1.4.1] — 2026-05-06
+
+### Fixed
+
+- **Discover page no longer shows "not enough data" for populated libraries** — `GetAuthorWorks` was not requesting `ratings_count`/`ratings_average` from the OpenLibrary search API, so every book stored via a monitored-author sync had `RatingsCount=0`. The recommender's hard filter drops candidates with fewer than 50 ratings, silently eliminating all author-new and series candidates regardless of library size. The search query now fetches those fields and the enrichment merge propagates them to the stored book rows.
+
 ## [v1.4.0] — 2026-05-05
 
 ### Added
