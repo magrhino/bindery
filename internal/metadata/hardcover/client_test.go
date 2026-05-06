@@ -21,6 +21,27 @@ func (t *testTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return t.handler(r)
 }
 
+type countingBodyReader struct {
+	remaining int64
+	read      int64
+}
+
+func (r *countingBodyReader) Read(p []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, io.EOF
+	}
+	if int64(len(p)) > r.remaining {
+		p = p[:int(r.remaining)]
+	}
+	for i := range p {
+		p[i] = 'x'
+	}
+	n := len(p)
+	r.remaining -= int64(n)
+	r.read += int64(n)
+	return n, nil
+}
+
 // gqlResponse builds a GraphQL-style HTTP response with the given data payload.
 func gqlResponse(t *testing.T, statusCode int, data interface{}) *http.Response {
 	t.Helper()
@@ -109,6 +130,26 @@ func TestQuery_GraphQLErrorsReturnError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Malformed Authorization header") || !strings.Contains(err.Error(), "invalid-headers") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestQuery_SuccessResponseBodyReadIsBounded(t *testing.T) {
+	body := &countingBodyReader{remaining: hardcoverSuccessResponseBodyLimit + 1}
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(body),
+			Header:     make(http.Header),
+		}, nil
+	})
+
+	var out struct{}
+	err := c.query(context.Background(), "query Test { __typename }", nil, &out)
+	if err == nil {
+		t.Fatal("expected truncated invalid JSON error")
+	}
+	if body.read != hardcoverSuccessResponseBodyLimit {
+		t.Fatalf("read bytes = %d, want %d", body.read, hardcoverSuccessResponseBodyLimit)
 	}
 }
 

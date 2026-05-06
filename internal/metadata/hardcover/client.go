@@ -22,6 +22,8 @@ const (
 
 	authorWorksPageSize = 100
 	authorWorksMaxBooks = 500
+
+	hardcoverSuccessResponseBodyLimit = 8 << 20
 )
 
 // Client implements metadata.Provider for Hardcover.app using its public GraphQL API.
@@ -513,7 +515,7 @@ func (c *Client) query(ctx context.Context, q string, vars map[string]any, out i
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
 	}
 
-	b, err := io.ReadAll(resp.Body)
+	b, err := io.ReadAll(io.LimitReader(resp.Body, hardcoverSuccessResponseBodyLimit))
 	if err != nil {
 		return err
 	}
