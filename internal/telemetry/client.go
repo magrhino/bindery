@@ -60,6 +60,18 @@ func (c *Client) Ping(ctx context.Context) {
 		return
 	}
 
+	// Skip pings from local dev builds. The version string defaults to "dev"
+	// when the binary is built without the goreleaser/docker -ldflags version
+	// injection — i.e. `go run ./cmd/bindery` or a fresh `go build`. Most of
+	// those runs are testing/coding sessions that recreate the DB (and the
+	// install_id) repeatedly, which inflates the active count with throwaway
+	// UUIDs. Set BINDERY_TELEMETRY_FORCE=1 to override (e.g. when smoke-testing
+	// the ping path against a local telemetry-server).
+	if c.version == "dev" && os.Getenv("BINDERY_TELEMETRY_FORCE") == "" {
+		slog.Debug("telemetry: skipping ping for dev build")
+		return
+	}
+
 	id, err := c.installID(ctx)
 	if err != nil {
 		slog.Debug("telemetry: could not resolve install ID", "error", err)

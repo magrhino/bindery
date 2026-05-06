@@ -45,6 +45,12 @@ spec:
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
+            # Telemetry signal — distinguishes Helm-installed pods from raw
+            # k8s manifests / kustomize / operators in the public dashboard
+            # at https://getbindery.dev/stats. Only the bucket label is sent;
+            # the install ID and ping payload are unchanged.
+            - name: BINDERY_DEPLOY_METHOD
+              value: "helm"
             {{- if or .Values.auth.existingSecret .Values.auth.apiKey }}
             - name: BINDERY_API_KEY
               valueFrom:

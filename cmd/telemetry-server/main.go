@@ -112,6 +112,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Sweep test fixtures and locally-built dev rows. These are throwaway
+	// UUIDs from `go run` / `go build` sessions that inflate the active count
+	// without representing a real installation. New clients no longer send
+	// these pings (see internal/telemetry/client.go); the server still drops
+	// them belt-and-suspenders below.
+	if _, err := db.ExecContext(context.Background(),
+		`DELETE FROM installs WHERE version = 'dev' OR install_id NOT GLOB '????????-????-????-????-????????????'`,
+	); err != nil {
+		slog.Error("cleanup dev rows", "error", err)
+		os.Exit(1)
+	}
+
 	s := &server{
 		db:            db,
 		latestVersion: latestVersion,
@@ -279,6 +291,14 @@ func (s *server) handlePing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Version = normalizeVersion(req.Version)
+	// Reject locally-built `dev` pings — overwhelmingly developer testing
+	// against throwaway DBs, which generates a fresh install_id on every run.
+	// Newer clients skip these on the client side; old clients land here.
+	if req.Version == "dev" {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(pingResponse{LatestVersion: s.latestVersion})
+		return
+	}
 	if !validDeploys[req.Deploy] {
 		req.Deploy = ""
 	}
