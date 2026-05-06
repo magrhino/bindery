@@ -45,3 +45,24 @@ func TestGoogleBooksAPIKeyFallsBackToLegacySetting(t *testing.T) {
 		t.Fatalf("googleBooksAPIKey = %q, want legacy-key", got)
 	}
 }
+
+func TestGoogleBooksAPIKeyEmptyUISettingDisablesLegacyFallback(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	settings := db.NewSettingsRepo(database)
+	ctx := context.Background()
+
+	if err := settings.Set(ctx, legacySettingGoogleBooksAPIKey, "legacy-key"); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.Set(ctx, settingGoogleBooksAPIKey, "   "); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := googleBooksAPIKey(ctx, settings); got != "" {
+		t.Fatalf("googleBooksAPIKey = %q, want empty string", got)
+	}
+}

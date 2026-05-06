@@ -188,6 +188,115 @@ func TestAddBook_CreatesSelectedProviderNativeBook(t *testing.T) {
 	}
 }
 
+func TestAddBook_ProviderNativeBookUsesExistingAuthorByName(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+	existing := &models.Author{
+		ForeignID:        "OL123A",
+		Name:             "Provider Author",
+		SortName:         "Author, Provider",
+		MetadataProvider: "openlibrary",
+		Monitored:        true,
+	}
+	if err := authorRepo.Create(ctx, existing); err != nil {
+		t.Fatal(err)
+	}
+	provider := &namedBookProvider{
+		name: "hardcover",
+		books: map[string]*models.Book{
+			"hc:book": {
+				ForeignID:        "hc:book",
+				Title:            "Provider Native",
+				SortTitle:        "Provider Native",
+				Description:      "A provider-native result that should attach to the existing author.",
+				MetadataProvider: "hardcover",
+				Author:           &models.Author{ForeignID: "hc:provider-author", Name: "Provider Author", MetadataProvider: "hardcover"},
+			},
+		},
+	}
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, metadata.NewAggregator(&stubMetaProvider{}, provider), nil, profileRepo, nil)
+
+	rec := httptest.NewRecorder()
+	h.AddBook(rec, httptest.NewRequest(http.MethodPost, "/api/v1/author/book", bytes.NewBufferString(`{"foreignBookId":"hc:book"}`)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	authors, err := authorRepo.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(authors) != 1 {
+		t.Fatalf("authors = %d, want 1", len(authors))
+	}
+	if authors[0].ID != existing.ID || authors[0].ForeignID != "OL123A" {
+		t.Fatalf("author = %+v, want existing OpenLibrary author", authors[0])
+	}
+	book, err := bookRepo.GetByForeignID(ctx, "hc:book")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if book == nil || book.AuthorID != existing.ID {
+		t.Fatalf("book = %+v, want attached to existing author id %d", book, existing.ID)
+	}
+}
+
+func TestAddBook_ProviderNativeAuthorNameAmbiguousReturnsConflict(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+	for _, author := range []*models.Author{
+		{ForeignID: "OL123A", Name: "Provider Author", SortName: "Author, Provider", MetadataProvider: "openlibrary", Monitored: true},
+		{ForeignID: "OL456A", Name: "Provider Author", SortName: "Author, Provider", MetadataProvider: "openlibrary", Monitored: true},
+	} {
+		if err := authorRepo.Create(ctx, author); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider := &namedBookProvider{
+		name: "hardcover",
+		books: map[string]*models.Book{
+			"hc:book": {
+				ForeignID:        "hc:book",
+				Title:            "Provider Native",
+				SortTitle:        "Provider Native",
+				Description:      "A provider-native result with an ambiguous local author name.",
+				MetadataProvider: "hardcover",
+				Author:           &models.Author{ForeignID: "hc:provider-author", Name: "Provider Author", MetadataProvider: "hardcover"},
+			},
+		},
+	}
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, metadata.NewAggregator(&stubMetaProvider{}, provider), nil, profileRepo, nil)
+
+	rec := httptest.NewRecorder()
+	h.AddBook(rec, httptest.NewRequest(http.MethodPost, "/api/v1/author/book", bytes.NewBufferString(`{"foreignBookId":"hc:book"}`)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	book, err := bookRepo.GetByForeignID(ctx, "hc:book")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if book != nil {
+		t.Fatalf("book = %+v, want no created book", book)
+	}
+}
+
 // TestDeleteAuthor_WithDeleteFiles verifies the ?deleteFiles=true branch
 // sweeps every book's on-disk path. The invariant under test is ordering:
 // paths must be collected from `books ListByAuthor` *before* the cascade
