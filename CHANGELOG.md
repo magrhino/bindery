@@ -5,6 +5,12 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Semantic Versioning](https://semver.org).
 
 
+## [Unreleased]
+
+### Chores
+
+- **Frontend regression coverage expanded** (#427) — Added MSW-backed tests for login, CSRF handling, auth state/guards, Book Detail search/grab flows, and Wanted page search/grab/bulk actions.
+
 ## [v1.4.3] — 2026-05-06
 
 ### Fixed
