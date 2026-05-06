@@ -11,21 +11,24 @@ import (
 
 // mockProvider is a test double for the Provider interface.
 type mockProvider struct {
-	name           string
-	searchBooks    []models.Book
-	searchBookErr  error
-	searchAuthors  []models.Author
-	searchAuthErr  error
-	getAuthor      *models.Author
-	getAuthorErr   error
-	getBook        *models.Book
-	getBookErr     error
-	getEditions    []models.Edition
-	getEditionsErr error
-	getByISBN      *models.Book
-	getByISBNErr   error
-	getByISBNCalls int
-	gotISBNs       []string
+	name              string
+	searchBooks       []models.Book
+	searchBookErr     error
+	searchAuthors     []models.Author
+	searchAuthErr     error
+	getAuthor         *models.Author
+	getAuthorErr      error
+	getBook           *models.Book
+	getBookErr        error
+	getBookCalls      int
+	gotBookIDs        []string
+	getEditions       []models.Edition
+	getEditionsErr    error
+	getByISBN         *models.Book
+	getByISBNErr      error
+	getByISBNCalls    int
+	gotISBNs          []string
+	searchBookQueries []string
 	// authorWorks implements worksProvider interface
 	authorWorks    []models.Book
 	authorWorksErr error
@@ -35,13 +38,16 @@ func (m *mockProvider) Name() string { return m.name }
 func (m *mockProvider) SearchAuthors(_ context.Context, _ string) ([]models.Author, error) {
 	return m.searchAuthors, m.searchAuthErr
 }
-func (m *mockProvider) SearchBooks(_ context.Context, _ string) ([]models.Book, error) {
+func (m *mockProvider) SearchBooks(_ context.Context, query string) ([]models.Book, error) {
+	m.searchBookQueries = append(m.searchBookQueries, query)
 	return m.searchBooks, m.searchBookErr
 }
 func (m *mockProvider) GetAuthor(_ context.Context, _ string) (*models.Author, error) {
 	return m.getAuthor, m.getAuthorErr
 }
-func (m *mockProvider) GetBook(_ context.Context, _ string) (*models.Book, error) {
+func (m *mockProvider) GetBook(_ context.Context, foreignID string) (*models.Book, error) {
+	m.getBookCalls++
+	m.gotBookIDs = append(m.gotBookIDs, foreignID)
 	return m.getBook, m.getBookErr
 }
 func (m *mockProvider) GetEditions(_ context.Context, _ string) ([]models.Edition, error) {
@@ -270,6 +276,53 @@ func TestAggregator_GetBook_Error(t *testing.T) {
 	}
 }
 
+func TestAggregator_GetBook_RoutesProviderPrefixes(t *testing.T) {
+	primary := &mockProvider{name: "openlibrary", getBook: &models.Book{Title: "Wrong"}}
+	google := &mockProvider{name: "googlebooks", getBook: &models.Book{ForeignID: "gb:vol1", Title: "Google Book", MetadataProvider: "googlebooks"}}
+	hardcover := &mockProvider{name: "hardcover", getBook: &models.Book{ForeignID: "hc:book", Title: "Hardcover Book", MetadataProvider: "hardcover"}}
+	dnb := &mockProvider{name: "dnb", getBook: &models.Book{ForeignID: "dnb:123", Title: "DNB Book", MetadataProvider: "dnb"}}
+	agg := newTestAggregator(primary, google, hardcover, dnb)
+
+	tests := []struct {
+		foreignID string
+		wantTitle string
+		provider  *mockProvider
+	}{
+		{foreignID: "gb:vol1", wantTitle: "Google Book", provider: google},
+		{foreignID: "hc:book", wantTitle: "Hardcover Book", provider: hardcover},
+		{foreignID: "dnb:123", wantTitle: "DNB Book", provider: dnb},
+	}
+	for _, tt := range tests {
+		got, err := agg.GetBook(context.Background(), tt.foreignID)
+		if err != nil {
+			t.Fatalf("GetBook(%q): %v", tt.foreignID, err)
+		}
+		if got == nil || got.Title != tt.wantTitle {
+			t.Fatalf("GetBook(%q) = %+v, want %s", tt.foreignID, got, tt.wantTitle)
+		}
+		if tt.provider.getBookCalls != 1 || tt.provider.gotBookIDs[0] != tt.foreignID {
+			t.Fatalf("%s calls=%d ids=%v, want one %s", tt.provider.name, tt.provider.getBookCalls, tt.provider.gotBookIDs, tt.foreignID)
+		}
+	}
+	if primary.getBookCalls != 0 {
+		t.Fatalf("primary get calls = %d, want 0", primary.getBookCalls)
+	}
+}
+
+func TestAggregator_GetAuthor_RoutesProviderPrefixes(t *testing.T) {
+	primary := &mockProvider{name: "openlibrary", getAuthor: &models.Author{Name: "Wrong"}}
+	hardcover := &mockProvider{name: "hardcover", getAuthor: &models.Author{ForeignID: "hc:author", Name: "Hardcover Author", MetadataProvider: "hardcover"}}
+	agg := newTestAggregator(primary, hardcover)
+
+	got, err := agg.GetAuthor(context.Background(), "hc:author")
+	if err != nil {
+		t.Fatalf("GetAuthor: %v", err)
+	}
+	if got == nil || got.Name != "Hardcover Author" {
+		t.Fatalf("got %+v, want Hardcover Author", got)
+	}
+}
+
 func TestAggregator_GetEditions_Success(t *testing.T) {
 	editions := []models.Edition{{Title: "1st ed."}, {Title: "2nd ed."}}
 	primary := &mockProvider{name: "ol", getEditions: editions}
@@ -353,6 +406,74 @@ func TestAggregator_GetBookByISBN_SearchesRegisteredEnrichers(t *testing.T) {
 				t.Fatalf("calls primary=%d enricher=%d, want 1/1", primary.getByISBNCalls, enricher.getByISBNCalls)
 			}
 		})
+	}
+}
+
+func TestAggregator_GetBookByISBN_CanonicalizesSecondaryHitToPrimary(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooks: []models.Book{{
+			ForeignID: "OL-PHM",
+			Title:     "Project Hail Mary",
+			Author:    &models.Author{Name: "Andy Weir"},
+		}},
+		getBook: &models.Book{
+			ForeignID:        "OL-PHM",
+			Title:            "Project Hail Mary",
+			Description:      "OpenLibrary canonical description long enough to avoid extra enrichment.",
+			MetadataProvider: "openlibrary",
+			Author:           &models.Author{Name: "Andy Weir", ForeignID: "OL-A"},
+		},
+	}
+	google := &mockProvider{
+		name: "googlebooks",
+		getByISBN: &models.Book{
+			ForeignID:        "gb:vol-phm",
+			Title:            "Project Hail Mary",
+			MetadataProvider: "googlebooks",
+			Author:           &models.Author{Name: "Andy Weir"},
+		},
+	}
+	agg := newTestAggregator(primary, google)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9780593135204")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL-PHM" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want canonical OpenLibrary book", got)
+	}
+	if len(primary.searchBookQueries) != 1 || primary.searchBookQueries[0] != "Project Hail Mary Andy Weir" {
+		t.Fatalf("search queries = %v, want title+author query", primary.searchBookQueries)
+	}
+}
+
+func TestAggregator_GetBookByISBN_KeepsSecondaryHitWhenPrimaryMatchAmbiguous(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooks: []models.Book{
+			{ForeignID: "OL1W", Title: "The Book", Author: &models.Author{Name: "A. Author"}},
+			{ForeignID: "OL2W", Title: "The Book", Author: &models.Author{Name: "A. Author"}},
+		},
+	}
+	google := &mockProvider{
+		name: "googlebooks",
+		getByISBN: &models.Book{
+			ForeignID:        "gb:ambiguous",
+			Title:            "The Book",
+			Description:      "Secondary provider description long enough to avoid enrichment.",
+			MetadataProvider: "googlebooks",
+			Author:           &models.Author{Name: "A. Author"},
+		},
+	}
+	agg := newTestAggregator(primary, google)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9780000000007")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "gb:ambiguous" {
+		t.Fatalf("got %+v, want secondary provider result", got)
 	}
 }
 

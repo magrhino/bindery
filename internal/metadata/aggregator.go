@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +17,8 @@ import (
 	"github.com/vavallee/bindery/internal/metadata/audible"
 	"github.com/vavallee/bindery/internal/metadata/audnex"
 	"github.com/vavallee/bindery/internal/models"
+	"github.com/vavallee/bindery/internal/seriesmatch"
+	"github.com/vavallee/bindery/internal/textutil"
 )
 
 // Aggregator fans out requests to multiple providers and merges results.
@@ -118,7 +121,11 @@ func (a *Aggregator) GetAuthor(ctx context.Context, foreignID string) (*models.A
 		return cached.(*models.Author), nil
 	}
 
-	author, err := a.primary.GetAuthor(ctx, foreignID)
+	provider := a.providerForForeignID(foreignID)
+	if provider == nil {
+		return nil, nil
+	}
+	author, err := provider.GetAuthor(ctx, foreignID)
 	if err != nil {
 		return nil, err
 	}
@@ -196,8 +203,15 @@ func (a *Aggregator) GetAuthorWorksForAuthor(ctx context.Context, author models.
 }
 
 func (a *Aggregator) primaryAuthorWorks(ctx context.Context, authorForeignID string) ([]models.Book, error) {
-	if wp, ok := a.primary.(worksProvider); ok {
+	provider := a.providerForForeignID(authorForeignID)
+	if provider == nil {
+		return nil, nil
+	}
+	if wp, ok := provider.(worksProvider); ok {
 		return wp.GetAuthorWorks(ctx, authorForeignID)
+	}
+	if !sameProvider(provider, a.primary) {
+		return nil, nil
 	}
 	return a.primary.SearchBooks(ctx, authorForeignID)
 }
@@ -294,9 +308,17 @@ func (a *Aggregator) GetBook(ctx context.Context, foreignID string) (*models.Boo
 		return cached.(*models.Book), nil
 	}
 
-	book, err := a.primary.GetBook(ctx, foreignID)
+	provider := a.providerForForeignID(foreignID)
+	if provider == nil {
+		return nil, nil
+	}
+	book, err := provider.GetBook(ctx, foreignID)
 	if err != nil {
 		return nil, err
+	}
+	if book == nil {
+		a.cache.set(key, book)
+		return nil, nil
 	}
 
 	// Enrich from secondary providers if description is sparse or cover is missing.
@@ -314,7 +336,11 @@ func (a *Aggregator) GetEditions(ctx context.Context, bookForeignID string) ([]m
 		return cached.([]models.Edition), nil
 	}
 
-	editions, err := a.primary.GetEditions(ctx, bookForeignID)
+	provider := a.providerForForeignID(bookForeignID)
+	if provider == nil {
+		return nil, nil
+	}
+	editions, err := provider.GetEditions(ctx, bookForeignID)
 	if err != nil {
 		return nil, err
 	}
@@ -348,6 +374,11 @@ func (a *Aggregator) GetBookByISBN(ctx context.Context, isbn string) (*models.Bo
 		if book == nil {
 			continue
 		}
+		if !sameProvider(provider, a.primary) {
+			if canonical, ok := a.canonicalPrimaryBook(ctx, *book); ok {
+				book = canonical
+			}
+		}
 		if len(book.Description) < 50 {
 			a.enrichBook(ctx, book)
 		}
@@ -363,6 +394,199 @@ func (a *Aggregator) GetBookByISBN(ctx context.Context, isbn string) (*models.Bo
 		a.cache.set(key, noBook)
 	}
 	return nil, nil
+}
+
+type bookMatchCandidate struct {
+	book        models.Book
+	titleScore  int
+	authorKind  textutil.AuthorMatchKind
+	authorScore float64
+}
+
+func (a *Aggregator) canonicalPrimaryBook(ctx context.Context, source models.Book) (*models.Book, bool) {
+	if a == nil || a.primary == nil || source.Title == "" {
+		return nil, false
+	}
+	sourceAuthor := bookAuthorName(source)
+	if sourceAuthor == "" {
+		return nil, false
+	}
+	query := strings.TrimSpace(source.Title + " " + sourceAuthor)
+	results, err := a.primary.SearchBooks(ctx, query)
+	if err != nil {
+		slog.Debug("primary canonical book search failed", "title", source.Title, "author", sourceAuthor, "error", err)
+		return nil, false
+	}
+	matches := make([]bookMatchCandidate, 0, len(results))
+	seen := make(map[string]struct{}, len(results))
+	for _, result := range results {
+		if result.ForeignID == "" {
+			continue
+		}
+		if _, ok := seen[result.ForeignID]; ok {
+			continue
+		}
+		seen[result.ForeignID] = struct{}{}
+		candidate, ok := scoreBookCandidate(source, result)
+		if ok {
+			matches = append(matches, candidate)
+		}
+	}
+	if len(matches) == 0 {
+		return nil, false
+	}
+	best := matches[0]
+	ambiguous := false
+	for _, candidate := range matches[1:] {
+		switch compareBookCandidate(candidate, best) {
+		case 1:
+			best = candidate
+			ambiguous = false
+		case 0:
+			ambiguous = true
+		}
+	}
+	if ambiguous {
+		slog.Debug("primary canonical book search ambiguous", "title", source.Title, "author", sourceAuthor)
+		return nil, false
+	}
+	full, err := a.primary.GetBook(ctx, best.book.ForeignID)
+	if err != nil {
+		slog.Debug("primary canonical book fetch failed", "foreignID", best.book.ForeignID, "error", err)
+		return &best.book, true
+	}
+	if full == nil {
+		return &best.book, true
+	}
+	return full, true
+}
+
+func scoreBookCandidate(source, candidate models.Book) (bookMatchCandidate, bool) {
+	titleScore := titleMatchScore(source.Title, candidate.Title)
+	if titleScore < 88 {
+		return bookMatchCandidate{}, false
+	}
+	author := textutil.MatchAuthorName(bookAuthorName(source), bookAuthorName(candidate))
+	if author.Kind != textutil.AuthorMatchExact && author.Kind != textutil.AuthorMatchFuzzyAuto {
+		return bookMatchCandidate{}, false
+	}
+	return bookMatchCandidate{
+		book:        candidate,
+		titleScore:  titleScore,
+		authorKind:  author.Kind,
+		authorScore: author.Score,
+	}, true
+}
+
+func titleMatchScore(a, b string) int {
+	left := indexer.NormalizeTitleForDedup(a)
+	right := indexer.NormalizeTitleForDedup(b)
+	if left != "" && left == right {
+		return 100
+	}
+	return seriesmatch.TitleScore(a, b)
+}
+
+func bookAuthorName(book models.Book) string {
+	if book.Author == nil {
+		return ""
+	}
+	return strings.TrimSpace(book.Author.Name)
+}
+
+func compareBookCandidate(a, b bookMatchCandidate) int {
+	if a.titleScore != b.titleScore {
+		if a.titleScore > b.titleScore {
+			return 1
+		}
+		return -1
+	}
+	if authorMatchRank(a.authorKind) != authorMatchRank(b.authorKind) {
+		if authorMatchRank(a.authorKind) > authorMatchRank(b.authorKind) {
+			return 1
+		}
+		return -1
+	}
+	if math.Abs(a.authorScore-b.authorScore) > 0.001 {
+		if a.authorScore > b.authorScore {
+			return 1
+		}
+		return -1
+	}
+	return 0
+}
+
+func authorMatchRank(kind textutil.AuthorMatchKind) int {
+	switch kind {
+	case textutil.AuthorMatchExact:
+		return 2
+	case textutil.AuthorMatchFuzzyAuto:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func (a *Aggregator) providerForForeignID(foreignID string) Provider {
+	if a == nil {
+		return nil
+	}
+	want := providerNameForForeignID(foreignID)
+	if want == "" {
+		return a.primary
+	}
+	for _, provider := range a.providers() {
+		if provider == nil {
+			continue
+		}
+		if normalizedProviderName(provider.Name()) == want {
+			return provider
+		}
+	}
+	if want == "openlibrary" || want == normalizedProviderName(providerName(a.primary)) {
+		return a.primary
+	}
+	return nil
+}
+
+func providerName(provider Provider) string {
+	if provider == nil {
+		return ""
+	}
+	return provider.Name()
+}
+
+func sameProvider(a, b Provider) bool {
+	return normalizedProviderName(providerName(a)) == normalizedProviderName(providerName(b))
+}
+
+func providerNameForForeignID(foreignID string) string {
+	foreignID = strings.TrimSpace(foreignID)
+	switch {
+	case strings.HasPrefix(foreignID, "gb:"):
+		return "googlebooks"
+	case strings.HasPrefix(foreignID, "hc:"):
+		return "hardcover"
+	case strings.HasPrefix(foreignID, "dnb:"):
+		return "dnb"
+	default:
+		return "openlibrary"
+	}
+}
+
+func normalizedProviderName(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "ol", "openlibrary", "open_library":
+		return "openlibrary"
+	case "gb", "googlebooks", "google_books":
+		return "googlebooks"
+	case "hc", "hardcover":
+		return "hardcover"
+	case "dnb":
+		return "dnb"
+	default:
+		return strings.ToLower(strings.TrimSpace(name))
+	}
 }
 
 func (a *Aggregator) providers() []Provider {

@@ -17,11 +17,17 @@ import (
 // mockMetaProvider implements metadata.Provider for scheduler tests.
 // It always returns the configured author/book without any network calls.
 type mockMetaProvider struct {
+	name   string
 	author *models.Author
 	book   *models.Book
 }
 
-func (m *mockMetaProvider) Name() string { return "mock" }
+func (m *mockMetaProvider) Name() string {
+	if m.name != "" {
+		return m.name
+	}
+	return "mock"
+}
 func (m *mockMetaProvider) SearchAuthors(_ context.Context, _ string) ([]models.Author, error) {
 	if m.author != nil {
 		return []models.Author{*m.author}, nil
@@ -341,4 +347,49 @@ func TestRefreshMetadata_MonitoredAuthor_MetaSuccess(t *testing.T) {
 
 	// Loop body executes: GetAuthor → success → Update author fields.
 	s.refreshMetadata()
+}
+
+func TestRefreshMetadata_RoutesProviderNativeAuthor(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory: %v", err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	authRepo := db.NewAuthorRepo(database)
+	author := &models.Author{
+		ForeignID:        "hc:brandon-sanderson",
+		Name:             "Brandon Sanderson",
+		SortName:         "Sanderson, Brandon",
+		MetadataProvider: "hardcover",
+		Monitored:        true,
+	}
+	if err := authRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	primary := &mockMetaProvider{name: "openlibrary"}
+	hardcover := &mockMetaProvider{
+		name: "hardcover",
+		author: &models.Author{
+			ForeignID:        "hc:brandon-sanderson",
+			Name:             "Brandon Sanderson",
+			Description:      "Updated from Hardcover.",
+			MetadataProvider: "hardcover",
+		},
+	}
+	s := &Scheduler{
+		authors: authRepo,
+		meta:    metadata.NewAggregator(primary, hardcover),
+	}
+
+	s.refreshMetadata()
+
+	updated, err := authRepo.GetByID(ctx, author.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Description != "Updated from Hardcover." {
+		t.Fatalf("description = %q, want Hardcover refresh", updated.Description)
+	}
 }

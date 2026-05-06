@@ -1114,9 +1114,8 @@ func dedupeAuthorQueries(values []string) []string {
 }
 
 // AddBook adds a single book to the wanted list by its metadata foreign ID.
-// If the author is not yet in Bindery it is added as unmonitored and its
-// books are fetched in the background; the endpoint then polls until the
-// requested book appears and marks it monitored before responding.
+// If the provider can return that exact book, create it directly; otherwise
+// fall back to the legacy author-catalog sync and short poll.
 func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ForeignBookID   string `json:"foreignBookId"`
@@ -1128,27 +1127,82 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	if req.ForeignBookID == "" || req.ForeignAuthorID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreignBookId and foreignAuthorId required"})
+	if req.ForeignBookID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreignBookId required"})
 		return
 	}
 
 	ctx := r.Context()
+	var selected *models.Book
+	if h.meta != nil {
+		book, err := h.meta.GetBook(ctx, req.ForeignBookID)
+		if err != nil {
+			slog.Debug("add book metadata fetch failed", "foreignBookId", req.ForeignBookID, "error", err)
+		} else if book != nil {
+			copy := *book
+			if copy.ForeignID == "" {
+				copy.ForeignID = req.ForeignBookID
+			}
+			if book.Author != nil {
+				author := *book.Author
+				copy.Author = &author
+			}
+			selected = &copy
+			if selected.Author != nil {
+				if req.ForeignAuthorID == "" {
+					req.ForeignAuthorID = selected.Author.ForeignID
+				}
+				if req.AuthorName == "" {
+					req.AuthorName = selected.Author.Name
+				}
+			}
+		}
+	}
+	if req.ForeignAuthorID == "" && req.AuthorName == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreignAuthorId or authorName required"})
+		return
+	}
 
 	// 1. Find or create the author (unmonitored if new so we don't auto-want all books).
-	author, _ := h.authors.GetByForeignID(ctx, req.ForeignAuthorID)
+	var author *models.Author
+	if req.ForeignAuthorID != "" {
+		author, _ = h.authors.GetByForeignID(ctx, req.ForeignAuthorID)
+	}
+	if author == nil && req.ForeignAuthorID == "" && req.AuthorName != "" {
+		if canonical, ambiguous, err := h.findCanonicalAuthorMatch(ctx, req.AuthorName); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		} else if ambiguous {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "author name resolves ambiguously — merge manually"})
+			return
+		} else if canonical != nil {
+			author = canonical
+		}
+	}
+	startedSync := false
 	if author == nil {
 		name := req.AuthorName
 		if name == "" {
 			name = req.ForeignAuthorID
 		}
-		fetched, err := h.meta.GetAuthor(ctx, req.ForeignAuthorID)
-		if err != nil || fetched == nil {
+		var fetched *models.Author
+		if h.meta != nil && req.ForeignAuthorID != "" {
+			var err error
+			fetched, err = h.meta.GetAuthor(ctx, req.ForeignAuthorID)
+			if err != nil {
+				slog.Debug("add book author metadata fetch failed", "foreignAuthorId", req.ForeignAuthorID, "error", err)
+			}
+		}
+		if fetched == nil {
+			foreignID := req.ForeignAuthorID
+			if foreignID == "" {
+				foreignID = fallbackMetadataAuthorForeignID(metadataProviderFromForeignID(req.ForeignBookID), name)
+			}
 			fetched = &models.Author{
-				ForeignID:        req.ForeignAuthorID,
+				ForeignID:        foreignID,
 				Name:             name,
 				SortName:         sortName(name),
-				MetadataProvider: "openlibrary",
+				MetadataProvider: metadataProviderFromForeignID(firstNonEmpty(req.ForeignAuthorID, req.ForeignBookID)),
 			}
 		}
 		fetched.Monitored = false
@@ -1160,10 +1214,13 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			// Race: another request created it between our check and insert.
-			author, _ = h.authors.GetByForeignID(ctx, req.ForeignAuthorID)
+			author, _ = h.authors.GetByForeignID(ctx, fetched.ForeignID)
 		} else {
 			author = fetched
-			h.fetchAuthorBooksAsync(author, false, h.resolveDefaultMediaType(ctx))
+			if selected == nil && req.ForeignAuthorID != "" {
+				h.fetchAuthorBooksAsync(author, false, h.resolveDefaultMediaType(ctx))
+				startedSync = true
+			}
 		}
 	}
 	if author == nil {
@@ -1171,23 +1228,56 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Poll until the book appears (FetchAuthorBooks runs asynchronously).
-	deadline := time.Now().Add(15 * time.Second)
 	var book *models.Book
-	for {
-		b, _ := h.books.GetByForeignID(ctx, req.ForeignBookID)
-		if b != nil {
-			book = b
-			break
+	if b, _ := h.books.GetByForeignID(ctx, req.ForeignBookID); b != nil {
+		book = b
+	}
+	if book == nil && selected != nil {
+		selected.AuthorID = author.ID
+		selected.Author = nil
+		if selected.SortTitle == "" {
+			selected.SortTitle = selected.Title
 		}
-		if time.Now().After(deadline) {
-			break
+		if selected.Status == "" {
+			selected.Status = models.BookStatusWanted
 		}
-		select {
-		case <-ctx.Done():
-			writeJSON(w, http.StatusGatewayTimeout, map[string]string{"error": "request cancelled"})
-			return
-		case <-time.After(500 * time.Millisecond):
+		if selected.Genres == nil {
+			selected.Genres = []string{}
+		}
+		if selected.MediaType == "" {
+			selected.MediaType = h.resolveDefaultMediaType(ctx)
+		}
+		if selected.MetadataProvider == "" {
+			selected.MetadataProvider = metadataProviderFromForeignID(selected.ForeignID)
+		}
+		if err := h.books.Create(ctx, selected); err != nil {
+			if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			book, _ = h.books.GetByForeignID(ctx, req.ForeignBookID)
+		} else {
+			book = selected
+		}
+	}
+	if book == nil && startedSync {
+		// Poll until the book appears (FetchAuthorBooks runs asynchronously).
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			b, _ := h.books.GetByForeignID(ctx, req.ForeignBookID)
+			if b != nil {
+				book = b
+				break
+			}
+			if time.Now().After(deadline) {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				writeJSON(w, http.StatusGatewayTimeout, map[string]string{"error": "request cancelled"})
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
 		}
 	}
 
@@ -1209,6 +1299,30 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, book)
+}
+
+func metadataProviderFromForeignID(foreignID string) string {
+	switch {
+	case strings.HasPrefix(foreignID, "gb:"):
+		return "googlebooks"
+	case strings.HasPrefix(foreignID, "hc:"):
+		return "hardcover"
+	case strings.HasPrefix(foreignID, "dnb:"):
+		return "dnb"
+	default:
+		return "openlibrary"
+	}
+}
+
+func fallbackMetadataAuthorForeignID(provider, name string) string {
+	key := strings.ReplaceAll(textutil.NormalizeAuthorName(name), " ", "-")
+	if key == "" {
+		key = "unknown"
+	}
+	if provider == "" {
+		provider = "metadata"
+	}
+	return "metadata:author:" + provider + ":" + key
 }
 
 // saveAlternateNames persists any latin-script OL alternate names from

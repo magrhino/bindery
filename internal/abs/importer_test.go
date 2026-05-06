@@ -481,6 +481,7 @@ func requireStringSlicesEqual(t *testing.T, got, want []string) {
 }
 
 type stubABSMetadataProvider struct {
+	name                 string
 	searchAuthors        []models.Author
 	searchAuthorsByQuery map[string][]models.Author
 	authors              map[string]*models.Author
@@ -492,7 +493,12 @@ type stubABSMetadataProvider struct {
 	searchSeriesCalls    int
 }
 
-func (p *stubABSMetadataProvider) Name() string { return "stub" }
+func (p *stubABSMetadataProvider) Name() string {
+	if p.name != "" {
+		return p.name
+	}
+	return "stub"
+}
 func (p *stubABSMetadataProvider) SearchAuthors(_ context.Context, query string) ([]models.Author, error) {
 	if p.searchAuthorsByQuery != nil {
 		return append([]models.Author(nil), p.searchAuthorsByQuery[query]...), nil
@@ -1262,10 +1268,7 @@ func TestImporter_MetadataEnrichmentRelinksAuthorAndBook(t *testing.T) {
 			},
 		},
 		booksByISBN: map[string]*models.Book{
-			"9780593135204": {ForeignID: "OL-PHM", Title: "Project Hail Mary"},
-		},
-		books: map[string]*models.Book{
-			"OL-PHM": {
+			"9780593135204": {
 				ForeignID:        "OL-PHM",
 				Title:            "Project Hail Mary",
 				ImageURL:         "https://img.example.com/phm.jpg",
@@ -1331,6 +1334,62 @@ func TestImporter_MetadataEnrichmentRelinksAuthorAndBook(t *testing.T) {
 	}
 }
 
+func TestImporter_MetadataEnrichmentUsesSecondaryISBNResultDirectly(t *testing.T) {
+	t.Parallel()
+
+	importer, _, bookRepo, _, _, _, _, _, _, _ := newABSImporterFixture(t)
+	primary := &stubABSMetadataProvider{name: "openlibrary"}
+	google := &stubABSMetadataProvider{
+		name: "googlebooks",
+		booksByISBN: map[string]*models.Book{
+			"9780593135204": {
+				ForeignID:        "gb:project-hail-mary",
+				Title:            "Project Hail Mary",
+				ImageURL:         "https://img.example.com/gb-phm.jpg",
+				Description:      "Google Books metadata for Project Hail Mary.",
+				MetadataProvider: "googlebooks",
+				Language:         "eng",
+				Author:           &models.Author{Name: "Andy Weir", MetadataProvider: "googlebooks"},
+			},
+		},
+	}
+	importer.WithMetadata(metadata.NewAggregator(primary, google))
+
+	item := sampleABSItem()
+	item.ISBN = "9780593135204"
+	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		if err := fn(ctx, item); err != nil {
+			return EnumerationStats{}, err
+		}
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+
+	stats, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:  DefaultSourceID,
+		BaseURL:   "https://abs.example.com",
+		APIKey:    "secret",
+		LibraryID: item.LibraryID,
+		Label:     "Shelf",
+		Enabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if stats.MetadataRelinked == 0 {
+		t.Fatalf("metadataRelinked = %d, want secondary ISBN relink", stats.MetadataRelinked)
+	}
+	books, err := bookRepo.ListIncludingExcluded(context.Background())
+	if err != nil || len(books) != 1 {
+		t.Fatalf("books = %d err=%v, want 1", len(books), err)
+	}
+	if books[0].ForeignID != "gb:project-hail-mary" || books[0].MetadataProvider != "googlebooks" {
+		t.Fatalf("book = %+v, want provider-native googlebooks identity", books[0])
+	}
+	if books[0].ImageURL != "https://img.example.com/gb-phm.jpg" {
+		t.Fatalf("book image = %q", books[0].ImageURL)
+	}
+}
+
 func TestImporter_MetadataConflictPersistsAndUsesUpstreamTemporarily(t *testing.T) {
 	t.Parallel()
 
@@ -1341,7 +1400,13 @@ func TestImporter_MetadataConflictPersistsAndUsesUpstreamTemporarily(t *testing.
 			"OL-ANDY": {ForeignID: "OL-ANDY", Name: "Andy Weir", MetadataProvider: "openlibrary"},
 		},
 		booksByISBN: map[string]*models.Book{
-			"9780593135204": {ForeignID: "OL-PHM", Title: "Project Hail Mary"},
+			"9780593135204": {
+				ForeignID:        "OL-PHM",
+				Title:            "Project Hail Mary",
+				Description:      "Upstream version of the story.",
+				MetadataProvider: "openlibrary",
+				Language:         "eng",
+			},
 		},
 		books: map[string]*models.Book{
 			"OL-PHM": {
@@ -1413,7 +1478,13 @@ func TestImporter_RerunReusesResolvedConflictPreference(t *testing.T) {
 			"OL-ANDY": {ForeignID: "OL-ANDY", Name: "Andy Weir", MetadataProvider: "openlibrary"},
 		},
 		booksByISBN: map[string]*models.Book{
-			"9780593135204": {ForeignID: "OL-PHM", Title: "Project Hail Mary"},
+			"9780593135204": {
+				ForeignID:        "OL-PHM",
+				Title:            "Project Hail Mary",
+				Description:      "Upstream version of the story.",
+				MetadataProvider: "openlibrary",
+				Language:         "eng",
+			},
 		},
 		books: map[string]*models.Book{
 			"OL-PHM": {

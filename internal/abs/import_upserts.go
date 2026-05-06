@@ -457,13 +457,6 @@ func (i *Importer) lookupUpstreamBook(ctx context.Context, author *models.Author
 			return nil, "", false, err
 		}
 		if match != nil {
-			full, err := i.meta.GetBook(ctx, match.ForeignID)
-			if err != nil {
-				return nil, "", false, err
-			}
-			if full != nil {
-				return full, "isbn", false, nil
-			}
 			return match, "isbn", false, nil
 		}
 	}
