@@ -170,10 +170,10 @@ func newFakeIDP() *fakeIDP {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"issuer":                 f.URL,
-			"authorization_endpoint": f.URL + "/authorize",
-			"token_endpoint":         f.URL + "/token",
-			"jwks_uri":               f.URL + "/jwks",
+			"issuer":                                f.URL,
+			"authorization_endpoint":                f.URL + "/authorize",
+			"token_endpoint":                        f.URL + "/token",
+			"jwks_uri":                              f.URL + "/jwks",
 			"id_token_signing_alg_values_supported": []string{"RS256"},
 			"response_types_supported":              []string{"code"},
 			"subject_types_supported":               []string{"public"},
