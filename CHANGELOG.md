@@ -4,6 +4,11 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Fixed
+
+- **Manual series mutations require admin role** (#468) — Authenticated non-admin users can no longer create, update, monitor, delete, fill, or link series to Hardcover. Read-only series endpoints remain available to authenticated users.
 
 ## [v1.4.1] — 2026-05-06
 
