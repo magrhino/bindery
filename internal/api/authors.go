@@ -918,17 +918,7 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool,
 		}
 		added++
 
-		// Populate series membership for this book.
-		for _, ref := range b.SeriesRefs {
-			s := &models.Series{ForeignID: ref.ForeignID, Title: ref.Title}
-			if err := h.series.CreateOrGet(ctx, s); err != nil {
-				slog.Warn("failed to upsert series", "series", ref.Title, "error", err)
-				continue
-			}
-			if err := h.series.LinkBook(ctx, s.ID, b.ID, ref.Position, ref.Primary); err != nil {
-				slog.Warn("failed to link book to series", "book", b.Title, "series", ref.Title, "error", err)
-			}
-		}
+		h.linkBookSeriesRefs(ctx, b.ID, b.Title, b.SeriesRefs)
 
 		// Check if the user already owns this book before queuing a download.
 		if h.finder != nil {
@@ -947,6 +937,22 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool,
 	}
 	runBookSearches(ctx, h.searcher, searchQueue, authorAutoSearchConcurrency)
 	slog.Info("author books synced", "author", author.Name, "added", added, "skipped_language", skippedLang, "skipped_junk", skippedJunk, "total", len(books))
+}
+
+func (h *AuthorHandler) linkBookSeriesRefs(ctx context.Context, bookID int64, bookTitle string, refs []models.SeriesRef) {
+	if h == nil || h.series == nil || bookID == 0 || len(refs) == 0 {
+		return
+	}
+	for _, ref := range refs {
+		s := &models.Series{ForeignID: ref.ForeignID, Title: ref.Title}
+		if err := h.series.CreateOrGet(ctx, s); err != nil {
+			slog.Warn("failed to upsert series", "series", ref.Title, "error", err)
+			continue
+		}
+		if err := h.series.LinkBook(ctx, s.ID, bookID, ref.Position, ref.Primary); err != nil {
+			slog.Warn("failed to link book to series", "book", bookTitle, "series", ref.Title, "error", err)
+		}
+	}
 }
 
 func runBookSearches(ctx context.Context, searcher BookSearcher, books []models.Book, concurrency int) {
@@ -1284,6 +1290,9 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 	if book == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found after author sync — try again shortly"})
 		return
+	}
+	if selected != nil {
+		h.linkBookSeriesRefs(ctx, book.ID, book.Title, selected.SeriesRefs)
 	}
 
 	// 3. Mark the book monitored (wanted).

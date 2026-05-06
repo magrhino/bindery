@@ -102,8 +102,9 @@ func (p *stubMetaProvider) GetAuthorWorks(_ context.Context, _ string) ([]models
 }
 
 type namedBookProvider struct {
-	name  string
-	books map[string]*models.Book
+	name        string
+	books       map[string]*models.Book
+	searchBooks []models.Book
 }
 
 func (p *namedBookProvider) Name() string { return p.name }
@@ -111,7 +112,7 @@ func (p *namedBookProvider) SearchAuthors(context.Context, string) ([]models.Aut
 	return nil, nil
 }
 func (p *namedBookProvider) SearchBooks(context.Context, string) ([]models.Book, error) {
-	return nil, nil
+	return append([]models.Book(nil), p.searchBooks...), nil
 }
 func (p *namedBookProvider) GetAuthor(context.Context, string) (*models.Author, error) {
 	return nil, nil
@@ -155,13 +156,22 @@ func TestAddBook_CreatesSelectedProviderNativeBook(t *testing.T) {
 				ForeignID:        "gb:vol1",
 				Title:            "Provider Native",
 				SortTitle:        "Provider Native",
-				Description:      "A provider-native ISBN result that should be created directly.",
+				Description:      "Short.",
 				MetadataProvider: "googlebooks",
 				Author:           &models.Author{Name: "Provider Author", MetadataProvider: "googlebooks"},
 			},
 		},
 	}
-	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, metadata.NewAggregator(&stubMetaProvider{}, provider), nil, profileRepo, nil)
+	hardcover := &namedBookProvider{
+		name: "hardcover",
+		searchBooks: []models.Book{{
+			Description:   "Hardcover enrichment with a fuller provider-native description.",
+			ImageURL:      "https://img.example.com/provider-native.jpg",
+			AverageRating: 4.4,
+			RatingsCount:  9,
+		}},
+	}
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, metadata.NewAggregator(&stubMetaProvider{}, provider, hardcover), nil, profileRepo, nil)
 
 	rec := httptest.NewRecorder()
 	h.AddBook(rec, httptest.NewRequest(http.MethodPost, "/api/v1/author/book", bytes.NewBufferString(`{"foreignBookId":"gb:vol1","authorName":"Provider Author"}`)))
@@ -176,6 +186,12 @@ func TestAddBook_CreatesSelectedProviderNativeBook(t *testing.T) {
 	if book == nil || !book.Monitored || book.MetadataProvider != "googlebooks" {
 		t.Fatalf("book = %+v, want monitored googlebooks book", book)
 	}
+	if book.Description != "Hardcover enrichment with a fuller provider-native description." || book.ImageURL != "https://img.example.com/provider-native.jpg" {
+		t.Fatalf("book enrichment = description %q image %q, want hardcover enrichment", book.Description, book.ImageURL)
+	}
+	if book.AverageRating != 4.4 || book.RatingsCount != 9 {
+		t.Fatalf("rating/count = %f/%d, want 4.4/9", book.AverageRating, book.RatingsCount)
+	}
 	authors, err := authorRepo.List(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -185,6 +201,90 @@ func TestAddBook_CreatesSelectedProviderNativeBook(t *testing.T) {
 	}
 	if authors[0].Name != "Provider Author" || authors[0].ForeignID != "metadata:author:googlebooks:provider-author" {
 		t.Fatalf("author = %+v, want provider fallback author", authors[0])
+	}
+}
+
+func TestAddBook_PrimaryDirectBookLinksSeriesAndKeepsSecondaryEnrichment(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	seriesRepo := db.NewSeriesRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+	primary := &namedBookProvider{
+		name: "openlibrary",
+		books: map[string]*models.Book{
+			"OL1W": {
+				ForeignID:        "OL1W",
+				Title:            "Primary Series Book",
+				SortTitle:        "Primary Series Book",
+				Description:      "Short.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{ForeignID: "OL1A", Name: "Series Author", MetadataProvider: "openlibrary"},
+				SeriesRefs: []models.SeriesRef{{
+					ForeignID: "OL-SERIES",
+					Title:     "Primary Series",
+					Position:  "2",
+					Primary:   true,
+				}},
+			},
+		},
+	}
+	hardcover := &namedBookProvider{
+		name: "hardcover",
+		searchBooks: []models.Book{{
+			Description:   "Hardcover supplied the fuller description for the primary direct book.",
+			ImageURL:      "https://img.example.com/primary-series-book.jpg",
+			AverageRating: 4.8,
+			RatingsCount:  123,
+		}},
+	}
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, seriesRepo, metadata.NewAggregator(primary, hardcover), nil, profileRepo, nil)
+
+	rec := httptest.NewRecorder()
+	h.AddBook(rec, httptest.NewRequest(http.MethodPost, "/api/v1/author/book", bytes.NewBufferString(`{"foreignBookId":"OL1W"}`)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	book, err := bookRepo.GetByForeignID(ctx, "OL1W")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if book == nil {
+		t.Fatal("book = nil, want direct created book")
+	}
+	if book.Description != "Hardcover supplied the fuller description for the primary direct book." || book.ImageURL != "https://img.example.com/primary-series-book.jpg" {
+		t.Fatalf("book enrichment = description %q image %q, want hardcover enrichment", book.Description, book.ImageURL)
+	}
+	if book.AverageRating != 4.8 || book.RatingsCount != 123 {
+		t.Fatalf("rating/count = %f/%d, want 4.8/123", book.AverageRating, book.RatingsCount)
+	}
+	series, err := seriesRepo.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(series) != 1 || series[0].ForeignID != "OL-SERIES" || series[0].Title != "Primary Series" {
+		t.Fatalf("series = %+v, want linked provider series", series)
+	}
+	linked, err := seriesRepo.ListBooksInSeries(ctx, series[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(linked) != 1 || linked[0].ID != book.ID {
+		t.Fatalf("linked books = %+v, want created book id %d", linked, book.ID)
+	}
+	seriesTitle, position, err := seriesRepo.GetPrimarySeriesForBook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seriesTitle != "Primary Series" || position != "2" {
+		t.Fatalf("primary series = %q position %q, want Primary Series position 2", seriesTitle, position)
 	}
 }
 
