@@ -630,6 +630,9 @@ func (s *Scheduler) refreshMetadata() {
 			slog.Warn("failed to refresh author", "author", author.Name, "error", err)
 			continue
 		}
+		if updated == nil {
+			continue
+		}
 
 		// Update changed fields
 		author.Description = updated.Description

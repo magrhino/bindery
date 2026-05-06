@@ -78,6 +78,7 @@ func (c *Client) GetAuthor(_ context.Context, _ string) (*models.Author, error) 
 }
 
 func (c *Client) GetBook(ctx context.Context, foreignID string) (*models.Book, error) {
+	foreignID = strings.TrimPrefix(foreignID, "gb:")
 	u := fmt.Sprintf("%s/volumes/%s", baseURL, foreignID)
 	if c.apiKey != "" {
 		u += "?key=" + url.QueryEscape(c.apiKey)

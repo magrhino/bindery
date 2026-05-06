@@ -101,6 +101,93 @@ func (p *stubMetaProvider) GetAuthorWorks(_ context.Context, _ string) ([]models
 	return p.works, nil
 }
 
+type namedBookProvider struct {
+	name  string
+	books map[string]*models.Book
+}
+
+func (p *namedBookProvider) Name() string { return p.name }
+func (p *namedBookProvider) SearchAuthors(context.Context, string) ([]models.Author, error) {
+	return nil, nil
+}
+func (p *namedBookProvider) SearchBooks(context.Context, string) ([]models.Book, error) {
+	return nil, nil
+}
+func (p *namedBookProvider) GetAuthor(context.Context, string) (*models.Author, error) {
+	return nil, nil
+}
+func (p *namedBookProvider) GetBook(_ context.Context, foreignID string) (*models.Book, error) {
+	if p.books == nil {
+		return nil, nil
+	}
+	if book := p.books[foreignID]; book != nil {
+		copy := *book
+		if book.Author != nil {
+			author := *book.Author
+			copy.Author = &author
+		}
+		return &copy, nil
+	}
+	return nil, nil
+}
+func (p *namedBookProvider) GetEditions(context.Context, string) ([]models.Edition, error) {
+	return nil, nil
+}
+func (p *namedBookProvider) GetBookByISBN(context.Context, string) (*models.Book, error) {
+	return nil, nil
+}
+
+func TestAddBook_CreatesSelectedProviderNativeBook(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+	provider := &namedBookProvider{
+		name: "googlebooks",
+		books: map[string]*models.Book{
+			"gb:vol1": {
+				ForeignID:        "gb:vol1",
+				Title:            "Provider Native",
+				SortTitle:        "Provider Native",
+				Description:      "A provider-native ISBN result that should be created directly.",
+				MetadataProvider: "googlebooks",
+				Author:           &models.Author{Name: "Provider Author", MetadataProvider: "googlebooks"},
+			},
+		},
+	}
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, metadata.NewAggregator(&stubMetaProvider{}, provider), nil, profileRepo, nil)
+
+	rec := httptest.NewRecorder()
+	h.AddBook(rec, httptest.NewRequest(http.MethodPost, "/api/v1/author/book", bytes.NewBufferString(`{"foreignBookId":"gb:vol1","authorName":"Provider Author"}`)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	book, err := bookRepo.GetByForeignID(ctx, "gb:vol1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if book == nil || !book.Monitored || book.MetadataProvider != "googlebooks" {
+		t.Fatalf("book = %+v, want monitored googlebooks book", book)
+	}
+	authors, err := authorRepo.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(authors) != 1 {
+		t.Fatalf("authors = %d, want 1", len(authors))
+	}
+	if authors[0].Name != "Provider Author" || authors[0].ForeignID != "metadata:author:googlebooks:provider-author" {
+		t.Fatalf("author = %+v, want provider fallback author", authors[0])
+	}
+}
+
 // TestDeleteAuthor_WithDeleteFiles verifies the ?deleteFiles=true branch
 // sweeps every book's on-disk path. The invariant under test is ordering:
 // paths must be collected from `books ListByAuthor` *before* the cascade
