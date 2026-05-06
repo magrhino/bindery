@@ -4,9 +4,10 @@
 //
 // Endpoints:
 //
-//	POST /api/ping   — upsert install record, return latest version
-//	GET  /api/stats  — active/total counts + version breakdown (token-gated)
-//	GET  /health     — liveness probe
+//	GET  /               — welcome page with logo and GitHub link
+//	POST /api/ping       — upsert install record, return latest version (rate-limited)
+//	GET  /api/stats      — active/total counts + version breakdown (token-gated)
+//	GET  /health         — liveness probe
 package main
 
 import (
@@ -15,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -24,6 +26,7 @@ type server struct {
 	db            *sql.DB
 	latestVersion string
 	statsToken    string
+	limiter       *rateLimiter
 }
 
 type pingRequest struct {
@@ -68,9 +71,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	s := &server{db: db, latestVersion: latestVersion, statsToken: statsToken}
+	s := &server{
+		db:            db,
+		latestVersion: latestVersion,
+		statsToken:    statsToken,
+		// Each IP may ping at most once per hour.
+		limiter: newRateLimiter(1*time.Hour, 5*time.Minute),
+	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /", s.handleHome)
 	mux.HandleFunc("POST /api/ping", s.handlePing)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
@@ -78,13 +88,90 @@ func main() {
 	})
 
 	slog.Info("telemetry-server starting", "addr", addr, "latest", latestVersion)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := http.ListenAndServe(addr, secureHeaders(mux)); err != nil {
 		slog.Error("listen", "error", err)
 		os.Exit(1)
 	}
 }
 
+// secureHeaders adds security response headers and rejects non-HTTPS requests
+// (when running behind Traefik, X-Forwarded-Proto carries the original scheme).
+func secureHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Reject plain HTTP when the request came through the public ingress.
+		if r.Header.Get("X-Forwarded-Proto") == "http" {
+			http.Redirect(w, r, "https://"+r.Host+r.RequestURI, http.StatusMovedPermanently)
+			return
+		}
+		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src https:; style-src 'unsafe-inline'")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *server) handleHome(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bindery</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100svh;
+    display: flex; align-items: center; justify-content: center;
+    background: #0f1117;
+    color: #e2e8f0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  .card {
+    text-align: center;
+    padding: 3rem 2rem;
+    max-width: 480px;
+  }
+  img { width: 96px; height: 96px; margin-bottom: 1.5rem; }
+  h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: .5rem; }
+  p  { color: #94a3b8; line-height: 1.6; margin-bottom: 2rem; }
+  a  {
+    display: inline-flex; align-items: center; gap: .5rem;
+    padding: .65rem 1.4rem;
+    background: #10b981; color: #fff;
+    border-radius: 8px; text-decoration: none;
+    font-weight: 600; font-size: .95rem;
+    transition: background .15s;
+  }
+  a:hover { background: #059669; }
+</style>
+</head>
+<body>
+<div class="card">
+  <img src="https://raw.githubusercontent.com/vavallee/bindery/main/.github/assets/logo.png" alt="Bindery logo">
+  <h1>Bindery</h1>
+  <p>Open-source automated book management.<br>
+     A clean-room replacement for Readarr — no scraping, no dead backends.</p>
+  <a href="https://github.com/vavallee/bindery">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+    </svg>
+    View on GitHub
+  </a>
+</div>
+</body>
+</html>`))
+}
+
 func (s *server) handlePing(w http.ResponseWriter, r *http.Request) {
+	ip := realIP(r)
+	if !s.limiter.allow(ip) {
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+
 	var req pingRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -118,12 +205,13 @@ func (s *server) handlePing(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
-	if s.statsToken != "" {
-		tok := r.Header.Get("Authorization")
-		if tok != "Bearer "+s.statsToken {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
+	if s.statsToken == "" {
+		http.Error(w, "stats endpoint not configured", http.StatusForbidden)
+		return
+	}
+	if r.Header.Get("Authorization") != "Bearer "+s.statsToken {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
 	}
 
 	cutoff := time.Now().UTC().Add(-30 * 24 * time.Hour)
@@ -165,6 +253,56 @@ func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 		Total:     total,
 		Versions:  versions,
 	})
+}
+
+// realIP extracts the client IP from X-Forwarded-For (set by Traefik) or
+// falls back to RemoteAddr. Used only for rate limiting — not for auth.
+func realIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		return xff
+	}
+	return r.RemoteAddr
+}
+
+// rateLimiter is a simple in-memory token bucket: one ping per window per IP.
+type rateLimiter struct {
+	mu      sync.Mutex
+	seen    map[string]time.Time
+	window  time.Duration
+	cleanup time.Duration
+}
+
+func newRateLimiter(window, cleanup time.Duration) *rateLimiter {
+	rl := &rateLimiter{
+		seen:    make(map[string]time.Time),
+		window:  window,
+		cleanup: cleanup,
+	}
+	go rl.purge()
+	return rl
+}
+
+func (rl *rateLimiter) allow(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	if last, ok := rl.seen[ip]; ok && time.Since(last) < rl.window {
+		return false
+	}
+	rl.seen[ip] = time.Now()
+	return true
+}
+
+func (rl *rateLimiter) purge() {
+	for range time.Tick(rl.cleanup) {
+		rl.mu.Lock()
+		cutoff := time.Now().Add(-rl.window)
+		for ip, t := range rl.seen {
+			if t.Before(cutoff) {
+				delete(rl.seen, ip)
+			}
+		}
+		rl.mu.Unlock()
+	}
 }
 
 func env(key, fallback string) string {
