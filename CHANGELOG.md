@@ -5,6 +5,12 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Semantic Versioning](https://semver.org).
 
 
+## [v1.4.2] — 2026-05-06
+
+### Fixed
+
+- **Discover works for libraries migrated from pre-v1.4.1** — Author refresh now updates `ratings_count` and `average_rating` on books that already exist in the database. Previously, `FetchAuthorBooks` skipped all processing for existing books (by foreign ID or deduplicated title), so libraries that had synced authors before v1.4.1 kept `ratings_count=0` on every book even after an upgrade and refresh. The recommender's hard filter then dropped all candidates, leaving Discover empty. A refresh-metadata run now back-fills ratings from OpenLibrary for any book where we have better data.
+
 ## [v1.4.1] — 2026-05-06
 
 ### Fixed
