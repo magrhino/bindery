@@ -435,6 +435,7 @@ describe('SettingsPage', () => {
     await waitFor(() => expect(api.authSetMode).toHaveBeenCalledWith('local-only'))
     expect(mockAuthContext.refresh).toHaveBeenCalled()
     await waitFor(() => expect(api.authConfig).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(sectionForHeading('Security').getByRole('combobox')).toHaveValue('local-only'))
   })
 
   it('shows, copies, and regenerates the security API key', async () => {

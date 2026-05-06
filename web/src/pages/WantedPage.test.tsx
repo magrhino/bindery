@@ -289,10 +289,19 @@ describe('WantedPage', () => {
     ['Unmonitor', 'unmonitor'],
     ['Blocklist', 'blocklist'],
   ] as const)('runs the bulk %s action and refreshes the list', async (label, action) => {
-    vi.mocked(api.listWanted).mockResolvedValue([
+    const initialBooks = [
       makeBook({ id: 1, title: 'Dune' }),
       makeBook({ id: 2, title: 'Hyperion' }),
-    ])
+    ]
+    const refreshedBooks = action === 'search'
+      ? [
+          makeBook({ id: 1, title: 'Dune Refreshed' }),
+          makeBook({ id: 2, title: 'Hyperion Refreshed' }),
+        ]
+      : []
+    vi.mocked(api.listWanted)
+      .mockResolvedValueOnce(initialBooks)
+      .mockResolvedValueOnce(refreshedBooks)
 
     renderWantedPage()
 
@@ -307,5 +316,13 @@ describe('WantedPage', () => {
     await waitFor(() => expect(api.bulkActionWanted).toHaveBeenCalledWith([1, 2], action))
     await waitFor(() => expect(api.listWanted).toHaveBeenCalledTimes(2))
     expect(screen.queryByText('2 selected')).not.toBeInTheDocument()
+    if (action === 'search') {
+      expect(await screen.findByRole('link', { name: 'Dune Refreshed' })).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: 'Hyperion Refreshed' })).toBeInTheDocument()
+    } else {
+      expect(await screen.findByText('No wanted books. Add an author to start tracking.')).toBeInTheDocument()
+    }
+    expect(screen.queryByRole('link', { name: 'Dune' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Hyperion' })).not.toBeInTheDocument()
   })
 })
