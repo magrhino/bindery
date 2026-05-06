@@ -5,6 +5,12 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Semantic Versioning](https://semver.org).
 
 
+## [Unreleased]
+
+### Fixed
+
+- **Hardcover GraphQL success responses are bounded** (#470) — Successful Hardcover responses are now read through an 8 MiB cap so a misbehaving upstream cannot force unbounded memory growth before JSON parsing.
+
 ## [v1.4.1] — 2026-05-06
 
 ### Fixed
