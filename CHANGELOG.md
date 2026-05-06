@@ -6,6 +6,8 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [v1.4.5] — 2026-05-06
+
 ### Added
 
 - **Book Detail page now exposes the media-type selector** — Imported and downloaded books can now be flipped between ebook / audiobook / both directly from the Book Detail page. Previously this was only available on the Wanted page, so once a book progressed past wanted there was no UI path to add the second format short of deleting and re-adding the author.
@@ -923,6 +925,7 @@ Initial public release.
 - Single-binary distribution with embedded React frontend.
 - Distroless Docker image and Helm chart.
 
+[v1.4.5]: https://github.com/vavallee/bindery/releases/tag/v1.4.5
 [v1.4.4]: https://github.com/vavallee/bindery/releases/tag/v1.4.4
 [v1.4.3]: https://github.com/vavallee/bindery/releases/tag/v1.4.3
 [v1.4.2]: https://github.com/vavallee/bindery/releases/tag/v1.4.2
