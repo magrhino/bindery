@@ -1,13 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import SettingsPage from './SettingsPage'
-import { api, type DownloadClient, type Indexer, type ProwlarrInstance, type SystemStatus } from '../api/client'
+import { api, type DownloadClient, type Indexer, type OidcProvider, type ProwlarrInstance, type RootFolder, type SystemStatus } from '../api/client'
 
-vi.mock('../settings/AuthSettings', () => ({ default: () => <div data-testid="auth-settings" /> }))
+const mockAuthContext = vi.hoisted(() => ({
+  status: {
+    authenticated: true,
+    setupRequired: false,
+    username: 'admin',
+    role: 'admin',
+    mode: 'enabled' as const,
+  },
+  loading: false,
+  isAdmin: true,
+  refresh: vi.fn(),
+  logout: vi.fn(),
+}))
+
 vi.mock('../components/ThemeToggle', () => ({ default: () => <button type="button">Theme</button> }))
 vi.mock('../components/LanguageSwitcher', () => ({ default: () => <select aria-label="Language" /> }))
 vi.mock('../auth/AuthContext', () => ({
-  useAuth: () => ({ isAdmin: true }),
+  useAuth: () => mockAuthContext,
 }))
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -52,7 +65,17 @@ vi.mock('../api/client', async importOriginal => {
       status: vi.fn(),
       setSetting: vi.fn(),
       testHardcover: vi.fn(),
+      triggerLibraryScan: vi.fn(),
+      createBackup: vi.fn(),
+      addRootFolder: vi.fn(),
       authConfig: vi.fn(),
+      authSetMode: vi.fn(),
+      authRegenerateApiKey: vi.fn(),
+      authChangePassword: vi.fn(),
+      oidcProviders: vi.fn(),
+      oidcSetProviders: vi.fn(),
+      oidcRedirectBase: vi.fn(),
+      oidcTestDiscovery: vi.fn(),
     },
   }
 })
@@ -109,11 +132,24 @@ function makeClient(overrides: Partial<DownloadClient> = {}): DownloadClient {
   }
 }
 
+function makeRootFolder(overrides: Partial<RootFolder> = {}): RootFolder {
+  return {
+    id: 1,
+    path: '/books',
+    freeSpace: 1024,
+    createdAt: '2026-05-06T12:00:00Z',
+    ...overrides,
+  }
+}
+
 function seedSettingsMocks(options: {
   indexers?: Indexer[]
   clients?: DownloadClient[]
   prowlarr?: ProwlarrInstance[]
   status?: SystemStatus
+  settings?: Array<{ key: string; value: string }>
+  rootFolders?: RootFolder[]
+  oidcProviders?: OidcProvider[]
 } = {}) {
   vi.mocked(api.listIndexers).mockResolvedValue(options.indexers ?? [])
   vi.mocked(api.addIndexer).mockImplementation(async data => makeIndexer({ id: 100, ...data }))
@@ -141,13 +177,16 @@ function seedSettingsMocks(options: {
     vi.mocked(api.absImportRuns).mockResolvedValue([])
     vi.mocked(api.absReviewItems).mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
     vi.mocked(api.absConflicts).mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
-    vi.mocked(api.listSettings).mockResolvedValue([{ key: 'hardcover.enhanced_series_enabled', value: 'false' }])
+    vi.mocked(api.listSettings).mockResolvedValue(options.settings ?? [{ key: 'hardcover.enhanced_series_enabled', value: 'false' }])
     vi.mocked(api.listBackups).mockResolvedValue([])
     vi.mocked(api.libraryScanStatus).mockRejectedValue(new Error('no scan'))
     vi.mocked(api.getStorage).mockResolvedValue({ downloadDir: '/downloads', libraryDir: '/books', audiobookDir: '' })
-    vi.mocked(api.listRootFolders).mockResolvedValue([])
+    vi.mocked(api.listRootFolders).mockResolvedValue(options.rootFolders ?? [])
     vi.mocked(api.status).mockResolvedValue(options.status ?? defaultStatus)
     vi.mocked(api.setSetting).mockResolvedValue(undefined)
+    vi.mocked(api.triggerLibraryScan).mockResolvedValue({ message: 'started' })
+    vi.mocked(api.createBackup).mockResolvedValue({ filename: 'bindery-backup.zip' })
+    vi.mocked(api.addRootFolder).mockImplementation(async path => makeRootFolder({ id: 99, path }))
     vi.mocked(api.testHardcover).mockResolvedValue({
       ok: true,
       tokenConfigured: true,
@@ -158,7 +197,22 @@ function seedSettingsMocks(options: {
       catalogBookCount: 8,
       message: 'Found 2 series; catalog "Dune" has 8 books',
     })
-    vi.mocked(api.authConfig).mockResolvedValue({ mode: 'disabled', apiKey: 'key', username: 'admin' })
+    vi.mocked(api.authConfig).mockResolvedValue({ mode: 'enabled', apiKey: 'key', username: 'admin' })
+    vi.mocked(api.authSetMode).mockResolvedValue({ mode: 'enabled' })
+    vi.mocked(api.authRegenerateApiKey).mockResolvedValue({ apiKey: 'rotated-key' })
+    vi.mocked(api.authChangePassword).mockResolvedValue({ ok: true })
+    vi.mocked(api.oidcProviders).mockResolvedValue(options.oidcProviders ?? [])
+    vi.mocked(api.oidcSetProviders).mockResolvedValue(undefined)
+    vi.mocked(api.oidcRedirectBase).mockResolvedValue({ base: 'http://localhost', callback_path: '/api/v1/auth/oidc/{id}/callback' })
+    vi.mocked(api.oidcTestDiscovery).mockResolvedValue({
+      ok: true,
+      discovered: {
+        issuer: 'https://accounts.example.com',
+        authorization_endpoint: 'https://accounts.example.com/auth',
+        token_endpoint: 'https://accounts.example.com/token',
+        scopes_supported: ['openid', 'email', 'profile'],
+      },
+    })
 }
 
 function renderSettings(options?: Parameters<typeof seedSettingsMocks>[0]) {
@@ -174,9 +228,29 @@ async function openClientsTab() {
   fireEvent.click(await screen.findByRole('button', { name: 'settings.tabs.clients' }))
 }
 
+function sectionForHeading(name: string) {
+  const heading = screen.getByRole('heading', { name })
+  const section = heading.closest('section')
+  if (!section) throw new Error(`No section found for heading: ${name}`)
+  return within(section as HTMLElement)
+}
+
 describe('SettingsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockAuthContext.status = {
+      authenticated: true,
+      setupRequired: false,
+      username: 'admin',
+      role: 'admin',
+      mode: 'enabled',
+    }
+    mockAuthContext.loading = false
+    mockAuthContext.isAdmin = true
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+      configurable: true,
+    })
     seedSettingsMocks()
   })
 
@@ -223,6 +297,294 @@ describe('SettingsPage', () => {
     })
     expect(await screen.findByText('Found 2 series; catalog "Dune" has 8 books')).toBeInTheDocument()
     expect(screen.queryByText('hc-secret')).not.toBeInTheDocument()
+  })
+
+  it('persists import mode, naming templates, and preferred language', async () => {
+    renderSettings({
+      settings: [
+        { key: 'import.mode', value: 'move' },
+        { key: 'naming.bookTemplate', value: '{OldBook}' },
+        { key: 'naming_template_audiobook', value: '{OldAudio}' },
+        { key: 'search.preferredLanguage', value: 'en' },
+        { key: 'hardcover.enhanced_series_enabled', value: 'false' },
+      ],
+    })
+
+    expect(await screen.findByText('Import Mode')).toBeInTheDocument()
+    const fileNaming = sectionForHeading('settings.general.fileNaming')
+
+    fireEvent.click(fileNaming.getByRole('button', { name: 'Copy' }))
+    await waitFor(() => expect(api.setSetting).toHaveBeenCalledWith('import.mode', 'copy'))
+
+    fireEvent.change(fileNaming.getByPlaceholderText('{Author}/{Title} ({Year})/{Title} - {Author}.{ext}'), {
+      target: { value: '{Author}/{Title}/{Title}.{ext}' },
+    })
+    fireEvent.click(fileNaming.getAllByRole('button', { name: 'common.save' })[0])
+    await waitFor(() => {
+      expect(api.setSetting).toHaveBeenCalledWith('naming.bookTemplate', '{Author}/{Title}/{Title}.{ext}')
+    })
+
+    fireEvent.change(fileNaming.getByPlaceholderText('{Author}/{Title} ({Year})'), {
+      target: { value: '{Author}/{Title}' },
+    })
+    fireEvent.click(fileNaming.getAllByRole('button', { name: 'common.save' })[1])
+    await waitFor(() => {
+      expect(api.setSetting).toHaveBeenCalledWith('naming_template_audiobook', '{Author}/{Title}')
+    })
+
+    const downloads = sectionForHeading('settings.general.downloads')
+    fireEvent.change(downloads.getByRole('combobox'), { target: { value: 'any' } })
+    fireEvent.click(downloads.getByRole('button', { name: 'common.save' }))
+    await waitFor(() => {
+      expect(api.setSetting).toHaveBeenCalledWith('search.preferredLanguage', 'any')
+    })
+  })
+
+  it('refreshes library scan status', async () => {
+    vi.mocked(api.libraryScanStatus)
+      .mockResolvedValueOnce({ ran_at: new Date(Date.now() - 10_000).toISOString(), files_found: 2, reconciled: 1, unmatched: 1 })
+      .mockResolvedValueOnce({ ran_at: new Date(Date.now() + 10_000).toISOString(), files_found: 9, reconciled: 5, unmatched: 4 })
+
+    renderSettings()
+
+    expect(await screen.findByText('settings.general.lastScan')).toBeInTheDocument()
+    expect(screen.getByText('2')).toBeInTheDocument()
+
+    const library = sectionForHeading('settings.general.library')
+    fireEvent.click(library.getByRole('button', { name: 'settings.general.scanLibraryButton' }))
+
+    await waitFor(() => expect(api.triggerLibraryScan).toHaveBeenCalled())
+    await waitFor(() => expect(api.libraryScanStatus).toHaveBeenCalledTimes(2), { timeout: 2500 })
+    expect(await screen.findByText('9', {}, { timeout: 2500 })).toBeInTheDocument()
+    expect(screen.getByText('5')).toBeInTheDocument()
+    expect(screen.getByText('4')).toBeInTheDocument()
+  })
+
+  it('persists default root folder and media type choices', async () => {
+    const existing = makeRootFolder({ id: 7, path: '/mnt/books' })
+    const added = makeRootFolder({ id: 8, path: '/mnt/audiobooks' })
+
+    renderSettings({
+      rootFolders: [existing],
+      settings: [
+        { key: 'library.defaultRootFolderId', value: '' },
+        { key: 'default.media_type', value: 'ebook' },
+        { key: 'hardcover.enhanced_series_enabled', value: 'false' },
+      ],
+    })
+    vi.mocked(api.addRootFolder).mockResolvedValue(added)
+
+    await screen.findByRole('heading', { name: 'Default library location' })
+    const defaultLocation = sectionForHeading('Default library location')
+
+    fireEvent.change(defaultLocation.getByRole('combobox'), { target: { value: '7' } })
+    await waitFor(() => {
+      expect(api.setSetting).toHaveBeenCalledWith('library.defaultRootFolderId', '7')
+    })
+
+    fireEvent.click(defaultLocation.getByRole('button', { name: '+ Add root folder' }))
+    fireEvent.change(defaultLocation.getByPlaceholderText('/mnt/books'), { target: { value: ' /mnt/audiobooks ' } })
+    fireEvent.click(defaultLocation.getByRole('button', { name: 'Add' }))
+
+    await waitFor(() => expect(api.addRootFolder).toHaveBeenCalledWith('/mnt/audiobooks'))
+    await waitFor(() => {
+      expect(api.setSetting).toHaveBeenCalledWith('library.defaultRootFolderId', '8')
+    })
+    expect(defaultLocation.getByRole('combobox')).toHaveValue('8')
+
+    const authorDefaults = sectionForHeading('Author defaults')
+    fireEvent.change(authorDefaults.getByRole('combobox'), { target: { value: 'audiobook' } })
+    await waitFor(() => {
+      expect(api.setSetting).toHaveBeenCalledWith('default.media_type', 'audiobook')
+    })
+  })
+
+  it('persists auto-grab and recommendations toggles', async () => {
+    renderSettings({
+      settings: [
+        { key: 'autoGrab.enabled', value: 'true' },
+        { key: 'recommendations.enabled', value: 'false' },
+        { key: 'hardcover.enhanced_series_enabled', value: 'false' },
+      ],
+    })
+
+    await screen.findByRole('heading', { name: 'settings.general.autoGrab' })
+
+    fireEvent.click(sectionForHeading('settings.general.autoGrab').getByTitle('common.disable'))
+    await waitFor(() => {
+      expect(api.setSetting).toHaveBeenCalledWith('autoGrab.enabled', 'false')
+    })
+
+    fireEvent.click(sectionForHeading('settings.general.recommendations').getByTitle('common.enable'))
+    await waitFor(() => {
+      expect(api.setSetting).toHaveBeenCalledWith('recommendations.enabled', 'true')
+    })
+  })
+
+  it('persists authentication mode changes and refreshes auth status', async () => {
+    vi.mocked(api.authConfig)
+      .mockResolvedValueOnce({ mode: 'enabled', apiKey: 'api-secret', username: 'admin' })
+      .mockResolvedValue({ mode: 'local-only', apiKey: 'api-secret', username: 'admin' })
+    vi.mocked(api.authSetMode).mockResolvedValue({ mode: 'local-only' })
+
+    renderSettings()
+
+    await screen.findByRole('heading', { name: 'Security' })
+    fireEvent.change(sectionForHeading('Security').getByRole('combobox'), { target: { value: 'local-only' } })
+
+    await waitFor(() => expect(api.authSetMode).toHaveBeenCalledWith('local-only'))
+    expect(mockAuthContext.refresh).toHaveBeenCalled()
+    await waitFor(() => expect(api.authConfig).toHaveBeenCalledTimes(2))
+  })
+
+  it('shows, copies, and regenerates the security API key', async () => {
+    vi.mocked(api.authConfig).mockResolvedValue({ mode: 'enabled', apiKey: 'api-secret', username: 'admin' })
+    vi.mocked(api.authRegenerateApiKey).mockResolvedValue({ apiKey: 'rotated-secret' })
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    try {
+      renderSettings()
+
+      await screen.findByRole('heading', { name: 'Security' })
+      const security = sectionForHeading('Security')
+      expect(security.queryByText('api-secret')).not.toBeInTheDocument()
+
+      fireEvent.click(security.getByRole('button', { name: 'Show' }))
+      expect(security.getByText('api-secret')).toBeInTheDocument()
+      fireEvent.click(security.getByRole('button', { name: 'Hide' }))
+      expect(security.queryByText('api-secret')).not.toBeInTheDocument()
+
+      fireEvent.click(security.getByRole('button', { name: 'Copy' }))
+      await waitFor(() => {
+        expect(navigator.clipboard.writeText).toHaveBeenCalledWith('api-secret')
+      })
+      expect(await security.findByRole('button', { name: 'Copied' })).toBeInTheDocument()
+
+      fireEvent.click(security.getByRole('button', { name: 'Regenerate' }))
+      await waitFor(() => expect(api.authRegenerateApiKey).toHaveBeenCalled())
+      expect(confirmSpy).toHaveBeenCalledWith('Regenerate the API key? Existing integrations using the old key will stop working.')
+      expect(await security.findByText('rotated-secret')).toBeInTheDocument()
+    } finally {
+      confirmSpy.mockRestore()
+    }
+  })
+
+  it('validates and submits password changes', async () => {
+    renderSettings()
+
+    await screen.findByRole('heading', { name: 'Security' })
+    const security = sectionForHeading('Security')
+    const current = security.getByPlaceholderText('Current password')
+    const next = security.getByPlaceholderText('New password')
+    const confirm = security.getByPlaceholderText('Confirm new password')
+    const submit = security.getByRole('button', { name: 'Change password' })
+
+    fireEvent.change(current, { target: { value: 'old-password' } })
+    fireEvent.change(next, { target: { value: 'long-enough' } })
+    fireEvent.change(confirm, { target: { value: 'different' } })
+    fireEvent.click(submit)
+
+    expect(await security.findByText('New passwords do not match')).toBeInTheDocument()
+    expect(api.authChangePassword).not.toHaveBeenCalled()
+
+    fireEvent.change(next, { target: { value: 'short' } })
+    fireEvent.change(confirm, { target: { value: 'short' } })
+    fireEvent.click(submit)
+
+    expect(await security.findByText('Password must be at least 8 characters')).toBeInTheDocument()
+    expect(api.authChangePassword).not.toHaveBeenCalled()
+
+    fireEvent.change(next, { target: { value: 'long-enough' } })
+    fireEvent.change(confirm, { target: { value: 'long-enough' } })
+    fireEvent.click(submit)
+
+    await waitFor(() => {
+      expect(api.authChangePassword).toHaveBeenCalledWith('old-password', 'long-enough')
+    })
+    expect(await security.findByText('Password updated')).toBeInTheDocument()
+    expect(current).toHaveValue('')
+    expect(next).toHaveValue('')
+    expect(confirm).toHaveValue('')
+  })
+
+  it('renders OIDC empty state and adds a provider with callback preview', async () => {
+    vi.mocked(api.oidcRedirectBase).mockResolvedValue({
+      base: 'https://bindery.example.com',
+      callback_path: '/api/v1/auth/oidc/{id}/callback',
+    })
+
+    renderSettings()
+
+    expect(await screen.findByText('settings.oidc.empty')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'settings.oidc.addButton' }))
+
+    const form = screen.getByText('settings.oidc.addHeading').closest('form')
+    if (!form) throw new Error('OIDC add form not found')
+    const oidcForm = within(form)
+    const inputs = Array.from(form.querySelectorAll('input')) as HTMLInputElement[]
+
+    fireEvent.change(oidcForm.getByPlaceholderText('google'), { target: { value: ' okta ' } })
+    fireEvent.change(oidcForm.getByPlaceholderText('Google'), { target: { value: ' Okta ' } })
+    expect(await screen.findByText('https://bindery.example.com/api/v1/auth/oidc/okta/callback')).toBeInTheDocument()
+    fireEvent.change(oidcForm.getByPlaceholderText('https://accounts.google.com'), {
+      target: { value: ' https://issuer.example.com ' },
+    })
+    fireEvent.change(inputs[3], { target: { value: ' client-id ' } })
+    fireEvent.change(inputs[4], { target: { value: ' client-secret ' } })
+    fireEvent.change(inputs[5], { target: { value: 'openid email profile groups' } })
+
+    const add = oidcForm.getByRole('button', { name: 'settings.oidc.addSave' })
+    expect(add).toBeEnabled()
+    fireEvent.click(add)
+
+    await waitFor(() => {
+      expect(api.oidcSetProviders).toHaveBeenCalledWith([
+        {
+          id: 'okta',
+          name: 'Okta',
+          issuer: 'https://issuer.example.com',
+          client_id: 'client-id',
+          client_secret: 'client-secret',
+          scopes: ['openid', 'email', 'profile', 'groups'],
+        },
+      ])
+    })
+  })
+
+  it('persists external API key controls without exposing stored Hardcover secrets', async () => {
+    renderSettings({
+      status: {
+        version: 'dev',
+        commit: 'unknown',
+        buildDate: '',
+        enhancedHardcoverApi: false,
+        hardcoverTokenConfigured: true,
+        enhancedHardcoverDisabledReason: 'admin_disabled',
+      },
+      settings: [
+        { key: 'googlebooks.apiKey', value: '' },
+        { key: 'hardcover.enhanced_series_enabled', value: 'false' },
+      ],
+    })
+
+    await screen.findByRole('heading', { name: 'settings.general.apiKeys' })
+    const apiKeys = sectionForHeading('settings.general.apiKeys')
+
+    fireEvent.change(apiKeys.getByPlaceholderText('AIza...'), { target: { value: 'AIza-test-key' } })
+    fireEvent.click(apiKeys.getByRole('button', { name: 'common.save' }))
+    await waitFor(() => {
+      expect(api.setSetting).toHaveBeenCalledWith('googlebooks.apiKey', 'AIza-test-key')
+    })
+
+    expect(apiKeys.getByText('Token configured')).toBeInTheDocument()
+    expect(apiKeys.getByPlaceholderText('Saved token is hidden. Enter a new token to rotate it.')).toHaveValue('')
+    expect(apiKeys.queryByText('stored-hc-secret')).not.toBeInTheDocument()
+    expect(apiKeys.getByRole('button', { name: 'Save Hardcover API token' })).toBeDisabled()
+
+    fireEvent.click(apiKeys.getByRole('button', { name: 'Clear Hardcover API token' }))
+    await waitFor(() => {
+      expect(api.setSetting).toHaveBeenCalledWith('hardcover.api_token', '')
+    })
   })
 
   it('requires saved Audiobookshelf settings before starting an import', async () => {
