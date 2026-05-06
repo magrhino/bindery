@@ -5,6 +5,7 @@ package metadata
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -327,17 +328,53 @@ func (a *Aggregator) GetBookByISBN(ctx context.Context, isbn string) (*models.Bo
 		return cached.(*models.Book), nil
 	}
 
-	book, err := a.primary.GetBookByISBN(ctx, isbn)
-	if err != nil {
-		return nil, err
+	var errs []error
+	skippedUnconfigured := false
+	for _, provider := range a.providers() {
+		if provider == nil {
+			continue
+		}
+		book, err := provider.GetBookByISBN(ctx, isbn)
+		if err != nil {
+			if errors.Is(err, ErrProviderNotConfigured) {
+				skippedUnconfigured = true
+				slog.Debug("isbn provider not configured", "provider", provider.Name())
+				continue
+			}
+			errs = append(errs, fmt.Errorf("%s: %w", provider.Name(), err))
+			slog.Debug("isbn lookup provider failed", "provider", provider.Name(), "error", err)
+			continue
+		}
+		if book == nil {
+			continue
+		}
+		if len(book.Description) < 50 {
+			a.enrichBook(ctx, book)
+		}
+		a.cache.set(key, book)
+		return book, nil
 	}
 
-	if book != nil && len(book.Description) < 50 {
-		a.enrichBook(ctx, book)
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
 	}
+	var noBook *models.Book
+	if !skippedUnconfigured {
+		a.cache.set(key, noBook)
+	}
+	return nil, nil
+}
 
-	a.cache.set(key, book)
-	return book, nil
+func (a *Aggregator) providers() []Provider {
+	if a == nil {
+		return nil
+	}
+	providers := make([]Provider, 0, len(a.enrichers)+1)
+	if a.primary != nil {
+		providers = append(providers, a.primary)
+	}
+	providers = append(providers, a.enrichers...)
+	return providers
 }
 
 // SearchSeries queries metadata providers that expose series catalog search.

@@ -48,6 +48,11 @@ var (
 	date    = "unknown"
 )
 
+const (
+	settingGoogleBooksAPIKey       = "googlebooks.apiKey"
+	legacySettingGoogleBooksAPIKey = "google_books_api_key"
+)
+
 func main() {
 	// Healthcheck subcommand — used by the Docker HEALTHCHECK directive.
 	// Hits the local /api/v1/health endpoint and exits 0 on 200, else 1.
@@ -168,8 +173,8 @@ func main() {
 	// Metadata providers
 	olClient := openlibrary.New()
 	var enrichers []metadata.Provider
-	if setting, _ := settingsRepo.Get(context.Background(), "google_books_api_key"); setting != nil && setting.Value != "" {
-		enrichers = append(enrichers, googlebooks.New(setting.Value))
+	if apiKey := googleBooksAPIKey(context.Background(), settingsRepo); apiKey != "" {
+		enrichers = append(enrichers, googlebooks.New(apiKey))
 		slog.Info("google books enrichment enabled")
 	}
 	hcClient := hardcover.New().WithTokenSource(func(ctx context.Context) string {
@@ -816,6 +821,21 @@ func main() {
 func defaultNamingTemplate(settings *db.SettingsRepo) string {
 	if s, _ := settings.Get(context.Background(), "naming_template"); s != nil && s.Value != "" {
 		return s.Value
+	}
+	return ""
+}
+
+func googleBooksAPIKey(ctx context.Context, settings *db.SettingsRepo) string {
+	if settings == nil {
+		return ""
+	}
+	if s, _ := settings.Get(ctx, settingGoogleBooksAPIKey); s != nil {
+		if value := strings.TrimSpace(s.Value); value != "" {
+			return value
+		}
+	}
+	if s, _ := settings.Get(ctx, legacySettingGoogleBooksAPIKey); s != nil {
+		return strings.TrimSpace(s.Value)
 	}
 	return ""
 }

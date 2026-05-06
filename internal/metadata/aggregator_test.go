@@ -24,6 +24,8 @@ type mockProvider struct {
 	getEditionsErr error
 	getByISBN      *models.Book
 	getByISBNErr   error
+	getByISBNCalls int
+	gotISBNs       []string
 	// authorWorks implements worksProvider interface
 	authorWorks    []models.Book
 	authorWorksErr error
@@ -45,7 +47,9 @@ func (m *mockProvider) GetBook(_ context.Context, _ string) (*models.Book, error
 func (m *mockProvider) GetEditions(_ context.Context, _ string) ([]models.Edition, error) {
 	return m.getEditions, m.getEditionsErr
 }
-func (m *mockProvider) GetBookByISBN(_ context.Context, _ string) (*models.Book, error) {
+func (m *mockProvider) GetBookByISBN(_ context.Context, isbn string) (*models.Book, error) {
+	m.getByISBNCalls++
+	m.gotISBNs = append(m.gotISBNs, isbn)
 	return m.getByISBN, m.getByISBNErr
 }
 
@@ -297,10 +301,11 @@ func TestAggregator_GetEditions_Cached(t *testing.T) {
 	}
 }
 
-func TestAggregator_GetBookByISBN_Success(t *testing.T) {
+func TestAggregator_GetBookByISBN_PrimaryHitStopsBeforeEnrichers(t *testing.T) {
 	book := &models.Book{Title: "The Left Hand of Darkness", Description: "A novel long enough description to pass the enrichment check easily."}
 	primary := &mockProvider{name: "ol", getByISBN: book}
-	agg := newTestAggregator(primary)
+	enricher := &mockProvider{name: "hardcover", getByISBN: &models.Book{Title: "Wrong Book"}}
+	agg := newTestAggregator(primary, enricher)
 
 	got, err := agg.GetBookByISBN(context.Background(), "9780441478125")
 	if err != nil {
@@ -309,28 +314,81 @@ func TestAggregator_GetBookByISBN_Success(t *testing.T) {
 	if got.Title != "The Left Hand of Darkness" {
 		t.Errorf("Title: want 'The Left Hand of Darkness', got %q", got.Title)
 	}
+	if primary.getByISBNCalls != 1 {
+		t.Errorf("primary calls = %d, want 1", primary.getByISBNCalls)
+	}
+	if enricher.getByISBNCalls != 0 {
+		t.Errorf("enricher calls = %d, want 0 after primary hit", enricher.getByISBNCalls)
+	}
 }
 
-func TestAggregator_GetBookByISBN_Cached(t *testing.T) {
-	book := &models.Book{Title: "Cached ISBN Book", Description: "Long enough to skip enrichment and exercise the caching path correctly."}
-	primary := &mockProvider{name: "ol", getByISBN: book}
-	agg := newTestAggregator(primary)
+func TestAggregator_GetBookByISBN_SearchesRegisteredEnrichers(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		provider string
+	}{
+		{name: "google books", provider: "googlebooks"},
+		{name: "hardcover", provider: "hardcover"},
+		{name: "dnb", provider: "dnb"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			primary := &mockProvider{name: "ol"}
+			enricher := &mockProvider{
+				name:      tt.provider,
+				getByISBN: &models.Book{Title: tt.provider + " ISBN Book", MetadataProvider: tt.provider},
+			}
+			agg := newTestAggregator(primary, enricher)
 
-	_, _ = agg.GetBookByISBN(context.Background(), "9780441478125")
-	primary.getByISBN = nil
+			got, err := agg.GetBookByISBN(context.Background(), "9780000000002")
+			if err != nil {
+				t.Fatalf("GetBookByISBN: %v", err)
+			}
+			if got == nil {
+				t.Fatal("expected secondary provider result")
+			}
+			if got.MetadataProvider != tt.provider {
+				t.Fatalf("MetadataProvider = %q, want %q", got.MetadataProvider, tt.provider)
+			}
+			if primary.getByISBNCalls != 1 || enricher.getByISBNCalls != 1 {
+				t.Fatalf("calls primary=%d enricher=%d, want 1/1", primary.getByISBNCalls, enricher.getByISBNCalls)
+			}
+		})
+	}
+}
 
-	got, err := agg.GetBookByISBN(context.Background(), "9780441478125")
+func TestAggregator_GetBookByISBN_ContinuesAfterProviderError(t *testing.T) {
+	primary := &mockProvider{name: "ol", getByISBNErr: errors.New("openlibrary down")}
+	enricher := &mockProvider{name: "dnb", getByISBN: &models.Book{Title: "DNB ISBN Book", MetadataProvider: "dnb"}}
+	agg := newTestAggregator(primary, enricher)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9783453198975")
 	if err != nil {
-		t.Fatalf("GetBookByISBN (cache): %v", err)
+		t.Fatalf("GetBookByISBN: %v", err)
 	}
-	if got.Title != "Cached ISBN Book" {
-		t.Errorf("cached book mismatch: got %q", got.Title)
+	if got == nil || got.Title != "DNB ISBN Book" {
+		t.Fatalf("got %+v, want DNB ISBN Book", got)
 	}
 }
 
-func TestAggregator_GetBookByISBN_NilBook(t *testing.T) {
-	primary := &mockProvider{name: "ol", getByISBN: nil}
-	agg := newTestAggregator(primary)
+func TestAggregator_GetBookByISBN_SkipsUnconfiguredProviders(t *testing.T) {
+	primary := &mockProvider{name: "ol"}
+	unconfigured := &mockProvider{name: "hardcover", getByISBNErr: ErrProviderNotConfigured}
+	dnb := &mockProvider{name: "dnb", getByISBN: &models.Book{Title: "DNB ISBN Book", MetadataProvider: "dnb"}}
+	agg := newTestAggregator(primary, unconfigured, dnb)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9783453198975")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.MetadataProvider != "dnb" {
+		t.Fatalf("got %+v, want dnb result", got)
+	}
+}
+
+func TestAggregator_GetBookByISBN_AllProvidersMiss(t *testing.T) {
+	primary := &mockProvider{name: "ol"}
+	enricher := &mockProvider{name: "dnb"}
+	agg := newTestAggregator(primary, enricher)
 
 	got, err := agg.GetBookByISBN(context.Background(), "0000000000")
 	if err != nil {
@@ -338,6 +396,104 @@ func TestAggregator_GetBookByISBN_NilBook(t *testing.T) {
 	}
 	if got != nil {
 		t.Errorf("expected nil for missing ISBN, got %+v", got)
+	}
+}
+
+func TestAggregator_GetBookByISBN_AllConfiguredProvidersFail(t *testing.T) {
+	primary := &mockProvider{name: "ol", getByISBNErr: errors.New("openlibrary down")}
+	enricher := &mockProvider{name: "dnb", getByISBNErr: errors.New("dnb down")}
+	agg := newTestAggregator(primary, enricher)
+
+	_, err := agg.GetBookByISBN(context.Background(), "9780000000003")
+	if err == nil {
+		t.Fatal("expected error when all configured providers fail")
+	}
+}
+
+func TestAggregator_GetBookByISBN_FirstSuccessfulProviderWins(t *testing.T) {
+	primary := &mockProvider{name: "ol"}
+	first := &mockProvider{name: "googlebooks", getByISBN: &models.Book{Title: "First", MetadataProvider: "googlebooks"}}
+	second := &mockProvider{name: "dnb", getByISBN: &models.Book{Title: "Second", MetadataProvider: "dnb"}}
+	agg := newTestAggregator(primary, first, second)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9780000000004")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.Title != "First" {
+		t.Fatalf("got %+v, want first provider result", got)
+	}
+	if second.getByISBNCalls != 0 {
+		t.Fatalf("second provider calls = %d, want 0", second.getByISBNCalls)
+	}
+}
+
+func TestAggregator_GetBookByISBN_EnrichesShortDescription(t *testing.T) {
+	primary := &mockProvider{name: "ol", getByISBN: &models.Book{Title: "Sparse ISBN", Description: "Short."}}
+	enricher := &mockProvider{
+		name: "googlebooks",
+		searchBooks: []models.Book{{
+			Description:   "A fuller description from a configured enricher that should replace the sparse ISBN result.",
+			AverageRating: 4.2,
+			RatingsCount:  12,
+		}},
+	}
+	agg := newTestAggregator(primary, enricher)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9780000000005")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected book")
+	}
+	if got.Description == "Short." {
+		t.Fatalf("expected enriched description, got %q", got.Description)
+	}
+	if got.AverageRating != 4.2 || got.RatingsCount != 12 {
+		t.Fatalf("rating/count = %f/%d, want 4.2/12", got.AverageRating, got.RatingsCount)
+	}
+}
+
+func TestAggregator_GetBookByISBN_CachesSecondaryProviderHit(t *testing.T) {
+	primary := &mockProvider{name: "ol"}
+	enricher := &mockProvider{name: "hardcover", getByISBN: &models.Book{Title: "Cached Secondary", MetadataProvider: "hardcover"}}
+	agg := newTestAggregator(primary, enricher)
+
+	_, err := agg.GetBookByISBN(context.Background(), "9780000000006")
+	if err != nil {
+		t.Fatalf("first GetBookByISBN: %v", err)
+	}
+	enricher.getByISBN = nil
+
+	got, err := agg.GetBookByISBN(context.Background(), "9780000000006")
+	if err != nil {
+		t.Fatalf("cached GetBookByISBN: %v", err)
+	}
+	if got == nil || got.Title != "Cached Secondary" {
+		t.Fatalf("cached book = %+v, want Cached Secondary", got)
+	}
+	if primary.getByISBNCalls != 1 || enricher.getByISBNCalls != 1 {
+		t.Fatalf("calls primary=%d enricher=%d, want 1/1 after cache hit", primary.getByISBNCalls, enricher.getByISBNCalls)
+	}
+}
+
+func TestAggregator_GetBookByISBN_CachesCleanMisses(t *testing.T) {
+	primary := &mockProvider{name: "ol"}
+	enricher := &mockProvider{name: "dnb"}
+	agg := newTestAggregator(primary, enricher)
+
+	for i := 0; i < 2; i++ {
+		got, err := agg.GetBookByISBN(context.Background(), "0000000000")
+		if err != nil {
+			t.Fatalf("GetBookByISBN #%d: %v", i+1, err)
+		}
+		if got != nil {
+			t.Fatalf("GetBookByISBN #%d = %+v, want nil", i+1, got)
+		}
+	}
+	if primary.getByISBNCalls != 1 || enricher.getByISBNCalls != 1 {
+		t.Fatalf("calls primary=%d enricher=%d, want 1/1 after cached miss", primary.getByISBNCalls, enricher.getByISBNCalls)
 	}
 }
 
@@ -895,10 +1051,11 @@ func TestTTLCache_Cleanup(t *testing.T) {
 	}
 }
 
-// newTestAggregator creates an aggregator with a real TTL cache and no enrichers.
-func newTestAggregator(primary Provider) *Aggregator {
+// newTestAggregator creates an aggregator with a real TTL cache.
+func newTestAggregator(primary Provider, enrichers ...Provider) *Aggregator {
 	return &Aggregator{
-		primary: primary,
-		cache:   newTTLCache(time.Minute),
+		primary:   primary,
+		enrichers: enrichers,
+		cache:     newTTLCache(time.Minute),
 	}
 }
