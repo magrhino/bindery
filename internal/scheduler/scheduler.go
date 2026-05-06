@@ -51,6 +51,12 @@ type HCListSyncer interface {
 	Sync(ctx context.Context) error
 }
 
+// TelemetryPinger is the interface the scheduler calls to send the daily
+// anonymous install ping. Implemented by *telemetry.Client.
+type TelemetryPinger interface {
+	Ping(ctx context.Context)
+}
+
 // Scheduler runs background jobs on configurable intervals.
 type Scheduler struct {
 	cron     *cron.Cron
@@ -72,6 +78,7 @@ type Scheduler struct {
 	calibreSyncer CalibreSyncer        // optional; nil if Calibre is not configured
 	recommender   RecommendationEngine // optional; generates recommendations
 	hcSyncer      HCListSyncer         // optional; syncs Hardcover import lists
+	telemetry     TelemetryPinger      // optional; sends daily anonymous install ping
 	logs          *db.LogRepo          // optional; enables periodic log retention trim
 	logRetainDays int                  // 0 = use default (14)
 }
@@ -146,6 +153,12 @@ func (s *Scheduler) WithRecommender(engine RecommendationEngine) {
 // hours to import books from the user's Hardcover reading lists.
 func (s *Scheduler) WithHardcoverSyncer(syncer HCListSyncer) {
 	s.hcSyncer = syncer
+}
+
+// WithTelemetry registers the telemetry client for the daily anonymous ping.
+// Must be called before Start.
+func (s *Scheduler) WithTelemetry(p TelemetryPinger) {
+	s.telemetry = p
 }
 
 // WithLogRepo registers a log repository for the daily retention trim job.
@@ -243,6 +256,15 @@ func (s *Scheduler) Start() {
 				slog.Error("hardcover list sync failed", "error", err)
 			}
 		}))
+	}
+
+	// Send anonymous install ping every 24 hours.
+	if s.telemetry != nil {
+		s.cron.AddFunc("@every 24h", runJob("telemetry-ping", func() {
+			s.telemetry.Ping(context.Background())
+		}))
+		// Also fire once on startup (non-blocking).
+		go s.telemetry.Ping(context.Background())
 	}
 
 	// Trim old log entries once per day.

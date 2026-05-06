@@ -372,6 +372,21 @@ To report a vulnerability, follow the process in **[SECURITY.md](SECURITY.md)**.
 The full threat model, control catalogue, and verification recipes live on
 the [wiki Security page](https://github.com/vavallee/bindery/wiki/Security).
 
+## Telemetry
+
+Bindery sends one anonymous ping per day to [getbindery.dev](https://getbindery.dev) so the maintainer can count active installs. The ping contains:
+
+| Field | Value |
+|---|---|
+| `install_id` | Random UUID generated on first run, stored locally |
+| `version` | Running binary version (e.g. `v1.4.1`) |
+| `os` | `linux`, `darwin`, `windows` |
+| `arch` | `amd64`, `arm64` |
+
+No hostnames, IP addresses, library contents, or personal data are included. The server returns the latest published version, which Bindery uses for update notifications.
+
+**To opt out:** set `telemetry.enabled` to `false` in **Settings → General**, or set the env var `BINDERY_TELEMETRY_DISABLED=true` before first run.
+
 ## Contributing
 
 PRs, issues, and feedback welcome. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the dev setup, the full local check suite, and the PR flow. Tracked feature work lives in **[docs/ROADMAP.md](docs/ROADMAP.md)** — open an issue before starting anything substantial.

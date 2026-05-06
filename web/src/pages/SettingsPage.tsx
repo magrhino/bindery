@@ -3077,6 +3077,34 @@ function GeneralTab() {
           )}
         </div>
       </section>
+
+      <section>
+        <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">{t('settings.general.telemetry')}</h3>
+        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-3">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">{t('settings.general.telemetryLabel')}</label>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">{t('settings.general.telemetryHint')}</p>
+            </div>
+            <button
+              onClick={async () => {
+                const current = (settings['telemetry.enabled'] ?? 'true').toLowerCase()
+                const next = current !== 'false' ? 'false' : 'true'
+                setSettings(s => ({ ...s, 'telemetry.enabled': next }))
+                await api.setSetting('telemetry.enabled', next).catch(console.error)
+              }}
+              className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${(settings['telemetry.enabled'] ?? 'true') !== 'false' ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-zinc-700'}`}
+              title={(settings['telemetry.enabled'] ?? 'true') !== 'false' ? t('common.disable') : t('common.enable')}
+              aria-label={t('settings.general.telemetryToggle')}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${(settings['telemetry.enabled'] ?? 'true') !== 'false' ? 'translate-x-4' : ''}`} />
+            </button>
+          </div>
+          <p className="text-xs text-slate-500 dark:text-zinc-600">
+            {t('settings.general.telemetryDetail')}
+          </p>
+        </div>
+      </section>
     </div>
   )
 }

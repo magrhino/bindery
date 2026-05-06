@@ -365,7 +365,12 @@
       "logRetention": "Log Retention",
       "logRetentionLabel": "Keep log entries for",
       "logRetentionHint": "Log entries older than this are deleted by the daily trim job. Set via BINDERY_LOG_RETENTION_DAYS or here.",
-      "days": "days"
+      "days": "days",
+      "telemetry": "Usage Telemetry",
+      "telemetryLabel": "Send anonymous usage ping",
+      "telemetryHint": "Helps the maintainer count active installs. No personal data or library contents are sent.",
+      "telemetryToggle": "Toggle anonymous usage ping",
+      "telemetryDetail": "Sends install_id (random UUID), version, OS, and architecture to getbindery.dev once per day. Disable at any time."
     },
     "import": {
       "csvHeading": "CSV of author names",

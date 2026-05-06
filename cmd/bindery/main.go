@@ -38,6 +38,7 @@ import (
 	"github.com/vavallee/bindery/internal/prowlarr"
 	"github.com/vavallee/bindery/internal/recommender"
 	"github.com/vavallee/bindery/internal/scheduler"
+	"github.com/vavallee/bindery/internal/telemetry"
 	"github.com/vavallee/bindery/internal/webui"
 )
 
@@ -312,6 +313,10 @@ func main() {
 	hcSyncer := hardcoverlistsyncer.New(importListRepo, authorRepo, bookRepo)
 	sched.WithHardcoverSyncer(hcSyncer)
 	sched.WithLogRepo(logRepo, cfg.LogRetentionDays)
+
+	// Anonymous install ping (opt-out via telemetry.enabled=false in settings).
+	telemetryClient := telemetry.New(settingsRepo, version)
+	sched.WithTelemetry(telemetryClient)
 
 	sched.Start()
 	defer sched.Stop()
