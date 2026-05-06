@@ -844,9 +844,15 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool,
 			continue
 		}
 
-		// Skip if foreign ID already exists
+		// Update ratings on existing books so the recommender has data to work with,
+		// then skip further processing (we don't want to overwrite user state like status).
 		existing, _ := h.books.GetByForeignID(ctx, b.ForeignID)
 		if existing != nil {
+			if b.RatingsCount > 0 && (existing.RatingsCount == 0 || b.RatingsCount > existing.RatingsCount) {
+				existing.RatingsCount = b.RatingsCount
+				existing.AverageRating = b.AverageRating
+				_ = h.books.Update(ctx, existing)
+			}
 			continue
 		}
 
@@ -871,15 +877,30 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool,
 				if existing.Language == "" && b.Language != "" {
 					existing.Language = b.Language
 				}
+				if b.RatingsCount > 0 && (existing.RatingsCount == 0 || b.RatingsCount > existing.RatingsCount) {
+					existing.RatingsCount = b.RatingsCount
+					existing.AverageRating = b.AverageRating
+				}
 				_ = h.books.Update(ctx, existing)
 			case canUpgradeToBoth(existing.MediaType, b.MediaType):
 				// One Work is ebook, the other is audiobook — merge into a single
 				// dual-format row instead of creating a second book entry.
 				existing.MediaType = models.MediaTypeBoth
+				if b.RatingsCount > 0 && (existing.RatingsCount == 0 || b.RatingsCount > existing.RatingsCount) {
+					existing.RatingsCount = b.RatingsCount
+					existing.AverageRating = b.AverageRating
+				}
 				if err := h.books.Update(ctx, existing); err != nil {
 					slog.Warn("failed to upgrade book to dual-format", "title", existing.Title, "error", err)
 				} else {
 					slog.Debug("upgraded book to dual-format", "title", existing.Title, "foreignId", b.ForeignID)
+				}
+			default:
+				// Same media type duplicate — just refresh ratings if we have better data.
+				if b.RatingsCount > 0 && (existing.RatingsCount == 0 || b.RatingsCount > existing.RatingsCount) {
+					existing.RatingsCount = b.RatingsCount
+					existing.AverageRating = b.AverageRating
+					_ = h.books.Update(ctx, existing)
 				}
 			}
 			continue
