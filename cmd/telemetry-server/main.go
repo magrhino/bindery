@@ -5,6 +5,7 @@
 // Endpoints:
 //
 //	GET  /               — welcome page with logo and GitHub link
+//	GET  /stats          — public dashboard with version/OS/arch charts
 //	POST /api/ping       — upsert install record, return latest version (rate-limited)
 //	GET  /api/stats      — active/total counts + version breakdown (token-gated)
 //	GET  /health         — liveness probe
@@ -14,10 +15,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"html"
 	"log/slog"
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -86,6 +90,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handleHome)
+	mux.HandleFunc("GET /stats", s.handleStatsPage)
 	mux.HandleFunc("POST /api/ping", s.handlePing)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
@@ -207,6 +212,14 @@ func (s *server) handleHome(w http.ResponseWriter, _ *http.Request) {
       </svg>
       Calibre Plugin
     </a>
+    <a class="secondary" href="/stats">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="18" y1="20" x2="18" y2="10"/>
+        <line x1="12" y1="20" x2="12" y2="4"/>
+        <line x1="6" y1="20" x2="6" y2="14"/>
+      </svg>
+      Telemetry
+    </a>
   </div>
 </div>
 </body>
@@ -256,6 +269,112 @@ func (s *server) handlePing(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(pingResponse{LatestVersion: s.latestVersion})
 }
 
+// statsBucket pairs a label (version / OS / arch) with its install count.
+type statsBucket struct {
+	Label string
+	Count int
+}
+
+// dailyBucket holds the count of installs whose last_seen falls within a
+// single day, used for the 30-day activity sparkline.
+type dailyBucket struct {
+	Day   time.Time
+	Count int
+}
+
+// statsData is the complete aggregated telemetry view used by both the
+// auth-gated JSON API and the public HTML dashboard.
+type statsData struct {
+	Active30d int
+	Total     int
+	Versions  []statsBucket
+	OS        []statsBucket
+	Arch      []statsBucket
+	Daily     []dailyBucket
+}
+
+// computeStats runs every dashboard query and returns one assembled snapshot.
+// All counts are scoped to the active-30-day window except Total.
+func (s *server) computeStats(ctx context.Context) (*statsData, error) {
+	cutoff := time.Now().UTC().Add(-30 * 24 * time.Hour)
+	d := &statsData{}
+
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM installs WHERE last_seen >= ?`, cutoff,
+	).Scan(&d.Active30d); err != nil {
+		return nil, err
+	}
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM installs`,
+	).Scan(&d.Total); err != nil {
+		return nil, err
+	}
+
+	queryBuckets := func(col string) ([]statsBucket, error) {
+		// #nosec G202 — col is a literal from the caller, not user input.
+		q := `SELECT ` + col + `, COUNT(*) FROM installs WHERE last_seen >= ? GROUP BY ` + col + ` ORDER BY COUNT(*) DESC`
+		rows, err := s.db.QueryContext(ctx, q, cutoff)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var out []statsBucket
+		for rows.Next() {
+			var b statsBucket
+			if err := rows.Scan(&b.Label, &b.Count); err != nil {
+				return nil, err
+			}
+			if b.Label == "" {
+				b.Label = "(unknown)"
+			}
+			out = append(out, b)
+		}
+		return out, rows.Err()
+	}
+
+	var err error
+	if d.Versions, err = queryBuckets("version"); err != nil {
+		return nil, err
+	}
+	if d.OS, err = queryBuckets("os"); err != nil {
+		return nil, err
+	}
+	if d.Arch, err = queryBuckets("arch"); err != nil {
+		return nil, err
+	}
+
+	// Daily activity for the last 30 days. last_seen is stored in Go's
+	// time.Time.String() form (`YYYY-MM-DD HH:MM:SS.NNNNNNNNN ±HHMM TZ`),
+	// which SQLite's date() can't parse — slice the YYYY-MM-DD prefix instead.
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT substr(last_seen, 1, 10) AS day, COUNT(*) FROM installs WHERE last_seen >= ? GROUP BY day ORDER BY day`, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	dayCount := make(map[string]int)
+	for rows.Next() {
+		var day string
+		var count int
+		if err := rows.Scan(&day, &count); err != nil {
+			return nil, err
+		}
+		dayCount[day] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Fill in zero-count days so the sparkline has a continuous 30-day axis.
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	for i := 29; i >= 0; i-- {
+		day := today.AddDate(0, 0, -i)
+		key := day.Format("2006-01-02")
+		d.Daily = append(d.Daily, dailyBucket{Day: day, Count: dayCount[key]})
+	}
+
+	return d, nil
+}
+
 func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 	if s.statsToken == "" {
 		http.Error(w, "stats endpoint not configured", http.StatusForbidden)
@@ -266,49 +385,241 @@ func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cutoff := time.Now().UTC().Add(-30 * 24 * time.Hour)
-
-	var active, total int
-	if err := s.db.QueryRowContext(r.Context(),
-		`SELECT COUNT(*) FROM installs WHERE last_seen >= ?`, cutoff,
-	).Scan(&active); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	if err := s.db.QueryRowContext(r.Context(),
-		`SELECT COUNT(*) FROM installs`,
-	).Scan(&total); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	rows, err := s.db.QueryContext(r.Context(),
-		`SELECT version, COUNT(*) FROM installs WHERE last_seen >= ? GROUP BY version ORDER BY COUNT(*) DESC`, cutoff)
+	d, err := s.computeStats(r.Context())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
 
-	versions := make(map[string]int)
-	for rows.Next() {
-		var ver string
-		var count int
-		if err := rows.Scan(&ver, &count); err == nil {
-			versions[ver] = count
+	versions := make(map[string]int, len(d.Versions))
+	for _, b := range d.Versions {
+		versions[b.Label] = b.Count
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(statsResponse{
+		Active30d: d.Active30d,
+		Total:     d.Total,
+		Versions:  versions,
+	})
+}
+
+// chartPalette cycles through these colours for chart bars and legend swatches.
+var chartPalette = []string{
+	"#10b981", "#3b82f6", "#f59e0b", "#a855f7",
+	"#ef4444", "#06b6d4", "#ec4899", "#84cc16",
+}
+
+func paletteColor(i int) string { return chartPalette[i%len(chartPalette)] }
+
+// renderBarChart returns inline SVG for a horizontal bar chart with a legend.
+// Each bucket gets its own colour from chartPalette so the swatch in the
+// legend column matches the bar.
+func renderBarChart(buckets []statsBucket, maxBars int) string {
+	if len(buckets) == 0 {
+		return `<p class="empty">No data yet.</p>`
+	}
+	if maxBars > 0 && len(buckets) > maxBars {
+		// Collapse the long tail into an "(other)" bucket so the chart
+		// doesn't grow unbounded with every release sha.
+		head := buckets[:maxBars]
+		tail := 0
+		for _, b := range buckets[maxBars:] {
+			tail += b.Count
+		}
+		head = append(head, statsBucket{Label: "(other)", Count: tail})
+		buckets = head
+	}
+	max := buckets[0].Count
+	for _, b := range buckets {
+		if b.Count > max {
+			max = b.Count
 		}
 	}
-	if err := rows.Err(); err != nil {
+
+	var sb strings.Builder
+	sb.WriteString(`<div class="chart">`)
+	sb.WriteString(`<table class="bars" role="presentation">`)
+	for i, b := range buckets {
+		colour := paletteColor(i)
+		pct := 0
+		if max > 0 {
+			pct = b.Count * 100 / max
+		}
+		fmt.Fprintf(&sb,
+			`<tr><td class="legend-cell"><span class="swatch" style="background:%s"></span>%s</td>`+
+				`<td class="bar-cell"><div class="bar" style="width:%d%%;background:%s"></div></td>`+
+				`<td class="count-cell">%d</td></tr>`,
+			colour, html.EscapeString(b.Label), pct, colour, b.Count)
+	}
+	sb.WriteString(`</table></div>`)
+	return sb.String()
+}
+
+// renderSparkline returns inline SVG for a 30-day daily-activity bar chart.
+func renderSparkline(daily []dailyBucket) string {
+	if len(daily) == 0 {
+		return `<p class="empty">No data yet.</p>`
+	}
+	max := 0
+	for _, d := range daily {
+		if d.Count > max {
+			max = d.Count
+		}
+	}
+	const w, h, gap = 600, 80, 2
+	barW := (w - gap*(len(daily)-1)) / len(daily)
+	if barW < 1 {
+		barW = 1
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, `<svg class="sparkline" viewBox="0 0 %d %d" preserveAspectRatio="none" role="img" aria-label="Daily active installs over the last 30 days">`, w, h)
+	for i, d := range daily {
+		barH := 0
+		if max > 0 {
+			barH = d.Count * h / max
+		}
+		if barH < 1 && d.Count > 0 {
+			barH = 1
+		}
+		x := i * (barW + gap)
+		y := h - barH
+		fmt.Fprintf(&sb, `<rect x="%d" y="%d" width="%d" height="%d" fill="#10b981"><title>%s: %d</title></rect>`,
+			x, y, barW, barH, d.Day.Format("Jan 2"), d.Count)
+	}
+	sb.WriteString(`</svg>`)
+	// Axis labels: first and last day below the chart.
+	first := daily[0].Day.Format("Jan 2")
+	last := daily[len(daily)-1].Day.Format("Jan 2")
+	fmt.Fprintf(&sb, `<div class="sparkline-axis"><span>%s</span><span>%s</span></div>`, first, last)
+	return sb.String()
+}
+
+// handleStatsPage renders a public dashboard with charts and a legend.
+// The data is the same aggregate counts surfaced by /api/stats; nothing
+// install-identifying is exposed.
+func (s *server) handleStatsPage(w http.ResponseWriter, r *http.Request) {
+	d, err := s.computeStats(r.Context())
+	if err != nil {
+		slog.Error("stats page", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(statsResponse{
-		Active30d: active,
-		Total:     total,
-		Versions:  versions,
-	})
+	// Stable order for legend-rendering: queryBuckets already sorts by count
+	// desc; ties are broken alphabetically here so the page is deterministic.
+	stable := func(bs []statsBucket) {
+		sort.SliceStable(bs, func(i, j int) bool {
+			if bs[i].Count != bs[j].Count {
+				return bs[i].Count > bs[j].Count
+			}
+			return bs[i].Label < bs[j].Label
+		})
+	}
+	stable(d.Versions)
+	stable(d.OS)
+	stable(d.Arch)
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bindery — Telemetry</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100svh;
+    background: #0f1117;
+    color: #e2e8f0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 3rem 1.5rem;
+  }
+  .container { max-width: 720px; margin: 0 auto; }
+  header { margin-bottom: 2.5rem; }
+  header a.back { color: #94a3b8; font-size: .85rem; text-decoration: none; }
+  header a.back:hover { color: #e2e8f0; }
+  h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin: .75rem 0 .5rem; }
+  header p { color: #94a3b8; font-size: .9rem; line-height: 1.6; }
+  .summary { display: flex; gap: 1rem; margin: 2rem 0; flex-wrap: wrap; }
+  .summary .stat {
+    flex: 1 1 200px;
+    padding: 1.25rem 1.5rem;
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 10px;
+  }
+  .summary .stat .num { font-size: 2.25rem; font-weight: 700; color: #10b981; line-height: 1; }
+  .summary .stat .label { color: #94a3b8; font-size: .85rem; margin-top: .35rem; }
+  section { margin-bottom: 2.5rem; }
+  section > h2 {
+    font-size: .8rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .08em; color: #94a3b8; margin-bottom: .85rem;
+  }
+  .chart { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 1rem 1.25rem; }
+  table.bars { width: 100%%; border-collapse: collapse; font-size: .9rem; }
+  table.bars td { padding: .35rem .5rem; vertical-align: middle; }
+  td.legend-cell { width: 35%%; color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  td.bar-cell { width: 50%%; }
+  td.count-cell { width: 15%%; text-align: right; color: #94a3b8; font-variant-numeric: tabular-nums; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: .5rem; vertical-align: middle; }
+  .bar { height: 14px; border-radius: 2px; min-width: 2px; }
+  .sparkline { width: 100%%; height: 80px; display: block; }
+  .sparkline-axis {
+    display: flex; justify-content: space-between;
+    color: #94a3b8; font-size: .75rem; margin-top: .35rem;
+  }
+  .empty { color: #94a3b8; font-size: .85rem; padding: .25rem 0; }
+  footer { margin-top: 3rem; color: #64748b; font-size: .75rem; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <a class="back" href="/">← Bindery</a>
+    <h1>Telemetry</h1>
+    <p>Anonymous install counts from instances that opted in to update checks. No identifying information is collected — only an opaque install UUID, the version, and the OS/arch reported by Go's runtime. Active = pinged in the last 30 days.</p>
+  </header>
+
+  <div class="summary">
+    <div class="stat"><div class="num">%d</div><div class="label">Active installs (30d)</div></div>
+    <div class="stat"><div class="num">%d</div><div class="label">Total installs (all-time)</div></div>
+  </div>
+
+  <section>
+    <h2>Versions</h2>
+    %s
+  </section>
+
+  <section>
+    <h2>Operating system</h2>
+    %s
+  </section>
+
+  <section>
+    <h2>Architecture</h2>
+    %s
+  </section>
+
+  <section>
+    <h2>Daily activity (last 30 days)</h2>
+    <div class="chart">%s</div>
+  </section>
+
+  <footer>
+    Generated %s. Data refreshes on every page load.
+  </footer>
+</div>
+</body>
+</html>`,
+		d.Active30d, d.Total,
+		renderBarChart(d.Versions, 8),
+		renderBarChart(d.OS, 0),
+		renderBarChart(d.Arch, 0),
+		renderSparkline(d.Daily),
+		time.Now().UTC().Format("2006-01-02 15:04 MST"),
+	)
 }
 
 // realIP returns the client IP for rate limiting. Prefers X-Real-Ip set by
