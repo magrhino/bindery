@@ -13,7 +13,7 @@ All notable changes to Bindery are documented here. Format loosely follows
 - **Edition dedup now strips subtitles** (#458) — Author sync no longer creates duplicate rows when OpenLibrary returns the same work twice with different subtitle handling — typically the audiobook drops the post-colon subtitle while the ebook keeps it (e.g. *Carl's Doomsday Scenario* vs. *Carl's Doomsday Scenario: Dungeon Crawler Carl, Book 2*). `NormalizeTitleForDedup` now drops a `: subtitle` tail when the colon is followed by whitespace, so both editions collapse to the same key and the existing v1.3.1 dual-format upgrade path is taken instead of inserting a duplicate.
 - **Series title inputs now have an API length limit** (#469) — Manual series creation and title updates now reject titles longer than 500 bytes before writing to SQLite, preventing oversized titles from being stored through the HTTP API.
 - **Hardcover GraphQL success responses are bounded** (#470) — Successful Hardcover responses are now read through an 8 MiB cap so a misbehaving upstream cannot force unbounded memory growth before JSON parsing.
-- **Add-author search no longer accepts book-title matches** — Search results that come back from OpenLibrary as works/books are filtered out of the Add Author modal, preventing some books from being added as authors.
+- **Add-author search no longer hides valid author results when the query matches a book title** — Results whose name exactly matches a known book title and whose disambiguation points to that book's real author are now placed behind a reveal button rather than silently dropped.
 
 ## [v1.4.3] — 2026-05-06
 
