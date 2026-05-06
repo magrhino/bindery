@@ -4,6 +4,7 @@
 //   - install_id  — random UUID generated on first run, stored in the DB
 //   - version     — the running binary's version string
 //   - os / arch   — runtime.GOOS / runtime.GOARCH
+//   - deploy      — kubernetes / docker / binary (best-effort runtime detect)
 //
 // No personal data, no hostnames, no library contents. The setting
 // "telemetry.enabled" (default "true") can be set to "false" to opt out.
@@ -16,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"runtime"
 	"time"
 
@@ -69,6 +71,7 @@ func (c *Client) Ping(ctx context.Context) {
 		"version":    c.version,
 		"os":         runtime.GOOS,
 		"arch":       runtime.GOARCH,
+		"deploy":     detectDeploy(),
 	})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, pingURL, bytes.NewReader(payload))
@@ -104,6 +107,24 @@ func (c *Client) isEnabled(ctx context.Context) bool {
 		return true // default on
 	}
 	return s.Value != "false"
+}
+
+// detectDeploy returns a best-effort label for how this binary is being run:
+// "kubernetes" inside a pod, "docker" inside any other container, "binary"
+// otherwise. Pod detection wins over docker because every k8s pod also has
+// a container runtime underneath. The Helm chart can override by setting
+// BINDERY_DEPLOY_METHOD if it wants to distinguish helm from raw manifests.
+func detectDeploy() string {
+	if v := os.Getenv("BINDERY_DEPLOY_METHOD"); v != "" {
+		return v
+	}
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+		return "kubernetes"
+	}
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return "docker"
+	}
+	return "binary"
 }
 
 // installID returns the persistent install UUID, creating it on first call.

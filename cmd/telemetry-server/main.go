@@ -43,6 +43,17 @@ type pingRequest struct {
 	Version   string `json:"version"`
 	OS        string `json:"os"`
 	Arch      string `json:"arch"`
+	Deploy    string `json:"deploy"`
+}
+
+// validDeploys constrains the set of deploy strings we accept on /api/ping.
+// Anything outside this list is replaced with "" so a malicious client can't
+// pollute the chart's legend with arbitrary labels.
+var validDeploys = map[string]bool{
+	"kubernetes": true,
+	"docker":     true,
+	"binary":     true,
+	"helm":       true, // Helm chart can opt-in via BINDERY_DEPLOY_METHOD=helm
 }
 
 type pingResponse struct {
@@ -87,6 +98,17 @@ func main() {
 		`UPDATE installs SET version = substr(version, 2) WHERE version GLOB 'v[0-9]*'`,
 	); err != nil {
 		slog.Error("normalize versions", "error", err)
+		os.Exit(1)
+	}
+
+	// Add the deploy column (kubernetes / docker / binary) for newer pings.
+	// Existing rows get an empty string and surface as "(unknown)" in the
+	// dashboard. ALTER TABLE ADD COLUMN errors with "duplicate column" once
+	// the column exists, which we tolerate so the migration stays idempotent.
+	if _, err := db.ExecContext(context.Background(),
+		`ALTER TABLE installs ADD COLUMN deploy TEXT NOT NULL DEFAULT ''`,
+	); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		slog.Error("add deploy column", "error", err)
 		os.Exit(1)
 	}
 
@@ -252,22 +274,26 @@ func (s *server) handlePing(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "install_id must be a valid UUID", http.StatusBadRequest)
 		return
 	}
-	if len(req.Version) > 64 || len(req.OS) > 32 || len(req.Arch) > 32 {
+	if len(req.Version) > 64 || len(req.OS) > 32 || len(req.Arch) > 32 || len(req.Deploy) > 32 {
 		http.Error(w, "field too long", http.StatusBadRequest)
 		return
 	}
 	req.Version = normalizeVersion(req.Version)
+	if !validDeploys[req.Deploy] {
+		req.Deploy = ""
+	}
 
 	now := time.Now().UTC()
 	_, err := s.db.ExecContext(r.Context(), `
-		INSERT INTO installs (install_id, version, os, arch, first_seen, last_seen)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO installs (install_id, version, os, arch, deploy, first_seen, last_seen)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(install_id) DO UPDATE SET
 			version   = excluded.version,
 			os        = excluded.os,
 			arch      = excluded.arch,
+			deploy    = excluded.deploy,
 			last_seen = excluded.last_seen
-	`, req.InstallID, req.Version, req.OS, req.Arch, now, now)
+	`, req.InstallID, req.Version, req.OS, req.Arch, req.Deploy, now, now)
 	if err != nil {
 		slog.Warn("upsert install", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -301,6 +327,7 @@ type statsData struct {
 	Versions  []statsBucket
 	OS        []statsBucket
 	Arch      []statsBucket
+	Deploy    []statsBucket
 	Daily     []dailyBucket
 }
 
@@ -351,6 +378,9 @@ func (s *server) computeStats(ctx context.Context) (*statsData, error) {
 		return nil, err
 	}
 	if d.Arch, err = queryBuckets("arch"); err != nil {
+		return nil, err
+	}
+	if d.Deploy, err = queryBuckets("deploy"); err != nil {
 		return nil, err
 	}
 
@@ -530,6 +560,7 @@ func (s *server) handleStatsPage(w http.ResponseWriter, r *http.Request) {
 	stable(d.Versions)
 	stable(d.OS)
 	stable(d.Arch)
+	stable(d.Deploy)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!doctype html>
@@ -614,6 +645,11 @@ func (s *server) handleStatsPage(w http.ResponseWriter, r *http.Request) {
   </section>
 
   <section>
+    <h2>Deployment method</h2>
+    %s
+  </section>
+
+  <section>
     <h2>Daily activity (last 30 days)</h2>
     <div class="chart">%s</div>
   </section>
@@ -628,6 +664,7 @@ func (s *server) handleStatsPage(w http.ResponseWriter, r *http.Request) {
 		renderBarChart(d.Versions, 8),
 		renderBarChart(d.OS, 0),
 		renderBarChart(d.Arch, 0),
+		renderBarChart(d.Deploy, 0),
 		renderSparkline(d.Daily),
 		time.Now().UTC().Format("2006-01-02 15:04 MST"),
 	)
