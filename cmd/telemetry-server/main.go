@@ -11,6 +11,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"log/slog"
@@ -59,7 +60,7 @@ func main() {
 	}
 	defer db.Close()
 
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS installs (
+	if _, err := db.ExecContext(context.Background(), `CREATE TABLE IF NOT EXISTS installs (
 		install_id  TEXT PRIMARY KEY,
 		version     TEXT NOT NULL,
 		os          TEXT NOT NULL,
@@ -87,8 +88,15 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      secureHeaders(mux),
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
 	slog.Info("telemetry-server starting", "addr", addr, "latest", latestVersion)
-	if err := http.ListenAndServe(addr, secureHeaders(mux)); err != nil {
+	if err := srv.ListenAndServe(); err != nil {
 		slog.Error("listen", "error", err)
 		os.Exit(1)
 	}
@@ -114,7 +122,7 @@ func secureHeaders(next http.Handler) http.Handler {
 
 func (s *server) handleHome(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(`<!doctype html>
+	_, _ = w.Write([]byte(`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -201,7 +209,7 @@ func (s *server) handlePing(w http.ResponseWriter, r *http.Request) {
 	slog.Info("ping", "id", req.InstallID[:min(8, len(req.InstallID))], "version", req.Version, "os", req.OS, "arch", req.Arch)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(pingResponse{LatestVersion: s.latestVersion})
+	_ = json.NewEncoder(w).Encode(pingResponse{LatestVersion: s.latestVersion})
 }
 
 func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -246,9 +254,13 @@ func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 			versions[ver] = count
 		}
 	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(statsResponse{
+	_ = json.NewEncoder(w).Encode(statsResponse{
 		Active30d: active,
 		Total:     total,
 		Versions:  versions,
