@@ -35,6 +35,7 @@ type SeriesHandler struct {
 const (
 	autoHardcoverLinkMinConfidence = 0.70
 	hardcoverNoEvidenceScoreCap    = autoHardcoverLinkMinConfidence - 0.01
+	seriesTitleMaxLength           = 500
 )
 
 func NewSeriesHandler(series *db.SeriesRepo, books *db.BookRepo, authors *db.AuthorRepo, meta *metadata.Aggregator, searcher BookSearcher) *SeriesHandler {
@@ -68,6 +69,17 @@ func (h *SeriesHandler) requireEnhancedHardcoverAPI(w http.ResponseWriter, r *ht
 		"reason": state.EnhancedHardcoverDisabledReason,
 	})
 	return false
+}
+
+func validateSeriesTitle(title string) (string, string) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return "", "title is required"
+	}
+	if len(title) > seriesTitleMaxLength {
+		return "", "title is too long"
+	}
+	return title, ""
 }
 
 func (h *SeriesHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -112,9 +124,9 @@ func (h *SeriesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	title := strings.TrimSpace(body.Title)
-	if title == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "title is required"})
+	title, validationErr := validateSeriesTitle(body.Title)
+	if validationErr != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationErr})
 		return
 	}
 	series, err := h.series.CreateManual(r.Context(), title)
@@ -137,9 +149,9 @@ func (h *SeriesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	title := strings.TrimSpace(body.Title)
-	if title == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "title is required"})
+	title, validationErr := validateSeriesTitle(body.Title)
+	if validationErr != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationErr})
 		return
 	}
 	existing, err := h.series.GetByID(r.Context(), id)

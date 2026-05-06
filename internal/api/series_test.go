@@ -338,6 +338,43 @@ func TestSeriesManagementInvalidInput(t *testing.T) {
 	}
 }
 
+func TestSeriesManagementRejectsOverlongTitle(t *testing.T) {
+	h, seriesRepo, _, _ := seriesFixture(t)
+	ctx := contextBackground()
+	tooLongTitle := strings.Repeat("a", seriesTitleMaxLength+1)
+
+	rec := httptest.NewRecorder()
+	h.Create(rec, httptest.NewRequest(http.MethodPost, "/api/v1/series", bytes.NewBufferString(`{"title":"`+tooLongTitle+`"}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("create: expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	list, err := seriesRepo.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("overlong create should not write a series, got %+v", list)
+	}
+
+	series := &models.Series{ForeignID: "ol-series:dune", Title: "Dune Chronicles"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+
+	rec = httptest.NewRecorder()
+	h.Update(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/api/v1/series/1", bytes.NewBufferString(`{"title":"`+tooLongTitle+`"}`)), "id", strconv.FormatInt(series.ID, 10)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("update: expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	got, err := seriesRepo.GetByID(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Title != "Dune Chronicles" {
+		t.Fatalf("overlong update should preserve title, got %+v", got)
+	}
+}
+
 func TestSeriesHardcoverSearch(t *testing.T) {
 	provider := &stubSeriesProvider{
 		searchResults: []metadata.SeriesSearchResult{{
