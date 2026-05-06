@@ -11,24 +11,25 @@ import (
 
 // mockProvider is a test double for the Provider interface.
 type mockProvider struct {
-	name              string
-	searchBooks       []models.Book
-	searchBookErr     error
-	searchAuthors     []models.Author
-	searchAuthErr     error
-	getAuthor         *models.Author
-	getAuthorErr      error
-	getBook           *models.Book
-	getBookErr        error
-	getBookCalls      int
-	gotBookIDs        []string
-	getEditions       []models.Edition
-	getEditionsErr    error
-	getByISBN         *models.Book
-	getByISBNErr      error
-	getByISBNCalls    int
-	gotISBNs          []string
-	searchBookQueries []string
+	name               string
+	searchBooks        []models.Book
+	searchBooksByQuery map[string][]models.Book
+	searchBookErr      error
+	searchAuthors      []models.Author
+	searchAuthErr      error
+	getAuthor          *models.Author
+	getAuthorErr       error
+	getBook            *models.Book
+	getBookErr         error
+	getBookCalls       int
+	gotBookIDs         []string
+	getEditions        []models.Edition
+	getEditionsErr     error
+	getByISBN          *models.Book
+	getByISBNErr       error
+	getByISBNCalls     int
+	gotISBNs           []string
+	searchBookQueries  []string
 	// authorWorks implements worksProvider interface
 	authorWorks    []models.Book
 	authorWorksErr error
@@ -40,6 +41,11 @@ func (m *mockProvider) SearchAuthors(_ context.Context, _ string) ([]models.Auth
 }
 func (m *mockProvider) SearchBooks(_ context.Context, query string) ([]models.Book, error) {
 	m.searchBookQueries = append(m.searchBookQueries, query)
+	if m.searchBooksByQuery != nil {
+		if books, ok := m.searchBooksByQuery[query]; ok {
+			return books, m.searchBookErr
+		}
+	}
 	return m.searchBooks, m.searchBookErr
 }
 func (m *mockProvider) GetAuthor(_ context.Context, _ string) (*models.Author, error) {
@@ -57,6 +63,18 @@ func (m *mockProvider) GetBookByISBN(_ context.Context, isbn string) (*models.Bo
 	m.getByISBNCalls++
 	m.gotISBNs = append(m.gotISBNs, isbn)
 	return m.getByISBN, m.getByISBNErr
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // worksProvider implementation (optional, only attached when needed).
@@ -412,11 +430,14 @@ func TestAggregator_GetBookByISBN_SearchesRegisteredEnrichers(t *testing.T) {
 func TestAggregator_GetBookByISBN_CanonicalizesSecondaryHitToPrimary(t *testing.T) {
 	primary := &mockProvider{
 		name: "openlibrary",
-		searchBooks: []models.Book{{
-			ForeignID: "OL-PHM",
-			Title:     "Project Hail Mary",
-			Author:    &models.Author{Name: "Andy Weir"},
-		}},
+		searchBooksByQuery: map[string][]models.Book{
+			"isbn:9780593135204": nil,
+			"Project Hail Mary Andy Weir": {{
+				ForeignID: "OL-PHM",
+				Title:     "Project Hail Mary",
+				Author:    &models.Author{Name: "Andy Weir"},
+			}},
+		},
 		getBook: &models.Book{
 			ForeignID:        "OL-PHM",
 			Title:            "Project Hail Mary",
@@ -443,8 +464,55 @@ func TestAggregator_GetBookByISBN_CanonicalizesSecondaryHitToPrimary(t *testing.
 	if got == nil || got.ForeignID != "OL-PHM" || got.MetadataProvider != "openlibrary" {
 		t.Fatalf("got %+v, want canonical OpenLibrary book", got)
 	}
-	if len(primary.searchBookQueries) != 1 || primary.searchBookQueries[0] != "Project Hail Mary Andy Weir" {
-		t.Fatalf("search queries = %v, want title+author query", primary.searchBookQueries)
+	wantQueries := []string{"isbn:9780593135204", "Project Hail Mary Andy Weir"}
+	if !equalStringSlices(primary.searchBookQueries, wantQueries) {
+		t.Fatalf("search queries = %v, want %v", primary.searchBookQueries, wantQueries)
+	}
+}
+
+func TestAggregator_GetBookByISBN_CanonicalizesSecondaryHitUsingISBNSearch(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"isbn:9780441172719": {{
+				ForeignID: "OL-DUNE",
+				Title:     "Dune",
+				Author:    &models.Author{Name: "Frank Herbert"},
+			}},
+			"Dune Frank Herbert": {
+				{ForeignID: "OL1W", Title: "Dune", Author: &models.Author{Name: "Frank Herbert"}},
+				{ForeignID: "OL2W", Title: "Dune", Author: &models.Author{Name: "Frank Herbert"}},
+			},
+		},
+		getBook: &models.Book{
+			ForeignID:        "OL-DUNE",
+			Title:            "Dune",
+			Description:      "OpenLibrary canonical description long enough to avoid extra enrichment.",
+			MetadataProvider: "openlibrary",
+			Author:           &models.Author{Name: "Frank Herbert"},
+		},
+	}
+	google := &mockProvider{
+		name: "googlebooks",
+		getByISBN: &models.Book{
+			ForeignID:        "gb:dune",
+			Title:            "Dune",
+			MetadataProvider: "googlebooks",
+			Author:           &models.Author{Name: "Frank Herbert"},
+		},
+	}
+	agg := newTestAggregator(primary, google)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9780441172719")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL-DUNE" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want canonical OpenLibrary book from ISBN search", got)
+	}
+	wantQueries := []string{"isbn:9780441172719"}
+	if !equalStringSlices(primary.searchBookQueries, wantQueries) {
+		t.Fatalf("search queries = %v, want %v", primary.searchBookQueries, wantQueries)
 	}
 }
 
@@ -491,6 +559,78 @@ func TestAggregator_GetBookByISBN_CanonicalizesSecondaryHitPrefersExactPrimaryTi
 	}
 	if primary.getBookCalls != 1 || primary.gotBookIDs[0] != "OL-PHM" {
 		t.Fatalf("GetBook calls=%d ids=%v, want OL-PHM", primary.getBookCalls, primary.gotBookIDs)
+	}
+}
+
+func TestAggregator_GetBookByISBN_CanonicalizesSecondaryHitWithSubtitleAndCaseVariant(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooks: []models.Book{{
+			ForeignID: "OL-BODY",
+			Title:     "The Body Keeps the Score",
+			Author:    &models.Author{Name: "Bessel van der Kolk"},
+		}},
+		getBook: &models.Book{
+			ForeignID:        "OL-BODY",
+			Title:            "The Body Keeps the Score",
+			Description:      "OpenLibrary canonical description long enough to avoid extra enrichment.",
+			MetadataProvider: "openlibrary",
+			Author:           &models.Author{Name: "Bessel van der Kolk"},
+		},
+	}
+	hardcover := &mockProvider{
+		name: "hardcover",
+		getByISBN: &models.Book{
+			ForeignID:        "hc:the-body-keeps-the-score",
+			Title:            "THE BODY KEEPS THE SCORE: Brain, Mind, and Body in the Healing of Trauma",
+			MetadataProvider: "hardcover",
+			Author:           &models.Author{Name: "Bessel van der Kolk"},
+		},
+	}
+	agg := newTestAggregator(primary, hardcover)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9780143127741")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL-BODY" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want canonical OpenLibrary book", got)
+	}
+}
+
+func TestAggregator_GetBookByISBN_CanonicalizesSecondaryHitWithAuthorPunctuationVariant(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooks: []models.Book{{
+			ForeignID: "OL-LHOD",
+			Title:     "The Left Hand of Darkness",
+			Author:    &models.Author{Name: "Ursula K. Le Guin"},
+		}},
+		getBook: &models.Book{
+			ForeignID:        "OL-LHOD",
+			Title:            "The Left Hand of Darkness",
+			Description:      "OpenLibrary canonical description long enough to avoid extra enrichment.",
+			MetadataProvider: "openlibrary",
+			Author:           &models.Author{Name: "Ursula K. Le Guin"},
+		},
+	}
+	google := &mockProvider{
+		name: "googlebooks",
+		getByISBN: &models.Book{
+			ForeignID:        "gb:left-hand",
+			Title:            "The Left Hand of Darkness",
+			MetadataProvider: "googlebooks",
+			Author:           &models.Author{Name: "Ursula Le Guin"},
+		},
+	}
+	agg := newTestAggregator(primary, google)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9780441478125")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL-LHOD" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want canonical OpenLibrary book", got)
 	}
 }
 

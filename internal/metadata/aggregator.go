@@ -375,7 +375,7 @@ func (a *Aggregator) GetBookByISBN(ctx context.Context, isbn string) (*models.Bo
 			continue
 		}
 		if !sameProvider(provider, a.primary) {
-			if canonical, ok := a.canonicalPrimaryBook(ctx, *book); ok {
+			if canonical, ok := a.canonicalPrimaryBook(ctx, isbn, *book); ok {
 				book = canonical
 			}
 		}
@@ -404,7 +404,7 @@ type bookMatchCandidate struct {
 	authorScore float64
 }
 
-func (a *Aggregator) canonicalPrimaryBook(ctx context.Context, source models.Book) (*models.Book, bool) {
+func (a *Aggregator) canonicalPrimaryBook(ctx context.Context, isbn string, source models.Book) (*models.Book, bool) {
 	if a == nil || a.primary == nil || source.Title == "" {
 		return nil, false
 	}
@@ -412,10 +412,29 @@ func (a *Aggregator) canonicalPrimaryBook(ctx context.Context, source models.Boo
 	if sourceAuthor == "" {
 		return nil, false
 	}
-	query := strings.TrimSpace(source.Title + " " + sourceAuthor)
+	for _, query := range primaryBookCanonicalQueries(isbn, source.Title, sourceAuthor) {
+		if canonical, ok := a.canonicalPrimaryBookSearch(ctx, query, source, sourceAuthor); ok {
+			return canonical, true
+		}
+	}
+	return nil, false
+}
+
+func primaryBookCanonicalQueries(isbn, title, author string) []string {
+	queries := make([]string, 0, 2)
+	if isbn = strings.TrimSpace(isbn); isbn != "" {
+		queries = append(queries, "isbn:"+isbn)
+	}
+	if titleAuthor := strings.TrimSpace(title + " " + author); titleAuthor != "" {
+		queries = append(queries, titleAuthor)
+	}
+	return queries
+}
+
+func (a *Aggregator) canonicalPrimaryBookSearch(ctx context.Context, query string, source models.Book, sourceAuthor string) (*models.Book, bool) {
 	results, err := a.primary.SearchBooks(ctx, query)
 	if err != nil {
-		slog.Debug("primary canonical book search failed", "title", source.Title, "author", sourceAuthor, "error", err)
+		slog.Debug("primary canonical book search failed", "query", query, "title", source.Title, "author", sourceAuthor, "error", err)
 		return nil, false
 	}
 	matches := make([]bookMatchCandidate, 0, len(results))
@@ -448,7 +467,7 @@ func (a *Aggregator) canonicalPrimaryBook(ctx context.Context, source models.Boo
 		}
 	}
 	if ambiguous {
-		slog.Debug("primary canonical book search ambiguous", "title", source.Title, "author", sourceAuthor)
+		slog.Debug("primary canonical book search ambiguous", "query", query, "title", source.Title, "author", sourceAuthor)
 		return nil, false
 	}
 	full, err := a.primary.GetBook(ctx, best.book.ForeignID)
