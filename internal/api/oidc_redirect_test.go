@@ -90,7 +90,7 @@ func TestResolveOIDCRedirectBase_HTTPSDetection(t *testing.T) {
 		},
 		{
 			name: "plain HTTP",
-			set: func(r *http.Request) { r.Host = "bindery.example.com" },
+			set:  func(r *http.Request) { r.Host = "bindery.example.com" },
 			want: "http://bindery.example.com",
 		},
 	}
@@ -122,4 +122,3 @@ func TestResolveOIDCRedirectBase_StripsTrailingSlashes(t *testing.T) {
 		t.Fatalf("trailing slash on X-Forwarded-Host should be stripped, got %q", got)
 	}
 }
-

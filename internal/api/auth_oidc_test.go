@@ -91,10 +91,10 @@ func TestTestDiscovery_Success(t *testing.T) {
 		t.Fatalf("status %d, body=%s", rec.Code, rec.Body.String())
 	}
 	var got struct {
-		OK             bool                 `json:"ok"`
-		IssuerMismatch bool                 `json:"issuer_mismatch"`
-		Discovered     *oidc.DiscoveryDoc   `json:"discovered"`
-		Error          string               `json:"error"`
+		OK             bool               `json:"ok"`
+		IssuerMismatch bool               `json:"issuer_mismatch"`
+		Discovered     *oidc.DiscoveryDoc `json:"discovered"`
+		Error          string             `json:"error"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("parse body: %v (body=%s)", err, rec.Body.String())

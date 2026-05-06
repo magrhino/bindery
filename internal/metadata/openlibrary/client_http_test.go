@@ -619,7 +619,7 @@ func TestGetAuthorWorks_HTTP(t *testing.T) {
 
 	c := newClientWithPaths(t, map[string]interface{}{
 		"/authors/OL123A/works.json": jsonStr(worksResp),
-		"/search.json":                    jsonStr(searchResp),
+		"/search.json":               jsonStr(searchResp),
 	})
 
 	books, err := c.GetAuthorWorks(context.Background(), "OL123A")
@@ -665,7 +665,7 @@ func TestGetAuthorWorks_HTTP_FetchesSourcesConcurrently(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		started[path] = true
-		if started["/search"] && started["/authors/OL123A/works.json"] {
+		if started["/search.json"] && started["/authors/OL123A/works.json"] {
 			once.Do(func() { close(bothStarted) })
 		}
 	}
@@ -682,7 +682,7 @@ func TestGetAuthorWorks_HTTP_FetchesSourcesConcurrently(t *testing.T) {
 	}
 
 	c := newClientWithPaths(t, map[string]interface{}{
-		"/search":                    waitForPeer("/search", jsonStr(searchResp)),
+		"/search.json":               waitForPeer("/search.json", jsonStr(searchResp)),
 		"/authors/OL123A/works.json": waitForPeer("/authors/OL123A/works.json", jsonStr(worksResp)),
 	})
 
@@ -715,7 +715,7 @@ func TestGetAuthorWorks_HTTP_WorksEndpointFillsMissingSearchEntries(t *testing.T
 	}
 	c := newClientWithPaths(t, map[string]interface{}{
 		"/authors/OL123A/works.json": jsonStr(worksResp),
-		"/search.json":                    jsonStr(searchResp),
+		"/search.json":               jsonStr(searchResp),
 	})
 
 	books, err := c.GetAuthorWorks(context.Background(), "OL123A")
@@ -745,7 +745,7 @@ func TestGetAuthorWorks_HTTP_SearchFallbackWhenWorksEmpty(t *testing.T) {
 	}
 	c := newClientWithPaths(t, map[string]interface{}{
 		"/authors/OL123A/works.json": jsonStr(authorWorksResponse{}),
-		"/search.json":                    jsonStr(searchResp),
+		"/search.json":               jsonStr(searchResp),
 	})
 	books, err := c.GetAuthorWorks(context.Background(), "OL123A")
 	if err != nil {
@@ -774,7 +774,7 @@ func TestGetAuthorWorks_HTTP_ObjectSeries(t *testing.T) {
 
 	c := newClientWithPaths(t, map[string]interface{}{
 		"/authors/OL999A/works.json": worksBody,
-		"/search.json":                    searchBody,
+		"/search.json":               searchBody,
 	})
 
 	books, err := c.GetAuthorWorks(context.Background(), "OL999A")
@@ -804,11 +804,11 @@ func TestGetAuthorWorks_HTTP_Error(t *testing.T) {
 	c := newClientWithStatus(t,
 		map[string]interface{}{
 			"/authors/OL404A/works.json": "error",
-			"/search.json":                    "error",
+			"/search.json":               "error",
 		},
 		map[string]int{
 			"/authors/OL404A/works.json": http.StatusInternalServerError,
-			"/search.json":                    http.StatusInternalServerError,
+			"/search.json":               http.StatusInternalServerError,
 		},
 	)
 	_, err := c.GetAuthorWorks(context.Background(), "OL404A")
@@ -830,7 +830,7 @@ func TestGetAuthorWorks_HTTP_SearchEnrichmentFailure(t *testing.T) {
 	c := newClientWithStatus(t,
 		map[string]interface{}{
 			"/authors/OL1A/works.json": jsonStr(worksResp),
-			"/search.json":                  "oops",
+			"/search.json":             "oops",
 		},
 		map[string]int{
 			"/search.json": http.StatusInternalServerError,
@@ -863,7 +863,7 @@ func TestGetAuthorWorks_HTTP_LangPreferEng(t *testing.T) {
 	}
 	c := newClientWithPaths(t, map[string]interface{}{
 		"/authors/OL999A/works.json": jsonStr(worksResp),
-		"/search.json":                    jsonStr(searchResp),
+		"/search.json":               jsonStr(searchResp),
 	})
 
 	books, err := c.GetAuthorWorks(context.Background(), "OL999A")
@@ -895,7 +895,7 @@ func TestGetAuthorWorks_HTTP_NoiseFilter(t *testing.T) {
 	}
 	c := newClientWithPaths(t, map[string]interface{}{
 		"/authors/OL5A/works.json": jsonStr(worksResp),
-		"/search.json":                  jsonStr(searchRespForAuthor{}),
+		"/search.json":             jsonStr(searchRespForAuthor{}),
 	})
 	books, err := c.GetAuthorWorks(context.Background(), "OL5A")
 	if err != nil {
