@@ -5,6 +5,12 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Semantic Versioning](https://semver.org).
 
 
+## [v1.4.3] — 2026-05-06
+
+### Fixed
+
+- **Discover now shows recommendations for all libraries** — The `ratingsCount < 50` hard filter was silently dropping every candidate from the most useful recommendation sources: monitored-author books, series continuations, and genre-popular picks from OpenLibrary. These sources already carry an implicit quality signal (the user chose to monitor the author; the book is part of a series they're reading; OL's subject curators selected it), so gating them on OL's sparse ratings data was wrong. Only serendipity and list-cross candidates — which come from broader, uncurated pools — now require a ratings signal. The filter is unchanged for those types.
+
 ## [v1.4.2] — 2026-05-06
 
 ### Fixed

@@ -167,8 +167,15 @@ func hardFilter(candidates []models.RecommendationCandidate, p *UserProfile) []m
 		if p.PreferredLanguage != "" && c.Language != "" && c.Language != p.PreferredLanguage {
 			continue
 		}
-		// Suppress candidates with too few ratings (likely obscure editions or test entries).
-		if c.RatingsCount < 50 {
+		// Suppress candidates with too few ratings, but only for types where we have no
+		// other quality signal. Monitored-author, series, and genre-popular candidates
+		// come from trusted sources (user's own choices or OL's curated subject lists)
+		// and should not be gated on OL's sparse ratings data.
+		needsRatingSignal := c.RecType != models.RecTypeAuthorNew &&
+			c.RecType != models.RecTypeSeries &&
+			c.RecType != models.RecTypeGenrePopular &&
+			c.RecType != models.RecTypeGenreSimilar
+		if needsRatingSignal && c.RatingsCount < 50 {
 			continue
 		}
 		// Suppress objectively poor books — only apply when there are enough ratings to trust the score.

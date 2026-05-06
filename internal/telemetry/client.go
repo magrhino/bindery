@@ -19,15 +19,15 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/vavallee/bindery/internal/db"
 	"github.com/google/uuid"
+	"github.com/vavallee/bindery/internal/db"
 )
 
 const (
-	pingURL         = "https://getbindery.dev/api/ping"
-	settingEnabled  = "telemetry.enabled"
+	pingURL          = "https://getbindery.dev/api/ping"
+	settingEnabled   = "telemetry.enabled"
 	settingInstallID = "telemetry.install_id"
-	timeout         = 10 * time.Second
+	timeout          = 10 * time.Second
 )
 
 // Client sends anonymous usage pings and surfaces the latest published version.
