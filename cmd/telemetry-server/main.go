@@ -80,6 +80,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Strip a leading "v" from any pre-existing version starting with "v<digit>",
+	// so `v1.4.4` and `1.4.4` collapse into one chart slice. Idempotent: after
+	// the first run no rows match, so subsequent startups are no-ops.
+	if _, err := db.ExecContext(context.Background(),
+		`UPDATE installs SET version = substr(version, 2) WHERE version GLOB 'v[0-9]*'`,
+	); err != nil {
+		slog.Error("normalize versions", "error", err)
+		os.Exit(1)
+	}
+
 	s := &server{
 		db:            db,
 		latestVersion: latestVersion,
@@ -246,6 +256,7 @@ func (s *server) handlePing(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "field too long", http.StatusBadRequest)
 		return
 	}
+	req.Version = normalizeVersion(req.Version)
 
 	now := time.Now().UTC()
 	_, err := s.db.ExecContext(r.Context(), `
@@ -620,6 +631,17 @@ func (s *server) handleStatsPage(w http.ResponseWriter, r *http.Request) {
 		renderSparkline(d.Daily),
 		time.Now().UTC().Format("2006-01-02 15:04 MST"),
 	)
+}
+
+// normalizeVersion strips a leading "v" from version strings of the form
+// "v1.4.4" so they collapse into the same bucket as "1.4.4". Non-release
+// strings ("dev", "sha-abc1234") pass through unchanged because the "v"
+// strip is gated on the next character being a digit.
+func normalizeVersion(v string) string {
+	if len(v) >= 2 && v[0] == 'v' && v[1] >= '0' && v[1] <= '9' {
+		return v[1:]
+	}
+	return v
 }
 
 // realIP returns the client IP for rate limiting. Prefers X-Real-Ip set by
