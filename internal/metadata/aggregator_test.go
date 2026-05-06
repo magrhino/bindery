@@ -448,6 +448,52 @@ func TestAggregator_GetBookByISBN_CanonicalizesSecondaryHitToPrimary(t *testing.
 	}
 }
 
+func TestAggregator_GetBookByISBN_CanonicalizesSecondaryHitPrefersExactPrimaryTitle(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooks: []models.Book{
+			{
+				ForeignID: "OL-ANTHOLOGY",
+				Title:     "The Martian / Artemis / Project Hail Mary",
+				Author:    &models.Author{Name: "Andy Weir"},
+			},
+			{
+				ForeignID: "OL-PHM",
+				Title:     "Project Hail Mary",
+				Author:    &models.Author{Name: "Andy Weir"},
+			},
+		},
+		getBook: &models.Book{
+			ForeignID:        "OL-PHM",
+			Title:            "Project Hail Mary",
+			Description:      "OpenLibrary canonical description long enough to avoid extra enrichment.",
+			MetadataProvider: "openlibrary",
+			Author:           &models.Author{Name: "Andy Weir", ForeignID: "OL-A"},
+		},
+	}
+	google := &mockProvider{
+		name: "googlebooks",
+		getByISBN: &models.Book{
+			ForeignID:        "gb:vol-phm",
+			Title:            "Project Hail Mary",
+			MetadataProvider: "googlebooks",
+			Author:           &models.Author{Name: "Andy Weir"},
+		},
+	}
+	agg := newTestAggregator(primary, google)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9780593135204")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL-PHM" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want exact-title OpenLibrary book", got)
+	}
+	if primary.getBookCalls != 1 || primary.gotBookIDs[0] != "OL-PHM" {
+		t.Fatalf("GetBook calls=%d ids=%v, want OL-PHM", primary.getBookCalls, primary.gotBookIDs)
+	}
+}
+
 func TestAggregator_GetBookByISBN_KeepsSecondaryHitWhenPrimaryMatchAmbiguous(t *testing.T) {
 	primary := &mockProvider{
 		name: "openlibrary",

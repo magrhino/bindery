@@ -398,6 +398,7 @@ func (a *Aggregator) GetBookByISBN(ctx context.Context, isbn string) (*models.Bo
 
 type bookMatchCandidate struct {
 	book        models.Book
+	titleExact  bool
 	titleScore  int
 	authorKind  textutil.AuthorMatchKind
 	authorScore float64
@@ -472,10 +473,17 @@ func scoreBookCandidate(source, candidate models.Book) (bookMatchCandidate, bool
 	}
 	return bookMatchCandidate{
 		book:        candidate,
+		titleExact:  titleExactMatch(source.Title, candidate.Title),
 		titleScore:  titleScore,
 		authorKind:  author.Kind,
 		authorScore: author.Score,
 	}, true
+}
+
+func titleExactMatch(a, b string) bool {
+	left := indexer.NormalizeTitleForDedup(a)
+	right := indexer.NormalizeTitleForDedup(b)
+	return left != "" && left == right
 }
 
 func titleMatchScore(a, b string) int {
@@ -495,6 +503,12 @@ func bookAuthorName(book models.Book) string {
 }
 
 func compareBookCandidate(a, b bookMatchCandidate) int {
+	if a.titleExact != b.titleExact {
+		if a.titleExact {
+			return 1
+		}
+		return -1
+	}
 	if a.titleScore != b.titleScore {
 		if a.titleScore > b.titleScore {
 			return 1
