@@ -6,6 +6,8 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [v1.4.4] — 2026-05-06
+
 ### Fixed
 
 - **Manual series mutations require admin role** (#468) — Authenticated non-admin users can no longer create, update, monitor, delete, fill, or link series to Hardcover. Read-only series endpoints remain available to authenticated users.
@@ -912,6 +914,11 @@ Initial public release.
 - Single-binary distribution with embedded React frontend.
 - Distroless Docker image and Helm chart.
 
+[v1.4.4]: https://github.com/vavallee/bindery/releases/tag/v1.4.4
+[v1.4.3]: https://github.com/vavallee/bindery/releases/tag/v1.4.3
+[v1.4.2]: https://github.com/vavallee/bindery/releases/tag/v1.4.2
+[v1.4.1]: https://github.com/vavallee/bindery/releases/tag/v1.4.1
+[v1.4.0]: https://github.com/vavallee/bindery/releases/tag/v1.4.0
 [v1.3.1]: https://github.com/vavallee/bindery/releases/tag/v1.3.1
 [v1.3.0]: https://github.com/vavallee/bindery/releases/tag/v1.3.0
 [v1.2.7]: https://github.com/vavallee/bindery/releases/tag/v1.2.7
