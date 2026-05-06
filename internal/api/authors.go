@@ -1168,7 +1168,7 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 	if req.ForeignAuthorID != "" {
 		author, _ = h.authors.GetByForeignID(ctx, req.ForeignAuthorID)
 	}
-	if author == nil && req.ForeignAuthorID == "" && req.AuthorName != "" {
+	if author == nil && req.AuthorName != "" {
 		if canonical, ambiguous, err := h.findCanonicalAuthorMatch(ctx, req.AuthorName); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return

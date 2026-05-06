@@ -830,9 +830,7 @@ func googleBooksAPIKey(ctx context.Context, settings *db.SettingsRepo) string {
 		return ""
 	}
 	if s, _ := settings.Get(ctx, settingGoogleBooksAPIKey); s != nil {
-		if value := strings.TrimSpace(s.Value); value != "" {
-			return value
-		}
+		return strings.TrimSpace(s.Value)
 	}
 	if s, _ := settings.Get(ctx, legacySettingGoogleBooksAPIKey); s != nil {
 		return strings.TrimSpace(s.Value)
