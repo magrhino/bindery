@@ -1,0 +1,73 @@
+name: Telemetry backup
+
+# Daily snapshot of api.getbindery.dev's installs DB. Pulls a SQLite
+# VACUUM INTO copy via the token-gated /api/backup endpoint and stores
+# it as a workflow artifact (90-day retention) so the data survives
+# cluster loss, accidental PVC deletion, or schema mistakes.
+#
+# Restoring: `gh run download <run-id> -n telemetry-backup` then
+# `kubectl cp <file> bindery-ping/<pod>:/data/telemetry.db` after a
+# `kubectl scale deployment/bindery-ping --replicas=0` to release the
+# WAL lock.
+#
+# Required repo secret: TELEMETRY_STATS_TOKEN (same value as the
+# `stats-token` key in the bindery-ping-secret k8s Secret).
+
+on:
+  schedule:
+    - cron: "17 3 * * *" # 03:17 UTC daily — off-hours, off-minute to dodge runner contention
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fetch backup
+        env:
+          STATS_TOKEN: ${{ secrets.TELEMETRY_STATS_TOKEN }}
+        run: |
+          if [ -z "$STATS_TOKEN" ]; then
+            echo "::error::TELEMETRY_STATS_TOKEN secret is not set"
+            exit 1
+          fi
+          DATE=$(date -u +%Y-%m-%d)
+          OUT="bindery-telemetry-${DATE}.db"
+          HTTP=$(curl -sS -o "$OUT" -w "%{http_code}" \
+            -H "Authorization: Bearer $STATS_TOKEN" \
+            "https://api.getbindery.dev/api/backup")
+          if [ "$HTTP" != "200" ]; then
+            echo "::error::backup endpoint returned HTTP $HTTP"
+            head -c 500 "$OUT" || true
+            exit 1
+          fi
+          # Sanity: a valid SQLite file starts with the literal string
+          # "SQLite format 3\0" and is at least a few KB. Catches the case
+          # where a 200 with a non-DB body slips through.
+          SIZE=$(stat -c%s "$OUT")
+          if [ "$SIZE" -lt 1024 ]; then
+            echo "::error::backup is suspiciously small: ${SIZE} bytes"
+            exit 1
+          fi
+          if ! head -c 16 "$OUT" | grep -q "SQLite format 3"; then
+            echo "::error::response body is not a SQLite database"
+            exit 1
+          fi
+          echo "Fetched ${OUT} (${SIZE} bytes)"
+          # Quick integrity check using sqlite3 if available on the runner.
+          if command -v sqlite3 >/dev/null 2>&1; then
+            ROWS=$(sqlite3 "$OUT" "SELECT COUNT(*) FROM installs")
+            echo "Verified: ${ROWS} rows in installs table"
+          fi
+          echo "ARTIFACT_NAME=$OUT" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_NAME }}
+          retention-days: 90
+          if-no-files-found: error

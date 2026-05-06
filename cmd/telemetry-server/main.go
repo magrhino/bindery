@@ -8,6 +8,7 @@
 //	GET  /stats          — public dashboard with version/OS/arch charts
 //	POST /api/ping       — upsert install record, return latest version (rate-limited)
 //	GET  /api/stats      — active/total counts + version breakdown (token-gated)
+//	GET  /api/backup     — sqlite VACUUM INTO snapshot of installs DB (token-gated)
 //	GET  /health         — liveness probe
 package main
 
@@ -17,9 +18,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -137,6 +140,7 @@ func main() {
 	mux.HandleFunc("GET /stats", s.handleStatsPage)
 	mux.HandleFunc("POST /api/ping", s.handlePing)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
+	mux.HandleFunc("GET /api/backup", s.handleBackup)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -462,6 +466,66 @@ func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 		Total:     d.Total,
 		Versions:  versions,
 	})
+}
+
+// handleBackup streams a consistent snapshot of the installs database. Uses
+// SQLite's VACUUM INTO so the snapshot is taken under a transaction (no torn
+// reads against concurrent ping writes) and lands as a fully self-contained
+// file with no WAL sidecar. The endpoint is token-gated identically to
+// /api/stats and is intended to be pulled by a scheduled GitHub workflow.
+func (s *server) handleBackup(w http.ResponseWriter, r *http.Request) {
+	if s.statsToken == "" {
+		http.Error(w, "backup endpoint not configured", http.StatusForbidden)
+		return
+	}
+	if r.Header.Get("Authorization") != "Bearer "+s.statsToken {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	dir, err := os.MkdirTemp("", "bindery-backup-*")
+	if err != nil {
+		slog.Error("backup: mkdir", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer os.RemoveAll(dir)
+	dst := filepath.Join(dir, "telemetry.db")
+
+	// VACUUM INTO acquires a read transaction, copies pages out, and produces
+	// a single self-contained SQLite file. Safer than streaming /data/telemetry.db
+	// directly (which would race the WAL). Path is parameterized as a literal
+	// string in the SQL because VACUUM INTO does not accept bind parameters.
+	if _, err := s.db.ExecContext(r.Context(),
+		`VACUUM INTO '`+strings.ReplaceAll(dst, `'`, `''`)+`'`,
+	); err != nil {
+		slog.Error("backup: vacuum", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	f, err := os.Open(dst) // #nosec G304 — dst is a server-generated tempdir path.
+	if err != nil {
+		slog.Error("backup: open", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil {
+		slog.Error("backup: stat", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	filename := "bindery-telemetry-" + time.Now().UTC().Format("2006-01-02") + ".db"
+	w.Header().Set("Content-Type", "application/vnd.sqlite3")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size()))
+	if _, err := io.Copy(w, f); err != nil {
+		slog.Warn("backup: write response", "error", err)
+	}
 }
 
 // chartPalette cycles through these colours for chart bars and legend swatches.
