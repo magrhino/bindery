@@ -19,11 +19,12 @@ const canonicalPrimaryLiveTestTimeout = 45 * time.Second
 const canonicalPrimaryLiveLookupDelay = 250 * time.Millisecond
 
 type canonicalTortureCase struct {
-	id                       string
-	titleInputs              []string
-	authorInputs             []string
-	expectedOpenLibraryWork  string
-	forbiddenCanonicalTitles []string
+	id                        string
+	titleInputs               []string
+	authorInputs              []string
+	expectedOpenLibraryWork   string
+	forbiddenOpenLibraryWorks []string
+	forbiddenCanonicalTitles  []string
 }
 
 type canonicalProviderSourceCase struct {
@@ -163,6 +164,11 @@ func assertNoForbiddenCanonicalLiveMatch(t *testing.T, canonical *models.Book, t
 	if canonical == nil {
 		return
 	}
+	for _, workID := range tc.forbiddenOpenLibraryWorks {
+		if strings.TrimSpace(canonical.ForeignID) == strings.TrimSpace(workID) {
+			t.Fatalf("canonical ForeignID = %q, forbidden for torture case %s", canonical.ForeignID, tc.id)
+		}
+	}
 	gotTitle := indexer.NormalizeTitleForDedup(canonical.Title)
 	for _, title := range tc.forbiddenCanonicalTitles {
 		if gotTitle == indexer.NormalizeTitleForDedup(title) {
@@ -257,7 +263,15 @@ func canonicalTortureCorpus() []canonicalTortureCase {
 				"Yu Hua",
 				"Hua Yu",
 			},
-			expectedOpenLibraryWork: "OL20903102W",
+			forbiddenOpenLibraryWorks: []string{
+				"OL25129388W",
+				"OL15861449W",
+				"OL8036242W",
+				"OL25686018W",
+				"OL3240289W",
+				"OL10634244W",
+				"OL19963794W",
+			},
 		},
 		{
 			id: "awlad_haratina_arabic_rtl_translations",

@@ -12,10 +12,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/vavallee/bindery/internal/indexer"
+	"github.com/vavallee/bindery/internal/isbnutil"
 	"github.com/vavallee/bindery/internal/metadata/audible"
 	"github.com/vavallee/bindery/internal/metadata/audnex"
 	"github.com/vavallee/bindery/internal/models"
@@ -374,6 +376,7 @@ func (a *Aggregator) GetEditions(ctx context.Context, bookForeignID string) ([]m
 }
 
 func (a *Aggregator) GetBookByISBN(ctx context.Context, isbn string) (*models.Book, error) {
+	isbn = isbnutil.Normalize(isbn)
 	key := "isbn:" + isbn
 	if cached, ok := a.cache.get(key); ok {
 		return cached.(*models.Book), nil
@@ -450,15 +453,18 @@ func (a *Aggregator) cacheISBNBook(ctx context.Context, key string, book *models
 }
 
 type bookMatchCandidate struct {
-	book        models.Book
-	titleExact  bool
-	workExact   bool
-	titleScore  int
-	authorKind  textutil.AuthorMatchKind
-	authorScore float64
-	authorAlias bool
-	resultRank  int
-	rankTie     bool
+	book         models.Book
+	titleExact   bool
+	workExact    bool
+	titleScore   int
+	authorKind   textutil.AuthorMatchKind
+	authorScore  float64
+	authorAlias  bool
+	resultRank   int
+	rankTie      bool
+	editionExact bool
+	variantKind  canonicalTitleVariantKind
+	isISBN       bool
 }
 
 type canonicalTitleVariantKind int
@@ -476,6 +482,7 @@ type primaryBookCanonicalQuery struct {
 	exactTitleOnly         bool
 	allowRankTieBreak      bool
 	allowEditionTitleMatch bool
+	hasAuthor              bool
 	variantKind            canonicalTitleVariantKind
 	isISBN                 bool
 }
@@ -516,8 +523,13 @@ func (a *Aggregator) lookupCanonicalPrimaryBook(ctx context.Context, isbn string
 	queries := primaryBookCanonicalQueries(isbn, source.Title, sourceAuthor, source.Language)
 	if canonical, status := a.canonicalPrimaryBookFromQueries(ctx, queries, func(query primaryBookCanonicalQuery) (*canonicalPrimaryBookMatch, bool) {
 		return a.canonicalPrimaryBookSearch(ctx, query, source, sourceAuthor)
-	}); status != canonicalPrimaryBookNoMatch {
+	}); status == canonicalPrimaryBookMatched {
 		return canonical, status
+	} else if status == canonicalPrimaryBookDirectISBNConfirmed {
+		if canonical, ok := a.canonicalPrimaryBookAuthorWorks(ctx, source, sourceAuthor); ok {
+			return canonical, canonicalPrimaryBookMatched
+		}
+		return nil, status
 	}
 	if canonical, ok := a.canonicalPrimaryBookAuthorWorks(ctx, source, sourceAuthor); ok {
 		return canonical, canonicalPrimaryBookMatched
@@ -529,7 +541,7 @@ func primaryBookCanonicalQueries(isbn, title, author, language string) []primary
 	queries := make([]primaryBookCanonicalQuery, 0, 4)
 	allowEditionTitleMatch := true
 	seen := make(map[string]struct{})
-	addQuery := func(queryText, matchTitle string, exactTitleOnly, allowRankTieBreak bool, kind canonicalTitleVariantKind, isISBN bool) {
+	addQuery := func(queryText, matchTitle string, exactTitleOnly, allowRankTieBreak, hasAuthor bool, kind canonicalTitleVariantKind, isISBN bool) {
 		queryText = strings.TrimSpace(queryText)
 		if queryText == "" {
 			return
@@ -544,21 +556,22 @@ func primaryBookCanonicalQueries(isbn, title, author, language string) []primary
 			exactTitleOnly:         exactTitleOnly,
 			allowRankTieBreak:      allowRankTieBreak,
 			allowEditionTitleMatch: allowEditionTitleMatch,
+			hasAuthor:              hasAuthor,
 			variantKind:            kind,
 			isISBN:                 isISBN,
 		})
 	}
-	if isbn = strings.TrimSpace(isbn); isbn != "" {
-		addQuery("isbn:"+isbn, title, false, false, canonicalTitleVariantSource, true)
+	if isbn = isbnutil.Normalize(isbn); isbn != "" {
+		addQuery("isbn:"+isbn, title, false, false, true, canonicalTitleVariantSource, true)
 	}
 	for _, variant := range canonicalTitleVariants(title, language) {
 		for _, authorVariant := range canonicalAuthorQueryVariants(author) {
-			addQuery(variant.title+" "+authorVariant, variant.title, variant.exactTitleOnly, variant.allowRankTieBreak, variant.kind, false)
-			addQuery("title:"+variant.title+" author:"+authorVariant, variant.title, variant.exactTitleOnly, variant.allowRankTieBreak, variant.kind, false)
+			addQuery(variant.title+" "+authorVariant, variant.title, variant.exactTitleOnly, variant.allowRankTieBreak, true, variant.kind, false)
+			addQuery("title:"+variant.title+" author:"+authorVariant, variant.title, variant.exactTitleOnly, variant.allowRankTieBreak, true, variant.kind, false)
 		}
 		if canonicalAuthorNeedsTitleOnlyFallback(author) {
-			addQuery(variant.title, variant.title, variant.exactTitleOnly, variant.allowRankTieBreak, variant.kind, false)
-			addQuery("title:"+variant.title, variant.title, variant.exactTitleOnly, variant.allowRankTieBreak, variant.kind, false)
+			addQuery(variant.title, variant.title, variant.exactTitleOnly, variant.allowRankTieBreak, false, variant.kind, false)
+			addQuery("title:"+variant.title, variant.title, variant.exactTitleOnly, variant.allowRankTieBreak, false, variant.kind, false)
 		}
 	}
 	return queries
@@ -696,6 +709,10 @@ func canonicalTitleVariants(title, language string) []canonicalTitleVariant {
 		add(segment, true, canonicalTitleVariantRightSegment)
 	}
 
+	for _, segment := range nonLatinCanonicalTitleSegments(title) {
+		add(segment, true, canonicalTitleVariantRightSegment)
+	}
+
 	for _, segment := range leftCanonicalTitleSegments(title, stripped) {
 		add(stripCanonicalTitleDescriptor(segment), true, canonicalTitleVariantLeftSegment)
 		add(segment, true, canonicalTitleVariantLeftSegment)
@@ -796,6 +813,51 @@ func leftCanonicalTitleSegments(titles ...string) []string {
 	return segments
 }
 
+func nonLatinCanonicalTitleSegments(title string) []string {
+	var segments []string
+	var b strings.Builder
+	spacePending := false
+	flush := func() {
+		segment := cleanCanonicalTitleVariant(b.String())
+		if usefulCanonicalTitleVariant(segment) {
+			segments = append(segments, segment)
+		}
+		b.Reset()
+		spacePending = false
+	}
+	for _, r := range cleanCanonicalTitleVariant(title) {
+		switch {
+		case isCanonicalNonLatinScript(r):
+			if spacePending && b.Len() > 0 {
+				b.WriteByte(' ')
+			}
+			b.WriteRune(r)
+			spacePending = false
+		case unicode.IsSpace(r):
+			spacePending = b.Len() > 0
+		default:
+			if b.Len() > 0 {
+				flush()
+			}
+		}
+	}
+	if b.Len() > 0 {
+		flush()
+	}
+	return segments
+}
+
+func isCanonicalNonLatinScript(r rune) bool {
+	return unicode.In(r,
+		unicode.Arabic,
+		unicode.Cyrillic,
+		unicode.Han,
+		unicode.Hangul,
+		unicode.Hiragana,
+		unicode.Katakana,
+	)
+}
+
 func startsWithGermanArticle(title string) bool {
 	words := strings.Fields(cleanCanonicalTitleVariant(title))
 	if len(words) == 0 {
@@ -876,6 +938,7 @@ func (a *Aggregator) canonicalPrimaryBookSearch(ctx context.Context, query prima
 func (a *Aggregator) canonicalPrimaryBookFromQueries(ctx context.Context, queries []primaryBookCanonicalQuery, lookup func(primaryBookCanonicalQuery) (*canonicalPrimaryBookMatch, bool)) (*models.Book, canonicalPrimaryBookStatus) {
 	hasSegmentVariant := canonicalQueriesHaveSegmentVariant(queries)
 	var provisional *canonicalPrimaryBookMatch
+	provisionalAmbiguous := false
 	directISBNConfirmed := false
 	for _, query := range queries {
 		match, ok := lookup(query)
@@ -883,19 +946,22 @@ func (a *Aggregator) canonicalPrimaryBookFromQueries(ctx context.Context, querie
 			continue
 		}
 		if match.sameSource {
-			if query.isISBN && !hasSegmentVariant {
+			if query.isISBN {
 				directISBNConfirmed = true
 				break
 			}
 			continue
 		}
-		if shouldDeferCanonicalPrimaryBookMatch(query, match, hasSegmentVariant) {
-			provisional = betterCanonicalProvisionalMatch(provisional, match)
+		if query.isISBN {
+			return a.fetchCanonicalPrimaryBook(ctx, match), canonicalPrimaryBookMatched
+		}
+		if hasSegmentVariant || shouldDeferCanonicalPrimaryBookMatch(query, match, hasSegmentVariant) {
+			provisional, provisionalAmbiguous = betterCanonicalProvisionalMatch(provisional, provisionalAmbiguous, match)
 			continue
 		}
 		return a.fetchCanonicalPrimaryBook(ctx, match), canonicalPrimaryBookMatched
 	}
-	if provisional != nil {
+	if provisional != nil && !provisionalAmbiguous {
 		return a.fetchCanonicalPrimaryBook(ctx, provisional), canonicalPrimaryBookMatched
 	}
 	if directISBNConfirmed {
@@ -929,17 +995,22 @@ func shouldDeferCanonicalPrimaryBookMatch(query primaryBookCanonicalQuery, match
 	return !match.candidate.titleExact
 }
 
-func betterCanonicalProvisionalMatch(current, next *canonicalPrimaryBookMatch) *canonicalPrimaryBookMatch {
+func betterCanonicalProvisionalMatch(current *canonicalPrimaryBookMatch, ambiguous bool, next *canonicalPrimaryBookMatch) (*canonicalPrimaryBookMatch, bool) {
 	if current == nil {
-		return next
+		return next, false
 	}
 	if next == nil {
-		return current
+		return current, ambiguous
 	}
-	if compareBookCandidate(next.candidate, current.candidate) == 1 {
-		return next
+	switch compareBookCandidate(next.candidate, current.candidate) {
+	case 1:
+		return next, false
+	case 0:
+		if strings.TrimSpace(next.candidate.book.ForeignID) != strings.TrimSpace(current.candidate.book.ForeignID) {
+			return current, true
+		}
 	}
-	return current
+	return current, ambiguous
 }
 
 func (a *Aggregator) canonicalPrimaryBookAuthorWorks(ctx context.Context, source models.Book, sourceAuthor string) (*models.Book, bool) {
@@ -969,6 +1040,7 @@ func (a *Aggregator) canonicalPrimaryBookAuthorWorks(ctx context.Context, source
 			exactTitleOnly:         variant.exactTitleOnly,
 			allowRankTieBreak:      variant.allowRankTieBreak,
 			allowEditionTitleMatch: isGermanBookLanguage(source.Language),
+			hasAuthor:              true,
 			variantKind:            variant.kind,
 		})
 	}
@@ -997,7 +1069,7 @@ func (a *Aggregator) canonicalPrimaryBookFromResults(query primaryBookCanonicalQ
 				continue
 			}
 		}
-		candidate, ok := scoreBookCandidate(query.matchTitle, result, author, authorMatchedAlias, rank, query.exactTitleOnly, query.allowRankTieBreak, query.allowEditionTitleMatch || authorMatchedAlias)
+		candidate, ok := scoreBookCandidate(query, result, author, authorMatchedAlias, rank, query.allowEditionTitleMatch || authorMatchedAlias)
 		if ok {
 			matches = append(matches, candidate)
 		}
@@ -1038,28 +1110,43 @@ func (a *Aggregator) fetchCanonicalPrimaryBook(ctx context.Context, match *canon
 	return full
 }
 
-func scoreBookCandidate(matchTitle string, candidate models.Book, author textutil.AuthorMatchResult, authorAlias bool, resultRank int, exactTitleOnly, allowRankTieBreak, allowEditionTitleMatch bool) (bookMatchCandidate, bool) {
-	workExact, titleExact, titleScore, editionExact := bestBookTitleMatch(matchTitle, candidate, allowEditionTitleMatch)
-	if exactTitleOnly && !titleExact {
+func scoreBookCandidate(query primaryBookCanonicalQuery, candidate models.Book, author textutil.AuthorMatchResult, authorAlias bool, resultRank int, allowEditionTitleMatch bool) (bookMatchCandidate, bool) {
+	workExact, titleExact, titleScore, editionExact := bestBookTitleMatch(query.matchTitle, candidate, allowEditionTitleMatch)
+	if query.exactTitleOnly && !query.isISBN && !titleExact {
 		return bookMatchCandidate{}, false
 	}
-	if titleScore < 88 {
+	if !query.isISBN && titleScore < 88 {
+		if !dominantCatalogCandidate(candidate, author, query) {
+			return bookMatchCandidate{}, false
+		}
+	}
+	if !query.isISBN && !query.hasAuthor && candidate.EditionCount < 10 {
 		return bookMatchCandidate{}, false
 	}
-	if !titleExact && !editionExact && weakPartialTitleMatch(matchTitle, candidate.Title) {
+	if !query.isISBN && !titleExact && !editionExact && weakPartialTitleMatch(query.matchTitle, candidate.Title) {
 		return bookMatchCandidate{}, false
 	}
 	return bookMatchCandidate{
-		book:        candidate,
-		titleExact:  titleExact,
-		workExact:   workExact,
-		titleScore:  titleScore,
-		authorKind:  author.Kind,
-		authorScore: author.Score,
-		authorAlias: authorAlias,
-		resultRank:  resultRank,
-		rankTie:     allowRankTieBreak || editionExact,
+		book:         candidate,
+		titleExact:   titleExact,
+		workExact:    workExact,
+		titleScore:   titleScore,
+		authorKind:   author.Kind,
+		authorScore:  author.Score,
+		authorAlias:  authorAlias,
+		resultRank:   resultRank,
+		rankTie:      query.allowRankTieBreak,
+		editionExact: editionExact,
+		variantKind:  query.variantKind,
+		isISBN:       query.isISBN,
 	}, true
+}
+
+func dominantCatalogCandidate(candidate models.Book, author textutil.AuthorMatchResult, query primaryBookCanonicalQuery) bool {
+	if query.exactTitleOnly || query.isISBN || candidate.EditionCount < 10 {
+		return false
+	}
+	return author.Kind == textutil.AuthorMatchExact
 }
 
 func bestBookTitleMatch(matchTitle string, candidate models.Book, allowEditionTitleMatch bool) (bool, bool, int, bool) {
@@ -1196,6 +1283,12 @@ func compareAuthorMatch(a, b textutil.AuthorMatchResult) int {
 }
 
 func compareBookCandidate(a, b bookMatchCandidate) int {
+	if a.isISBN != b.isISBN {
+		if a.isISBN {
+			return 1
+		}
+		return -1
+	}
 	if a.titleExact != b.titleExact {
 		if a.titleExact {
 			return 1
@@ -1226,13 +1319,55 @@ func compareBookCandidate(a, b bookMatchCandidate) int {
 		}
 		return -1
 	}
-	if a.resultRank != b.resultRank {
+	if a.editionExact != b.editionExact {
+		if a.editionExact {
+			return 1
+		}
+		return -1
+	}
+	if catalogDominates(a.book.EditionCount, b.book.EditionCount) {
+		return 1
+	}
+	if catalogDominates(b.book.EditionCount, a.book.EditionCount) {
+		return -1
+	}
+	if a.variantKind != b.variantKind {
+		if a.variantKind == canonicalTitleVariantSource && a.workExact {
+			return 1
+		}
+		if b.variantKind == canonicalTitleVariantSource && b.workExact {
+			return -1
+		}
+		if a.variantKind == canonicalTitleVariantRightSegment && b.variantKind == canonicalTitleVariantLeftSegment {
+			return 1
+		}
+		if b.variantKind == canonicalTitleVariantRightSegment && a.variantKind == canonicalTitleVariantLeftSegment {
+			return -1
+		}
+	}
+	if a.workExact != b.workExact {
+		if a.workExact {
+			return 1
+		}
+		return -1
+	}
+	if (a.rankTie || b.rankTie) && a.resultRank != b.resultRank {
 		if a.resultRank < b.resultRank {
 			return 1
 		}
 		return -1
 	}
 	return 0
+}
+
+func catalogDominates(a, b int) bool {
+	if a < 10 || a <= b {
+		return false
+	}
+	if b <= 1 {
+		return true
+	}
+	return a >= b*3
 }
 
 func authorMatchRank(kind textutil.AuthorMatchKind) int {

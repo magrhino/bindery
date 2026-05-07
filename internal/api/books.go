@@ -21,6 +21,7 @@ import (
 
 type BookHandler struct {
 	books     *db.BookRepo
+	authors   *db.AuthorRepo
 	meta      *metadata.Aggregator
 	history   *db.HistoryRepo
 	searcher  BookSearcher
@@ -30,6 +31,11 @@ type BookHandler struct {
 
 func NewBookHandler(books *db.BookRepo, meta *metadata.Aggregator, history *db.HistoryRepo, searcher BookSearcher) *BookHandler {
 	return &BookHandler{books: books, meta: meta, history: history, searcher: searcher}
+}
+
+func (h *BookHandler) WithAuthors(authors *db.AuthorRepo) *BookHandler {
+	h.authors = authors
+	return h
 }
 
 // WithSettings wires in the settings repo so the book handler can consult the
@@ -477,4 +483,158 @@ func (h *BookHandler) ToggleExcluded(w http.ResponseWriter, r *http.Request) {
 	book.Excluded = newVal
 	cleanBookDescription(book)
 	writeJSON(w, http.StatusOK, book)
+}
+
+func (h *BookHandler) MapMetadata(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	if h.meta == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "metadata provider unavailable"})
+		return
+	}
+	if h.authors == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "author repository unavailable"})
+		return
+	}
+	var req struct {
+		ForeignBookID string `json:"foreignBookId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	req.ForeignBookID = strings.TrimSpace(req.ForeignBookID)
+	if req.ForeignBookID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreignBookId required"})
+		return
+	}
+
+	book, err := h.books.GetByID(r.Context(), id)
+	if err != nil || book == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
+		return
+	}
+	if existing, err := h.books.GetByForeignID(r.Context(), req.ForeignBookID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	} else if existing != nil && existing.ID != book.ID {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "foreignBookId is already mapped to another book"})
+		return
+	}
+
+	target, err := h.meta.GetBook(r.Context(), req.ForeignBookID)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	if target == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "target book not found"})
+		return
+	}
+	if target.ForeignID == "" {
+		target.ForeignID = req.ForeignBookID
+	}
+	currentAuthor, err := h.authors.GetByID(r.Context(), book.AuthorID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !bookMapAuthorMatches(currentAuthor, target.Author) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "target book author does not match current author"})
+		return
+	}
+
+	preserveBookStateForMetadataMap(book, target)
+	if err := h.books.Update(r.Context(), book); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	updated, err := h.books.GetByID(r.Context(), book.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	h.attachBookFiles(r.Context(), updated)
+	cleanBookDescription(updated)
+	proxyBookImages(updated)
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func preserveBookStateForMetadataMap(book *models.Book, target *models.Book) {
+	id := book.ID
+	authorID := book.AuthorID
+	monitored := book.Monitored
+	status := book.Status
+	anyEditionOK := book.AnyEditionOK
+	selectedEditionID := book.SelectedEditionID
+	filePath := book.FilePath
+	mediaType := book.MediaType
+	narrator := book.Narrator
+	durationSeconds := book.DurationSeconds
+	asin := book.ASIN
+	calibreID := book.CalibreID
+	createdAt := book.CreatedAt
+	ebookFilePath := book.EbookFilePath
+	audiobookFilePath := book.AudiobookFilePath
+	excluded := book.Excluded
+
+	book.ForeignID = target.ForeignID
+	book.Title = target.Title
+	book.SortTitle = firstNonEmpty(target.SortTitle, target.Title)
+	book.OriginalTitle = target.OriginalTitle
+	book.Description = target.Description
+	book.ImageURL = target.ImageURL
+	book.ReleaseDate = target.ReleaseDate
+	book.Genres = target.Genres
+	if book.Genres == nil {
+		book.Genres = []string{}
+	}
+	book.AverageRating = target.AverageRating
+	book.RatingsCount = target.RatingsCount
+	book.Language = target.Language
+	book.MetadataProvider = firstNonEmpty(target.MetadataProvider, metadataProviderFromForeignID(target.ForeignID))
+
+	book.ID = id
+	book.AuthorID = authorID
+	book.Monitored = monitored
+	book.Status = status
+	book.AnyEditionOK = anyEditionOK
+	book.SelectedEditionID = selectedEditionID
+	book.FilePath = filePath
+	book.MediaType = mediaType
+	book.Narrator = narrator
+	book.DurationSeconds = durationSeconds
+	book.ASIN = asin
+	book.CalibreID = calibreID
+	book.CreatedAt = createdAt
+	book.EbookFilePath = ebookFilePath
+	book.AudiobookFilePath = audiobookFilePath
+	book.Excluded = excluded
+}
+
+func bookMapAuthorMatches(current, target *models.Author) bool {
+	if current == nil || target == nil {
+		return false
+	}
+	if strings.TrimSpace(current.ForeignID) != "" &&
+		strings.TrimSpace(target.ForeignID) != "" &&
+		strings.TrimSpace(current.ForeignID) == strings.TrimSpace(target.ForeignID) {
+		return true
+	}
+	if authorNameAutoMatches(current.Name, target.Name) {
+		return true
+	}
+	for _, alias := range target.AlternateNames {
+		if authorNameAutoMatches(current.Name, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func authorNameAutoMatches(a, b string) bool {
+	match := textutil.MatchAuthorName(a, b)
+	return match.Kind == textutil.AuthorMatchExact || match.Kind == textutil.AuthorMatchFuzzyAuto
 }
