@@ -34,10 +34,10 @@ func TestLiveISBNProviderFallbackTortureCorpus(t *testing.T) {
 	skipUnlessIntegration(t)
 
 	ol := openlibrary.New()
-	gb := googlebooks.New(os.Getenv("GOOGLE_BOOKS_API_KEY"))
+	gb := googlebooks.New(os.Getenv(googleBooksAPIKeyEnv))
 	dn := dnb.New()
 	providers := []metadata.Provider{gb, dn}
-	if token := os.Getenv("HARDCOVER_API_TOKEN"); token != "" {
+	if token := os.Getenv(binderyHardcoverAPITokenEnv); token != "" {
 		providers = append(providers, hardcover.New().WithToken(token))
 	}
 	agg := metadata.NewAggregator(ol, providers...)
@@ -52,6 +52,7 @@ func TestLiveISBNProviderFallbackTortureCorpus(t *testing.T) {
 					got, err := agg.GetBookByISBN(ctx, isbnInput)
 					sleepAfterLiveISBNProviderCall()
 					if err != nil {
+						skipIfLiveProviderUnavailableError(t, "aggregator", err)
 						t.Fatalf("GetBookByISBN(%q): %v", isbnInput, err)
 					}
 					if tc.expectedOpenLibraryWork == "" {
@@ -74,13 +75,13 @@ func TestLiveDirectISBNProvidersTortureCorpus(t *testing.T) {
 	skipUnlessIntegration(t)
 
 	directProviders := []isbnDirectProvider{
-		{name: "googlebooks", provider: googlebooks.New(os.Getenv("GOOGLE_BOOKS_API_KEY"))},
+		{name: "googlebooks", provider: googlebooks.New(os.Getenv(googleBooksAPIKeyEnv))},
 		{name: "dnb", provider: dnb.New()},
 	}
-	if token := os.Getenv("HARDCOVER_API_TOKEN"); token != "" {
+	if token := os.Getenv(binderyHardcoverAPITokenEnv); token != "" {
 		directProviders = append(directProviders, isbnDirectProvider{name: "hardcover", provider: hardcover.New().WithToken(token)})
 	} else {
-		directProviders = append(directProviders, isbnDirectProvider{name: "hardcover", skip: "set HARDCOVER_API_TOKEN to run Hardcover live ISBN lookups"})
+		directProviders = append(directProviders, isbnDirectProvider{name: "hardcover", skip: "set " + binderyHardcoverAPITokenEnv + " to run Hardcover live ISBN lookups"})
 	}
 
 	for _, tc := range isbnTortureCorpus() {
@@ -101,6 +102,7 @@ func TestLiveDirectISBNProvidersTortureCorpus(t *testing.T) {
 							got, err := directProvider.provider.GetBookByISBN(ctx, isbnInput)
 							sleepAfterLiveISBNProviderCall()
 							if err != nil {
+								skipIfLiveProviderUnavailableError(t, directProvider.name, err)
 								t.Fatalf("%s.GetBookByISBN(%q): %v", directProvider.name, isbnInput, err)
 							}
 							if got == nil {

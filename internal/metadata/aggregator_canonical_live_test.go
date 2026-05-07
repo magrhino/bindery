@@ -36,7 +36,7 @@ type canonicalProviderSourceCase struct {
 }
 
 func TestLiveAggregatorCanonicalPrimaryBookTortureCorpus(t *testing.T) {
-	if os.Getenv("BINDERY_INTEGRATION") == "" {
+	if os.Getenv(binderyIntegrationEnv) != "1" {
 		t.Skip("skipping live metadata test; set BINDERY_INTEGRATION=1 to run")
 	}
 
@@ -55,6 +55,7 @@ func TestLiveAggregatorCanonicalPrimaryBookTortureCorpus(t *testing.T) {
 					source, err := sourceProvider.GetBookByISBN(ctx, isbnInput)
 					sleepAfterCanonicalPrimaryLiveLookup()
 					if err != nil {
+						skipIfLiveProviderUnavailableError(t, tc.provider, err)
 						t.Fatalf("%s.GetBookByISBN(%q): %v", tc.provider, isbnInput, err)
 					}
 					assertCanonicalProviderSource(t, source, tc)
@@ -121,7 +122,7 @@ func canonicalLiveSourceProvider(provider string) (Provider, string) {
 	case "dnb":
 		return dnb.New(), ""
 	case "googlebooks":
-		return googlebooks.New(os.Getenv("GOOGLE_BOOKS_API_KEY")), ""
+		return googlebooks.New(os.Getenv(googleBooksAPIKeyEnv)), ""
 	default:
 		return nil, "unsupported canonical live source provider " + provider
 	}
