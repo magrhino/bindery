@@ -258,6 +258,7 @@ func canonicalTitleVariants(title, language string) []canonicalTitleVariant {
 		add(title, false, canonicalTitleVariantSource)
 	}
 	add(stripped, true, canonicalTitleVariantDescriptor)
+	add(stripCanonicalTrailingParentheticalDescriptors(stripped), true, canonicalTitleVariantDescriptor)
 
 	if isGerman {
 		for _, segment := range translatedOriginalTitleSegments(title, stripped) {
@@ -339,6 +340,50 @@ func stripCanonicalTitleDescriptor(title string) string {
 		}
 		title = next
 	}
+}
+
+func stripCanonicalTrailingParentheticalDescriptors(title string) string {
+	title = cleanCanonicalTitleVariant(title)
+	for {
+		if !strings.HasSuffix(title, ")") {
+			return title
+		}
+		start := strings.LastIndex(title, "(")
+		if start < 0 {
+			return title
+		}
+		descriptor := cleanCanonicalTitleVariant(title[start+1 : len(title)-1])
+		if !canonicalParentheticalProductionDescriptor(descriptor) {
+			return title
+		}
+		title = cleanCanonicalTitleVariant(title[:start])
+	}
+}
+
+func canonicalParentheticalProductionDescriptor(value string) bool {
+	value = strings.ToLower(strings.Join(strings.Fields(value), " "))
+	switch value {
+	case "abridged", "unabridged", "dramatized adaptation":
+		return true
+	default:
+	}
+	words := strings.Fields(value)
+	if len(words) != 4 || words[0] != "part" || words[2] != "of" {
+		return false
+	}
+	return canonicalDigitsOnly(words[1]) && canonicalDigitsOnly(words[3])
+}
+
+func canonicalDigitsOnly(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return true
 }
 
 func translatedOriginalTitleSegments(titles ...string) []string {

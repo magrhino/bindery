@@ -477,6 +477,15 @@ func (i *Importer) lookupUpstreamBook(ctx context.Context, author *models.Author
 			return match, "isbn", false, nil
 		}
 	}
+	if asin := strings.TrimSpace(item.ASIN); asin != "" {
+		match, err := i.meta.GetCanonicalBookByASIN(ctx, asin)
+		if err != nil {
+			return nil, "", false, err
+		}
+		if match != nil {
+			return match, "asin", false, nil
+		}
+	}
 	if author == nil || author.ForeignID == "" || author.MetadataProvider == providerAudiobookshelf {
 		return nil, "", false, nil
 	}

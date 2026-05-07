@@ -433,6 +433,7 @@ func (i *Importer) lookupUpstreamAuthor(ctx context.Context, name string) (*mode
 		matchedQuery string
 		sawAmbiguous bool
 		exactHits    = make(map[string]struct{})
+		exactMatches = make(map[string]models.Author)
 	)
 	for _, query := range authorSearchQueries(name) {
 		results, err := i.meta.SearchAuthors(ctx, query)
@@ -464,6 +465,11 @@ func (i *Importer) lookupUpstreamAuthor(ctx context.Context, name string) (*mode
 			}
 			if score >= exactScore {
 				exactHits[cp.ForeignID] = struct{}{}
+				if cp.ForeignID != "" {
+					if existing, ok := exactMatches[cp.ForeignID]; !ok || authorSearchWorkCount(cp) > authorSearchWorkCount(existing) {
+						exactMatches[cp.ForeignID] = cp
+					}
+				}
 			}
 			if best == nil || score > bestScore {
 				secondScore = bestScore
@@ -487,8 +493,13 @@ func (i *Importer) lookupUpstreamAuthor(ctx context.Context, name string) (*mode
 		return nil, false, nil
 	}
 	if len(exactHits) > 1 {
-		slog.Info("abs import: upstream author match ambiguous", "author", name, "hits", len(exactHits))
-		return nil, true, nil
+		if dominant, ok := dominantExactAuthorMatch(exactMatches); ok {
+			best = &dominant
+			bestScore = exactScore
+		} else {
+			slog.Info("abs import: upstream author match ambiguous", "author", name, "hits", len(exactHits))
+			return nil, true, nil
+		}
 	}
 	if bestScore < exactScore && bestScore-secondScore < fuzzyTieMargin {
 		slog.Info("abs import: upstream author match ambiguous (tie)", "author", name, "best", bestScore, "second", secondScore)
@@ -500,6 +511,43 @@ func (i *Importer) lookupUpstreamAuthor(ctx context.Context, name string) (*mode
 	}
 	slog.Info("abs import: upstream author matched", "author", name, "query", matchedQuery, "foreignId", best.ForeignID, "score", bestScore)
 	return full, false, nil
+}
+
+func dominantExactAuthorMatch(candidates map[string]models.Author) (models.Author, bool) {
+	const minDominantGap = 10
+	var best models.Author
+	bestCount := -1
+	secondCount := -1
+	for _, candidate := range candidates {
+		count := authorSearchWorkCount(candidate)
+		if count > bestCount {
+			secondCount = bestCount
+			best = candidate
+			bestCount = count
+		} else if count > secondCount {
+			secondCount = count
+		}
+	}
+	if bestCount <= 0 {
+		return models.Author{}, false
+	}
+	if secondCount < 0 {
+		return best, true
+	}
+	if bestCount-secondCount < minDominantGap {
+		return models.Author{}, false
+	}
+	if secondCount > 0 && bestCount < secondCount*2 {
+		return models.Author{}, false
+	}
+	return best, true
+}
+
+func authorSearchWorkCount(author models.Author) int {
+	if author.Statistics == nil {
+		return 0
+	}
+	return author.Statistics.BookCount
 }
 
 func authorSearchQueries(name string) []string {

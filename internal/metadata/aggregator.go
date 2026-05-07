@@ -20,9 +20,15 @@ import (
 type Aggregator struct {
 	primary   Provider
 	enrichers []Provider
-	audnex    *audnex.Client
+	audnex    AudnexBookClient
 	audible   *audible.Client
 	cache     *ttlCache
+}
+
+// AudnexBookClient is the narrow audnex capability the aggregator needs for
+// ASIN-based audiobook metadata lookup.
+type AudnexBookClient interface {
+	GetBook(ctx context.Context, asin string) (*audnex.Book, error)
 }
 
 // NewAggregator creates an aggregator with OpenLibrary as primary and optional enrichers.
@@ -34,6 +40,13 @@ func NewAggregator(primary Provider, enrichers ...Provider) *Aggregator {
 		audible:   audible.New(),
 		cache:     newTTLCache(24 * time.Hour),
 	}
+}
+
+// WithAudnexClient replaces the default audnex client. Tests use this to keep
+// ASIN canonicalization deterministic without reaching the network.
+func (a *Aggregator) WithAudnexClient(client AudnexBookClient) *Aggregator {
+	a.audnex = client
+	return a
 }
 
 func (a *Aggregator) SearchAuthors(ctx context.Context, query string) ([]models.Author, error) {

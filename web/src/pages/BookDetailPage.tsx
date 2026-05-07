@@ -701,9 +701,9 @@ export default function BookDetailPage() {
               onClick={enrich}
               disabled={!book.asin || enriching}
               className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded text-xs font-medium disabled:opacity-40"
-              title={book.asin ? 'Fetch narrator, duration, cover from audnex' : 'Set an ASIN first'}
+              title={book.asin ? 'Fetch audio details and match upstream metadata from ASIN' : 'Set an ASIN first'}
             >
-              {enriching ? 'Fetching…' : 'Enrich from audnex'}
+              {enriching ? 'Fetching…' : 'Enrich + match'}
             </button>
           </div>
         )}

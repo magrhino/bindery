@@ -54,7 +54,7 @@ func (h *BookHandler) WithDownloads(d *db.DownloadRepo) *BookHandler {
 
 // EnrichAudiobook fetches audnex data for the book's ASIN and updates
 // narrator, duration, cover, and description on the record. Requires the
-// book to be media_type=audiobook with an ASIN already set.
+// book to have an audiobook format and an ASIN already set.
 func (h *BookHandler) EnrichAudiobook(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(w, r)
 	if !ok {
@@ -65,7 +65,7 @@ func (h *BookHandler) EnrichAudiobook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
 		return
 	}
-	if book.MediaType != models.MediaTypeAudiobook {
+	if book.MediaType != models.MediaTypeAudiobook && book.MediaType != models.MediaTypeBoth {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "book is not an audiobook"})
 		return
 	}
@@ -73,17 +73,61 @@ func (h *BookHandler) EnrichAudiobook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "set ASIN before enriching"})
 		return
 	}
+	if h.meta == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "metadata provider unavailable"})
+		return
+	}
 	if err := h.meta.EnrichAudiobook(r.Context(), book); err != nil {
 		slog.Warn("audnex enrich failed", "bookId", book.ID, "error", err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
+	h.tryMapAudiobookMetadataByASIN(r.Context(), book)
 	if err := h.books.Update(r.Context(), book); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	cleanBookDescription(book)
 	writeJSON(w, http.StatusOK, book)
+}
+
+func (h *BookHandler) tryMapAudiobookMetadataByASIN(ctx context.Context, book *models.Book) {
+	if h == nil || h.meta == nil || h.authors == nil || book == nil || strings.TrimSpace(book.ASIN) == "" {
+		return
+	}
+	target, err := h.meta.GetCanonicalBookByASIN(ctx, book.ASIN)
+	if err != nil {
+		slog.Debug("asin metadata map skipped", "bookId", book.ID, "asin", book.ASIN, "error", err)
+		return
+	}
+	if target == nil || strings.TrimSpace(target.ForeignID) == "" {
+		return
+	}
+	if existing, err := h.books.GetByForeignID(ctx, target.ForeignID); err != nil {
+		slog.Warn("asin metadata map conflict check failed", "bookId", book.ID, "foreignId", target.ForeignID, "error", err)
+		return
+	} else if existing != nil && existing.ID != book.ID {
+		return
+	}
+	currentAuthor, err := h.authors.GetByID(ctx, book.AuthorID)
+	if err != nil || currentAuthor == nil {
+		if err != nil {
+			slog.Warn("asin metadata map author lookup failed", "bookId", book.ID, "authorId", book.AuthorID, "error", err)
+		}
+		return
+	}
+	if !bookMapAuthorMatches(currentAuthor, target.Author) {
+		return
+	}
+	fallbackDescription := book.Description
+	fallbackImageURL := book.ImageURL
+	preserveBookStateForMetadataMap(book, target)
+	if book.Description == "" {
+		book.Description = fallbackDescription
+	}
+	if book.ImageURL == "" {
+		book.ImageURL = fallbackImageURL
+	}
 }
 
 func (h *BookHandler) List(w http.ResponseWriter, r *http.Request) {

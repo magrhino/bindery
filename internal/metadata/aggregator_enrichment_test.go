@@ -6,8 +6,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vavallee/bindery/internal/metadata/audnex"
 	"github.com/vavallee/bindery/internal/models"
 )
+
+type stubAudnexClient struct {
+	books map[string]*audnex.Book
+	calls int
+}
+
+func (s *stubAudnexClient) GetBook(_ context.Context, asin string) (*audnex.Book, error) {
+	s.calls++
+	if s.books == nil {
+		return nil, nil
+	}
+	return s.books[asin], nil
+}
 
 func TestAggregator_EnrichAudiobook_NonAudiobook(t *testing.T) {
 	agg := newTestAggregator(&mockProvider{name: "ol"})
@@ -57,6 +71,97 @@ func TestAggregator_GetAuthorAudiobooks_EmptyName(t *testing.T) {
 	}
 	if books != nil {
 		t.Errorf("want nil, got %v", books)
+	}
+}
+
+func TestAggregator_GetCanonicalBookByASIN_CanonicalizesAudnexHit(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"Iron Flame Rebecca Yarros": {{
+				ForeignID:    "OL-IRON",
+				Title:        "Iron Flame",
+				EditionCount: 42,
+				Author:       &models.Author{Name: "Rebecca Yarros"},
+			}},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL-IRON": {
+				ForeignID:        "OL-IRON",
+				Title:            "Iron Flame",
+				Description:      "Canonical OpenLibrary description for Iron Flame.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Rebecca Yarros"},
+			},
+		},
+	}
+	audnexClient := &stubAudnexClient{books: map[string]*audnex.Book{
+		"B0D3R3MTLM": {
+			ASIN:     "B0D3R3MTLM",
+			Title:    "Iron Flame (Part 2 of 2) (Dramatized Adaptation)",
+			Authors:  []audnex.Person{{Name: "Rebecca Yarros"}},
+			Language: "English",
+		},
+	}}
+	agg := newTestAggregator(primary).WithAudnexClient(audnexClient)
+
+	got, err := agg.GetCanonicalBookByASIN(context.Background(), " b0d3r3mtlm ")
+	if err != nil {
+		t.Fatalf("GetCanonicalBookByASIN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL-IRON" {
+		t.Fatalf("GetCanonicalBookByASIN = %+v, want OL-IRON", got)
+	}
+
+	got, err = agg.GetCanonicalBookByASIN(context.Background(), "B0D3R3MTLM")
+	if err != nil {
+		t.Fatalf("cached GetCanonicalBookByASIN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL-IRON" {
+		t.Fatalf("cached GetCanonicalBookByASIN = %+v, want OL-IRON", got)
+	}
+	if audnexClient.calls != 1 {
+		t.Fatalf("audnex calls = %d, want 1", audnexClient.calls)
+	}
+}
+
+func TestAggregator_GetCanonicalBookByASIN_NoAudnexHit(t *testing.T) {
+	agg := newTestAggregator(&mockProvider{name: "openlibrary"}).WithAudnexClient(&stubAudnexClient{})
+
+	got, err := agg.GetCanonicalBookByASIN(context.Background(), "B0NONE")
+	if err != nil {
+		t.Fatalf("GetCanonicalBookByASIN: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("GetCanonicalBookByASIN = %+v, want nil", got)
+	}
+}
+
+func TestAggregator_GetCanonicalBookByASIN_AmbiguousPrimaryMatch(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"Dune Frank Herbert": {
+				{ForeignID: "OL-DUNE-1", Title: "Dune", EditionCount: 20, Author: &models.Author{Name: "Frank Herbert"}},
+				{ForeignID: "OL-DUNE-2", Title: "Dune", EditionCount: 20, Author: &models.Author{Name: "Frank Herbert"}},
+			},
+		},
+	}
+	audnexClient := &stubAudnexClient{books: map[string]*audnex.Book{
+		"B0036S4B2G": {
+			ASIN:    "B0036S4B2G",
+			Title:   "Dune",
+			Authors: []audnex.Person{{Name: "Frank Herbert"}},
+		},
+	}}
+	agg := newTestAggregator(primary).WithAudnexClient(audnexClient)
+
+	got, err := agg.GetCanonicalBookByASIN(context.Background(), "B0036S4B2G")
+	if err != nil {
+		t.Fatalf("GetCanonicalBookByASIN: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("GetCanonicalBookByASIN = %+v, want nil for ambiguous primary match", got)
 	}
 }
 

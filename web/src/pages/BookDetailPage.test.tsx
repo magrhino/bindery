@@ -203,6 +203,18 @@ describe('BookDetailPage — metadata match action', () => {
     expect(screen.getByText('Better cover, language, search, ASIN')).toBeInTheDocument()
   })
 
+  it('labels ASIN enrichment as an upstream metadata match action', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(makeBook({
+      mediaType: 'audiobook',
+      asin: 'B0D3R3MTLM',
+    }))
+
+    renderBookDetailPage()
+
+    const button = await screen.findByRole('button', { name: 'Enrich + match' })
+    expect(button).toHaveAttribute('title', 'Fetch audio details and match upstream metadata from ASIN')
+  })
+
   it('opens the map metadata modal from the improve metadata CTA', async () => {
     vi.mocked(api.getBook).mockResolvedValue(makeBook({
       foreignBookId: 'abs:book:lib-books:item-1',
