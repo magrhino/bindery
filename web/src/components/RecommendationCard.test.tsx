@@ -46,10 +46,10 @@ describe('RecommendationCard — rendering', () => {
   })
 
   it('shows a placeholder book icon when no imageUrl', () => {
-    render(<RecommendationCard rec={baseRec} onDismiss={vi.fn()} onAdd={vi.fn()} onExcludeAuthor={vi.fn()} />)
+    const { container } = render(<RecommendationCard rec={baseRec} onDismiss={vi.fn()} onAdd={vi.fn()} onExcludeAuthor={vi.fn()} />)
     expect(screen.queryByRole('img')).toBeNull()
     // SVG placeholder should be in the cover area
-    const coverArea = document.querySelector('.h-36 svg')
+    const coverArea = container.querySelector('[class*="aspect-[2/3]"] svg')
     expect(coverArea).not.toBeNull()
   })
 
@@ -61,12 +61,12 @@ describe('RecommendationCard — rendering', () => {
     expect(img.getAttribute('src')).toContain(encodeURIComponent('https://example.com/cover.jpg'))
   })
 
-  it('shows up to 3 genre tags', () => {
+  it('shows up to 2 genre tags', () => {
     const rec = { ...baseRec, genres: ['Fantasy', 'Adventure', 'Magic', 'Epic', 'Quest'] }
     render(<RecommendationCard rec={rec} onDismiss={vi.fn()} onAdd={vi.fn()} onExcludeAuthor={vi.fn()} />)
     expect(screen.getByText('Fantasy')).toBeInTheDocument()
     expect(screen.getByText('Adventure')).toBeInTheDocument()
-    expect(screen.getByText('Magic')).toBeInTheDocument()
+    expect(screen.queryByText('Magic')).toBeNull()
     expect(screen.queryByText('Epic')).toBeNull()
     expect(screen.queryByText('Quest')).toBeNull()
   })
@@ -149,16 +149,18 @@ describe('RecommendationCard — actions', () => {
 })
 
 describe('RecommendationCard — responsive layout', () => {
-  it('has a fixed width class for horizontal scroll within rows', () => {
+  it('fills its responsive grid cell instead of forcing horizontal scroll width', () => {
     const { container } = render(<RecommendationCard rec={baseRec} onDismiss={vi.fn()} onAdd={vi.fn()} onExcludeAuthor={vi.fn()} />)
     const card = container.firstChild as HTMLElement
-    expect(card.className).toContain('flex-shrink-0')
-    expect(card.className).toContain('w-56')
+    expect(card.className).toContain('flex')
+    expect(card.className).toContain('flex-col')
+    expect(card.className).not.toContain('flex-shrink-0')
+    expect(card.className).not.toContain('w-56')
   })
 
-  it('cover image area has a fixed height suitable for both mobile and desktop', () => {
+  it('cover image area keeps a portrait aspect ratio', () => {
     const { container } = render(<RecommendationCard rec={baseRec} onDismiss={vi.fn()} onAdd={vi.fn()} onExcludeAuthor={vi.fn()} />)
-    const coverArea = container.querySelector('.h-36')
+    const coverArea = container.querySelector('[class*="aspect-[2/3]"]')
     expect(coverArea).not.toBeNull()
   })
 })
