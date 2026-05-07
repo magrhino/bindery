@@ -1664,6 +1664,60 @@ func TestAggregator_GetBookByISBN_KeepsSecondaryWhenDerivedTitleHasOnlyPartialCa
 	}
 }
 
+func TestAggregator_GetBookByISBN_KeepsSecondaryWhenPrimaryOnlyFindsShorterParent(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"Dune Messiah Frank Herbert": {
+				{ForeignID: "OL-DUNE", Title: "Dune", Author: &models.Author{Name: "Frank Herbert"}},
+			},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL-DUNE": {
+				ForeignID:        "OL-DUNE",
+				Title:            "Dune",
+				Description:      "Wrong OpenLibrary parent description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Frank Herbert"},
+			},
+		},
+	}
+	google := &mockProvider{
+		name: "googlebooks",
+		getByISBN: &models.Book{
+			ForeignID:        "gb:dune-messiah",
+			Title:            "Dune Messiah",
+			Description:      "Google Books description long enough to avoid enrichment if canonicalization fails.",
+			MetadataProvider: "googlebooks",
+			Author:           &models.Author{Name: "Frank Herbert"},
+		},
+	}
+	agg := newTestAggregator(primary, google)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9780593098233")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "gb:dune-messiah" || got.MetadataProvider != "googlebooks" {
+		t.Fatalf("got %+v, want original Google Books sequel result", got)
+	}
+	if primary.getBookCalls != 0 {
+		t.Fatalf("GetBook calls=%d ids=%v, want no canonical parent fetch", primary.getBookCalls, primary.gotBookIDs)
+	}
+}
+
+func TestWeakPartialTitleMatchRejectsShorterSubsetOnlyWithoutSegmentSeparator(t *testing.T) {
+	if !weakPartialTitleMatch("Dune Messiah", "Dune") {
+		t.Fatal("Dune Messiah vs Dune should be a weak partial match")
+	}
+	if weakPartialTitleMatch("The Body Keeps the Score: Brain, Mind, and Body in the Healing of Trauma", "The Body Keeps the Score") {
+		t.Fatal("subtitle segment should allow shorter canonical title")
+	}
+	if weakPartialTitleMatch("Dune – Der Wüstenplanet", "Dune") {
+		t.Fatal("translated segment should allow shorter canonical title")
+	}
+}
+
 func TestAggregator_GetBookByISBN_CanonicalizesSecondaryHitPrefersExactPrimaryTitle(t *testing.T) {
 	primary := &mockProvider{
 		name: "openlibrary",

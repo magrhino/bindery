@@ -226,7 +226,7 @@ func canonicalTitleVariants(title, language string) []canonicalTitleVariant {
 		return nil
 	}
 	isGerman := isGermanBookLanguage(language)
-	sourceKey := indexer.NormalizeTitleForDedup(title)
+	sourceKey := canonicalTitleVariantKey(title)
 	variants := make([]canonicalTitleVariant, 0, 8)
 	seen := make(map[string]struct{})
 	add := func(candidate string, requireUseful bool, kind canonicalTitleVariantKind) bool {
@@ -237,10 +237,7 @@ func canonicalTitleVariants(title, language string) []canonicalTitleVariant {
 		if requireUseful && !usefulCanonicalTitleVariant(candidate) {
 			return false
 		}
-		key := indexer.NormalizeTitleForDedup(candidate)
-		if key == "" {
-			key = strings.ToLower(candidate)
-		}
+		key := canonicalTitleVariantKey(candidate)
 		if _, ok := seen[key]; ok {
 			return false
 		}
@@ -282,6 +279,30 @@ func canonicalTitleVariants(title, language string) []canonicalTitleVariant {
 		add(segment, true, canonicalTitleVariantLeftSegment)
 	}
 	return variants
+}
+
+func canonicalTitleVariantKey(title string) string {
+	title = cleanCanonicalTitleVariant(title)
+	if title == "" {
+		return ""
+	}
+	var b strings.Builder
+	spacePending := false
+	for _, r := range title {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r):
+			if spacePending && b.Len() > 0 {
+				b.WriteByte(' ')
+			}
+			b.WriteRune(unicode.ToLower(r))
+			spacePending = false
+		case unicode.IsSpace(r):
+			spacePending = b.Len() > 0
+		default:
+			spacePending = b.Len() > 0
+		}
+	}
+	return b.String()
 }
 
 func isGermanBookLanguage(language string) bool {
@@ -751,7 +772,16 @@ func weakPartialTitleMatch(matchTitle, candidateTitle string) bool {
 		return len(candidateWords) > len(matchWords)
 	}
 	if containsWordSequence(matchWords, candidateWords) {
-		return len(matchWords)-len(candidateWords) >= 3
+		return !canonicalTitleHasSegmentSeparator(matchTitle)
+	}
+	return false
+}
+
+func canonicalTitleHasSegmentSeparator(title string) bool {
+	for _, sep := range []string{":", " / ", " – ", " — ", " - "} {
+		if strings.Contains(title, sep) {
+			return true
+		}
 	}
 	return false
 }
