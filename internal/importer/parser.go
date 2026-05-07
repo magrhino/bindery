@@ -52,7 +52,7 @@ var bookExtensions = map[string]bool{
 	".epub": true, ".mobi": true, ".azw3": true, ".azw": true,
 	".pdf": true, ".djvu": true, ".cbr": true, ".cbz": true,
 	".fb2": true, ".lit": true, ".txt": true, ".rtf": true,
-	".mp3": true, ".m4a": true, ".m4b": true, ".flac": true, ".ogg": true,
+	".mp3": true, ".m4a": true, ".m4b": true, ".flac": true, ".ogg": true, ".opus": true,
 }
 
 // ParseFilename extracts book metadata from a filename or directory name.

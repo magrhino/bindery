@@ -14,7 +14,7 @@ import (
 // falls back to filename parsing without paying the open/seek cost.
 var audioTagExtensions = map[string]bool{
 	".mp3": true, ".m4a": true, ".m4b": true,
-	".flac": true, ".ogg": true,
+	".flac": true, ".ogg": true, ".opus": true,
 }
 
 // AudioTags is the subset of embedded audio metadata the library scanner

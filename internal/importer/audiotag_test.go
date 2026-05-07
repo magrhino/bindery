@@ -19,6 +19,8 @@ func TestIsAudioTagFile(t *testing.T) {
 		{"/lib/a.m4a", true},
 		{"/lib/a.flac", true},
 		{"/lib/a.ogg", true},
+		{"/lib/a.opus", true},
+		{"/lib/a.OPUS", true},
 		{"/lib/a.epub", false},
 		{"/lib/a.pdf", false},
 		{"/lib/a", false},

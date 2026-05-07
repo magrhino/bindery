@@ -96,6 +96,8 @@ func TestIsBookFile(t *testing.T) {
 		{"book.azw3", true},
 		{"audiobook.m4b", true},
 		{"audio.mp3", true},
+		{"audio.opus", true},
+		{"audio.OPUS", true},
 		{"image.jpg", false},
 		{"readme.md", false},
 		{"file.nzb", false},
