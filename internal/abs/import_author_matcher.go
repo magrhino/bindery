@@ -126,11 +126,11 @@ func (m *authorMatcher) findAuthorByName(ctx context.Context, name string) (*mod
 		if strings.ToLower(strings.TrimSpace(alias.Name)) != needle {
 			continue
 		}
-		author, err := m.getAuthor(ctx, alias.AuthorID)
+		author, trusted, err := m.trustedAliasAuthor(ctx, alias)
 		if err != nil {
 			return nil, "", false, err
 		}
-		if author == nil {
+		if !trusted || author == nil {
 			continue
 		}
 		if _, already := exact[author.ID]; !already {
@@ -164,11 +164,11 @@ func (m *authorMatcher) findAuthorByName(ctx context.Context, name string) (*mod
 		if textutil.MatchAuthorName(name, alias.Name).Kind != textutil.AuthorMatchExact {
 			continue
 		}
-		author, err := m.getAuthor(ctx, alias.AuthorID)
+		author, trusted, err := m.trustedAliasAuthor(ctx, alias)
 		if err != nil {
 			return nil, "", false, err
 		}
-		if author == nil {
+		if !trusted || author == nil {
 			continue
 		}
 		if _, already := normExact[author.ID]; !already {
@@ -224,11 +224,11 @@ func (m *authorMatcher) findAuthorByName(ctx context.Context, name string) (*mod
 		if res.Score < textutil.AuthorMatchAmbiguousMinimum {
 			continue
 		}
-		author, err := m.getAuthor(ctx, alias.AuthorID)
+		author, trusted, err := m.trustedAliasAuthor(ctx, alias)
 		if err != nil {
 			return nil, "", false, err
 		}
-		if author == nil {
+		if !trusted || author == nil {
 			continue
 		}
 		consider(author, res.Score, true)
@@ -266,6 +266,96 @@ func (m *authorMatcher) findAuthorByName(ctx context.Context, name string) (*mod
 	return nil, "", true, nil
 }
 
+func (m *authorMatcher) trustedAliasAuthor(ctx context.Context, alias models.AuthorAlias) (*models.Author, bool, error) {
+	author, err := m.getAuthor(ctx, alias.AuthorID)
+	if err != nil || author == nil {
+		return author, false, err
+	}
+	return author, trustedAuthorAlias(alias, author), nil
+}
+
+func trustedAuthorAlias(alias models.AuthorAlias, author *models.Author) bool {
+	if author == nil {
+		return false
+	}
+	if strings.TrimSpace(alias.SourceOLID) != "" {
+		return true
+	}
+	return authorNamesAutoMatch(alias.Name, author.Name)
+}
+
+func authorNamesAutoMatch(a, b string) bool {
+	match := textutil.MatchAuthorName(a, b)
+	return match.Kind == textutil.AuthorMatchExact ||
+		match.Kind == textutil.AuthorMatchFuzzyAuto ||
+		authorInitialVariantMatch(a, b)
+}
+
+func authorInitialVariantMatch(a, b string) bool {
+	for _, av := range textutil.NormalizeAuthorNameWithVariants(a) {
+		for _, bv := range textutil.NormalizeAuthorNameWithVariants(b) {
+			if normalizedAuthorInitialVariantMatch(av, bv) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func normalizedAuthorInitialVariantMatch(a, b string) bool {
+	aTokens := strings.Fields(a)
+	bTokens := strings.Fields(b)
+	if len(aTokens) == 0 || len(aTokens) != len(bTokens) {
+		return false
+	}
+	sawInitial := false
+	for idx := range aTokens {
+		if aTokens[idx] == bTokens[idx] {
+			continue
+		}
+		if singleRune(aTokens[idx]) && strings.HasPrefix(bTokens[idx], aTokens[idx]) {
+			sawInitial = true
+			continue
+		}
+		if singleRune(bTokens[idx]) && strings.HasPrefix(aTokens[idx], bTokens[idx]) {
+			sawInitial = true
+			continue
+		}
+		return false
+	}
+	return sawInitial
+}
+
+func singleRune(s string) bool {
+	return len([]rune(s)) == 1
+}
+
+func (m *authorMatcher) authorMatchesABSName(ctx context.Context, author *models.Author, name string) (bool, error) {
+	name = strings.TrimSpace(name)
+	if author == nil || name == "" {
+		return false, nil
+	}
+	if authorNamesAutoMatch(name, author.Name) {
+		return true, nil
+	}
+	if m == nil {
+		return false, nil
+	}
+	for _, alias := range m.aliases {
+		if alias.AuthorID != author.ID || !authorNamesAutoMatch(name, alias.Name) {
+			continue
+		}
+		aliasAuthor, trusted, err := m.trustedAliasAuthor(ctx, alias)
+		if err != nil {
+			return false, err
+		}
+		if trusted && aliasAuthor != nil && aliasAuthor.ID == author.ID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // shouldRecordAuthorVariantAlias returns true when the matchedBy tier is one
 // that identifies the canonical author via a form different from the supplied
 // ABS name, so recording the ABS form as an alias is helpful. "alias" and
@@ -283,9 +373,23 @@ func (i *Importer) recordSecondaryAuthors(ctx context.Context, canonicalID int64
 	if canonicalID == 0 || i.aliases == nil {
 		return
 	}
+	var canonical *models.Author
+	var err error
+	if matcher != nil {
+		canonical, err = matcher.getAuthor(ctx, canonicalID)
+	} else if i.authors != nil {
+		canonical, err = i.authors.GetByID(ctx, canonicalID)
+	}
+	if err != nil {
+		slog.Debug("abs import: secondary author alias skipped", "authorID", canonicalID, "error", err)
+		return
+	}
+	if canonical == nil {
+		return
+	}
 	for _, author := range extras {
 		name := strings.TrimSpace(author.Name)
-		if name == "" {
+		if name == "" || !authorNamesAutoMatch(name, canonical.Name) {
 			continue
 		}
 		alias := &models.AuthorAlias{AuthorID: canonicalID, Name: name}
