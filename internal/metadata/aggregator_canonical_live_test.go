@@ -4,19 +4,34 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/vavallee/bindery/internal/indexer"
+	"github.com/vavallee/bindery/internal/metadata/dnb"
+	"github.com/vavallee/bindery/internal/metadata/googlebooks"
 	"github.com/vavallee/bindery/internal/metadata/openlibrary"
 	"github.com/vavallee/bindery/internal/models"
 )
 
 const canonicalPrimaryLiveTestTimeout = 45 * time.Second
+const canonicalPrimaryLiveLookupDelay = 250 * time.Millisecond
 
 type canonicalTortureCase struct {
+	id                       string
+	titleInputs              []string
+	authorInputs             []string
+	expectedOpenLibraryWork  string
+	forbiddenCanonicalTitles []string
+}
+
+type canonicalProviderSourceCase struct {
 	id                      string
-	titleInputs             []string
-	authorInputs            []string
+	provider                string
+	isbnInputs              []string
+	expectedSourceProvider  string
+	expectedSourceLanguage  string
 	expectedOpenLibraryWork string
 }
 
@@ -26,10 +41,43 @@ func TestLiveAggregatorCanonicalPrimaryBookTortureCorpus(t *testing.T) {
 	}
 
 	agg := NewAggregator(openlibrary.New())
+	for _, tc := range canonicalProviderSourceCorpus() {
+		t.Run("provider_source/"+tc.id, func(t *testing.T) {
+			sourceProvider, skip := canonicalLiveSourceProvider(tc.provider)
+			if skip != "" {
+				t.Skip(skip)
+			}
+			for _, isbnInput := range tc.isbnInputs {
+				t.Run(isbnInput, func(t *testing.T) {
+					ctx, cancel := context.WithTimeout(context.Background(), canonicalPrimaryLiveTestTimeout)
+					t.Cleanup(cancel)
+
+					source, err := sourceProvider.GetBookByISBN(ctx, isbnInput)
+					sleepAfterCanonicalPrimaryLiveLookup()
+					if err != nil {
+						t.Fatalf("%s.GetBookByISBN(%q): %v", tc.provider, isbnInput, err)
+					}
+					assertCanonicalProviderSource(t, source, tc)
+
+					canonical, ok := agg.canonicalPrimaryBook(ctx, isbnInput, *source)
+					sleepAfterCanonicalPrimaryLiveLookup()
+					if !ok {
+						t.Fatalf("canonicalPrimaryBook(%q source=%s) ok = false, want true", isbnInput, describeCanonicalLiveBook(source))
+					}
+					if canonical == nil {
+						t.Fatalf("canonicalPrimaryBook(%q source=%s) = nil, want OpenLibrary work %s", isbnInput, describeCanonicalLiveBook(source), tc.expectedOpenLibraryWork)
+					}
+					if canonical.ForeignID != tc.expectedOpenLibraryWork {
+						t.Fatalf("canonical.ForeignID = %q, want %q (isbn=%q source=%s)", canonical.ForeignID, tc.expectedOpenLibraryWork, isbnInput, describeCanonicalLiveBook(source))
+					}
+				})
+			}
+		})
+	}
 	for _, tc := range canonicalTortureCorpus() {
 		for _, titleInput := range tc.titleInputs {
 			for _, authorInput := range tc.authorInputs {
-				t.Run(fmt.Sprintf("%s/%s/%s", tc.id, titleInput, authorInput), func(t *testing.T) {
+				t.Run(fmt.Sprintf("synthetic/%s/%s/%s", tc.id, titleInput, authorInput), func(t *testing.T) {
 					ctx, cancel := context.WithTimeout(context.Background(), canonicalPrimaryLiveTestTimeout)
 					t.Cleanup(cancel)
 
@@ -39,6 +87,8 @@ func TestLiveAggregatorCanonicalPrimaryBookTortureCorpus(t *testing.T) {
 						MetadataProvider: "torture-fixture",
 					}
 					canonical, ok := agg.canonicalPrimaryBook(ctx, "", source)
+					sleepAfterCanonicalPrimaryLiveLookup()
+					assertNoForbiddenCanonicalLiveMatch(t, canonical, tc)
 					if tc.expectedOpenLibraryWork == "" {
 						if !ok || canonical == nil {
 							t.Logf("canonicalPrimaryBook(%q, %q) did not match; fixture has no expected_openlibrary_work", titleInput, authorInput)
@@ -62,6 +112,80 @@ func TestLiveAggregatorCanonicalPrimaryBookTortureCorpus(t *testing.T) {
 	}
 }
 
+func sleepAfterCanonicalPrimaryLiveLookup() {
+	time.Sleep(canonicalPrimaryLiveLookupDelay)
+}
+
+func canonicalLiveSourceProvider(provider string) (Provider, string) {
+	switch provider {
+	case "dnb":
+		return dnb.New(), ""
+	case "googlebooks":
+		return googlebooks.New(os.Getenv("GOOGLE_BOOKS_API_KEY")), ""
+	default:
+		return nil, "unsupported canonical live source provider " + provider
+	}
+}
+
+func assertCanonicalProviderSource(t *testing.T, source *models.Book, tc canonicalProviderSourceCase) {
+	t.Helper()
+	if source == nil {
+		t.Fatalf("%s source = nil, want provider result", tc.provider)
+	}
+	if source.MetadataProvider != tc.expectedSourceProvider {
+		t.Fatalf("source provider = %q, want %q (source=%s)", source.MetadataProvider, tc.expectedSourceProvider, describeCanonicalLiveBook(source))
+	}
+	if tc.expectedSourceLanguage != "" && source.Language != tc.expectedSourceLanguage {
+		t.Fatalf("source language = %q, want %q (source=%s)", source.Language, tc.expectedSourceLanguage, describeCanonicalLiveBook(source))
+	}
+	if strings.TrimSpace(source.Title) == "" {
+		t.Fatalf("source title is empty: %s", describeCanonicalLiveBook(source))
+	}
+	if source.Author == nil || strings.TrimSpace(source.Author.Name) == "" {
+		t.Fatalf("source author is empty: %s", describeCanonicalLiveBook(source))
+	}
+}
+
+func describeCanonicalLiveBook(book *models.Book) string {
+	if book == nil {
+		return "<nil>"
+	}
+	author := ""
+	if book.Author != nil {
+		author = book.Author.Name
+	}
+	return fmt.Sprintf("title=%q author=%q language=%q provider=%q foreignID=%q", book.Title, author, book.Language, book.MetadataProvider, book.ForeignID)
+}
+
+func assertNoForbiddenCanonicalLiveMatch(t *testing.T, canonical *models.Book, tc canonicalTortureCase) {
+	t.Helper()
+	if canonical == nil {
+		return
+	}
+	gotTitle := indexer.NormalizeTitleForDedup(canonical.Title)
+	for _, title := range tc.forbiddenCanonicalTitles {
+		if gotTitle == indexer.NormalizeTitleForDedup(title) {
+			t.Fatalf("canonical title = %q, forbidden for torture case %s", canonical.Title, tc.id)
+		}
+	}
+}
+
+func canonicalProviderSourceCorpus() []canonicalProviderSourceCase {
+	return []canonicalProviderSourceCase{
+		{
+			id:       "dune_german_dnb_noisy_title_production_source",
+			provider: "dnb",
+			isbnInputs: []string{
+				"9783453323131",
+				"9783453317178",
+			},
+			expectedSourceProvider:  "dnb",
+			expectedSourceLanguage:  "ger",
+			expectedOpenLibraryWork: "OL893415W",
+		},
+	}
+}
+
 func canonicalTortureCorpus() []canonicalTortureCase {
 	return []canonicalTortureCase{
 		{
@@ -78,33 +202,16 @@ func canonicalTortureCorpus() []canonicalTortureCase {
 			expectedOpenLibraryWork: "OL21745884W",
 		},
 		{
-			id: "dune_german_ol_google_dnb_isbn10_x",
+			id: "data_science_real_trailing_descriptor_word",
 			titleInputs: []string{
-				"Der Wüstenplanet",
-				"Der Wüstenplanet: Science-fiction-Roman",
-				"Dune – Der Wüstenplanet",
-				"Dune - Der Wüstenplanet.",
-				"Dune: Der Wüstenplanet",
+				"Data Science",
 			},
 			authorInputs: []string{
-				"Frank Herbert",
-				"Herbert, Frank",
+				"John D. Kelleher",
 			},
-			expectedOpenLibraryWork: "OL893415W",
-		},
-		{
-			id: "dune_german_dnb_new_translation_title_noise",
-			titleInputs: []string{
-				"Dune – Der Wüstenplanet : Roman",
-				"Dune – Der Wüstenplanet: Roman",
-				"Der Wüstenplanet - neu übersetzt",
-				"Dune der Wüstenplanet Roman",
+			forbiddenCanonicalTitles: []string{
+				"Data",
 			},
-			authorInputs: []string{
-				"Frank Herbert",
-				"Herbert, Frank",
-			},
-			expectedOpenLibraryWork: "OL893415W",
 		},
 		{
 			id: "cien_anos_spanish_accents_bilingual",

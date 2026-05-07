@@ -20,12 +20,14 @@ type mockProvider struct {
 	getAuthor          *models.Author
 	getAuthorErr       error
 	getBook            *models.Book
+	getBookByID        map[string]*models.Book
 	getBookErr         error
 	getBookCalls       int
 	gotBookIDs         []string
 	getEditions        []models.Edition
 	getEditionsErr     error
 	getByISBN          *models.Book
+	getByISBNByISBN    map[string]*models.Book
 	getByISBNErr       error
 	getByISBNCalls     int
 	gotISBNs           []string
@@ -54,6 +56,9 @@ func (m *mockProvider) GetAuthor(_ context.Context, _ string) (*models.Author, e
 func (m *mockProvider) GetBook(_ context.Context, foreignID string) (*models.Book, error) {
 	m.getBookCalls++
 	m.gotBookIDs = append(m.gotBookIDs, foreignID)
+	if m.getBookByID != nil {
+		return m.getBookByID[foreignID], m.getBookErr
+	}
 	return m.getBook, m.getBookErr
 }
 func (m *mockProvider) GetEditions(_ context.Context, _ string) ([]models.Edition, error) {
@@ -62,6 +67,9 @@ func (m *mockProvider) GetEditions(_ context.Context, _ string) ([]models.Editio
 func (m *mockProvider) GetBookByISBN(_ context.Context, isbn string) (*models.Book, error) {
 	m.getByISBNCalls++
 	m.gotISBNs = append(m.gotISBNs, isbn)
+	if m.getByISBNByISBN != nil {
+		return m.getByISBNByISBN[isbn], m.getByISBNErr
+	}
 	return m.getByISBN, m.getByISBNErr
 }
 
@@ -77,12 +85,26 @@ func equalStringSlices(a, b []string) bool {
 	return true
 }
 
+func equalCanonicalQueries(a, b []primaryBookCanonicalQuery) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // worksProvider implementation (optional, only attached when needed).
 type mockWorksProvider struct {
 	mockProvider
+	authorWorksCalls int
 }
 
 func (m *mockWorksProvider) GetAuthorWorks(_ context.Context, _ string) ([]models.Book, error) {
+	m.authorWorksCalls++
 	return m.authorWorks, m.authorWorksErr
 }
 
@@ -513,6 +535,1027 @@ func TestAggregator_GetBookByISBN_CanonicalizesSecondaryHitUsingISBNSearch(t *te
 	wantQueries := []string{"isbn:9780441172719"}
 	if !equalStringSlices(primary.searchBookQueries, wantQueries) {
 		t.Fatalf("search queries = %v, want %v", primary.searchBookQueries, wantQueries)
+	}
+}
+
+func TestAggregator_GetBookByISBN_PrimaryISBNSearchDoesNotFallThroughToWrongTitleSearch(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		getByISBN: &models.Book{
+			ForeignID:        "OL-CORRECT",
+			Title:            "Classic Title",
+			Description:      "Primary OpenLibrary ISBN description long enough to avoid enrichment.",
+			MetadataProvider: "openlibrary",
+			Author:           &models.Author{Name: "Jane Author"},
+		},
+		searchBooksByQuery: map[string][]models.Book{
+			"isbn:9780000000008": {{
+				ForeignID: "OL-CORRECT",
+				Title:     "Classic Title",
+				Author:    &models.Author{Name: "Jane Author"},
+			}},
+			"Classic Title Jane Author": {{
+				ForeignID: "OL-WRONG",
+				Title:     "Classic Title",
+				Author:    &models.Author{Name: "Jane Author"},
+			}},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL-WRONG": {
+				ForeignID:        "OL-WRONG",
+				Title:            "Classic Title",
+				Description:      "Wrong OpenLibrary title-search work description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Jane Author"},
+			},
+		},
+	}
+	agg := newTestAggregator(primary)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9780000000008")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL-CORRECT" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want exact OpenLibrary ISBN work", got)
+	}
+	wantQueries := []string{"isbn:9780000000008"}
+	if !equalStringSlices(primary.searchBookQueries, wantQueries) {
+		t.Fatalf("search queries = %v, want %v", primary.searchBookQueries, wantQueries)
+	}
+	if primary.getBookCalls != 0 {
+		t.Fatalf("GetBook calls=%d ids=%v, want no title-search canonical fetch", primary.getBookCalls, primary.gotBookIDs)
+	}
+}
+
+func TestAggregator_GetBookByISBN_ISBNSearchWinsOverPlausibleWrongTitleSearch(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"isbn:9780000000001": {{
+				ForeignID: "OL-CORRECT",
+				Title:     "Classic Title",
+				Author:    &models.Author{Name: "Jane Author"},
+			}},
+			"Classic Title Jane Author": {{
+				ForeignID: "OL-WRONG",
+				Title:     "Classic Title",
+				Author:    &models.Author{Name: "Jane Author"},
+			}},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL-CORRECT": {
+				ForeignID:        "OL-CORRECT",
+				Title:            "Classic Title",
+				Description:      "Correct OpenLibrary ISBN work description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Jane Author"},
+			},
+			"OL-WRONG": {
+				ForeignID:        "OL-WRONG",
+				Title:            "Classic Title",
+				Description:      "Wrong OpenLibrary title-search work description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Jane Author"},
+			},
+		},
+	}
+	google := &mockProvider{
+		name: "googlebooks",
+		getByISBN: &models.Book{
+			ForeignID:        "gb:classic-title",
+			Title:            "Classic Title",
+			Description:      "Google Books description long enough to avoid enrichment if canonicalization fails.",
+			MetadataProvider: "googlebooks",
+			Author:           &models.Author{Name: "Jane Author"},
+		},
+	}
+	agg := newTestAggregator(primary, google)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9780000000001")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL-CORRECT" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want exact ISBN OpenLibrary work", got)
+	}
+	wantQueries := []string{"isbn:9780000000001"}
+	if !equalStringSlices(primary.searchBookQueries, wantQueries) {
+		t.Fatalf("search queries = %v, want %v", primary.searchBookQueries, wantQueries)
+	}
+}
+
+func TestAggregator_GetBookByISBN_CanonicalizesNoiseWordTitleAfterISBNMiss(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"isbn:9780000000003": nil,
+			"The Book Jane Author": {{
+				ForeignID: "OL-THE-BOOK",
+				Title:     "The Book",
+				Author:    &models.Author{Name: "Jane Author"},
+			}},
+		},
+		getBook: &models.Book{
+			ForeignID:        "OL-THE-BOOK",
+			Title:            "The Book",
+			Description:      "OpenLibrary canonical description long enough to avoid extra enrichment.",
+			MetadataProvider: "openlibrary",
+			Author:           &models.Author{Name: "Jane Author"},
+		},
+	}
+	google := &mockProvider{
+		name: "googlebooks",
+		getByISBN: &models.Book{
+			ForeignID:        "gb:the-book",
+			Title:            "The Book",
+			Description:      "Google Books description long enough to avoid enrichment if canonicalization fails.",
+			MetadataProvider: "googlebooks",
+			Author:           &models.Author{Name: "Jane Author"},
+		},
+	}
+	agg := newTestAggregator(primary, google)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9780000000003")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL-THE-BOOK" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want canonical OpenLibrary book", got)
+	}
+	wantQueries := []string{"isbn:9780000000003", "The Book Jane Author"}
+	if !equalStringSlices(primary.searchBookQueries, wantQueries) {
+		t.Fatalf("search queries = %v, want %v", primary.searchBookQueries, wantQueries)
+	}
+}
+
+func TestPrimaryBookCanonicalQueries_OrdersFullTitlesBeforeDerivedSegments(t *testing.T) {
+	tests := []struct {
+		title string
+		want  []primaryBookCanonicalQuery
+	}{
+		{
+			title: "Dune – Der Wüstenplanet",
+			want: []primaryBookCanonicalQuery{
+				{query: "Dune – Der Wüstenplanet Frank Herbert", matchTitle: "Dune – Der Wüstenplanet", allowEditionTitleMatch: true},
+				{query: "title:Dune – Der Wüstenplanet author:Frank Herbert", matchTitle: "Dune – Der Wüstenplanet", allowEditionTitleMatch: true},
+				{query: "Dune Frank Herbert", matchTitle: "Dune", exactTitleOnly: true, allowRankTieBreak: true, allowEditionTitleMatch: true, variantKind: canonicalTitleVariantRightSegment},
+				{query: "title:Dune author:Frank Herbert", matchTitle: "Dune", exactTitleOnly: true, allowRankTieBreak: true, allowEditionTitleMatch: true, variantKind: canonicalTitleVariantRightSegment},
+			},
+		},
+		{
+			title: "Dune – Der Wüstenplanet: Roman",
+			want: []primaryBookCanonicalQuery{
+				{query: "Dune – Der Wüstenplanet: Roman Frank Herbert", matchTitle: "Dune – Der Wüstenplanet: Roman", allowEditionTitleMatch: true},
+				{query: "title:Dune – Der Wüstenplanet: Roman author:Frank Herbert", matchTitle: "Dune – Der Wüstenplanet: Roman", allowEditionTitleMatch: true},
+				{query: "Dune – Der Wüstenplanet Frank Herbert", matchTitle: "Dune – Der Wüstenplanet", exactTitleOnly: true, allowRankTieBreak: true, allowEditionTitleMatch: true, variantKind: canonicalTitleVariantDescriptor},
+				{query: "title:Dune – Der Wüstenplanet author:Frank Herbert", matchTitle: "Dune – Der Wüstenplanet", exactTitleOnly: true, allowRankTieBreak: true, allowEditionTitleMatch: true, variantKind: canonicalTitleVariantDescriptor},
+				{query: "Dune Frank Herbert", matchTitle: "Dune", exactTitleOnly: true, allowRankTieBreak: true, allowEditionTitleMatch: true, variantKind: canonicalTitleVariantRightSegment},
+				{query: "title:Dune author:Frank Herbert", matchTitle: "Dune", exactTitleOnly: true, allowRankTieBreak: true, allowEditionTitleMatch: true, variantKind: canonicalTitleVariantRightSegment},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		got := primaryBookCanonicalQueries("", tc.title, "Frank Herbert", "ger")
+		if len(got) < len(tc.want) {
+			t.Fatalf("queries for %q = %+v, want at least %d queries", tc.title, got, len(tc.want))
+		}
+		for i := range tc.want {
+			if got[i] != tc.want[i] {
+				t.Fatalf("queries for %q [%d] = %+v, want %+v (all queries=%+v)", tc.title, i, got[i], tc.want[i], got)
+			}
+		}
+	}
+}
+
+func TestPrimaryBookCanonicalQueries_KeepsOriginalNoiseWordTitle(t *testing.T) {
+	got := primaryBookCanonicalQueries("", "The Book", "Jane Author", "eng")
+	want := []primaryBookCanonicalQuery{
+		{query: "The Book Jane Author", matchTitle: "The Book"},
+		{query: "title:The Book author:Jane Author", matchTitle: "The Book"},
+	}
+	if !equalCanonicalQueries(got, want) {
+		t.Fatalf("queries = %+v, want %+v", got, want)
+	}
+}
+
+func TestPrimaryBookCanonicalQueries_DoesNotStripRealTrailingDescriptorWords(t *testing.T) {
+	got := primaryBookCanonicalQueries("", "Data Science", "Jane Author", "eng")
+	for _, query := range got {
+		if query.matchTitle == "Data" || query.query == "Data Jane Author" || query.query == "title:Data author:Jane Author" {
+			t.Fatalf("generated unsafe derived title query %+v from Data Science (all queries=%+v)", query, got)
+		}
+	}
+}
+
+func TestPrimaryBookCanonicalQueries_GatesGermanNoPunctuationFallbackByLanguageAndDescriptor(t *testing.T) {
+	tests := []struct {
+		name     string
+		title    string
+		author   string
+		language string
+		query    string
+		want     bool
+	}{
+		{
+			name:     "german three letter code",
+			title:    "Dune der Wüstenplanet Roman",
+			author:   "Frank Herbert",
+			language: "ger",
+			query:    "Dune Frank Herbert",
+			want:     true,
+		},
+		{
+			name:     "german two letter code",
+			title:    "Dune der Wüstenplanet Roman",
+			author:   "Frank Herbert",
+			language: "de",
+			query:    "Dune Frank Herbert",
+			want:     true,
+		},
+		{
+			name:     "german title without descriptor",
+			title:    "Dune der Wüstenplanet",
+			author:   "Frank Herbert",
+			language: "ger",
+			query:    "Dune Frank Herbert",
+			want:     false,
+		},
+		{
+			name:     "ordinary german genitive title",
+			title:    "Haus der Sonne",
+			author:   "Jane Author",
+			language: "ger",
+			query:    "Haus Jane Author",
+			want:     false,
+		},
+		{
+			name:     "unknown language",
+			title:    "Dune der Wüstenplanet Roman",
+			author:   "Frank Herbert",
+			language: "",
+			query:    "Dune Frank Herbert",
+			want:     false,
+		},
+		{
+			name:     "english die verb",
+			title:    "Never Die Alone",
+			author:   "Donald Goines",
+			language: "eng",
+			query:    "Never Donald Goines",
+			want:     false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := primaryBookCanonicalQueries("", tc.title, tc.author, tc.language)
+			found := false
+			for _, query := range got {
+				if query.query == tc.query {
+					found = true
+					break
+				}
+			}
+			if found != tc.want {
+				t.Fatalf("query %q present=%v, want %v (all queries=%+v)", tc.query, found, tc.want, got)
+			}
+		})
+	}
+}
+
+func TestAggregator_GetBookByISBN_DoesNotApplyGermanFallbackToEnglishDieTitle(t *testing.T) {
+	tests := []struct {
+		name     string
+		language string
+	}{
+		{name: "english language", language: "eng"},
+		{name: "unknown language", language: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			primary := &mockProvider{
+				name: "openlibrary",
+				searchBooksByQuery: map[string][]models.Book{
+					"Never Donald Goines": {{
+						ForeignID: "OL-NEVER",
+						Title:     "Never",
+						Author:    &models.Author{Name: "Donald Goines"},
+					}},
+				},
+				getBook: &models.Book{
+					ForeignID:        "OL-NEVER",
+					Title:            "Never",
+					Description:      "Wrong OpenLibrary description long enough to avoid enrichment.",
+					MetadataProvider: "openlibrary",
+					Author:           &models.Author{Name: "Donald Goines"},
+				},
+			}
+			google := &mockProvider{
+				name: "googlebooks",
+				getByISBN: &models.Book{
+					ForeignID:        "gb:never-die-alone",
+					Title:            "Never Die Alone",
+					Description:      "Google Books description long enough to avoid enrichment if canonicalization fails.",
+					Language:         tc.language,
+					MetadataProvider: "googlebooks",
+					Author:           &models.Author{Name: "Donald Goines"},
+				},
+			}
+			agg := newTestAggregator(primary, google)
+
+			got, err := agg.GetBookByISBN(context.Background(), "9780000000002")
+			if err != nil {
+				t.Fatalf("GetBookByISBN: %v", err)
+			}
+			if got == nil || got.ForeignID != "gb:never-die-alone" || got.MetadataProvider != "googlebooks" {
+				t.Fatalf("got %+v, want original Google Books result", got)
+			}
+			if primary.getBookCalls != 0 {
+				t.Fatalf("GetBook calls=%d ids=%v, want no German fallback canonical fetch", primary.getBookCalls, primary.gotBookIDs)
+			}
+			for _, query := range primary.searchBookQueries {
+				if query == "Never Donald Goines" {
+					t.Fatalf("generated German fallback query for English title: %v", primary.searchBookQueries)
+				}
+			}
+		})
+	}
+}
+
+func TestAggregator_GetBookByISBN_DoesNotApplyGermanFirstWordFallbackWithoutDescriptor(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"Haus Jane Author": {{
+				ForeignID: "OL-HAUS",
+				Title:     "Haus",
+				Author:    &models.Author{Name: "Jane Author"},
+			}},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL-HAUS": {
+				ForeignID:        "OL-HAUS",
+				Title:            "Haus",
+				Description:      "Wrong OpenLibrary description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Jane Author"},
+			},
+		},
+	}
+	google := &mockProvider{
+		name: "googlebooks",
+		getByISBN: &models.Book{
+			ForeignID:        "gb:haus-der-sonne",
+			Title:            "Haus der Sonne",
+			Description:      "Google Books description long enough to avoid enrichment if canonicalization fails.",
+			Language:         "ger",
+			MetadataProvider: "googlebooks",
+			Author:           &models.Author{Name: "Jane Author"},
+		},
+	}
+	agg := newTestAggregator(primary, google)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9780000000010")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "gb:haus-der-sonne" || got.MetadataProvider != "googlebooks" {
+		t.Fatalf("got %+v, want original Google Books result", got)
+	}
+	if primary.getBookCalls != 0 {
+		t.Fatalf("GetBook calls=%d ids=%v, want no German first-word canonical fetch", primary.getBookCalls, primary.gotBookIDs)
+	}
+	for _, query := range primary.searchBookQueries {
+		if query == "Haus Jane Author" || query == "title:Haus author:Jane Author" {
+			t.Fatalf("generated unsafe German first-word query: %v", primary.searchBookQueries)
+		}
+	}
+}
+
+func TestAggregator_GetBookByISBN_DoesNotCanonicalizeRealTrailingDescriptorWord(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"isbn:9780000000009": nil,
+			"Data Jane Author": {{
+				ForeignID: "OL-DATA",
+				Title:     "Data",
+				Author:    &models.Author{Name: "Jane Author"},
+			}},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL-DATA": {
+				ForeignID:        "OL-DATA",
+				Title:            "Data",
+				Description:      "Wrong OpenLibrary description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Jane Author"},
+			},
+		},
+	}
+	google := &mockProvider{
+		name: "googlebooks",
+		getByISBN: &models.Book{
+			ForeignID:        "gb:data-science",
+			Title:            "Data Science",
+			Description:      "Google Books description long enough to avoid enrichment if canonicalization fails.",
+			MetadataProvider: "googlebooks",
+			Author:           &models.Author{Name: "Jane Author"},
+		},
+	}
+	agg := newTestAggregator(primary, google)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9780000000009")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "gb:data-science" || got.MetadataProvider != "googlebooks" {
+		t.Fatalf("got %+v, want original Google Books result", got)
+	}
+	if primary.getBookCalls != 0 {
+		t.Fatalf("GetBook calls=%d ids=%v, want no unsafe trailing-word canonical fetch", primary.getBookCalls, primary.gotBookIDs)
+	}
+	for _, query := range primary.searchBookQueries {
+		if query == "Data Jane Author" || query == "title:Data author:Jane Author" {
+			t.Fatalf("generated unsafe trailing-word query: %v", primary.searchBookQueries)
+		}
+	}
+}
+
+func TestAggregator_GetBookByISBN_CanonicalizesPrimaryOpenLibraryDuplicateWork(t *testing.T) {
+	primary := &mockWorksProvider{
+		mockProvider: mockProvider{
+			name: "openlibrary",
+			getByISBN: &models.Book{
+				ForeignID:        "OL26431102W",
+				Title:            "Dune – Der Wüstenplanet",
+				Description:      "Duplicate OpenLibrary work description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Frank Herbert", ForeignID: "OL79034A", MetadataProvider: "openlibrary"},
+			},
+			searchBooksByQuery: map[string][]models.Book{
+				"isbn:9783453321229": {{
+					ForeignID: "OL26431102W",
+					Title:     "Dune – Der Wüstenplanet",
+					Author:    &models.Author{Name: "Frank Herbert"},
+				}},
+				"Dune – Der Wüstenplanet Frank Herbert": {{
+					ForeignID: "OL26431102W",
+					Title:     "Dune – Der Wüstenplanet",
+					Author:    &models.Author{Name: "Frank Herbert"},
+				}},
+			},
+			getBook: &models.Book{
+				ForeignID:        "OL893415W",
+				Title:            "Dune",
+				Description:      "Canonical OpenLibrary description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Frank Herbert"},
+			},
+			authorWorks: []models.Book{
+				{ForeignID: "OL26431102W", Title: "Dune – Der Wüstenplanet"},
+				{ForeignID: "OL893415W", Title: "Dune"},
+			},
+		},
+	}
+	agg := newTestAggregator(primary)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9783453321229")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL893415W" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want canonical OpenLibrary work", got)
+	}
+	if primary.getBookCalls != 1 || primary.gotBookIDs[0] != "OL893415W" {
+		t.Fatalf("GetBook calls=%d ids=%v, want OL893415W", primary.getBookCalls, primary.gotBookIDs)
+	}
+	if len(primary.searchBookQueries) == 0 || primary.searchBookQueries[0] != "isbn:9783453321229" {
+		t.Fatalf("first search query = %v, want isbn:9783453321229 first", primary.searchBookQueries)
+	}
+}
+
+func TestAggregator_GetBookByISBN_ReusesCachedAuthorWorksForPrimaryCanonicalization(t *testing.T) {
+	primary := &mockWorksProvider{
+		mockProvider: mockProvider{
+			name: "openlibrary",
+			getByISBNByISBN: map[string]*models.Book{
+				"9783453321229": {
+					ForeignID:        "OL-DUNE-DE",
+					Title:            "Dune – Der Wüstenplanet",
+					Description:      "Duplicate OpenLibrary work description long enough to avoid enrichment.",
+					MetadataProvider: "openlibrary",
+					Author:           &models.Author{Name: "Frank Herbert", ForeignID: "OL79034A", MetadataProvider: "openlibrary"},
+				},
+				"9783453321243": {
+					ForeignID:        "OL-MESSIAH-DE",
+					Title:            "Dune Messiah – Der Herr des Wüstenplaneten",
+					Description:      "Duplicate OpenLibrary work description long enough to avoid enrichment.",
+					MetadataProvider: "openlibrary",
+					Author:           &models.Author{Name: "Frank Herbert", ForeignID: "OL79034A", MetadataProvider: "openlibrary"},
+				},
+			},
+			searchBooksByQuery: map[string][]models.Book{
+				"isbn:9783453321229": {{
+					ForeignID: "OL-DUNE-DE",
+					Title:     "Dune – Der Wüstenplanet",
+					Author:    &models.Author{Name: "Frank Herbert"},
+				}},
+				"isbn:9783453321243": {{
+					ForeignID: "OL-MESSIAH-DE",
+					Title:     "Dune Messiah – Der Herr des Wüstenplaneten",
+					Author:    &models.Author{Name: "Frank Herbert"},
+				}},
+			},
+			getBookByID: map[string]*models.Book{
+				"OL-DUNE": {
+					ForeignID:        "OL-DUNE",
+					Title:            "Dune",
+					Description:      "Canonical OpenLibrary description long enough to avoid enrichment.",
+					MetadataProvider: "openlibrary",
+					Author:           &models.Author{Name: "Frank Herbert"},
+				},
+				"OL-MESSIAH": {
+					ForeignID:        "OL-MESSIAH",
+					Title:            "Dune Messiah",
+					Description:      "Canonical OpenLibrary description long enough to avoid enrichment.",
+					MetadataProvider: "openlibrary",
+					Author:           &models.Author{Name: "Frank Herbert"},
+				},
+			},
+			authorWorks: []models.Book{
+				{ForeignID: "OL-DUNE-DE", Title: "Dune – Der Wüstenplanet"},
+				{ForeignID: "OL-DUNE", Title: "Dune"},
+				{ForeignID: "OL-MESSIAH-DE", Title: "Dune Messiah – Der Herr des Wüstenplaneten"},
+				{ForeignID: "OL-MESSIAH", Title: "Dune Messiah"},
+			},
+		},
+	}
+	agg := newTestAggregator(primary)
+
+	first, err := agg.GetBookByISBN(context.Background(), "9783453321229")
+	if err != nil {
+		t.Fatalf("GetBookByISBN first: %v", err)
+	}
+	second, err := agg.GetBookByISBN(context.Background(), "9783453321243")
+	if err != nil {
+		t.Fatalf("GetBookByISBN second: %v", err)
+	}
+	if first == nil || first.ForeignID != "OL-DUNE" || first.MetadataProvider != "openlibrary" {
+		t.Fatalf("first = %+v, want OL-DUNE", first)
+	}
+	if second == nil || second.ForeignID != "OL-MESSIAH" || second.MetadataProvider != "openlibrary" {
+		t.Fatalf("second = %+v, want OL-MESSIAH", second)
+	}
+	if primary.authorWorksCalls != 1 {
+		t.Fatalf("author works calls = %d, want 1", primary.authorWorksCalls)
+	}
+	if primary.getBookCalls != 2 || !equalStringSlices(primary.gotBookIDs, []string{"OL-DUNE", "OL-MESSIAH"}) {
+		t.Fatalf("GetBook calls=%d ids=%v, want OL-DUNE and OL-MESSIAH", primary.getBookCalls, primary.gotBookIDs)
+	}
+}
+
+func TestAggregator_GetBookByISBN_AuthorWorksCanonicalizationDoesNotEnrichAllWorks(t *testing.T) {
+	primary := &mockWorksProvider{
+		mockProvider: mockProvider{
+			name: "openlibrary",
+			getByISBN: &models.Book{
+				ForeignID:        "OL-DUNE-DE",
+				Title:            "Dune – Der Wüstenplanet",
+				Description:      "Duplicate OpenLibrary work description long enough to avoid enrichment.",
+				Language:         "ger",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Frank Herbert", ForeignID: "OL79034A", MetadataProvider: "openlibrary"},
+			},
+			getBookByID: map[string]*models.Book{
+				"OL-DUNE": {
+					ForeignID:        "OL-DUNE",
+					Title:            "Dune",
+					Description:      "Canonical OpenLibrary description long enough to avoid enrichment.",
+					MetadataProvider: "openlibrary",
+					Author:           &models.Author{Name: "Frank Herbert"},
+				},
+			},
+			authorWorks: []models.Book{
+				{ForeignID: "OL-DUNE-DE", Title: "Dune – Der Wüstenplanet"},
+				{ForeignID: "OL-DUNE", Title: "Dune"},
+				{ForeignID: "OL-MESSIAH", Title: "Dune Messiah"},
+			},
+		},
+	}
+	enricher := &mockProvider{
+		name:        "googlebooks",
+		searchBooks: []models.Book{{ImageURL: "https://books.google.com/cover.jpg"}},
+	}
+	agg := newTestAggregator(primary, enricher)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9783453321229")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL-DUNE" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want canonical OpenLibrary work", got)
+	}
+	if primary.authorWorksCalls != 1 {
+		t.Fatalf("author works calls = %d, want 1", primary.authorWorksCalls)
+	}
+	if len(enricher.searchBookQueries) != 0 {
+		t.Fatalf("enricher SearchBooks queries = %v, want none during author-works canonicalization", enricher.searchBookQueries)
+	}
+}
+
+func TestAggregator_GetBookByISBN_CanonicalizesDNBNoisyTranslatedTitle(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"Dune – Der Wüstenplanet: Roman Frank Herbert": {{
+				ForeignID: "OL26431102W",
+				Title:     "Dune – Der Wüstenplanet",
+				Author:    &models.Author{Name: "Frank Herbert"},
+			}},
+			"title:Dune – Der Wüstenplanet: Roman author:Frank Herbert": {{
+				ForeignID: "OL26431102W",
+				Title:     "Dune – Der Wüstenplanet",
+				Author:    &models.Author{Name: "Frank Herbert"},
+			}},
+			"Dune – Der Wüstenplanet Frank Herbert": {{
+				ForeignID: "OL26431102W",
+				Title:     "Dune – Der Wüstenplanet",
+				Author:    &models.Author{Name: "Frank Herbert"},
+			}},
+			"title:Dune – Der Wüstenplanet author:Frank Herbert": {{
+				ForeignID: "OL26431102W",
+				Title:     "Dune – Der Wüstenplanet",
+				Author:    &models.Author{Name: "Frank Herbert"},
+			}},
+			"Dune Frank Herbert": {
+				{
+					ForeignID: "OL893415W",
+					Title:     "Dune",
+					Author:    &models.Author{Name: "Frank Herbert"},
+				},
+				{
+					ForeignID: "OL27969474W",
+					Title:     "Dune",
+					Author:    &models.Author{Name: "Frank Herbert"},
+				},
+			},
+		},
+		getBook: &models.Book{
+			ForeignID:        "OL893415W",
+			Title:            "Dune",
+			Description:      "Canonical OpenLibrary description long enough to avoid enrichment.",
+			MetadataProvider: "openlibrary",
+			Author:           &models.Author{Name: "Frank Herbert"},
+		},
+	}
+	dnb := &mockProvider{
+		name: "dnb",
+		getByISBN: &models.Book{
+			ForeignID:        "dnb:1285431693",
+			Title:            "Dune – Der Wüstenplanet: Roman",
+			Description:      "DNB description long enough to avoid enrichment if canonicalization fails.",
+			Language:         "ger",
+			MetadataProvider: "dnb",
+			Author:           &models.Author{Name: "Frank Herbert"},
+		},
+	}
+	agg := newTestAggregator(primary, dnb)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9783453323131")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL893415W" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want canonical OpenLibrary work", got)
+	}
+	if primary.getBookCalls != 1 || primary.gotBookIDs[0] != "OL893415W" {
+		t.Fatalf("GetBook calls=%d ids=%v, want OL893415W", primary.getBookCalls, primary.gotBookIDs)
+	}
+}
+
+func TestAggregator_GetBookByISBN_CanonicalizesGermanEditionTitleMatchToTopRankedWork(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"Der Wüstenplanet Frank Herbert": {
+				{
+					ForeignID: "OL893415W",
+					Title:     "Dune",
+					Author:    &models.Author{Name: "Frank Herbert"},
+					Editions: []models.Edition{{
+						ForeignID: "OL32663508M",
+						Title:     "Der Wüstenplanet.",
+						Language:  "ger",
+					}},
+				},
+				{ForeignID: "OL893502W", Title: "Heretics of Dune", Author: &models.Author{Name: "Frank Herbert"}},
+				{
+					ForeignID: "OL26431102W",
+					Title:     "Dune – Der Wüstenplanet",
+					Author:    &models.Author{Name: "Frank Herbert"},
+				},
+			},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL893415W": {
+				ForeignID:        "OL893415W",
+				Title:            "Dune",
+				Description:      "Canonical OpenLibrary description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Frank Herbert"},
+			},
+		},
+	}
+	dnb := &mockProvider{
+		name: "dnb",
+		getByISBN: &models.Book{
+			ForeignID:        "dnb:1070335703",
+			Title:            "Der Wüstenplanet",
+			Description:      "DNB description long enough to avoid enrichment if canonicalization fails.",
+			Language:         "ger",
+			MetadataProvider: "dnb",
+			Author:           &models.Author{Name: "Herbert, Frank"},
+		},
+	}
+	agg := newTestAggregator(primary, dnb)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9783453317178")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL893415W" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want canonical OpenLibrary edition-title match", got)
+	}
+	if primary.getBookCalls != 1 || primary.gotBookIDs[0] != "OL893415W" {
+		t.Fatalf("GetBook calls=%d ids=%v, want OL893415W", primary.getBookCalls, primary.gotBookIDs)
+	}
+}
+
+func TestAggregator_GetBookByISBN_DoesNotUseEditionTitleMatchForUnknownLanguage(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"Der Wüstenplanet Frank Herbert": {{
+				ForeignID: "OL893415W",
+				Title:     "Dune",
+				Author:    &models.Author{Name: "Frank Herbert"},
+				Editions: []models.Edition{{
+					ForeignID: "OL32663508M",
+					Title:     "Der Wüstenplanet",
+					Language:  "ger",
+				}},
+			}},
+		},
+	}
+	dnb := &mockProvider{
+		name: "dnb",
+		getByISBN: &models.Book{
+			ForeignID:        "dnb:1070335703",
+			Title:            "Der Wüstenplanet",
+			Description:      "DNB description long enough to avoid enrichment if canonicalization fails.",
+			MetadataProvider: "dnb",
+			Author:           &models.Author{Name: "Frank Herbert"},
+		},
+	}
+	agg := newTestAggregator(primary, dnb)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9783453317178")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "dnb:1070335703" || got.MetadataProvider != "dnb" {
+		t.Fatalf("got %+v, want original DNB result without source language", got)
+	}
+	if primary.getBookCalls != 0 {
+		t.Fatalf("GetBook calls=%d ids=%v, want no unknown-language edition-title fetch", primary.getBookCalls, primary.gotBookIDs)
+	}
+}
+
+func TestAggregator_GetBookByISBN_CanonicalizesDerivedTitleExactDuplicateByRank(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"Dune Frank Herbert": {
+				{ForeignID: "OL893415W", Title: "Dune", Author: &models.Author{Name: "Frank Herbert"}},
+				{ForeignID: "OL27969474W", Title: "Dune", Author: &models.Author{Name: "Frank Herbert"}},
+			},
+		},
+		getBook: &models.Book{
+			ForeignID:        "OL893415W",
+			Title:            "Dune",
+			Description:      "Canonical OpenLibrary description long enough to avoid enrichment.",
+			MetadataProvider: "openlibrary",
+			Author:           &models.Author{Name: "Frank Herbert"},
+		},
+	}
+	dnb := &mockProvider{
+		name: "dnb",
+		getByISBN: &models.Book{
+			ForeignID:        "dnb:1070335703",
+			Title:            "Dune der Wüstenplanet Roman",
+			Description:      "DNB description long enough to avoid enrichment if canonicalization fails.",
+			Language:         "ger",
+			MetadataProvider: "dnb",
+			Author:           &models.Author{Name: "Herbert, Frank"},
+		},
+	}
+	agg := newTestAggregator(primary, dnb)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9783453317178")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL893415W" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want top-ranked exact OpenLibrary work", got)
+	}
+	if primary.getBookCalls != 1 || primary.gotBookIDs[0] != "OL893415W" {
+		t.Fatalf("GetBook calls=%d ids=%v, want OL893415W", primary.getBookCalls, primary.gotBookIDs)
+	}
+}
+
+func TestAggregator_GetBookByISBN_PrefersRightSubtitleBeforeLeftFallback(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"The Hunger Games: Catching Fire Suzanne Collins": {
+				{ForeignID: "OL-HUNGER-GAMES", Title: "The Hunger Games", Author: &models.Author{Name: "Suzanne Collins"}},
+			},
+			"Catching Fire Suzanne Collins": {
+				{ForeignID: "OL-CATCHING-FIRE", Title: "Catching Fire", Author: &models.Author{Name: "Suzanne Collins"}},
+			},
+			"The Hunger Games Suzanne Collins": {
+				{ForeignID: "OL-HUNGER-GAMES", Title: "The Hunger Games", Author: &models.Author{Name: "Suzanne Collins"}},
+			},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL-CATCHING-FIRE": {
+				ForeignID:        "OL-CATCHING-FIRE",
+				Title:            "Catching Fire",
+				Description:      "OpenLibrary description long enough to avoid extra enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Suzanne Collins"},
+			},
+			"OL-HUNGER-GAMES": {
+				ForeignID:        "OL-HUNGER-GAMES",
+				Title:            "The Hunger Games",
+				Description:      "OpenLibrary parent description long enough to avoid extra enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Suzanne Collins"},
+			},
+		},
+	}
+	google := &mockProvider{
+		name: "googlebooks",
+		getByISBN: &models.Book{
+			ForeignID:        "gb:catching-fire",
+			Title:            "The Hunger Games: Catching Fire",
+			Description:      "Google Books description long enough to avoid enrichment if canonicalization fails.",
+			MetadataProvider: "googlebooks",
+			Author:           &models.Author{Name: "Suzanne Collins"},
+		},
+	}
+	agg := newTestAggregator(primary, google)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9780439023498")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL-CATCHING-FIRE" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want Catching Fire OpenLibrary work", got)
+	}
+	if !equalStringSlices(primary.gotBookIDs, []string{"OL-CATCHING-FIRE"}) {
+		t.Fatalf("GetBook IDs = %v, want only OL-CATCHING-FIRE", primary.gotBookIDs)
+	}
+	for _, query := range primary.searchBookQueries {
+		if query == "The Hunger Games Suzanne Collins" {
+			t.Fatalf("searched left fallback before returning right subtitle match: %v", primary.searchBookQueries)
+		}
+	}
+}
+
+func TestAggregator_GetBookByISBN_FallsBackToLeftTitleWhenRightSubtitleMisses(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"The Body Keeps the Score: Brain, Mind, and Body in the Healing of Trauma Bessel van der Kolk": {
+				{ForeignID: "OL-BODY", Title: "The Body Keeps the Score", Author: &models.Author{Name: "Bessel van der Kolk"}},
+			},
+			"The Body Keeps the Score Bessel van der Kolk": {
+				{ForeignID: "OL-BODY", Title: "The Body Keeps the Score", Author: &models.Author{Name: "Bessel van der Kolk"}},
+			},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL-BODY": {
+				ForeignID:        "OL-BODY",
+				Title:            "The Body Keeps the Score",
+				Description:      "OpenLibrary description long enough to avoid extra enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Bessel van der Kolk"},
+			},
+		},
+	}
+	hardcover := &mockProvider{
+		name: "hardcover",
+		getByISBN: &models.Book{
+			ForeignID:        "hc:the-body-keeps-the-score",
+			Title:            "The Body Keeps the Score: Brain, Mind, and Body in the Healing of Trauma",
+			Description:      "Hardcover description long enough to avoid enrichment if canonicalization fails.",
+			MetadataProvider: "hardcover",
+			Author:           &models.Author{Name: "Bessel van der Kolk"},
+		},
+	}
+	agg := newTestAggregator(primary, hardcover)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9780143127741")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL-BODY" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want left-title OpenLibrary work", got)
+	}
+	if !equalStringSlices(primary.gotBookIDs, []string{"OL-BODY"}) {
+		t.Fatalf("GetBook IDs = %v, want only OL-BODY", primary.gotBookIDs)
+	}
+}
+
+func TestAggregator_GetBookByISBN_DerivedPartialCandidateDoesNotBeatExactTitleCandidate(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"Dune Frank Herbert": {
+				{ForeignID: "OL-DUNE-MESSIAH", Title: "Dune Messiah", Author: &models.Author{Name: "Frank Herbert"}},
+				{ForeignID: "OL-DUNE", Title: "Dune", Author: &models.Author{Name: "Frank Herbert"}},
+			},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL-DUNE": {
+				ForeignID:        "OL-DUNE",
+				Title:            "Dune",
+				Description:      "Canonical OpenLibrary description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Frank Herbert"},
+			},
+		},
+	}
+	dnb := &mockProvider{
+		name: "dnb",
+		getByISBN: &models.Book{
+			ForeignID:        "dnb:dune-translated",
+			Title:            "Dune – Der Wüstenplanet",
+			Description:      "DNB description long enough to avoid enrichment if canonicalization fails.",
+			MetadataProvider: "dnb",
+			Author:           &models.Author{Name: "Frank Herbert"},
+		},
+	}
+	agg := newTestAggregator(primary, dnb)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9783453317178")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL-DUNE" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want exact title candidate over partial derived match", got)
+	}
+	if primary.getBookCalls != 1 || primary.gotBookIDs[0] != "OL-DUNE" {
+		t.Fatalf("GetBook calls=%d ids=%v, want OL-DUNE", primary.getBookCalls, primary.gotBookIDs)
+	}
+}
+
+func TestAggregator_GetBookByISBN_KeepsSecondaryWhenDerivedTitleHasOnlyPartialCandidates(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"Dune Frank Herbert": {
+				{ForeignID: "OL-DUNE-MESSIAH", Title: "Dune Messiah", Author: &models.Author{Name: "Frank Herbert"}},
+				{ForeignID: "OL-HERETICS", Title: "Heretics of Dune", Author: &models.Author{Name: "Frank Herbert"}},
+			},
+		},
+	}
+	dnb := &mockProvider{
+		name: "dnb",
+		getByISBN: &models.Book{
+			ForeignID:        "dnb:dune-translated",
+			Title:            "Dune – Der Wüstenplanet",
+			Description:      "DNB description long enough to avoid enrichment if canonicalization fails.",
+			MetadataProvider: "dnb",
+			Author:           &models.Author{Name: "Frank Herbert"},
+		},
+	}
+	agg := newTestAggregator(primary, dnb)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9783453317178")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "dnb:dune-translated" || got.MetadataProvider != "dnb" {
+		t.Fatalf("got %+v, want original DNB result when derived title has only partial primary matches", got)
+	}
+	if primary.getBookCalls != 0 {
+		t.Fatalf("GetBook calls=%d ids=%v, want no canonical primary fetch", primary.getBookCalls, primary.gotBookIDs)
 	}
 }
 

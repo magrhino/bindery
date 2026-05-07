@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/metadata/audible"
 	"github.com/vavallee/bindery/internal/metadata/audnex"
@@ -152,7 +154,7 @@ func (a *Aggregator) GetAuthorWorks(ctx context.Context, authorForeignID string)
 		return cached.([]models.Book), nil
 	}
 
-	books, err := a.primaryAuthorWorks(ctx, authorForeignID)
+	books, err := a.rawPrimaryAuthorWorks(ctx, authorForeignID)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +172,7 @@ func (a *Aggregator) GetAuthorWorksForAuthor(ctx context.Context, author models.
 		return cached.([]models.Book), nil
 	}
 
-	books, err := a.primaryAuthorWorks(ctx, author.ForeignID)
+	books, err := a.rawPrimaryAuthorWorks(ctx, author.ForeignID)
 	if err != nil {
 		return nil, err
 	}
@@ -202,6 +204,20 @@ func (a *Aggregator) GetAuthorWorksForAuthor(ctx context.Context, author models.
 	return books, nil
 }
 
+func (a *Aggregator) rawPrimaryAuthorWorks(ctx context.Context, authorForeignID string) ([]models.Book, error) {
+	key := "authorworks-raw:" + authorForeignID
+	if cached, ok := a.cache.get(key); ok {
+		return cloneBooks(cached.([]models.Book)), nil
+	}
+
+	books, err := a.primaryAuthorWorks(ctx, authorForeignID)
+	if err != nil {
+		return nil, err
+	}
+	a.cache.set(key, cloneBooks(books))
+	return cloneBooks(books), nil
+}
+
 func (a *Aggregator) primaryAuthorWorks(ctx context.Context, authorForeignID string) ([]models.Book, error) {
 	provider := a.providerForForeignID(authorForeignID)
 	if provider == nil {
@@ -227,6 +243,15 @@ func (a *Aggregator) authorWorksByNameProviders() []authorWorksByNameProvider {
 		}
 	}
 	return providers
+}
+
+func cloneBooks(books []models.Book) []models.Book {
+	if books == nil {
+		return nil
+	}
+	cloned := make([]models.Book, len(books))
+	copy(cloned, books)
+	return cloned
 }
 
 func (a *Aggregator) enrichMissingAuthorWorkCovers(ctx context.Context, books []models.Book) {
@@ -374,10 +399,8 @@ func (a *Aggregator) GetBookByISBN(ctx context.Context, isbn string) (*models.Bo
 		if book == nil {
 			continue
 		}
-		if !sameProvider(provider, a.primary) {
-			if canonical, ok := a.canonicalPrimaryBook(ctx, isbn, *book); ok {
-				book = canonical
-			}
+		if canonical, ok := a.canonicalPrimaryBook(ctx, isbn, *book); ok {
+			book = canonical
 		}
 		if len(book.Description) < 50 {
 			a.enrichBook(ctx, book)
@@ -402,6 +425,39 @@ type bookMatchCandidate struct {
 	titleScore  int
 	authorKind  textutil.AuthorMatchKind
 	authorScore float64
+	resultRank  int
+	rankTie     bool
+}
+
+type canonicalTitleVariantKind int
+
+const (
+	canonicalTitleVariantSource canonicalTitleVariantKind = iota
+	canonicalTitleVariantDescriptor
+	canonicalTitleVariantRightSegment
+	canonicalTitleVariantLeftSegment
+)
+
+type primaryBookCanonicalQuery struct {
+	query                  string
+	matchTitle             string
+	exactTitleOnly         bool
+	allowRankTieBreak      bool
+	allowEditionTitleMatch bool
+	variantKind            canonicalTitleVariantKind
+	isISBN                 bool
+}
+
+type canonicalTitleVariant struct {
+	title             string
+	exactTitleOnly    bool
+	allowRankTieBreak bool
+	kind              canonicalTitleVariantKind
+}
+
+type canonicalPrimaryBookMatch struct {
+	candidate  bookMatchCandidate
+	sameSource bool
 }
 
 func (a *Aggregator) canonicalPrimaryBook(ctx context.Context, isbn string, source models.Book) (*models.Book, bool) {
@@ -412,34 +468,408 @@ func (a *Aggregator) canonicalPrimaryBook(ctx context.Context, isbn string, sour
 	if sourceAuthor == "" {
 		return nil, false
 	}
-	for _, query := range primaryBookCanonicalQueries(isbn, source.Title, sourceAuthor) {
-		if canonical, ok := a.canonicalPrimaryBookSearch(ctx, query, source, sourceAuthor); ok {
-			return canonical, true
-		}
+	queries := primaryBookCanonicalQueries(isbn, source.Title, sourceAuthor, source.Language)
+	if canonical, ok := a.canonicalPrimaryBookFromQueries(ctx, queries, func(query primaryBookCanonicalQuery) (*canonicalPrimaryBookMatch, bool) {
+		return a.canonicalPrimaryBookSearch(ctx, query, source, sourceAuthor)
+	}); ok {
+		return canonical, true
+	}
+	if canonical, ok := a.canonicalPrimaryBookAuthorWorks(ctx, source, sourceAuthor); ok {
+		return canonical, true
 	}
 	return nil, false
 }
 
-func primaryBookCanonicalQueries(isbn, title, author string) []string {
-	queries := make([]string, 0, 2)
-	if isbn = strings.TrimSpace(isbn); isbn != "" {
-		queries = append(queries, "isbn:"+isbn)
+func primaryBookCanonicalQueries(isbn, title, author, language string) []primaryBookCanonicalQuery {
+	queries := make([]primaryBookCanonicalQuery, 0, 4)
+	allowEditionTitleMatch := isGermanBookLanguage(language)
+	seen := make(map[string]struct{})
+	addQuery := func(queryText, matchTitle string, exactTitleOnly, allowRankTieBreak bool, kind canonicalTitleVariantKind, isISBN bool) {
+		queryText = strings.TrimSpace(queryText)
+		if queryText == "" {
+			return
+		}
+		if _, ok := seen[queryText]; ok {
+			return
+		}
+		seen[queryText] = struct{}{}
+		queries = append(queries, primaryBookCanonicalQuery{
+			query:                  queryText,
+			matchTitle:             matchTitle,
+			exactTitleOnly:         exactTitleOnly,
+			allowRankTieBreak:      allowRankTieBreak,
+			allowEditionTitleMatch: allowEditionTitleMatch,
+			variantKind:            kind,
+			isISBN:                 isISBN,
+		})
 	}
-	if titleAuthor := strings.TrimSpace(title + " " + author); titleAuthor != "" {
-		queries = append(queries, titleAuthor)
+	if isbn = strings.TrimSpace(isbn); isbn != "" {
+		addQuery("isbn:"+isbn, title, false, false, canonicalTitleVariantSource, true)
+	}
+	for _, variant := range canonicalTitleVariants(title, language) {
+		for _, authorVariant := range canonicalAuthorQueryVariants(author) {
+			addQuery(variant.title+" "+authorVariant, variant.title, variant.exactTitleOnly, variant.allowRankTieBreak, variant.kind, false)
+			addQuery("title:"+variant.title+" author:"+authorVariant, variant.title, variant.exactTitleOnly, variant.allowRankTieBreak, variant.kind, false)
+		}
 	}
 	return queries
 }
 
-func (a *Aggregator) canonicalPrimaryBookSearch(ctx context.Context, query string, source models.Book, sourceAuthor string) (*models.Book, bool) {
-	results, err := a.primary.SearchBooks(ctx, query)
+func canonicalAuthorQueryVariants(author string) []string {
+	author = strings.TrimSpace(author)
+	if author == "" {
+		return nil
+	}
+	variants := make([]string, 0, 2)
+	add := func(candidate string) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			return
+		}
+		for _, existing := range variants {
+			if strings.EqualFold(existing, candidate) {
+				return
+			}
+		}
+		variants = append(variants, candidate)
+	}
+	if before, after, ok := strings.Cut(author, ","); ok {
+		add(strings.TrimSpace(after) + " " + strings.TrimSpace(before))
+	}
+	add(author)
+	return variants
+}
+
+func canonicalTitleVariants(title, language string) []canonicalTitleVariant {
+	title = cleanCanonicalTitleVariant(title)
+	if title == "" {
+		return nil
+	}
+	isGerman := isGermanBookLanguage(language)
+	sourceKey := indexer.NormalizeTitleForDedup(title)
+	variants := make([]canonicalTitleVariant, 0, 8)
+	seen := make(map[string]struct{})
+	add := func(candidate string, requireUseful bool, kind canonicalTitleVariantKind) bool {
+		candidate = cleanCanonicalTitleVariant(candidate)
+		if candidate == "" {
+			return false
+		}
+		if requireUseful && !usefulCanonicalTitleVariant(candidate) {
+			return false
+		}
+		key := indexer.NormalizeTitleForDedup(candidate)
+		if key == "" {
+			key = strings.ToLower(candidate)
+		}
+		if _, ok := seen[key]; ok {
+			return false
+		}
+		seen[key] = struct{}{}
+		derived := sourceKey != key
+		variants = append(variants, canonicalTitleVariant{
+			title:             candidate,
+			exactTitleOnly:    derived,
+			allowRankTieBreak: derived,
+			kind:              kind,
+		})
+		return true
+	}
+
+	stripped := stripCanonicalTitleDescriptor(title)
+
+	if sourceKey != "" {
+		add(title, false, canonicalTitleVariantSource)
+	}
+	add(stripped, true, canonicalTitleVariantDescriptor)
+
+	if isGerman {
+		for _, segment := range translatedOriginalTitleSegments(title, stripped) {
+			add(segment, true, canonicalTitleVariantRightSegment)
+		}
+	}
+
+	for _, segment := range rightCanonicalTitleSegments(title, stripped) {
+		add(stripCanonicalTitleDescriptor(segment), true, canonicalTitleVariantRightSegment)
+		add(segment, true, canonicalTitleVariantRightSegment)
+	}
+
+	for _, segment := range leftCanonicalTitleSegments(title, stripped) {
+		add(stripCanonicalTitleDescriptor(segment), true, canonicalTitleVariantLeftSegment)
+		add(segment, true, canonicalTitleVariantLeftSegment)
+	}
+	return variants
+}
+
+func isGermanBookLanguage(language string) bool {
+	switch strings.ToLower(strings.TrimSpace(language)) {
+	case "ger", "deu", "de":
+		return true
+	default:
+		return false
+	}
+}
+
+func cleanCanonicalTitleVariant(title string) string {
+	return norm.NFC.String(strings.Trim(strings.TrimSpace(title), `"'“”‘’.,;`))
+}
+
+func stripCanonicalTitleDescriptor(title string) string {
+	title = cleanCanonicalTitleVariant(title)
+	for {
+		next := title
+		for _, sep := range []string{":", " - ", " – ", " — "} {
+			idx := strings.LastIndex(next, sep)
+			if idx <= 0 {
+				continue
+			}
+			head := cleanCanonicalTitleVariant(next[:idx])
+			tail := cleanCanonicalTitleVariant(next[idx+len(sep):])
+			if usefulCanonicalTitleVariant(head) && canonicalTitleDescriptor(tail) {
+				next = head
+				break
+			}
+		}
+		if next == title {
+			return title
+		}
+		title = next
+	}
+}
+
+func translatedOriginalTitleSegments(titles ...string) []string {
+	var segments []string
+	for _, title := range titles {
+		for _, sep := range []string{" – ", " — ", " - "} {
+			parts := strings.Split(cleanCanonicalTitleVariant(title), sep)
+			if len(parts) < 2 {
+				continue
+			}
+			left := cleanCanonicalTitleVariant(parts[0])
+			right := cleanCanonicalTitleVariant(parts[1])
+			if usefulCanonicalTitleVariant(left) && startsWithGermanArticle(right) {
+				segments = append(segments, left)
+			}
+		}
+		if segment := leadingGermanTranslatedTitleSegment(title); segment != "" {
+			segments = append(segments, segment)
+		}
+	}
+	return segments
+}
+
+func rightCanonicalTitleSegments(titles ...string) []string {
+	var segments []string
+	for _, title := range titles {
+		for _, sep := range []string{":", " / ", " – ", " — ", " - "} {
+			parts := strings.Split(cleanCanonicalTitleVariant(title), sep)
+			if len(parts) < 2 {
+				continue
+			}
+			for _, segment := range parts[1:] {
+				segment = cleanCanonicalTitleVariant(segment)
+				if segment != "" {
+					segments = append(segments, segment)
+				}
+			}
+		}
+	}
+	return segments
+}
+
+func leftCanonicalTitleSegments(titles ...string) []string {
+	var segments []string
+	for _, title := range titles {
+		for _, sep := range []string{":", " / ", " – ", " — ", " - "} {
+			parts := strings.Split(cleanCanonicalTitleVariant(title), sep)
+			if len(parts) < 2 {
+				continue
+			}
+			segment := cleanCanonicalTitleVariant(parts[0])
+			if segment != "" {
+				segments = append(segments, segment)
+			}
+		}
+	}
+	return segments
+}
+
+func startsWithGermanArticle(title string) bool {
+	words := strings.Fields(cleanCanonicalTitleVariant(title))
+	if len(words) == 0 {
+		return false
+	}
+	switch strings.ToLower(words[0]) {
+	case "der", "die", "das":
+		return true
+	default:
+		return false
+	}
+}
+
+func leadingGermanTranslatedTitleSegment(title string) string {
+	words := strings.Fields(cleanCanonicalTitleVariant(title))
+	if len(words) < 4 {
+		return ""
+	}
+	switch strings.ToLower(words[1]) {
+	case "der", "die", "das":
+		if canonicalTitleDescriptorSuffix(strings.Join(words[2:], " ")) {
+			return words[0]
+		}
+	default:
+	}
+	return ""
+}
+
+func usefulCanonicalTitleVariant(title string) bool {
+	clean := seriesmatch.CleanTitle(title)
+	if clean == "" {
+		return false
+	}
+	words := strings.Fields(clean)
+	return len(words) > 0 && !canonicalTitleDescriptor(title)
+}
+
+func canonicalTitleDescriptor(title string) bool {
+	clean := seriesmatch.CleanTitle(title)
+	if clean == "" {
+		return true
+	}
+	for _, word := range strings.Fields(clean) {
+		if canonicalTitleDescriptorWord(word) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func canonicalTitleDescriptorSuffix(title string) bool {
+	words := strings.Fields(seriesmatch.CleanTitle(title))
+	if len(words) == 0 {
+		return false
+	}
+	return canonicalTitleDescriptorWord(words[len(words)-1])
+}
+
+func canonicalTitleDescriptorWord(word string) bool {
+	switch word {
+	case "roman", "science", "fiction", "sci", "fi", "translated", "translation", "new", "neu", "ubersetzt", "übersetzt":
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *Aggregator) canonicalPrimaryBookSearch(ctx context.Context, query primaryBookCanonicalQuery, source models.Book, sourceAuthor string) (*canonicalPrimaryBookMatch, bool) {
+	results, err := a.primary.SearchBooks(ctx, query.query)
 	if err != nil {
-		slog.Debug("primary canonical book search failed", "query", query, "title", source.Title, "author", sourceAuthor, "error", err)
+		slog.Debug("primary canonical book search failed", "query", query.query, "title", source.Title, "author", sourceAuthor, "error", err)
 		return nil, false
 	}
+	return a.canonicalPrimaryBookFromResults(query, source, sourceAuthor, results, false)
+}
+
+func (a *Aggregator) canonicalPrimaryBookFromQueries(ctx context.Context, queries []primaryBookCanonicalQuery, lookup func(primaryBookCanonicalQuery) (*canonicalPrimaryBookMatch, bool)) (*models.Book, bool) {
+	hasSegmentVariant := canonicalQueriesHaveSegmentVariant(queries)
+	var provisional *canonicalPrimaryBookMatch
+	for _, query := range queries {
+		match, ok := lookup(query)
+		if !ok {
+			continue
+		}
+		if match.sameSource {
+			if query.isISBN {
+				break
+			}
+			continue
+		}
+		if shouldDeferCanonicalPrimaryBookMatch(query, match, hasSegmentVariant) {
+			provisional = betterCanonicalProvisionalMatch(provisional, match)
+			continue
+		}
+		return a.fetchCanonicalPrimaryBook(ctx, match), true
+	}
+	if provisional != nil {
+		return a.fetchCanonicalPrimaryBook(ctx, provisional), true
+	}
+	return nil, false
+}
+
+func canonicalQueriesHaveSegmentVariant(queries []primaryBookCanonicalQuery) bool {
+	for _, query := range queries {
+		if query.variantKind == canonicalTitleVariantRightSegment || query.variantKind == canonicalTitleVariantLeftSegment {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldDeferCanonicalPrimaryBookMatch(query primaryBookCanonicalQuery, match *canonicalPrimaryBookMatch, hasSegmentVariant bool) bool {
+	if !hasSegmentVariant || match == nil {
+		return false
+	}
+	if query.allowEditionTitleMatch && (query.variantKind == canonicalTitleVariantSource || query.variantKind == canonicalTitleVariantDescriptor) {
+		return true
+	}
+	if query.isISBN || query.variantKind != canonicalTitleVariantSource {
+		return false
+	}
+	return !match.candidate.titleExact
+}
+
+func betterCanonicalProvisionalMatch(current, next *canonicalPrimaryBookMatch) *canonicalPrimaryBookMatch {
+	if current == nil {
+		return next
+	}
+	if next == nil {
+		return current
+	}
+	if compareBookCandidate(next.candidate, current.candidate) == 1 {
+		return next
+	}
+	return current
+}
+
+func (a *Aggregator) canonicalPrimaryBookAuthorWorks(ctx context.Context, source models.Book, sourceAuthor string) (*models.Book, bool) {
+	if source.Author == nil || source.Author.ForeignID == "" {
+		return nil, false
+	}
+	authorID := strings.TrimSpace(source.Author.ForeignID)
+	if source.Author.MetadataProvider != "" && normalizedProviderName(source.Author.MetadataProvider) != normalizedProviderName(providerName(a.primary)) {
+		return nil, false
+	}
+	if source.Author.MetadataProvider == "" && providerNameForForeignID(authorID) != normalizedProviderName(providerName(a.primary)) {
+		return nil, false
+	}
+	if _, ok := a.primary.(worksProvider); !ok {
+		return nil, false
+	}
+	works, err := a.rawPrimaryAuthorWorks(ctx, authorID)
+	if err != nil {
+		slog.Debug("primary canonical author works failed", "author", authorID, "title", source.Title, "error", err)
+		return nil, false
+	}
+	queries := make([]primaryBookCanonicalQuery, 0, len(canonicalTitleVariants(source.Title, source.Language)))
+	for _, variant := range canonicalTitleVariants(source.Title, source.Language) {
+		queries = append(queries, primaryBookCanonicalQuery{
+			query:                  "authorworks:" + authorID,
+			matchTitle:             variant.title,
+			exactTitleOnly:         variant.exactTitleOnly,
+			allowRankTieBreak:      variant.allowRankTieBreak,
+			allowEditionTitleMatch: isGermanBookLanguage(source.Language),
+			variantKind:            variant.kind,
+		})
+	}
+	return a.canonicalPrimaryBookFromQueries(ctx, queries, func(query primaryBookCanonicalQuery) (*canonicalPrimaryBookMatch, bool) {
+		return a.canonicalPrimaryBookFromResults(query, source, sourceAuthor, works, true)
+	})
+}
+
+func (a *Aggregator) canonicalPrimaryBookFromResults(query primaryBookCanonicalQuery, source models.Book, sourceAuthor string, results []models.Book, assumeAuthorMatch bool) (*canonicalPrimaryBookMatch, bool) {
 	matches := make([]bookMatchCandidate, 0, len(results))
 	seen := make(map[string]struct{}, len(results))
-	for _, result := range results {
+	for rank, result := range results {
 		if result.ForeignID == "" {
 			continue
 		}
@@ -447,7 +877,14 @@ func (a *Aggregator) canonicalPrimaryBookSearch(ctx context.Context, query strin
 			continue
 		}
 		seen[result.ForeignID] = struct{}{}
-		candidate, ok := scoreBookCandidate(source, result)
+		author := textutil.AuthorMatchResult{Kind: textutil.AuthorMatchExact, Score: 1}
+		if !assumeAuthorMatch || bookAuthorName(result) != "" {
+			author = textutil.MatchAuthorName(sourceAuthor, bookAuthorName(result))
+			if author.Kind != textutil.AuthorMatchExact && author.Kind != textutil.AuthorMatchFuzzyAuto {
+				continue
+			}
+		}
+		candidate, ok := scoreBookCandidate(query.matchTitle, result, author, rank, query.exactTitleOnly, query.allowRankTieBreak, query.allowEditionTitleMatch)
 		if ok {
 			matches = append(matches, candidate)
 		}
@@ -467,51 +904,84 @@ func (a *Aggregator) canonicalPrimaryBookSearch(ctx context.Context, query strin
 		}
 	}
 	if ambiguous {
-		slog.Debug("primary canonical book search ambiguous", "query", query, "title", source.Title, "author", sourceAuthor)
+		slog.Debug("primary canonical book search ambiguous", "query", query.query, "title", source.Title, "author", sourceAuthor)
 		return nil, false
 	}
-	full, err := a.primary.GetBook(ctx, best.book.ForeignID)
-	if err != nil {
-		slog.Debug("primary canonical book fetch failed", "foreignID", best.book.ForeignID, "error", err)
-		return &best.book, true
+	if strings.TrimSpace(best.book.ForeignID) == strings.TrimSpace(source.ForeignID) {
+		return &canonicalPrimaryBookMatch{sameSource: true}, true
 	}
-	if full == nil {
-		return &best.book, true
-	}
-	return full, true
+	return &canonicalPrimaryBookMatch{candidate: best}, true
 }
 
-func scoreBookCandidate(source, candidate models.Book) (bookMatchCandidate, bool) {
-	titleScore := titleMatchScore(source.Title, candidate.Title)
-	if titleScore < 88 {
+func (a *Aggregator) fetchCanonicalPrimaryBook(ctx context.Context, match *canonicalPrimaryBookMatch) *models.Book {
+	full, err := a.primary.GetBook(ctx, match.candidate.book.ForeignID)
+	if err != nil {
+		slog.Debug("primary canonical book fetch failed", "foreignID", match.candidate.book.ForeignID, "error", err)
+		return &match.candidate.book
+	}
+	if full == nil {
+		return &match.candidate.book
+	}
+	return full
+}
+
+func scoreBookCandidate(matchTitle string, candidate models.Book, author textutil.AuthorMatchResult, resultRank int, exactTitleOnly, allowRankTieBreak, allowEditionTitleMatch bool) (bookMatchCandidate, bool) {
+	titleExact, titleScore, editionExact := bestBookTitleMatch(matchTitle, candidate, allowEditionTitleMatch)
+	if exactTitleOnly && !titleExact {
 		return bookMatchCandidate{}, false
 	}
-	author := textutil.MatchAuthorName(bookAuthorName(source), bookAuthorName(candidate))
-	if author.Kind != textutil.AuthorMatchExact && author.Kind != textutil.AuthorMatchFuzzyAuto {
+	if titleScore < 88 {
 		return bookMatchCandidate{}, false
 	}
 	return bookMatchCandidate{
 		book:        candidate,
-		titleExact:  titleExactMatch(source.Title, candidate.Title),
+		titleExact:  titleExact,
 		titleScore:  titleScore,
 		authorKind:  author.Kind,
 		authorScore: author.Score,
+		resultRank:  resultRank,
+		rankTie:     allowRankTieBreak || editionExact,
 	}, true
 }
 
+func bestBookTitleMatch(matchTitle string, candidate models.Book, allowEditionTitleMatch bool) (bool, int, bool) {
+	bestExact := titleExactMatch(matchTitle, candidate.Title)
+	bestScore := titleMatchScore(matchTitle, candidate.Title)
+	bestEditionExact := false
+	if !allowEditionTitleMatch {
+		return bestExact, bestScore, bestEditionExact
+	}
+	for _, edition := range candidate.Editions {
+		if strings.TrimSpace(edition.Title) == "" {
+			continue
+		}
+		exact := titleExactMatch(matchTitle, edition.Title)
+		score := titleMatchScore(matchTitle, edition.Title)
+		if exact && !bestExact {
+			bestExact = true
+			bestEditionExact = true
+		}
+		if score > bestScore {
+			bestScore = score
+			bestEditionExact = exact
+		} else if exact && score == bestScore {
+			bestEditionExact = true
+		}
+	}
+	return bestExact, bestScore, bestEditionExact
+}
+
 func titleExactMatch(a, b string) bool {
-	left := indexer.NormalizeTitleForDedup(a)
-	right := indexer.NormalizeTitleForDedup(b)
+	left := indexer.NormalizeTitleForDedup(cleanCanonicalTitleVariant(a))
+	right := indexer.NormalizeTitleForDedup(cleanCanonicalTitleVariant(b))
 	return left != "" && left == right
 }
 
 func titleMatchScore(a, b string) int {
-	left := indexer.NormalizeTitleForDedup(a)
-	right := indexer.NormalizeTitleForDedup(b)
-	if left != "" && left == right {
+	if titleExactMatch(a, b) {
 		return 100
 	}
-	return seriesmatch.TitleScore(a, b)
+	return seriesmatch.TitleScore(cleanCanonicalTitleVariant(a), cleanCanonicalTitleVariant(b))
 }
 
 func bookAuthorName(book models.Book) string {
@@ -542,6 +1012,12 @@ func compareBookCandidate(a, b bookMatchCandidate) int {
 	}
 	if math.Abs(a.authorScore-b.authorScore) > 0.001 {
 		if a.authorScore > b.authorScore {
+			return 1
+		}
+		return -1
+	}
+	if (a.rankTie || b.rankTie) && a.titleExact && b.titleExact && a.resultRank != b.resultRank {
+		if a.resultRank < b.resultRank {
 			return 1
 		}
 		return -1
