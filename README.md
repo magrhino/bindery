@@ -114,10 +114,10 @@
   - **Library import** — read an existing Calibre library's `metadata.db` directly and ingest it as Bindery's catalogue (idempotent; trigger from the Settings page or set `calibre.sync_on_startup`). Toggling the mode takes effect without a restart.
 
 ### Metadata
-- **OpenLibrary** (primary) — Authors, books, editions, covers, ISBN lookup
-- **Google Books** (enricher) — Richer descriptions and ratings
-- **Hardcover.app** (enricher) — Community ratings and series data via GraphQL
-- **DNB** (enricher) — Deutsche Nationalbibliothek via the public SRU endpoint. No API key. Always on. Fills description, language, year, and publisher from MARC21 records — especially useful for German-language titles where OpenLibrary coverage is thin.
+- **OpenLibrary** (primary canonical source) — Authors, books, editions, covers, ISBN lookup
+- **Google Books** (secondary lookup + enricher) — ISBN fallback, richer descriptions, and ratings when configured
+- **Hardcover.app** (secondary lookup + enricher) — ISBN fallback, community ratings, and series data via GraphQL when configured
+- **DNB** (secondary lookup + enricher) — Deutsche Nationalbibliothek via the public SRU endpoint. No API key. Always on. Provides ISBN fallback plus description, language, year, and publisher from MARC21 records — especially useful for German-language titles where OpenLibrary coverage is thin.
 - **Audnex** — Audiobook narrator, duration, cover, and description by Audible ASIN via the free [api.audnex.us](https://api.audnex.us) wrapper. Trigger with `POST /api/v1/book/{id}/enrich-audiobook`.
 - **Audible catalogue** — Direct author lookup against Audible's public catalogue endpoint. Supplements OpenLibrary/Hardcover during `FetchAuthorBooks` when the author's effective media type is `audiobook` or `both`. Pulled books carry the ASIN and flow through the same `allowed_languages` filter as the OpenLibrary path — prolific authors (Sanderson, King, Rowling) gain the ASINs that OL/Hardcover are missing, without letting foreign-language editions slip past the default profile.
 - **Cover image proxy** — Cover images are fetched and cached server-side under `<dataDir>/image-cache/` (30-day TTL). All `imageURL` fields in API responses are rewritten to `/api/v1/images?url=<encoded>` before leaving the server. The browser never contacts Goodreads, OpenLibrary, or Google Books directly — no IP leakage, no third-party tracking.
@@ -233,10 +233,10 @@ Bindery aggregates book metadata from multiple open sources:
 
 | Source | Auth Required | Used For |
 |--------|---------------|----------|
-| [OpenLibrary](https://openlibrary.org) | None | Primary: authors, books, editions, covers, ISBN lookup |
-| [Google Books](https://developers.google.com/books) | API key (free) | Enrichment: descriptions, ratings |
-| [Hardcover.app](https://hardcover.app) | None (public GraphQL) | Enrichment: community ratings, series |
-| [DNB](https://www.dnb.de/EN/Professionell/Metadatendienste/Datenbezug/SRU/sru_node.html) | None (public SRU) | Enrichment: descriptions, language, year for German-language titles |
+| [OpenLibrary](https://openlibrary.org) | None | Primary canonical source: authors, books, editions, covers, ISBN lookup |
+| [Google Books](https://developers.google.com/books) | API key (free) | Secondary ISBN lookup plus enrichment: descriptions, ratings |
+| [Hardcover.app](https://hardcover.app) | None (public GraphQL) | Secondary ISBN lookup plus enrichment: community ratings, series |
+| [DNB](https://www.dnb.de/EN/Professionell/Metadatendienste/Datenbezug/SRU/sru_node.html) | None (public SRU) | Secondary ISBN lookup plus enrichment: descriptions, language, year for German-language titles |
 | [Audnex](https://api.audnex.us) | None | Audiobook narrator, duration, cover, description by ASIN |
 | [Audible](https://audible.com) | None | Supplemental audiobook author lookup — pulls ASINs OpenLibrary/Hardcover miss |
 
