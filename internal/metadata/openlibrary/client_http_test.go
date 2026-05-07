@@ -147,6 +147,7 @@ func TestSearchBooks_HTTP(t *testing.T) {
 				Title:            "Dune",
 				AuthorName:       []string{"Frank Herbert"},
 				AuthorKey:        []string{"OL123A"},
+				AuthorAltName:    []string{"Franklin Patrick Herbert Jr."},
 				FirstPublishYear: 1965,
 				CoverI:           &coverI,
 				Subject:          []string{"Science Fiction", "Adventure"},
@@ -159,7 +160,7 @@ func TestSearchBooks_HTTP(t *testing.T) {
 	c := newClientWithPaths(t, map[string]interface{}{
 		"/search.json": func(r *http.Request) string {
 			fields := r.URL.Query().Get("fields")
-			for _, want := range []string{"editions", "editions.key", "editions.title", "editions.language"} {
+			for _, want := range []string{"author_alternative_name", "editions", "editions.key", "editions.title", "editions.language"} {
 				if !strings.Contains(fields, want) {
 					t.Fatalf("search fields = %q, want %q", fields, want)
 				}
@@ -187,6 +188,9 @@ func TestSearchBooks_HTTP(t *testing.T) {
 	}
 	if b.Author.ForeignID != "OL123A" {
 		t.Errorf("Author.ForeignID: want 'OL123A', got %q", b.Author.ForeignID)
+	}
+	if len(b.Author.AlternateNames) != 1 || b.Author.AlternateNames[0] != "Franklin Patrick Herbert Jr." {
+		t.Errorf("Author.AlternateNames: %+v", b.Author.AlternateNames)
 	}
 	if b.ReleaseDate == nil || b.ReleaseDate.Year() != 1965 {
 		t.Errorf("ReleaseDate year: expected 1965")

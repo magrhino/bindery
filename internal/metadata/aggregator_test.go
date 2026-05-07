@@ -394,7 +394,7 @@ func TestAggregator_GetEditions_Cached(t *testing.T) {
 	}
 }
 
-func TestAggregator_GetBookByISBN_PrimaryHitStopsBeforeEnrichers(t *testing.T) {
+func TestAggregator_GetBookByISBN_PrimaryFallbackWinsWhenEnricherDoesNotCanonicalize(t *testing.T) {
 	book := &models.Book{Title: "The Left Hand of Darkness", Description: "A novel long enough description to pass the enrichment check easily."}
 	primary := &mockProvider{name: "ol", getByISBN: book}
 	enricher := &mockProvider{name: "hardcover", getByISBN: &models.Book{Title: "Wrong Book"}}
@@ -410,8 +410,8 @@ func TestAggregator_GetBookByISBN_PrimaryHitStopsBeforeEnrichers(t *testing.T) {
 	if primary.getByISBNCalls != 1 {
 		t.Errorf("primary calls = %d, want 1", primary.getByISBNCalls)
 	}
-	if enricher.getByISBNCalls != 0 {
-		t.Errorf("enricher calls = %d, want 0 after primary hit", enricher.getByISBNCalls)
+	if enricher.getByISBNCalls != 1 {
+		t.Errorf("enricher calls = %d, want 1 while checking for canonical fallback", enricher.getByISBNCalls)
 	}
 }
 
@@ -732,8 +732,8 @@ func TestPrimaryBookCanonicalQueries_OrdersFullTitlesBeforeDerivedSegments(t *te
 func TestPrimaryBookCanonicalQueries_KeepsOriginalNoiseWordTitle(t *testing.T) {
 	got := primaryBookCanonicalQueries("", "The Book", "Jane Author", "eng")
 	want := []primaryBookCanonicalQuery{
-		{query: "The Book Jane Author", matchTitle: "The Book"},
-		{query: "title:The Book author:Jane Author", matchTitle: "The Book"},
+		{query: "The Book Jane Author", matchTitle: "The Book", allowEditionTitleMatch: true},
+		{query: "title:The Book author:Jane Author", matchTitle: "The Book", allowEditionTitleMatch: true},
 	}
 	if !equalCanonicalQueries(got, want) {
 		t.Fatalf("queries = %+v, want %+v", got, want)
@@ -1038,6 +1038,93 @@ func TestAggregator_GetBookByISBN_CanonicalizesPrimaryOpenLibraryDuplicateWork(t
 	}
 }
 
+func TestAggregator_GetBookByISBN_ContinuesPrimaryFallbackForSecondaryCanonicalWork(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		getByISBN: &models.Book{
+			ForeignID:        "OL24742012W",
+			Title:            "DUNE",
+			Description:      "Wrong OpenLibrary ISBN hit description long enough to avoid enrichment.",
+			MetadataProvider: "openlibrary",
+			Author:           &models.Author{Name: "Brian Herbert"},
+		},
+		searchBooksByQuery: map[string][]models.Book{
+			"isbn:9783453321229": {{
+				ForeignID: "OL24742012W",
+				Title:     "DUNE",
+				Author:    &models.Author{Name: "Brian Herbert"},
+			}},
+			"Dune – Der Wüstenplanet: Roman Frank Herbert": {{
+				ForeignID: "OL26431102W",
+				Title:     "Dune – Der Wüstenplanet",
+				Author:    &models.Author{Name: "Frank Herbert"},
+			}},
+			"title:Dune – Der Wüstenplanet: Roman author:Frank Herbert": {{
+				ForeignID: "OL26431102W",
+				Title:     "Dune – Der Wüstenplanet",
+				Author:    &models.Author{Name: "Frank Herbert"},
+			}},
+			"Dune – Der Wüstenplanet Frank Herbert": {{
+				ForeignID: "OL26431102W",
+				Title:     "Dune – Der Wüstenplanet",
+				Author:    &models.Author{Name: "Frank Herbert"},
+			}},
+			"title:Dune – Der Wüstenplanet author:Frank Herbert": {{
+				ForeignID: "OL26431102W",
+				Title:     "Dune – Der Wüstenplanet",
+				Author:    &models.Author{Name: "Frank Herbert"},
+			}},
+			"Dune Frank Herbert": {
+				{
+					ForeignID: "OL893415W",
+					Title:     "Dune",
+					Author:    &models.Author{Name: "Frank Herbert"},
+				},
+				{
+					ForeignID: "OL24742012W",
+					Title:     "DUNE",
+					Author:    &models.Author{Name: "Brian Herbert"},
+				},
+			},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL893415W": {
+				ForeignID:        "OL893415W",
+				Title:            "Dune",
+				Description:      "Canonical OpenLibrary description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Frank Herbert"},
+			},
+		},
+	}
+	dnb := &mockProvider{
+		name: "dnb",
+		getByISBN: &models.Book{
+			ForeignID:        "dnb:1285431693",
+			Title:            "Dune – Der Wüstenplanet: Roman",
+			Description:      "DNB description long enough to avoid enrichment if canonicalization fails.",
+			Language:         "ger",
+			MetadataProvider: "dnb",
+			Author:           &models.Author{Name: "Frank Herbert"},
+		},
+	}
+	agg := newTestAggregator(primary, dnb)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9783453321229")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL893415W" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want secondary-canonicalized OpenLibrary work", got)
+	}
+	if primary.getByISBNCalls != 1 || dnb.getByISBNCalls != 1 {
+		t.Fatalf("GetBookByISBN calls primary=%d dnb=%d, want 1/1", primary.getByISBNCalls, dnb.getByISBNCalls)
+	}
+	if primary.getBookCalls != 1 || primary.gotBookIDs[0] != "OL893415W" {
+		t.Fatalf("GetBook calls=%d ids=%v, want OL893415W", primary.getBookCalls, primary.gotBookIDs)
+	}
+}
+
 func TestAggregator_GetBookByISBN_ReusesCachedAuthorWorksForPrimaryCanonicalization(t *testing.T) {
 	primary := &mockWorksProvider{
 		mockProvider: mockProvider{
@@ -1295,7 +1382,7 @@ func TestAggregator_GetBookByISBN_CanonicalizesGermanEditionTitleMatchToTopRanke
 	}
 }
 
-func TestAggregator_GetBookByISBN_DoesNotUseEditionTitleMatchForUnknownLanguage(t *testing.T) {
+func TestAggregator_GetBookByISBN_UsesEditionTitleMatchWithoutSourceLanguage(t *testing.T) {
 	primary := &mockProvider{
 		name: "openlibrary",
 		searchBooksByQuery: map[string][]models.Book{
@@ -1309,6 +1396,15 @@ func TestAggregator_GetBookByISBN_DoesNotUseEditionTitleMatchForUnknownLanguage(
 					Language:  "ger",
 				}},
 			}},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL893415W": {
+				ForeignID:        "OL893415W",
+				Title:            "Dune",
+				Description:      "Canonical OpenLibrary description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Frank Herbert"},
+			},
 		},
 	}
 	dnb := &mockProvider{
@@ -1327,11 +1423,11 @@ func TestAggregator_GetBookByISBN_DoesNotUseEditionTitleMatchForUnknownLanguage(
 	if err != nil {
 		t.Fatalf("GetBookByISBN: %v", err)
 	}
-	if got == nil || got.ForeignID != "dnb:1070335703" || got.MetadataProvider != "dnb" {
-		t.Fatalf("got %+v, want original DNB result without source language", got)
+	if got == nil || got.ForeignID != "OL893415W" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want canonical OpenLibrary edition-title match", got)
 	}
-	if primary.getBookCalls != 0 {
-		t.Fatalf("GetBook calls=%d ids=%v, want no unknown-language edition-title fetch", primary.getBookCalls, primary.gotBookIDs)
+	if primary.getBookCalls != 1 || primary.gotBookIDs[0] != "OL893415W" {
+		t.Fatalf("GetBook calls=%d ids=%v, want OL893415W", primary.getBookCalls, primary.gotBookIDs)
 	}
 }
 
@@ -1374,6 +1470,295 @@ func TestAggregator_GetBookByISBN_CanonicalizesDerivedTitleExactDuplicateByRank(
 	}
 	if primary.getBookCalls != 1 || primary.gotBookIDs[0] != "OL893415W" {
 		t.Fatalf("GetBook calls=%d ids=%v, want OL893415W", primary.getBookCalls, primary.gotBookIDs)
+	}
+}
+
+func TestAggregator_CanonicalPrimaryBookUsesRankForExactTitleAuthorDuplicates(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"Cien años de soledad Gabriel García Márquez": {
+				{
+					ForeignID: "OL274505W",
+					Title:     "Cien años de soledad",
+					Author:    &models.Author{Name: "Gabriel García Márquez"},
+				},
+				{
+					ForeignID: "OL28027117W",
+					Title:     "Cien Años de Soledad",
+					Author:    &models.Author{Name: "Gabriel García Márquez"},
+				},
+			},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL274505W": {
+				ForeignID:        "OL274505W",
+				Title:            "Cien años de soledad",
+				Description:      "Canonical OpenLibrary description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Gabriel García Márquez"},
+			},
+		},
+	}
+	agg := newTestAggregator(primary)
+	source := models.Book{
+		Title:  "Cien años de soledad",
+		Author: &models.Author{Name: "Gabriel García Márquez"},
+	}
+
+	got, ok := agg.canonicalPrimaryBook(context.Background(), "", source)
+	if !ok {
+		t.Fatal("canonicalPrimaryBook ok = false, want true")
+	}
+	if got == nil || got.ForeignID != "OL274505W" {
+		t.Fatalf("got %+v, want top-ranked exact OpenLibrary work", got)
+	}
+}
+
+func TestAggregator_CanonicalPrimaryBookPrefersPrimaryAuthorOverAliasDuplicate(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"One Hundred Years of Solitude Gabriel Garcia Marquez": {
+				{
+					ForeignID: "OL274505W",
+					Title:     "Cien años de soledad",
+					Author:    &models.Author{Name: "Gabriel García Márquez"},
+					Editions: []models.Edition{{
+						ForeignID: "OL30448691M",
+						Title:     "One Hundred Years of Solitude",
+						Language:  "eng",
+					}},
+				},
+				{
+					ForeignID: "OL29355621W",
+					Title:     "One Hundred Years of Solitude",
+					Author: &models.Author{
+						Name:           "Gregory Rabassa",
+						AlternateNames: []string{"Gabriel Garcia Marquez", "Gabriel García Márquez"},
+					},
+				},
+			},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL274505W": {
+				ForeignID:        "OL274505W",
+				Title:            "Cien años de soledad",
+				Description:      "Canonical OpenLibrary description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Gabriel García Márquez"},
+			},
+		},
+	}
+	agg := newTestAggregator(primary)
+	source := models.Book{
+		Title:  "One Hundred Years of Solitude",
+		Author: &models.Author{Name: "Gabriel Garcia Marquez"},
+	}
+
+	got, ok := agg.canonicalPrimaryBook(context.Background(), "", source)
+	if !ok {
+		t.Fatal("canonicalPrimaryBook ok = false, want true")
+	}
+	if got == nil || got.ForeignID != "OL274505W" {
+		t.Fatalf("got %+v, want canonical Cien años work", got)
+	}
+}
+
+func TestAggregator_CanonicalPrimaryBookRejectsCompilationBeforeSwappedAuthorQuery(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"The Three-Body Problem Liu Cixin": {{
+				ForeignID: "OL44576333W",
+				Title:     "Cixin Liu Bestselling Collecting Books Series, Set of 4 Books. the Three-Body Problem, the Wandering Earth, the Dark Forest and Death's End",
+				Author:    &models.Author{Name: "Cixin Liu"},
+			}},
+			"The Three-Body Problem Cixin Liu": {{
+				ForeignID: "OL17267881W",
+				Title:     "三体",
+				Author: &models.Author{
+					Name:           "刘慈欣",
+					AlternateNames: []string{"Liu Cixin", "Cixin Liu"},
+				},
+				Editions: []models.Edition{{
+					ForeignID: "OL25840917M",
+					Title:     "The Three-Body Problem",
+					Language:  "eng",
+				}},
+			}},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL17267881W": {
+				ForeignID:        "OL17267881W",
+				Title:            "三体",
+				Description:      "Canonical OpenLibrary description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author: &models.Author{
+					Name:           "刘慈欣",
+					AlternateNames: []string{"Liu Cixin", "Cixin Liu"},
+				},
+			},
+		},
+	}
+	agg := newTestAggregator(primary)
+	source := models.Book{
+		Title:  "The Three-Body Problem",
+		Author: &models.Author{Name: "Liu Cixin"},
+	}
+
+	got, ok := agg.canonicalPrimaryBook(context.Background(), "", source)
+	if !ok {
+		t.Fatal("canonicalPrimaryBook ok = false, want true")
+	}
+	if got == nil || got.ForeignID != "OL17267881W" {
+		t.Fatalf("got %+v, want canonical Three-Body work", got)
+	}
+	if len(primary.searchBookQueries) < 3 || primary.searchBookQueries[2] != "The Three-Body Problem Cixin Liu" {
+		t.Fatalf("search queries = %v, want swapped author query after rejecting compilation", primary.searchBookQueries)
+	}
+}
+
+func TestAggregator_CanonicalPrimaryBookUsesSwappedEastAsianAuthorForCJKTitle(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"三体 Liu Cixin": {{
+				ForeignID: "OL17267881W",
+				Title:     "三体",
+				Author: &models.Author{
+					Name:           "刘慈欣",
+					AlternateNames: []string{"Liu Cixin", "Cixin Liu"},
+				},
+			}},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL17267881W": {
+				ForeignID:        "OL17267881W",
+				Title:            "三体",
+				Description:      "Canonical OpenLibrary description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author: &models.Author{
+					Name:           "刘慈欣",
+					AlternateNames: []string{"Liu Cixin", "Cixin Liu"},
+				},
+			},
+		},
+	}
+	agg := newTestAggregator(primary)
+	source := models.Book{
+		Title:  "三体",
+		Author: &models.Author{Name: "Cixin Liu"},
+	}
+
+	got, ok := agg.canonicalPrimaryBook(context.Background(), "", source)
+	if !ok {
+		t.Fatal("canonicalPrimaryBook ok = false, want true")
+	}
+	if got == nil || got.ForeignID != "OL17267881W" {
+		t.Fatalf("got %+v, want canonical Three-Body work", got)
+	}
+}
+
+func TestAggregator_CanonicalPrimaryBookMatchesEditionTitleWithAuthorAlias(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"The Master and Margarita Mikhail Bulgakov": {{
+				ForeignID: "OL676009W",
+				Title:     "Мастер и Маргарита",
+				Author: &models.Author{
+					Name:           "Михаил Афанасьевич Булгаков",
+					AlternateNames: []string{"Mikhail Bulgakov", "Bulgakov, Mikhail"},
+				},
+				Editions: []models.Edition{{
+					ForeignID: "OL1413669M",
+					Title:     "The Master & Margarita",
+					Language:  "eng",
+				}},
+			}},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL676009W": {
+				ForeignID:        "OL676009W",
+				Title:            "Мастер и Маргарита",
+				Description:      "Canonical OpenLibrary description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author: &models.Author{
+					Name:           "Михаил Афанасьевич Булгаков",
+					AlternateNames: []string{"Mikhail Bulgakov", "Bulgakov, Mikhail"},
+				},
+			},
+		},
+	}
+	agg := newTestAggregator(primary)
+	source := models.Book{
+		Title:  "The Master and Margarita",
+		Author: &models.Author{Name: "Mikhail Bulgakov"},
+	}
+
+	got, ok := agg.canonicalPrimaryBook(context.Background(), "", source)
+	if !ok {
+		t.Fatal("canonicalPrimaryBook ok = false, want true")
+	}
+	if got == nil || got.ForeignID != "OL676009W" {
+		t.Fatalf("got %+v, want canonical Master and Margarita work", got)
+	}
+}
+
+func TestAggregator_CanonicalPrimaryBookUsesEditionArticleEquivalenceByRank(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"Master and Margarita Mikhail Bulgakov": {
+				{
+					ForeignID: "OL676009W",
+					Title:     "Мастер и Маргарита",
+					Author: &models.Author{
+						Name:           "Михаил Афанасьевич Булгаков",
+						AlternateNames: []string{"Mikhail Bulgakov", "Bulgakov, Mikhail"},
+					},
+					Editions: []models.Edition{{
+						ForeignID: "OL1413669M",
+						Title:     "The Master & Margarita",
+						Language:  "eng",
+					}},
+				},
+				{
+					ForeignID: "OL39795340W",
+					Title:     "Master and Margarita",
+					Author: &models.Author{
+						Name:           "Михаил Афанасьевич Булгаков",
+						AlternateNames: []string{"Mikhail Bulgakov", "Bulgakov, Mikhail"},
+					},
+				},
+			},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL676009W": {
+				ForeignID:        "OL676009W",
+				Title:            "Мастер и Маргарита",
+				Description:      "Canonical OpenLibrary description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author: &models.Author{
+					Name:           "Михаил Афанасьевич Булгаков",
+					AlternateNames: []string{"Mikhail Bulgakov", "Bulgakov, Mikhail"},
+				},
+			},
+		},
+	}
+	agg := newTestAggregator(primary)
+	source := models.Book{
+		Title:  "Master and Margarita",
+		Author: &models.Author{Name: "Mikhail Bulgakov"},
+	}
+
+	got, ok := agg.canonicalPrimaryBook(context.Background(), "", source)
+	if !ok {
+		t.Fatal("canonicalPrimaryBook ok = false, want true")
+	}
+	if got == nil || got.ForeignID != "OL676009W" {
+		t.Fatalf("got %+v, want canonical Master and Margarita work", got)
 	}
 }
 
@@ -1433,6 +1818,63 @@ func TestAggregator_GetBookByISBN_PrefersRightSubtitleBeforeLeftFallback(t *test
 	for _, query := range primary.searchBookQueries {
 		if query == "The Hunger Games Suzanne Collins" {
 			t.Fatalf("searched left fallback before returning right subtitle match: %v", primary.searchBookQueries)
+		}
+	}
+}
+
+func TestAggregator_GetBookByISBN_PreservesExactFullTitleOverSegmentFallback(t *testing.T) {
+	primary := &mockProvider{
+		name: "openlibrary",
+		searchBooksByQuery: map[string][]models.Book{
+			"Foo: Bar Jane Author": {
+				{ForeignID: "OL-FOO-BAR", Title: "Foo: Bar", Author: &models.Author{Name: "Jane Author"}},
+			},
+			"Bar Jane Author": {
+				{ForeignID: "OL-BAR", Title: "Bar", Author: &models.Author{Name: "Jane Author"}},
+			},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL-FOO-BAR": {
+				ForeignID:        "OL-FOO-BAR",
+				Title:            "Foo: Bar",
+				Description:      "OpenLibrary exact full-title description long enough to avoid extra enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Jane Author"},
+			},
+			"OL-BAR": {
+				ForeignID:        "OL-BAR",
+				Title:            "Bar",
+				Description:      "OpenLibrary segment-title description long enough to avoid extra enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Jane Author"},
+			},
+		},
+	}
+	google := &mockProvider{
+		name: "googlebooks",
+		getByISBN: &models.Book{
+			ForeignID:        "gb:foo-bar",
+			Title:            "Foo: Bar",
+			Description:      "Google Books description long enough to avoid enrichment if canonicalization fails.",
+			MetadataProvider: "googlebooks",
+			Author:           &models.Author{Name: "Jane Author"},
+		},
+	}
+	agg := newTestAggregator(primary, google)
+
+	got, err := agg.GetBookByISBN(context.Background(), "9780000000011")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if got == nil || got.ForeignID != "OL-FOO-BAR" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("got %+v, want exact full-title OpenLibrary work", got)
+	}
+	if !equalStringSlices(primary.gotBookIDs, []string{"OL-FOO-BAR"}) {
+		t.Fatalf("GetBook IDs = %v, want only OL-FOO-BAR", primary.gotBookIDs)
+	}
+	for _, query := range primary.searchBookQueries {
+		if query == "Bar Jane Author" {
+			t.Fatalf("searched segment fallback before returning exact full-title match: %v", primary.searchBookQueries)
 		}
 	}
 }
@@ -1677,12 +2119,21 @@ func TestAggregator_GetBookByISBN_CanonicalizesSecondaryHitWithAuthorPunctuation
 	}
 }
 
-func TestAggregator_GetBookByISBN_KeepsSecondaryHitWhenPrimaryMatchAmbiguous(t *testing.T) {
+func TestAggregator_GetBookByISBN_UsesPrimarySearchRankForExactTitleAuthorDuplicates(t *testing.T) {
 	primary := &mockProvider{
 		name: "openlibrary",
 		searchBooks: []models.Book{
 			{ForeignID: "OL1W", Title: "The Book", Author: &models.Author{Name: "A. Author"}},
 			{ForeignID: "OL2W", Title: "The Book", Author: &models.Author{Name: "A. Author"}},
+		},
+		getBookByID: map[string]*models.Book{
+			"OL1W": {
+				ForeignID:        "OL1W",
+				Title:            "The Book",
+				Description:      "OpenLibrary description long enough to avoid enrichment.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "A. Author"},
+			},
 		},
 	}
 	google := &mockProvider{
@@ -1701,8 +2152,8 @@ func TestAggregator_GetBookByISBN_KeepsSecondaryHitWhenPrimaryMatchAmbiguous(t *
 	if err != nil {
 		t.Fatalf("GetBookByISBN: %v", err)
 	}
-	if got == nil || got.ForeignID != "gb:ambiguous" {
-		t.Fatalf("got %+v, want secondary provider result", got)
+	if got == nil || got.ForeignID != "OL1W" {
+		t.Fatalf("got %+v, want top-ranked primary result", got)
 	}
 }
 

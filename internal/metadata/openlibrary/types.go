@@ -44,6 +44,7 @@ type searchDoc struct {
 	Title            string   `json:"title"`
 	AuthorName       []string `json:"author_name"`
 	AuthorKey        []string `json:"author_key"` // e.g. ["OL123A"]
+	AuthorAltName    []string `json:"author_alternative_name"`
 	FirstPublishYear int      `json:"first_publish_year"`
 	CoverI           *int     `json:"cover_i"` // cover ID
 	ISBN             []string `json:"isbn"`
