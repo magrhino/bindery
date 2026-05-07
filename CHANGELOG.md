@@ -6,6 +6,13 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [v1.6.0] — 2026-05-07
+
+### Fixed
+
+- **Authenticated users no longer see the login page** (#493) — Visiting `/login` (or `/setup`) with a valid session now redirects to `/` instead of rendering a stale auth screen. New `PublicOnlyRoute` guard wraps both routes; mirrors the existing `AuthGuard` loading behaviour so there is no flash on refresh, and routes back to `/setup` if setup is still required.
+- **Discover page now uses the wrapping-grid layout** (#347) — Recommendation rows now match Books and Authors with `grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4` so all cards are visible at a glance, instead of horizontally scrolling. Section headings, grouping logic, the cold-start note, and empty/disabled states are unchanged.
+
 ## [v1.5.0] — 2026-05-07
 
 ### Added
