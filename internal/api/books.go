@@ -75,7 +75,7 @@ func (h *BookHandler) WithSeries(s *db.SeriesRepo) *BookHandler {
 
 // EnrichAudiobook fetches audnex data for the book's ASIN and updates
 // narrator, duration, cover, and description on the record. Requires the
-// book to be media_type=audiobook with an ASIN already set.
+// book to have an audiobook format and an ASIN already set.
 func (h *BookHandler) EnrichAudiobook(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(w, r)
 	if !ok {

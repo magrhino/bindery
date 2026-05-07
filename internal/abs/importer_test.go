@@ -12,6 +12,7 @@ import (
 
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/metadata"
+	"github.com/vavallee/bindery/internal/metadata/audnex"
 	"github.com/vavallee/bindery/internal/models"
 )
 
@@ -484,6 +485,7 @@ type stubABSMetadataProvider struct {
 	name                 string
 	searchAuthors        []models.Author
 	searchAuthorsByQuery map[string][]models.Author
+	searchBooksByQuery   map[string][]models.Book
 	authors              map[string]*models.Author
 	books                map[string]*models.Book
 	booksByISBN          map[string]*models.Book
@@ -505,7 +507,10 @@ func (p *stubABSMetadataProvider) SearchAuthors(_ context.Context, query string)
 	}
 	return append([]models.Author(nil), p.searchAuthors...), nil
 }
-func (p *stubABSMetadataProvider) SearchBooks(context.Context, string) ([]models.Book, error) {
+func (p *stubABSMetadataProvider) SearchBooks(_ context.Context, query string) ([]models.Book, error) {
+	if p.searchBooksByQuery != nil {
+		return append([]models.Book(nil), p.searchBooksByQuery[query]...), nil
+	}
 	return nil, nil
 }
 func (p *stubABSMetadataProvider) GetAuthor(_ context.Context, foreignID string) (*models.Author, error) {
@@ -551,6 +556,17 @@ func (p *stubABSMetadataProvider) GetSeriesCatalog(_ context.Context, foreignID 
 		return nil, nil
 	}
 	return p.catalogs[foreignID], nil
+}
+
+type stubABSAudnexClient struct {
+	books map[string]*audnex.Book
+}
+
+func (s *stubABSAudnexClient) GetBook(_ context.Context, asin string) (*audnex.Book, error) {
+	if s.books == nil {
+		return nil, nil
+	}
+	return s.books[asin], nil
 }
 
 func TestImporter_NormalizedAuthorMatchLinksExistingAuthor(t *testing.T) {
@@ -1150,6 +1166,49 @@ func TestImporter_LookupUpstreamAuthor_FuzzyCanonicalRelink(t *testing.T) {
 	}
 }
 
+func TestImporter_LookupUpstreamAuthor_ChoosesDominantExactDuplicate(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, _, _, _, _, _, _, _ := newABSImporterFixture(t)
+	importer.WithMetadata(metadata.NewAggregator(&stubABSMetadataProvider{
+		searchAuthors: []models.Author{
+			{ForeignID: "OL-DUPE-SMALL", Name: "Rebecca Yarros", Statistics: &models.AuthorStats{BookCount: 8}},
+			{ForeignID: "OL-DOMINANT", Name: "Rebecca Yarros", Statistics: &models.AuthorStats{BookCount: 33}},
+		},
+		authors: map[string]*models.Author{
+			"OL-DOMINANT": {ForeignID: "OL-DOMINANT", Name: "Rebecca Yarros", SortName: "Yarros, Rebecca", MetadataProvider: "openlibrary"},
+		},
+	}))
+
+	got, ambiguous, err := importer.lookupUpstreamAuthor(context.Background(), "Rebecca Yarros")
+	if err != nil {
+		t.Fatalf("lookupUpstreamAuthor: %v", err)
+	}
+	if ambiguous || got == nil || got.ForeignID != "OL-DOMINANT" {
+		t.Fatalf("lookupUpstreamAuthor = author=%+v ambiguous=%v, want dominant exact match", got, ambiguous)
+	}
+}
+
+func TestImporter_LookupUpstreamAuthor_KeepsCloseExactDuplicatesAmbiguous(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, _, _, _, _, _, _, _ := newABSImporterFixture(t)
+	importer.WithMetadata(metadata.NewAggregator(&stubABSMetadataProvider{
+		searchAuthors: []models.Author{
+			{ForeignID: "OL-DUPE-A", Name: "Rebecca Yarros", Statistics: &models.AuthorStats{BookCount: 18}},
+			{ForeignID: "OL-DUPE-B", Name: "Rebecca Yarros", Statistics: &models.AuthorStats{BookCount: 14}},
+		},
+	}))
+
+	got, ambiguous, err := importer.lookupUpstreamAuthor(context.Background(), "Rebecca Yarros")
+	if err != nil {
+		t.Fatalf("lookupUpstreamAuthor: %v", err)
+	}
+	if got != nil || !ambiguous {
+		t.Fatalf("lookupUpstreamAuthor = author=%+v ambiguous=%v, want ambiguous close exact duplicates", got, ambiguous)
+	}
+}
+
 func TestImporter_RelinksInitialedAuthorUsingFallbackSearch(t *testing.T) {
 	t.Parallel()
 
@@ -1610,6 +1669,168 @@ func TestImporter_MetadataEnrichmentRelinksAuthorAndBook(t *testing.T) {
 	}
 	if links[0].ExternalID != item.ItemID {
 		t.Fatalf("book provenance externalID = %q, want %q", links[0].ExternalID, item.ItemID)
+	}
+}
+
+func TestImporter_MetadataEnrichmentRelinksBookByASIN(t *testing.T) {
+	t.Parallel()
+
+	importer, authorRepo, bookRepo, _, _, _, _, _, _, _ := newABSImporterFixture(t)
+	provider := &stubABSMetadataProvider{
+		searchAuthors: []models.Author{{
+			ForeignID:  "OL-REBECCA",
+			Name:       "Rebecca Yarros",
+			Statistics: &models.AuthorStats{BookCount: 33},
+		}},
+		searchBooksByQuery: map[string][]models.Book{
+			"Iron Flame Rebecca Yarros": {{
+				ForeignID:    "OL-IRON",
+				Title:        "Iron Flame",
+				EditionCount: 42,
+				Author:       &models.Author{Name: "Rebecca Yarros"},
+			}},
+		},
+		authors: map[string]*models.Author{
+			"OL-REBECCA": {
+				ForeignID:        "OL-REBECCA",
+				Name:             "Rebecca Yarros",
+				SortName:         "Yarros, Rebecca",
+				MetadataProvider: "openlibrary",
+			},
+		},
+		books: map[string]*models.Book{
+			"OL-IRON": {
+				ForeignID:        "OL-IRON",
+				Title:            "Iron Flame",
+				SortTitle:        "Iron Flame",
+				Description:      "OpenLibrary description.",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Rebecca Yarros"},
+			},
+		},
+	}
+	audnexClient := &stubABSAudnexClient{books: map[string]*audnex.Book{
+		"B0D3R3MTLM": {
+			ASIN:     "B0D3R3MTLM",
+			Title:    "Iron Flame (Part 2 of 2) (Dramatized Adaptation)",
+			Authors:  []audnex.Person{{Name: "Rebecca Yarros"}},
+			Language: "English",
+		},
+	}}
+	importer.WithMetadata(metadata.NewAggregator(provider).WithAudnexClient(audnexClient))
+
+	item := sampleABSItem()
+	item.ItemID = "li-iron-flame"
+	item.Title = "Iron Flame (Part 2 of 2) (Dramatized Adaptation)"
+	item.Authors = []NormalizedAuthor{{ID: "author-rebecca", Name: "Rebecca Yarros"}}
+	item.ISBN = ""
+	item.ASIN = "B0D3R3MTLM"
+	item.Description = "ABS description."
+	item.EbookPath = ""
+	item.EbookINO = ""
+	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		if err := fn(ctx, item); err != nil {
+			return EnumerationStats{}, err
+		}
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+
+	stats, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:  DefaultSourceID,
+		BaseURL:   "https://abs.example.com",
+		APIKey:    "secret",
+		LibraryID: item.LibraryID,
+		Label:     "Shelf",
+		Enabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if stats.MetadataRelinked < 2 {
+		t.Fatalf("metadataRelinked = %d, want at least author and ASIN book relinks", stats.MetadataRelinked)
+	}
+	authors, err := authorRepo.List(context.Background())
+	if err != nil || len(authors) != 1 {
+		t.Fatalf("authors = %v err=%v, want 1 author", len(authors), err)
+	}
+	if authors[0].ForeignID != "OL-REBECCA" {
+		t.Fatalf("author = %+v, want upstream Rebecca Yarros", authors[0])
+	}
+	books, err := bookRepo.ListIncludingExcluded(context.Background())
+	if err != nil || len(books) != 1 {
+		t.Fatalf("books = %v err=%v, want 1 book", len(books), err)
+	}
+	if books[0].ForeignID != "OL-IRON" || books[0].MetadataProvider != "openlibrary" {
+		t.Fatalf("book = %+v, want OpenLibrary ASIN relink", books[0])
+	}
+	if books[0].ASIN != "B0D3R3MTLM" || books[0].MediaType != models.MediaTypeAudiobook {
+		t.Fatalf("book format fields = asin %q media %q, want preserved audiobook ASIN", books[0].ASIN, books[0].MediaType)
+	}
+}
+
+func TestImporter_MetadataEnrichmentISBNWinsOverASIN(t *testing.T) {
+	t.Parallel()
+
+	importer, _, bookRepo, _, _, _, _, _, _, _ := newABSImporterFixture(t)
+	provider := &stubABSMetadataProvider{
+		searchAuthors: []models.Author{{
+			ForeignID:  "OL-ANDY",
+			Name:       "Andy Weir",
+			Statistics: &models.AuthorStats{BookCount: 20},
+		}},
+		searchBooksByQuery: map[string][]models.Book{
+			"Wrong Title Andy Weir": {{
+				ForeignID:    "OL-ASIN",
+				Title:        "Wrong Title",
+				EditionCount: 20,
+				Author:       &models.Author{Name: "Andy Weir"},
+			}},
+		},
+		authors: map[string]*models.Author{
+			"OL-ANDY": {ForeignID: "OL-ANDY", Name: "Andy Weir", MetadataProvider: "openlibrary"},
+		},
+		booksByISBN: map[string]*models.Book{
+			"9780593135204": {
+				ForeignID:        "OL-ISBN",
+				Title:            "Project Hail Mary",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Andy Weir"},
+			},
+		},
+		books: map[string]*models.Book{
+			"OL-ASIN": {ForeignID: "OL-ASIN", Title: "Wrong Title", MetadataProvider: "openlibrary", Author: &models.Author{Name: "Andy Weir"}},
+		},
+	}
+	importer.WithMetadata(metadata.NewAggregator(provider).WithAudnexClient(&stubABSAudnexClient{books: map[string]*audnex.Book{
+		"B0ASIN0001": {ASIN: "B0ASIN0001", Title: "Wrong Title", Authors: []audnex.Person{{Name: "Andy Weir"}}},
+	}}))
+
+	item := sampleABSItem()
+	item.ISBN = "9780593135204"
+	item.ASIN = "B0ASIN0001"
+	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		if err := fn(ctx, item); err != nil {
+			return EnumerationStats{}, err
+		}
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+
+	if _, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:  DefaultSourceID,
+		BaseURL:   "https://abs.example.com",
+		APIKey:    "secret",
+		LibraryID: item.LibraryID,
+		Label:     "Shelf",
+		Enabled:   true,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	books, err := bookRepo.ListIncludingExcluded(context.Background())
+	if err != nil || len(books) != 1 {
+		t.Fatalf("books = %v err=%v, want 1 book", len(books), err)
+	}
+	if books[0].ForeignID != "OL-ISBN" {
+		t.Fatalf("book foreignID = %q, want ISBN match to win", books[0].ForeignID)
 	}
 }
 

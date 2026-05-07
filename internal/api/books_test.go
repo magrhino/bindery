@@ -16,6 +16,7 @@ import (
 
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/metadata"
+	"github.com/vavallee/bindery/internal/metadata/audnex"
 	"github.com/vavallee/bindery/internal/models"
 )
 
@@ -92,15 +93,19 @@ func withURLParam(req *http.Request, key, val string) *http.Request {
 }
 
 type bookMapProvider struct {
-	booksByID  map[string]*models.Book
-	getBookErr error
+	booksByID          map[string]*models.Book
+	searchBooksByQuery map[string][]models.Book
+	getBookErr         error
 }
 
 func (p *bookMapProvider) Name() string { return "openlibrary" }
 func (p *bookMapProvider) SearchAuthors(context.Context, string) ([]models.Author, error) {
 	return nil, nil
 }
-func (p *bookMapProvider) SearchBooks(context.Context, string) ([]models.Book, error) {
+func (p *bookMapProvider) SearchBooks(_ context.Context, query string) ([]models.Book, error) {
+	if p.searchBooksByQuery != nil {
+		return append([]models.Book(nil), p.searchBooksByQuery[query]...), nil
+	}
 	return nil, nil
 }
 func (p *bookMapProvider) GetAuthor(context.Context, string) (*models.Author, error) {
@@ -117,6 +122,17 @@ func (p *bookMapProvider) GetEditions(context.Context, string) ([]models.Edition
 }
 func (p *bookMapProvider) GetBookByISBN(context.Context, string) (*models.Book, error) {
 	return nil, nil
+}
+
+type apiStubAudnexClient struct {
+	books map[string]*audnex.Book
+}
+
+func (s *apiStubAudnexClient) GetBook(_ context.Context, asin string) (*audnex.Book, error) {
+	if s.books == nil {
+		return nil, nil
+	}
+	return s.books[asin], nil
 }
 
 // TestBookList_Empty returns [] (not null) so the frontend can render without
@@ -682,6 +698,83 @@ func TestEnrichAudiobook_RejectsMissingASIN(t *testing.T) {
 	h.EnrichAudiobook(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for missing ASIN, got %d", rec.Code)
+	}
+}
+
+func TestEnrichAudiobook_MapsCanonicalMetadataByASIN(t *testing.T) {
+	h, books, _, author, ctx := bookFixture(t)
+	provider := &bookMapProvider{
+		searchBooksByQuery: map[string][]models.Book{
+			"Iron Flame Rebecca Yarros": {{
+				ForeignID:    "OL-IRON",
+				Title:        "Iron Flame",
+				EditionCount: 42,
+				Author:       &models.Author{Name: "Rebecca Yarros"},
+			}},
+		},
+		booksByID: map[string]*models.Book{
+			"OL-IRON": {
+				ForeignID:        "OL-IRON",
+				Title:            "Iron Flame",
+				SortTitle:        "Iron Flame",
+				Description:      "Canonical upstream description.",
+				ImageURL:         "https://covers.example.com/iron.jpg",
+				Genres:           []string{"Fantasy"},
+				Language:         "eng",
+				MetadataProvider: "openlibrary",
+				Author:           &models.Author{Name: "Rebecca Yarros"},
+			},
+		},
+	}
+	h.meta = metadata.NewAggregator(provider).WithAudnexClient(&apiStubAudnexClient{books: map[string]*audnex.Book{
+		"B0D3R3MTLM": {
+			ASIN:             "B0D3R3MTLM",
+			Title:            "Iron Flame (Part 2 of 2) (Dramatized Adaptation)",
+			Authors:          []audnex.Person{{Name: "Rebecca Yarros"}},
+			Narrators:        []audnex.Person{{Name: "Narrator One"}},
+			RuntimeLengthMin: 10,
+			Image:            "https://audnex.example.com/cover.jpg",
+			Language:         "English",
+		},
+	}})
+	author.Name = "Rebecca Yarros"
+	author.SortName = "Yarros, Rebecca"
+	if err := h.authors.Update(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	book := &models.Book{
+		ForeignID: "abs:book:iron", AuthorID: author.ID, Title: "Iron Flame (Part 2 of 2) (Dramatized Adaptation)", SortTitle: "Iron Flame (Part 2 of 2) (Dramatized Adaptation)",
+		Status: models.BookStatusImported, MediaType: models.MediaTypeAudiobook, ASIN: "B0D3R3MTLM",
+		Genres: []string{}, MetadataProvider: "audiobookshelf", Monitored: true,
+		FilePath: "/books/audio/iron", AudiobookFilePath: "/books/audio/iron",
+	}
+	if err := books.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	book.FilePath = "/books/audio/iron"
+	book.AudiobookFilePath = "/books/audio/iron"
+	if err := books.Update(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	req := withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/book/"+strconv.FormatInt(book.ID, 10)+"/enrich", nil), "id", strconv.FormatInt(book.ID, 10))
+	rec := httptest.NewRecorder()
+	h.EnrichAudiobook(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got models.Book
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ForeignID != "OL-IRON" || got.MetadataProvider != "openlibrary" || got.Title != "Iron Flame" {
+		t.Fatalf("book = %+v, want canonical OpenLibrary metadata", got)
+	}
+	if got.ASIN != "B0D3R3MTLM" || got.MediaType != models.MediaTypeAudiobook || got.FilePath != "/books/audio/iron" || got.AudiobookFilePath != "/books/audio/iron" {
+		t.Fatalf("preserved fields = asin %q media %q file %q audio %q", got.ASIN, got.MediaType, got.FilePath, got.AudiobookFilePath)
+	}
+	if got.Narrator != "Narrator One" || got.DurationSeconds != 600 {
+		t.Fatalf("audnex fields = narrator %q duration %d, want preserved enrichment", got.Narrator, got.DurationSeconds)
 	}
 }
 

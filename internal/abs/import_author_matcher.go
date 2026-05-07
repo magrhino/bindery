@@ -497,13 +497,13 @@ func (i *Importer) lookupUpstreamAuthor(ctx context.Context, name string) (*mode
 		return nil, false, nil
 	}
 	if len(exactHits) > 1 {
-		dominant, ok := dominantExactAuthorMatch(exactMatches)
-		if !ok {
+		if dominant, ok := dominantExactAuthorMatch(exactMatches); ok {
+			best = &dominant
+			bestScore = exactScore
+		} else {
 			slog.Info("abs import: upstream author match ambiguous", "author", name, "hits", len(exactHits))
 			return nil, true, nil
 		}
-		best = &dominant
-		bestScore = exactScore
 	}
 	if bestScore < exactScore && bestScore-secondScore < fuzzyTieMargin {
 		slog.Info("abs import: upstream author match ambiguous (tie)", "author", name, "best", bestScore, "second", secondScore)
