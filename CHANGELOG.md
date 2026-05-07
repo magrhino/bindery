@@ -6,6 +6,20 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [v1.5.0] — 2026-05-07
+
+### Added
+
+- **Audiobookshelf (ABS) integration is now always enabled** — The `BINDERY_ABS_ENABLED` feature flag has been removed. ABS configuration, import, review, and conflict endpoints are unconditionally available; the ABS tab always appears in Settings for admins. Existing installs that relied on the flag being `false` to hide the UI will now see the tab; those that set it to `true` can simply remove the env var.
+- **Grimmory integration** — New **Settings → Grimmory** tab for configuring a [Grimmory](https://grimmory.org/) self-hosted digital library. Stores server URL and API key; a Test Connection button pings `GET /api/status`. New `GET/PUT /api/v1/grimmory/config` and `POST /api/v1/grimmory/test` endpoints back the UI. API paths are based on current Grimmory OpenAPI docs and will be updated as the API stabilises.
+- **Separate audiobook download watch folder** — New `BINDERY_AUDIOBOOK_DOWNLOAD_DIR` env var (also exposed in **Settings → General**). When set, the scanner uses this directory for audiobook downloads and falls back to `BINDERY_DOWNLOAD_DIR` for ebooks. Unset by default — fully backwards-compatible. Mirrors the existing `BINDERY_AUDIOBOOK_DIR` split on the library side.
+
+### Fixed
+
+- **`.opus` added to recognised book and audio-tag extensions** — Opus-encoded audiobook files are now detected and tagged correctly.
+- **Hardcover built-in shelves surface in the list picker** — "Want to Read", "Currently Reading", and "Read" now appear alongside user-created lists when adding a book to a Hardcover shelf.
+- **Telemetry security hardening** (#482) — Three fixes to the optional telemetry server: redirect target now uses `CANONICAL_HOST` instead of the user-controlled `Host` header (open redirect); rate-limiter key now strips the port from `RemoteAddr` so connections from the same IP share one bucket; `BINDERY_TELEMETRY_DISABLED=true` is now checked before the settings table on first boot so the opt-out takes effect immediately.
+
 ## [v1.4.5] — 2026-05-06
 
 ### Added
