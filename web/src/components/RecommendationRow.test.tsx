@@ -59,11 +59,17 @@ describe('RecommendationRow', () => {
     expect(screen.getByText('Gamma')).toBeInTheDocument()
   })
 
-  it('has overflow-x-auto class for horizontal scroll on mobile', () => {
+  it('uses a responsive wrapping grid layout', () => {
     const { container } = render(
       <RecommendationRow title="Row" recommendations={[makeRec(1, 'X')]} onDismiss={vi.fn()} onAdd={vi.fn()} onExcludeAuthor={vi.fn()} />
     )
-    expect(container.querySelector('.overflow-x-auto')).not.toBeNull()
+    const grid = container.querySelector('.grid')
+    expect(grid).not.toBeNull()
+    expect(grid?.className).toContain('grid-cols-1')
+    expect(grid?.className).toContain('sm:grid-cols-2')
+    expect(grid?.className).toContain('lg:grid-cols-3')
+    expect(grid?.className).toContain('xl:grid-cols-4')
+    expect(container.querySelector('.overflow-x-auto')).toBeNull()
   })
 
   it('passes onDismiss through to each card', () => {
