@@ -12,14 +12,15 @@ import (
 
 // Config holds the application configuration loaded from environment variables.
 type Config struct {
-	Port         string
-	DBPath       string
-	DataDir      string
-	LogLevel     string
-	APIKey       string
-	DownloadDir  string
-	LibraryDir   string
-	AudiobookDir string
+	Port                 string
+	DBPath               string
+	DataDir              string
+	LogLevel             string
+	APIKey               string
+	DownloadDir          string
+	AudiobookDownloadDir string
+	LibraryDir           string
+	AudiobookDir         string
 	// Enhanced Hardcover series API (BINDERY_ENHANCED_HARDCOVER_API, default false).
 	EnhancedHardcoverAPI bool
 	DownloadPathRemap    string
@@ -40,6 +41,8 @@ type Config struct {
 // Load reads configuration from environment variables with sensible defaults.
 // BINDERY_AUDIOBOOK_DIR falls back to BINDERY_LIBRARY_DIR when unset so
 // ebook-only installs continue to work unchanged.
+// BINDERY_AUDIOBOOK_DOWNLOAD_DIR falls back to BINDERY_DOWNLOAD_DIR when
+// unset so existing single-download-dir installs continue to work unchanged.
 // BINDERY_DOWNLOAD_PATH_REMAP is a comma-separated list of `from:to` pairs
 // applied to paths returned by the download client before bindery reads
 // them, for cases where SAB and bindery run in separate containers that
@@ -55,6 +58,7 @@ func Load() *Config {
 		LogLevel:               envOr("BINDERY_LOG_LEVEL", "info"),
 		APIKey:                 envOr("BINDERY_API_KEY", ""),
 		DownloadDir:            envOr("BINDERY_DOWNLOAD_DIR", "/downloads"),
+		AudiobookDownloadDir:   envOr("BINDERY_AUDIOBOOK_DOWNLOAD_DIR", ""),
 		LibraryDir:             envOr("BINDERY_LIBRARY_DIR", "/books"),
 		AudiobookDir:           envOr("BINDERY_AUDIOBOOK_DIR", ""),
 		EnhancedHardcoverAPI:   envBool("BINDERY_ENHANCED_HARDCOVER_API", false),

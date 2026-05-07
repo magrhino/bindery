@@ -339,6 +339,8 @@
       "storage": "Penyimpanan",
       "storageHint": "Jalur yang dibaca dan ditulis oleh Bindery. Konfigurasikan melalui variabel lingkungan (atau berkas config Anda) sebelum memulai container; proses yang berjalan akan menangkapnya saat startup.",
       "downloadDir": "Direktori unduhan",
+      "audiobookDownloadDir": "Direktori unduhan buku audio",
+      "audiobookDownloadDirFallback": "Tidak disetel — unduhan buku audio menggunakan direktori unduhan utama.",
       "libraryDir": "Direktori perpustakaan (ebook)",
       "audiobookDir": "Direktori buku audio",
       "audiobookDirFallback": "Tidak disetel — buku audio diimpor ke direktori perpustakaan.",

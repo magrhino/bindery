@@ -23,16 +23,18 @@ func NewStorageHandler(cfg *config.Config) *StorageHandler {
 }
 
 type storageResponse struct {
-	DownloadDir  string `json:"downloadDir"`
-	LibraryDir   string `json:"libraryDir"`
-	AudiobookDir string `json:"audiobookDir"`
+	DownloadDir          string `json:"downloadDir"`
+	AudiobookDownloadDir string `json:"audiobookDownloadDir"`
+	LibraryDir           string `json:"libraryDir"`
+	AudiobookDir         string `json:"audiobookDir"`
 }
 
 // Get handles GET /api/v1/system/storage.
 func (h *StorageHandler) Get(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, storageResponse{
-		DownloadDir:  h.cfg.DownloadDir,
-		LibraryDir:   h.cfg.LibraryDir,
-		AudiobookDir: h.cfg.AudiobookDir,
+		DownloadDir:          h.cfg.DownloadDir,
+		AudiobookDownloadDir: h.cfg.AudiobookDownloadDir,
+		LibraryDir:           h.cfg.LibraryDir,
+		AudiobookDir:         h.cfg.AudiobookDir,
 	})
 }

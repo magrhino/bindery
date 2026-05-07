@@ -58,6 +58,20 @@ func (c *Config) Validate(logger *slog.Logger) error {
 		}
 	}
 
+	// BINDERY_AUDIOBOOK_DOWNLOAD_DIR is optional; when set it must be a
+	// reachable directory (the download client is expected to place audiobook
+	// files there). Falls back to BINDERY_DOWNLOAD_DIR when unset.
+	if c.AudiobookDownloadDir != "" {
+		if err := checkDir(logger, "BINDERY_AUDIOBOOK_DOWNLOAD_DIR", c.AudiobookDownloadDir); err != nil {
+			logger.Warn("config: audiobook download directory does not exist or is not readable — check BINDERY_AUDIOBOOK_DOWNLOAD_DIR",
+				"audiobookDownloadDir", c.AudiobookDownloadDir, "error", err)
+		}
+	} else {
+		logger.Info("config: BINDERY_AUDIOBOOK_DOWNLOAD_DIR not set — audiobook downloads will use BINDERY_DOWNLOAD_DIR",
+			"effectiveAudiobookDownloadDir", c.DownloadDir,
+		)
+	}
+
 	// --- Invalid value checks (fatal) ---
 
 	// BINDERY_OIDC_REDIRECT_BASE_URL must be a valid absolute HTTP/HTTPS URL

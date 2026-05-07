@@ -209,6 +209,10 @@ func main() {
 		cfg.LibraryDir, cfg.AudiobookDir, namingTemplate, audiobookTemplate,
 		cfg.DownloadPathRemap,
 	)
+	if cfg.AudiobookDownloadDir != "" {
+		importScanner.WithAudiobookDownloadDir(cfg.AudiobookDownloadDir)
+		slog.Info("audiobook download dir configured", "path", cfg.AudiobookDownloadDir)
+	}
 
 	modeResolver := func() calibre.Mode { return api.LoadCalibreMode(settingsRepo) }
 	calibreCfg := api.LoadCalibreConfig(settingsRepo)

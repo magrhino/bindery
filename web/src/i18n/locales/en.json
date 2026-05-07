@@ -340,6 +340,8 @@
       "storage": "Storage",
       "storageHint": "Paths Bindery reads from and writes to. Configure via environment variables (or your config file) before starting the container; the running process captures them at startup.",
       "downloadDir": "Download directory",
+      "audiobookDownloadDir": "Audiobook download directory",
+      "audiobookDownloadDirFallback": "Unset — audiobook downloads use the main download directory.",
       "libraryDir": "Library (ebooks) directory",
       "audiobookDir": "Audiobook directory",
       "audiobookDirFallback": "Unset — audiobooks are imported into the library directory.",

@@ -2340,7 +2340,7 @@ function GeneralTab() {
   const [scanningLibrary, setScanningLibrary] = useState(false)
   const [scanMessage, setScanMessage] = useState<string | null>(null)
   const [lastScan, setLastScan] = useState<{ ran_at: string; files_found: number; reconciled: number; unmatched: number } | null>(null)
-  const [storage, setStorage] = useState<{ downloadDir: string; libraryDir: string; audiobookDir: string } | null>(null)
+  const [storage, setStorage] = useState<{ downloadDir: string; audiobookDownloadDir: string; libraryDir: string; audiobookDir: string } | null>(null)
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
   const [hardcoverToken, setHardcoverToken] = useState('')
   const [hardcoverTestResult, setHardcoverTestResult] = useState<(HardcoverTestResult & { testing?: boolean }) | null>(null)
@@ -2650,6 +2650,20 @@ function GeneralTab() {
               value={storage?.downloadDir ?? ''}
               className={`${inputCls} font-mono opacity-80 cursor-default`}
             />
+          </div>
+          <div>
+            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">
+              {t('settings.general.audiobookDownloadDir')} <code className="font-mono bg-slate-200 dark:bg-zinc-800 px-1 rounded">BINDERY_AUDIOBOOK_DOWNLOAD_DIR</code>
+            </label>
+            <input
+              readOnly
+              value={storage?.audiobookDownloadDir || (storage?.downloadDir ?? '')}
+              placeholder={storage?.downloadDir ?? ''}
+              className={`${inputCls} font-mono opacity-80 cursor-default`}
+            />
+            {storage && !storage.audiobookDownloadDir && (
+              <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">{t('settings.general.audiobookDownloadDirFallback')}</p>
+            )}
           </div>
           <div>
             <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">

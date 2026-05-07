@@ -33,20 +33,21 @@ type calibreAdder interface {
 
 // Scanner checks for completed downloads and imports them into the library.
 type Scanner struct {
-	downloads    *db.DownloadRepo
-	clients      *db.DownloadClientRepo
-	books        *db.BookRepo
-	authors      *db.AuthorRepo
-	history      *db.HistoryRepo
-	rootFolders  *db.RootFolderRepo
-	series       *db.SeriesRepo
-	renamer      *Renamer
-	remapper     *Remapper
-	calibreAdder calibreAdder
-	calibreMode  func() calibre.Mode
-	settings     *db.SettingsRepo
-	libraryDir   string
-	audiobookDir string
+	downloads            *db.DownloadRepo
+	clients              *db.DownloadClientRepo
+	books                *db.BookRepo
+	authors              *db.AuthorRepo
+	history              *db.HistoryRepo
+	rootFolders          *db.RootFolderRepo
+	series               *db.SeriesRepo
+	renamer              *Renamer
+	remapper             *Remapper
+	calibreAdder         calibreAdder
+	calibreMode          func() calibre.Mode
+	settings             *db.SettingsRepo
+	libraryDir           string
+	audiobookDir         string
+	audiobookDownloadDir string
 }
 
 // NewScanner creates an import scanner. downloadPathRemap is an optional
@@ -70,6 +71,24 @@ func NewScanner(downloads *db.DownloadRepo, clients *db.DownloadClientRepo,
 		libraryDir:   libraryDir,
 		audiobookDir: audiobookDir,
 	}
+}
+
+// WithAudiobookDownloadDir records the separate audiobook download watch
+// folder. When non-empty, this directory is the expected landing zone for
+// completed audiobook downloads (separate from the general download dir).
+// The value is surfaced via the storage API so the UI can display it; future
+// download-client integrations can use it to route audiobook grabs to a
+// dedicated category/folder.
+func (s *Scanner) WithAudiobookDownloadDir(dir string) *Scanner {
+	s.audiobookDownloadDir = dir
+	return s
+}
+
+// AudiobookDownloadDir returns the effective audiobook download directory:
+// audiobookDownloadDir when configured, or the empty string to signal
+// fall-back to the default download dir.
+func (s *Scanner) AudiobookDownloadDir() string {
+	return s.audiobookDownloadDir
 }
 
 // WithRootFolders attaches the root folder repo so the scanner can resolve

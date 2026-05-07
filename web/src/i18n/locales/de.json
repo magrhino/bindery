@@ -308,6 +308,8 @@
       "storage": "Speicher",
       "storageHint": "Pfade, aus denen Bindery liest und in die es schreibt. Über Umgebungsvariablen (oder Konfigurationsdatei) konfigurieren; der laufende Prozess liest sie beim Start ein.",
       "downloadDir": "Download-Verzeichnis",
+      "audiobookDownloadDir": "Hörbuch-Download-Verzeichnis",
+      "audiobookDownloadDirFallback": "Nicht gesetzt — Hörbuch-Downloads verwenden das allgemeine Download-Verzeichnis.",
       "libraryDir": "Bibliotheksverzeichnis (E-Books)",
       "audiobookDir": "Hörbuch-Verzeichnis",
       "audiobookDirFallback": "Nicht gesetzt — Hörbücher werden in das Bibliotheksverzeichnis importiert.",

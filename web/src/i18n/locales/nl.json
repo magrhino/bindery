@@ -308,6 +308,8 @@
       "storage": "Opslag",
       "storageHint": "Paden die Bindery leest en waarnaar het schrijft. Configureer via omgevingsvariabelen (of je configuratiebestand); het draaiende proces leest ze bij het starten in.",
       "downloadDir": "Downloadmap",
+      "audiobookDownloadDir": "Downloadmap voor luisterboeken",
+      "audiobookDownloadDirFallback": "Niet ingesteld — luisterboekdownloads gebruiken de algemene downloadmap.",
       "libraryDir": "Bibliotheekmap (ebooks)",
       "audiobookDir": "Luisterboekenmap",
       "audiobookDirFallback": "Niet ingesteld — luisterboeken worden in de bibliotheekmap geïmporteerd.",

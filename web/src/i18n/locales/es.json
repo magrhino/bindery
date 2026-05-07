@@ -339,6 +339,8 @@
       "storage": "Almacenamiento",
       "storageHint": "Rutas desde las que Bindery lee y escribe. Configúralas mediante variables de entorno (o tu archivo de configuración) antes de iniciar el contenedor; el proceso en ejecución las captura al arrancar.",
       "downloadDir": "Directorio de descargas",
+      "audiobookDownloadDir": "Directorio de descargas de audiolibros",
+      "audiobookDownloadDirFallback": "No definido — las descargas de audiolibros usan el directorio de descargas principal.",
       "libraryDir": "Directorio de biblioteca (libros electrónicos)",
       "audiobookDir": "Directorio de audiolibros",
       "audiobookDirFallback": "No definido — los audiolibros se importan al directorio de biblioteca.",

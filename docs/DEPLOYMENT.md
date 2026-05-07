@@ -209,6 +209,7 @@ Multiple remaps are separated by commas: `BINDERY_DOWNLOAD_PATH_REMAP=/sab/compl
 | `BINDERY_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `BINDERY_API_KEY` | _(empty)_ | **Seed only.** Bootstraps the initial API key on first launch if set; after that the key lives in the database and can be regenerated from the UI. |
 | `BINDERY_DOWNLOAD_DIR` | `/downloads` | Where the download client places completed downloads |
+| `BINDERY_AUDIOBOOK_DOWNLOAD_DIR` | falls back to `BINDERY_DOWNLOAD_DIR` | Separate watch folder for audiobook downloads; set this when your download client routes audiobook grabs to a dedicated category/path |
 | `BINDERY_LIBRARY_DIR` | `/books` | Destination for imported ebook files |
 | `BINDERY_AUDIOBOOK_DIR` | falls back to `BINDERY_LIBRARY_DIR` | Destination for imported audiobook folders |
 | `BINDERY_ENHANCED_HARDCOVER_API` | `false` | Set to `true` to allow token-backed Hardcover series search, linking, catalog diffs, and missing-book fill after an admin enables the feature in Settings. |
