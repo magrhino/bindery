@@ -18,9 +18,6 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.LogLevel != "info" {
 		t.Errorf("expected default log level info, got %s", cfg.LogLevel)
 	}
-	if cfg.ABSFeatureEnabled {
-		t.Error("expected ABS feature flag to default to disabled")
-	}
 	if cfg.EnhancedHardcoverAPI {
 		t.Error("expected enhanced Hardcover API to default to disabled")
 	}
@@ -41,7 +38,6 @@ func TestLoadDefaults(t *testing.T) {
 func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("BINDERY_PORT", "9999")
 	t.Setenv("BINDERY_LOG_LEVEL", "debug")
-	t.Setenv("BINDERY_ABS_ENABLED", "true")
 	t.Setenv("BINDERY_ENHANCED_HARDCOVER_API", "true")
 
 	cfg := Load()
@@ -51,9 +47,6 @@ func TestLoadFromEnv(t *testing.T) {
 	}
 	if cfg.LogLevel != "debug" {
 		t.Errorf("expected log level debug, got %s", cfg.LogLevel)
-	}
-	if !cfg.ABSFeatureEnabled {
-		t.Error("expected ABS feature flag to respect BINDERY_ABS_ENABLED=true")
 	}
 	if !cfg.EnhancedHardcoverAPI {
 		t.Error("expected enhanced Hardcover API to respect BINDERY_ENHANCED_HARDCOVER_API=true")

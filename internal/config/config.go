@@ -12,15 +12,14 @@ import (
 
 // Config holds the application configuration loaded from environment variables.
 type Config struct {
-	Port              string
-	DBPath            string
-	DataDir           string
-	LogLevel          string
-	APIKey            string
-	DownloadDir       string
-	LibraryDir        string
-	AudiobookDir      string
-	ABSFeatureEnabled bool
+	Port         string
+	DBPath       string
+	DataDir      string
+	LogLevel     string
+	APIKey       string
+	DownloadDir  string
+	LibraryDir   string
+	AudiobookDir string
 	// Enhanced Hardcover series API (BINDERY_ENHANCED_HARDCOVER_API, default false).
 	EnhancedHardcoverAPI bool
 	DownloadPathRemap    string
@@ -58,7 +57,6 @@ func Load() *Config {
 		DownloadDir:            envOr("BINDERY_DOWNLOAD_DIR", "/downloads"),
 		LibraryDir:             envOr("BINDERY_LIBRARY_DIR", "/books"),
 		AudiobookDir:           envOr("BINDERY_AUDIOBOOK_DIR", ""),
-		ABSFeatureEnabled:      envBool("BINDERY_ABS_ENABLED", false),
 		EnhancedHardcoverAPI:   envBool("BINDERY_ENHANCED_HARDCOVER_API", false),
 		DownloadPathRemap:      envOr("BINDERY_DOWNLOAD_PATH_REMAP", ""),
 		ProxyAuthHeader:        envOr("BINDERY_PROXY_AUTH_HEADER", "X-Forwarded-User"),
