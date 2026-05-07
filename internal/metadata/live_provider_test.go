@@ -60,14 +60,14 @@ func TestLiveProviderISBNLookups(t *testing.T) {
 		{
 			name: "googlebooks",
 			lookup: func(ctx context.Context, isbn string) (*models.Book, error) {
-				return googlebooks.New("").GetBookByISBN(ctx, isbn)
+				return googlebooks.New(os.Getenv(googleBooksAPIKeyEnv)).GetBookByISBN(ctx, isbn)
 			},
 		},
 		{
 			name:    "hardcover",
-			envSkip: "BINDERY_HARDCOVER_API_TOKEN",
+			envSkip: binderyHardcoverAPITokenEnv,
 			lookup: func(ctx context.Context, isbn string) (*models.Book, error) {
-				return hardcover.New().WithToken(os.Getenv("BINDERY_HARDCOVER_API_TOKEN")).GetBookByISBN(ctx, isbn)
+				return hardcover.New().WithToken(os.Getenv(binderyHardcoverAPITokenEnv)).GetBookByISBN(ctx, isbn)
 			},
 		},
 	}
@@ -88,6 +88,7 @@ func TestLiveProviderISBNLookups(t *testing.T) {
 
 					book, err := provider.lookup(ctx, tc.isbn)
 					if err != nil {
+						skipIfLiveProviderUnavailableError(t, provider.name, err)
 						t.Fatalf("GetBookByISBN(%s): %v", tc.isbn, err)
 					}
 					assertLiveBook(t, book, provider.name, want)
@@ -136,6 +137,7 @@ func TestLiveDNBISBNLookups(t *testing.T) {
 
 			book, err := dnb.New().GetBookByISBN(ctx, tt.isbn)
 			if err != nil {
+				skipIfLiveProviderUnavailableError(t, "dnb", err)
 				t.Fatalf("GetBookByISBN(%s): %v", tt.isbn, err)
 			}
 			assertLiveBook(t, book, "dnb", liveBookExpectation{
@@ -183,9 +185,10 @@ func TestLiveAggregatorCanonicalizesSecondaryISBNHitToOpenLibrary(t *testing.T) 
 			ctx, cancel := context.WithTimeout(context.Background(), liveProviderTestTimeout)
 			t.Cleanup(cancel)
 
-			agg := metadata.NewAggregator(openLibraryNoISBN{Client: openlibrary.New()}, googlebooks.New(""))
+			agg := metadata.NewAggregator(openLibraryNoISBN{Client: openlibrary.New()}, googlebooks.New(os.Getenv(googleBooksAPIKeyEnv)))
 			book, err := agg.GetBookByISBN(ctx, tt.isbn)
 			if err != nil {
+				skipIfLiveProviderUnavailableError(t, "googlebooks", err)
 				t.Fatalf("GetBookByISBN(%s): %v", tt.isbn, err)
 			}
 			assertLiveBook(t, book, "openlibrary", liveBookExpectation{
@@ -325,7 +328,7 @@ func liveWorkCases() []liveWorkCase {
 
 func skipUnlessIntegration(t *testing.T) {
 	t.Helper()
-	if os.Getenv("BINDERY_INTEGRATION") == "" {
+	if os.Getenv(binderyIntegrationEnv) != "1" {
 		t.Skip("skipping live metadata test; set BINDERY_INTEGRATION=1 to run")
 	}
 }
