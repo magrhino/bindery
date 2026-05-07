@@ -77,7 +77,7 @@ func (c *Client) SearchBooks(ctx context.Context, query string) ([]models.Book, 
 	// /search (without .json) is the HTML web-UI path (Solr-backed) and
 	// returns HTTP 500 "DEPRECATED ENDPOINT ACCESSED" for API consumers
 	// since their FastAPI rollout completed (see issue #462, follow-up to #408).
-	u := fmt.Sprintf("%s/search.json?q=%s&fields=key,title,author_name,author_key,first_publish_year,cover_i,isbn,subject,editions,editions.key,editions.title,editions.language&limit=20",
+	u := fmt.Sprintf("%s/search.json?q=%s&fields=key,title,author_name,author_key,author_alternative_name,first_publish_year,cover_i,isbn,subject,editions,editions.key,editions.title,editions.language&limit=20",
 		baseURL, url.QueryEscape(query))
 	var resp searchResponse
 	if err := c.getJSON(ctx, u, &resp); err != nil {
@@ -105,8 +105,9 @@ func (c *Client) SearchBooks(ctx context.Context, query string) ([]models.Book, 
 		}
 		if len(doc.AuthorName) > 0 {
 			b.Author = &models.Author{
-				Name:     doc.AuthorName[0],
-				SortName: sortName(doc.AuthorName[0]),
+				Name:           doc.AuthorName[0],
+				SortName:       sortName(doc.AuthorName[0]),
+				AlternateNames: doc.AuthorAltName,
 			}
 			if len(doc.AuthorKey) > 0 {
 				b.Author.ForeignID = doc.AuthorKey[0]

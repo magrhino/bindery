@@ -64,6 +64,7 @@ func TestMatchAuthorName(t *testing.T) {
 		{"spaced initials", "R.R. Haywood", "R R Haywood", AuthorMatchExact},
 		{"suffix jr", "John Smith Jr.", "John Smith", AuthorMatchExact},
 		{"suffix iii", "Henry VIII III", "Henry VIII", AuthorMatchExact},
+		{"diacritics", "Gabriel García Márquez", "Gabriel Garcia Marquez", AuthorMatchExact},
 		{"last first swap", "Haywood, R.R.", "R.R. Haywood", AuthorMatchExact},
 		{"last first comma", "Weir, Andy", "Andy Weir", AuthorMatchExact},
 		{"fuzzy auto", "Brandon Sanderson", "Brandon Sandersen", AuthorMatchFuzzyAuto},

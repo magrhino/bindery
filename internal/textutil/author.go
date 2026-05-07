@@ -8,8 +8,8 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// NormalizeAuthorName lower-cases the name, strips punctuation/diacritics-adjacent
-// characters, and collapses whitespace. Returned form is suitable for key-style
+// NormalizeAuthorName lower-cases the name, strips punctuation and combining
+// diacritics, and collapses whitespace. Returned form is suitable for key-style
 // equality comparisons but still preserves token spacing.
 func NormalizeAuthorName(name string) string {
 	name = norm.NFD.String(strings.TrimSpace(name))
