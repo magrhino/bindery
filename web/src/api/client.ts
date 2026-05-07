@@ -151,7 +151,7 @@ export const api = {
   // callback URLs (resolved from the current request) plus the path template
   // with `{id}` placeholder. The settings UI uses these to live-render the
   // redirect URI as the admin types the provider id.
-  oidcRedirectBase: () => request<{ base: string; callback_path: string }>('/auth/oidc/redirect-base'),
+  oidcRedirectBase: () => request<{ base: string; callback_path: string; configured: boolean }>('/auth/oidc/redirect-base'),
   // Probes <issuer>/.well-known/openid-configuration server-side. ok=false
   // means the IdP is unreachable / wrong / not OIDC; the error string is
   // safe to render directly. issuer_mismatch=true is the silent killer for

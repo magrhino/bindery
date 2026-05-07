@@ -342,7 +342,8 @@ func main() {
 	oidcResolveBase := func(r *http.Request) string {
 		return api.ResolveOIDCRedirectBase(r, cfg.OIDCRedirectBaseURL, trustedCIDRs)
 	}
-	oidcHandler := api.NewOIDCHandler(oidcMgr, userRepo, settingsRepo, authHandler, oidcResolveBase)
+	oidcHandler := api.NewOIDCHandler(oidcMgr, userRepo, settingsRepo, authHandler, oidcResolveBase).
+		WithBaseConfigured(cfg.OIDCRedirectBaseURL != "")
 	userMgmtHandler := api.NewUserManagementHandler(userRepo)
 	searchHandler := api.NewSearchHandler(metaAgg)
 	authorHandler := api.NewAuthorHandler(authorRepo, authorAliasRepo, bookRepo, seriesRepo, metaAgg, settingsRepo, metadataProfileRepo, sched).WithFinder(importScanner)

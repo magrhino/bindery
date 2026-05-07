@@ -419,6 +419,7 @@
       "fieldCallbackUrl": "Callback URL (register this in your IdP)",
       "callbackUrlEmpty": "Enter an ID above to preview the callback URL",
       "callbackUrlHint": "Copy this exact URL into your identity provider's redirect URI / callback URL field. Mismatches cause redirect_uri_mismatch errors.",
+      "callbackUrlNotConfiguredWarning": "BINDERY_OIDC_REDIRECT_BASE_URL is not set — the callback URL shown may not match what the IdP receives. Set this env var to the public URL of your Bindery instance.",
       "callbackUrlCopy": "Copy",
       "callbackUrlCopied": "Copied",
       "statusOk": "Ready",

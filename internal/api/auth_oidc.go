@@ -27,16 +27,31 @@ var oidcProviderIDRe = regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
 // which honors the configured BINDERY_OIDC_REDIRECT_BASE_URL env var first
 // and falls back to forwarded headers from a trusted proxy. Tests can supply
 // a fixed-value resolver.
+//
+// baseConfigured is true when BINDERY_OIDC_REDIRECT_BASE_URL was explicitly
+// set, false when the base URL will be derived from request headers. Used by
+// GetRedirectBase to tell the UI whether to show a "URL may not match" warning.
 type OIDCHandler struct {
-	mgr         *oidc.Manager
-	users       *db.UserRepo
-	settings    *db.SettingsRepo
-	auth        *AuthHandler
-	resolveBase func(*http.Request) string
+	mgr            *oidc.Manager
+	users          *db.UserRepo
+	settings       *db.SettingsRepo
+	auth           *AuthHandler
+	resolveBase    func(*http.Request) string
+	baseConfigured bool
 }
 
 func NewOIDCHandler(mgr *oidc.Manager, users *db.UserRepo, settings *db.SettingsRepo, auth *AuthHandler, resolveBase func(*http.Request) string) *OIDCHandler {
 	return &OIDCHandler{mgr: mgr, users: users, settings: settings, auth: auth, resolveBase: resolveBase}
+}
+
+// WithBaseConfigured sets the baseConfigured flag, indicating that
+// BINDERY_OIDC_REDIRECT_BASE_URL was explicitly configured. When false,
+// GetRedirectBase signals the UI to display a warning that the callback URL
+// shown may not match what the IdP receives (because it is derived from
+// request headers, which can vary).
+func (h *OIDCHandler) WithBaseConfigured(configured bool) *OIDCHandler {
+	h.baseConfigured = configured
+	return h
 }
 
 // Login initiates the Authorization Code + PKCE flow.
@@ -233,6 +248,11 @@ func (h *OIDCHandler) GetRedirectBase(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, map[string]any{
 		"base":          h.resolveBase(r),
 		"callback_path": oidc.CallbackPath("{id}"),
+		// configured is true when BINDERY_OIDC_REDIRECT_BASE_URL was explicitly
+		// set. When false, the base URL is derived from request headers (forwarded
+		// or Host) and the UI should warn that the value shown may differ from
+		// what the IdP actually receives.
+		"configured": h.baseConfigured,
 	})
 }
 

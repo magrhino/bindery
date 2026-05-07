@@ -150,6 +150,8 @@ function AddProviderForm({
     typeof window !== 'undefined' ? window.location.origin : ''
   )
   const [callbackTemplate, setCallbackTemplate] = useState('/api/v1/auth/oidc/{id}/callback')
+  // undefined = still loading, true = env var set, false = derived from headers
+  const [baseConfigured, setBaseConfigured] = useState<boolean | undefined>(undefined)
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
@@ -157,6 +159,9 @@ function AddProviderForm({
       .then(rb => {
         if (rb.base) setRedirectBase(rb.base)
         if (rb.callback_path) setCallbackTemplate(rb.callback_path)
+        // Older backends omit `configured`; treat as true (no warning) to
+        // avoid alarming users on deploys that predate this field.
+        setBaseConfigured(rb.configured !== false)
       })
       .catch(() => {})
   }, [])
@@ -228,6 +233,11 @@ function AddProviderForm({
         <p className="text-[11px] text-slate-500 dark:text-zinc-500 mt-1">
           {t('settings.oidc.callbackUrlHint')}
         </p>
+        {baseConfigured === false && (
+          <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
+            {t('settings.oidc.callbackUrlNotConfiguredWarning')}
+          </p>
+        )}
       </div>
       <IssuerField value={issuer} onChange={setIssuer} />
 

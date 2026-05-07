@@ -28,6 +28,7 @@ func TestGetRedirectBase(t *testing.T) {
 	var got struct {
 		Base         string `json:"base"`
 		CallbackPath string `json:"callback_path"`
+		Configured   bool   `json:"configured"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("parse body: %v (body=%s)", err, rec.Body.String())
@@ -37,6 +38,33 @@ func TestGetRedirectBase(t *testing.T) {
 	}
 	if got.CallbackPath != "/api/v1/auth/oidc/{id}/callback" {
 		t.Fatalf("callback_path=%q, want /api/v1/auth/oidc/{id}/callback", got.CallbackPath)
+	}
+	// default: WithBaseConfigured not called, so configured=false
+	if got.Configured {
+		t.Fatal("configured=true, want false (WithBaseConfigured not called)")
+	}
+}
+
+// TestGetRedirectBase_Configured verifies that WithBaseConfigured(true) causes
+// the endpoint to report configured=true, telling the UI not to show the
+// "BINDERY_OIDC_REDIRECT_BASE_URL not set" warning.
+func TestGetRedirectBase_Configured(t *testing.T) {
+	mgr := oidc.NewManager()
+	h := NewOIDCHandler(mgr, nil, nil, nil, func(_ *http.Request) string {
+		return "https://bindery.example.com"
+	}).WithBaseConfigured(true)
+
+	rec := httptest.NewRecorder()
+	h.GetRedirectBase(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/redirect-base", nil))
+
+	var got struct {
+		Configured bool `json:"configured"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("parse body: %v", err)
+	}
+	if !got.Configured {
+		t.Fatal("configured=false, want true (WithBaseConfigured(true) was called)")
 	}
 }
 
