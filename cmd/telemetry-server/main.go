@@ -35,6 +35,18 @@ import (
 
 var uuidRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
+// releaseVersionPattern matches semver-shaped release tags ("1.7.0", "v1.7.0").
+// Older Bindery clients (before the corresponding client-side filter) still
+// ping with non-release labels like "sha-abc1234", "dev-abc1234", and the
+// git-describe "v1.7.0-3-gabc1234" form for commits past a tag. Drop those
+// here so the version histogram doesn't grow a row per CI commit.
+var releaseVersionPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+$`)
+
+// isReleaseVersion reports whether v looks like a semver release tag.
+func isReleaseVersion(v string) bool {
+	return releaseVersionPattern.MatchString(v)
+}
+
 type server struct {
 	db            *sql.DB
 	latestVersion string
@@ -304,10 +316,14 @@ func (s *server) handlePing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Version = normalizeVersion(req.Version)
-	// Reject locally-built `dev` pings — overwhelmingly developer testing
-	// against throwaway DBs, which generates a fresh install_id on every run.
-	// Newer clients skip these on the client side; old clients land here.
-	if req.Version == "dev" {
+	// Reject pings from non-release builds — the literal "dev" (local
+	// `go run` / `go build` with no -ldflags), CI's "sha-abc1234" and
+	// "dev-abc1234" interim images, and "v1.7.0-3-gabc1234" git-describe
+	// labels for commits past a tag. Each of those becomes its own row
+	// in the version histogram, and the install_id is overwhelmingly
+	// throwaway (CI / dev containers that recreate the DB on every run).
+	// Newer clients skip these client-side; older clients land here.
+	if !isReleaseVersion(req.Version) {
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(pingResponse{LatestVersion: s.latestVersion})
 		return

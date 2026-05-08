@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
 	"runtime"
 	"time"
 
@@ -31,6 +32,19 @@ const (
 	settingInstallID = "telemetry.install_id"
 	timeout          = 10 * time.Second
 )
+
+// releaseVersionPattern matches semver-shaped release tags ("1.7.0", "v1.7.0").
+// CI builds inject non-matching strings — the literal "dev" when the binary
+// has no -ldflags, "sha-abc1234" / "dev-abc1234" for non-release branches,
+// and "v1.7.0-3-gabc1234" (git describe form) for commits past a tag — and
+// we want those builds to skip the ping so the active-install chart doesn't
+// fill up with throwaway version buckets, one per CI commit.
+var releaseVersionPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+$`)
+
+// isReleaseVersion reports whether v looks like a semver release tag.
+func isReleaseVersion(v string) bool {
+	return releaseVersionPattern.MatchString(v)
+}
 
 // Client sends anonymous usage pings and surfaces the latest published version.
 type Client struct {
@@ -60,15 +74,19 @@ func (c *Client) Ping(ctx context.Context) {
 		return
 	}
 
-	// Skip pings from local dev builds. The version string defaults to "dev"
-	// when the binary is built without the goreleaser/docker -ldflags version
-	// injection — i.e. `go run ./cmd/bindery` or a fresh `go build`. Most of
-	// those runs are testing/coding sessions that recreate the DB (and the
-	// install_id) repeatedly, which inflates the active count with throwaway
-	// UUIDs. Set BINDERY_TELEMETRY_FORCE=1 to override (e.g. when smoke-testing
+	// Skip pings from non-release builds. CI tags interim images with
+	// strings like "sha-abc1234" (non-release branches), "dev-abc1234"
+	// (development branch), and "v1.7.0-3-gabc1234" (git describe for
+	// commits past a tag); local builds with no -ldflags inject the
+	// literal "dev". Each unique label becomes its own row in the version
+	// histogram on api.getbindery.dev/stats — and most of those installs
+	// are throwaway dev/CI containers that recreate the DB (and the
+	// install_id) on every run, inflating active counts.
+	//
+	// Set BINDERY_TELEMETRY_FORCE=1 to override (e.g. when smoke-testing
 	// the ping path against a local telemetry-server).
-	if c.version == "dev" && os.Getenv("BINDERY_TELEMETRY_FORCE") == "" {
-		slog.Debug("telemetry: skipping ping for dev build")
+	if !isReleaseVersion(c.version) && os.Getenv("BINDERY_TELEMETRY_FORCE") == "" {
+		slog.Debug("telemetry: skipping ping for non-release build", "version", c.version)
 		return
 	}
 
