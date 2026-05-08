@@ -21,29 +21,16 @@
 
 ---
 
-<!-- Hero: Books library — auto-switches between dark and light to match the viewer's OS theme -->
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/books-desktop-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/books-desktop-light.png">
-    <img src="docs/screenshots/books-desktop-dark.png" alt="Bindery — Books library grid view" width="1200">
-  </picture>
+  <img src="https://zipline.autonomy.ninja/u/kx9KgV.png" alt="Bindery — Author detail page with monitored books" width="1200">
 </p>
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/authors-desktop-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/authors-desktop-light.png">
-    <img src="docs/screenshots/authors-desktop-dark.png" alt="Bindery — Authors overview with monitoring badges" width="1200">
-  </picture>
+  <img src="https://zipline.autonomy.ninja/u/6XklLc.png" alt="Bindery — Authors overview with monitoring badges" width="1200">
 </p>
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/author-detail-desktop-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/author-detail-desktop-light.png">
-    <img src="docs/screenshots/author-detail-desktop-dark.png" alt="Bindery — Author detail page with book list" width="1200">
-  </picture>
+  <img src="https://zipline.autonomy.ninja/u/Mh0yDk.png" alt="Bindery — Books library grid view" width="1200">
 </p>
 
 <h4 align="center">Mobile-friendly</h4>
