@@ -872,6 +872,33 @@ func (s *Scanner) findExistingInDir(root, title, authorName string) string {
 	return found
 }
 
+// normalizeTitle lowercases a title, converts comma-suffix article form to
+// leading-article form, then strips the leading article so that all three
+// representations of the same title compare equal:
+//
+//	"A Darker Shade of Magic"       → "darker shade of magic"
+//	"Darker Shade of Magic, A"      → "darker shade of magic"
+//	"The Fragile Threads of Power"  → "fragile threads of power"
+//	"Fragile Threads of Power, The" → "fragile threads of power"
+func normalizeTitle(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	// Invert comma-suffix form: check ", an" before ", a" to avoid prefix collision.
+	for _, art := range []string{", the", ", an", ", a"} {
+		if strings.HasSuffix(s, art) {
+			s = art[2:] + " " + s[:len(s)-len(art)]
+			break
+		}
+	}
+	// Strip leading article; check "an " before "a " for the same reason.
+	for _, art := range []string{"the ", "an ", "a "} {
+		if strings.HasPrefix(s, art) {
+			s = s[len(art):]
+			break
+		}
+	}
+	return s
+}
+
 // titleMatch returns true when bookTitle and parsedTitle refer to the same work.
 // It handles numeric titles (1984, 2001), article normalization ("Title, The"),
 // and uses dynamic overlap thresholds so short titles still match correctly.
@@ -880,25 +907,8 @@ func titleMatch(bookTitle, parsedTitle string) bool {
 		return false
 	}
 
-	// norm lowercases, handles "Title, The" inversion, and strips leading articles.
-	norm := func(s string) string {
-		s = strings.ToLower(strings.TrimSpace(s))
-		// Normalize "Title, The" → "the title" (comma-article inversion)
-		if idx := strings.LastIndex(s, ", the"); idx != -1 && idx == len(s)-5 {
-			s = "the " + s[:idx]
-		}
-		// Strip leading article for comparison
-		for _, art := range []string{"the ", "a ", "an "} {
-			if strings.HasPrefix(s, art) {
-				s = s[len(art):]
-				break
-			}
-		}
-		return s
-	}
-
 	// Fast path: exact match after normalization
-	if norm(bookTitle) == norm(parsedTitle) {
+	if normalizeTitle(bookTitle) == normalizeTitle(parsedTitle) {
 		return true
 	}
 
@@ -1155,8 +1165,10 @@ func (s *Scanner) ScanLibrary(ctx context.Context) {
 				}
 				// Require Jaro-Winkler >= 0.85 on normalised titles to prevent
 				// low-confidence matches from reconciling the wrong book after a
-				// delete+rescan cycle (#343).
-				jwScore := textutil.JaroWinkler(strings.ToLower(b.Title), strings.ToLower(parsed.Title))
+				// delete+rescan cycle (#343). normalizeTitle strips leading articles
+				// and inverts comma-suffix sort form ("Title, A" → "title") so that
+				// librarian-sorted folders reconcile correctly (#513).
+				jwScore := textutil.JaroWinkler(normalizeTitle(b.Title), normalizeTitle(parsed.Title))
 				if b.Status != models.BookStatusWanted ||
 					jwScore < 0.85 ||
 					!authorMatch(authorNames[b.AuthorID], parsed.Author) {

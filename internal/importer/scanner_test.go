@@ -14,6 +14,31 @@ import (
 	"github.com/vavallee/bindery/internal/models"
 )
 
+func TestNormalizeTitle(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		// Leading-article forms are stripped
+		{"A Darker Shade of Magic", "darker shade of magic"},
+		{"An Ember in the Ashes", "ember in the ashes"},
+		{"The Fragile Threads of Power", "fragile threads of power"},
+		// Comma-suffix forms are inverted then stripped
+		{"Darker Shade of Magic, A", "darker shade of magic"},
+		{"Ember in the Ashes, An", "ember in the ashes"},
+		{"Fragile Threads of Power, The", "fragile threads of power"},
+		// No article — unchanged (lowercased)
+		{"Project Hail Mary", "project hail mary"},
+		// Already normalised
+		{"darker shade of magic", "darker shade of magic"},
+	}
+	for _, tt := range tests {
+		if got := normalizeTitle(tt.in); got != tt.want {
+			t.Errorf("normalizeTitle(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
 func TestTitleMatch(t *testing.T) {
 	tests := []struct {
 		bookTitle   string
@@ -38,8 +63,10 @@ func TestTitleMatch(t *testing.T) {
 		{"1984", "1984", true},
 		{"1984", "George Orwell 1984", true},
 
-		// Article inversion: "Lord of the Rings, The" normalises to same as "The Lord of the Rings"
+		// Article inversion: comma-suffix form matches leading-article DB title
 		{"The Lord of the Rings", "Lord of the Rings, The", true},
+		{"A Darker Shade of Magic", "Darker Shade of Magic, A", true},
+		{"An Ember in the Ashes", "Ember in the Ashes, An", true},
 
 		// Dots in parsed title are split on non-alnum — "Project.Hail.Mary" yields 3 tokens
 		{"Project Hail Mary", "Project.Hail.Mary", true},
