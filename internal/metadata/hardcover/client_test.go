@@ -869,28 +869,30 @@ func TestGetUserWishlist_Success(t *testing.T) {
 	c := newMockClient(func(r *http.Request) (*http.Response, error) {
 		gotAuth = r.Header.Get("Authorization")
 		data := map[string]interface{}{
-			"me": map[string]interface{}{
-				"user_books": []map[string]interface{}{
-					{
-						"book": map[string]interface{}{
-							"id":            101,
-							"title":         "Project Hail Mary",
-							"slug":          "project-hail-mary",
-							"description":   "An astronaut wakes up alone.",
-							"release_year":  year,
-							"rating":        4.7,
-							"ratings_count": 50000,
-							"image":         map[string]interface{}{"url": "https://img.example.com/phm.jpg"},
-							"contributions": []map[string]interface{}{
-								{"author": map[string]interface{}{"id": 7, "name": "Andy Weir", "slug": "andy-weir"}},
+			"me": []map[string]interface{}{
+				{
+					"user_books": []map[string]interface{}{
+						{
+							"book": map[string]interface{}{
+								"id":            101,
+								"title":         "Project Hail Mary",
+								"slug":          "project-hail-mary",
+								"description":   "An astronaut wakes up alone.",
+								"release_year":  year,
+								"rating":        4.7,
+								"ratings_count": 50000,
+								"image":         map[string]interface{}{"url": "https://img.example.com/phm.jpg"},
+								"contributions": []map[string]interface{}{
+									{"author": map[string]interface{}{"id": 7, "name": "Andy Weir", "slug": "andy-weir"}},
+								},
 							},
 						},
-					},
-					{
-						"book": map[string]interface{}{
-							"id":    102,
-							"title": "Dune",
-							"slug":  "dune",
+						{
+							"book": map[string]interface{}{
+								"id":    102,
+								"title": "Dune",
+								"slug":  "dune",
+							},
 						},
 					},
 				},
@@ -956,7 +958,7 @@ func TestGetUserWishlist_DefaultLimit(t *testing.T) {
 		_ = json.Unmarshal(body, &req)
 		gotVars = req.Variables
 		return gqlResponse(t, http.StatusOK, map[string]interface{}{
-			"me": map[string]interface{}{"user_books": []interface{}{}},
+			"me": []map[string]interface{}{{"user_books": []interface{}{}}},
 		}), nil
 	})
 	c = c.WithToken("t")
@@ -974,7 +976,7 @@ func TestGetUserWishlist_DefaultLimit(t *testing.T) {
 func TestGetUserWishlist_Empty(t *testing.T) {
 	c := newMockClient(func(r *http.Request) (*http.Response, error) {
 		return gqlResponse(t, http.StatusOK, map[string]interface{}{
-			"me": map[string]interface{}{"user_books": []interface{}{}},
+			"me": []map[string]interface{}{{"user_books": []interface{}{}}},
 		}), nil
 	}).WithToken("t")
 
@@ -1006,7 +1008,7 @@ func TestGetUserLists_IncludesBuiltinShelves(t *testing.T) {
 	// When me.lists returns an empty array (user has no custom lists),
 	// GetUserLists must still return the 4 built-in shelf entries.
 	c := newMockClient(func(r *http.Request) (*http.Response, error) {
-		body := `{"data":{"me":{"lists":[]}}}`
+		body := `{"data":{"me":[{"lists":[]}]}}`
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(strings.NewReader(body)),
@@ -1029,7 +1031,7 @@ func TestGetUserLists_IncludesBuiltinShelves(t *testing.T) {
 
 func TestGetUserLists_CustomListsAppendedAfterShelves(t *testing.T) {
 	c := newMockClient(func(r *http.Request) (*http.Response, error) {
-		body := `{"data":{"me":{"lists":[{"id":42,"name":"Favorites","slug":"favorites","books_count":7}]}}}`
+		body := `{"data":{"me":[{"lists":[{"id":42,"name":"Favorites","slug":"favorites","books_count":7}]}]}}`
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(strings.NewReader(body)),
@@ -1059,7 +1061,7 @@ func TestGetListBooks_BuiltinShelfRoutesToUserBooks(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &req)
 		gotVars = req.Variables
-		resp := `{"data":{"me":{"user_books":[{"book":{"id":99,"title":"Dune","slug":"dune","contributions":[{"author":{"id":1,"name":"Frank Herbert","slug":"frank-herbert"}}]}}]}}}`
+		resp := `{"data":{"me":[{"user_books":[{"book":{"id":99,"title":"Dune","slug":"dune","contributions":[{"author":{"id":1,"name":"Frank Herbert","slug":"frank-herbert"}}]}}]}]}}`
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(strings.NewReader(resp)),

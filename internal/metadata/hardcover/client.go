@@ -351,7 +351,7 @@ func (c *Client) GetUserWishlist(ctx context.Context, limit int) ([]models.Recom
 	}`
 	var resp struct {
 		Data struct {
-			Me struct {
+			Me []struct {
 				UserBooks []struct {
 					Book hcBook `json:"book"`
 				} `json:"user_books"`
@@ -361,9 +361,12 @@ func (c *Client) GetUserWishlist(ctx context.Context, limit int) ([]models.Recom
 	if err := c.query(ctx, gql, map[string]any{"limit": limit}, &resp); err != nil {
 		return nil, fmt.Errorf("hardcover get wishlist: %w", err)
 	}
+	if len(resp.Data.Me) == 0 {
+		return nil, nil
+	}
 
-	candidates := make([]models.RecommendationCandidate, 0, len(resp.Data.Me.UserBooks))
-	for _, ub := range resp.Data.Me.UserBooks {
+	candidates := make([]models.RecommendationCandidate, 0, len(resp.Data.Me[0].UserBooks))
+	for _, ub := range resp.Data.Me[0].UserBooks {
 		b := c.toBook(ub.Book)
 		cand := models.RecommendationCandidate{
 			ForeignID:    b.ForeignID,
@@ -439,7 +442,7 @@ func (c *Client) GetUserLists(ctx context.Context) ([]HCList, error) {
 	}`
 	var resp struct {
 		Data struct {
-			Me struct {
+			Me []struct {
 				Lists []struct {
 					ID         int    `json:"id"`
 					Name       string `json:"name"`
@@ -452,9 +455,18 @@ func (c *Client) GetUserLists(ctx context.Context) ([]HCList, error) {
 	if err := c.query(ctx, gql, nil, &resp); err != nil {
 		return nil, fmt.Errorf("hardcover get user lists: %w", err)
 	}
-	lists := make([]HCList, 0, len(hcBuiltinShelves)+len(resp.Data.Me.Lists))
+	var customLists []struct {
+		ID         int    `json:"id"`
+		Name       string `json:"name"`
+		Slug       string `json:"slug"`
+		BooksCount int    `json:"books_count"`
+	}
+	if len(resp.Data.Me) > 0 {
+		customLists = resp.Data.Me[0].Lists
+	}
+	lists := make([]HCList, 0, len(hcBuiltinShelves)+len(customLists))
 	lists = append(lists, hcBuiltinShelves...)
-	for _, l := range resp.Data.Me.Lists {
+	for _, l := range customLists {
 		lists = append(lists, HCList{
 			ID:         l.ID,
 			Name:       l.Name,
@@ -535,7 +547,7 @@ func (c *Client) getShelfBooks(ctx context.Context, statusID int) ([]models.Book
 	}`
 	var resp struct {
 		Data struct {
-			Me struct {
+			Me []struct {
 				UserBooks []struct {
 					Book hcBook `json:"book"`
 				} `json:"user_books"`
@@ -545,8 +557,11 @@ func (c *Client) getShelfBooks(ctx context.Context, statusID int) ([]models.Book
 	if err := c.query(ctx, gql, map[string]any{"statusID": statusID}, &resp); err != nil {
 		return nil, fmt.Errorf("hardcover get shelf books: %w", err)
 	}
-	books := make([]models.Book, 0, len(resp.Data.Me.UserBooks))
-	for _, ub := range resp.Data.Me.UserBooks {
+	if len(resp.Data.Me) == 0 {
+		return nil, nil
+	}
+	books := make([]models.Book, 0, len(resp.Data.Me[0].UserBooks))
+	for _, ub := range resp.Data.Me[0].UserBooks {
 		books = append(books, c.toBook(ub.Book))
 	}
 	return books, nil
