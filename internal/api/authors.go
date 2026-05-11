@@ -1175,9 +1175,11 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	var selected *models.Book
+	var selectedLookupErr error
 	if h.meta != nil {
 		book, err := h.meta.GetBook(ctx, req.ForeignBookID)
 		if err != nil {
+			selectedLookupErr = err
 			slog.Debug("add book metadata fetch failed", "foreignBookId", req.ForeignBookID, "error", err)
 		} else if book != nil {
 			copy := *book
@@ -1198,6 +1200,17 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+	}
+	if req.ForeignAuthorID == "" && selected == nil {
+		switch {
+		case h.meta == nil:
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "metadata provider unavailable"})
+		case selectedLookupErr != nil:
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": selectedLookupErr.Error()})
+		default:
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "target book not found"})
+		}
+		return
 	}
 	if req.ForeignAuthorID == "" && req.AuthorName == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreignAuthorId or authorName required"})
@@ -1273,9 +1286,11 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 	if b, _ := h.books.GetByForeignID(ctx, req.ForeignBookID); b != nil {
 		book = b
 	}
+	skipAutoSearch := false
 	if book == nil && selected != nil {
 		selected.AuthorID = author.ID
 		selected.Author = nil
+		selected.Monitored = true
 		if selected.SortTitle == "" {
 			selected.SortTitle = selected.Title
 		}
@@ -1299,6 +1314,12 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 			book, _ = h.books.GetByForeignID(ctx, req.ForeignBookID)
 		} else {
 			book = selected
+		}
+		if book != nil {
+			skipAutoSearch = handleNewWantedBook(ctx, h.books, h.series, h.finder, *book, author.Name)
+			if refreshed, err := h.books.GetByID(ctx, book.ID); err == nil && refreshed != nil {
+				book = refreshed
+			}
 		}
 	}
 	if book == nil && startedSync {
@@ -1326,9 +1347,6 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found after author sync — try again shortly"})
 		return
 	}
-	if selected != nil {
-		h.linkBookSeriesRefs(ctx, book.ID, book.Title, selected.SeriesRefs)
-	}
 
 	// 3. Mark the book monitored (wanted).
 	book.Monitored = true
@@ -1338,7 +1356,7 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4. Optionally trigger an indexer search.
-	if req.SearchOnAdd && h.searcher != nil {
+	if req.SearchOnAdd && h.searcher != nil && !skipAutoSearch {
 		go h.searcher.SearchAndGrabBook(contextBackground(), *book)
 	}
 

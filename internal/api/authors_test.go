@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -38,6 +39,21 @@ func (s *searcherSpy) titles() []string {
 	out := make([]string, len(s.calls))
 	copy(out, s.calls)
 	return out
+}
+
+func waitForSearcherCalls(t *testing.T, spy *searcherSpy, want int) []string {
+	t.Helper()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		titles := spy.titles()
+		if len(titles) >= want {
+			return titles
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("search calls = %v, want at least %d", titles, want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 type concurrentSearcherSpy struct {
@@ -105,6 +121,7 @@ type namedBookProvider struct {
 	name        string
 	books       map[string]*models.Book
 	searchBooks []models.Book
+	getBookErr  error
 }
 
 func (p *namedBookProvider) Name() string { return p.name }
@@ -118,6 +135,9 @@ func (p *namedBookProvider) GetAuthor(context.Context, string) (*models.Author, 
 	return nil, nil
 }
 func (p *namedBookProvider) GetBook(_ context.Context, foreignID string) (*models.Book, error) {
+	if p.getBookErr != nil {
+		return nil, p.getBookErr
+	}
 	if p.books == nil {
 		return nil, nil
 	}
@@ -201,6 +221,141 @@ func TestAddBook_CreatesSelectedProviderNativeBook(t *testing.T) {
 	}
 	if authors[0].Name != "Provider Author" || authors[0].ForeignID != "metadata:author:googlebooks:provider-author" {
 		t.Fatalf("author = %+v, want provider fallback author", authors[0])
+	}
+}
+
+func TestAddBook_ProviderNativeGetBookErrorDoesNotCreateSyntheticAuthor(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+	providerErr := errors.New("googlebooks down")
+	provider := &namedBookProvider{
+		name:       "googlebooks",
+		getBookErr: providerErr,
+	}
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, metadata.NewAggregator(&stubMetaProvider{}, provider), nil, profileRepo, nil)
+
+	rec := httptest.NewRecorder()
+	h.AddBook(rec, httptest.NewRequest(http.MethodPost, "/api/v1/author/book", bytes.NewBufferString(`{"foreignBookId":"gb:vol1","authorName":"Provider Author"}`)))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d: %s", rec.Code, rec.Body.String())
+	}
+	authors, err := authorRepo.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(authors) != 0 {
+		t.Fatalf("authors = %+v, want none after provider error", authors)
+	}
+	books, err := bookRepo.ListIncludingExcluded(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(books) != 0 {
+		t.Fatalf("books = %+v, want none after provider error", books)
+	}
+}
+
+func TestAddBook_DirectProviderBookRecordsOwnedFileAndSkipsSearch(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+	provider := &namedBookProvider{
+		name: "googlebooks",
+		books: map[string]*models.Book{
+			"gb:owned": {
+				ForeignID:        "gb:owned",
+				Title:            "Already Owned",
+				SortTitle:        "Already Owned",
+				Description:      "Provider-native metadata for an already owned book.",
+				MetadataProvider: "googlebooks",
+				MediaType:        models.MediaTypeEbook,
+				Author:           &models.Author{Name: "Owned Author", MetadataProvider: "googlebooks"},
+			},
+		},
+	}
+	spy := &searcherSpy{}
+	finder := &stubLibraryFinder{
+		ownedTitle: "Already Owned",
+		ownedPath:  "/library/Owned Author/Already Owned.epub",
+	}
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, metadata.NewAggregator(&stubMetaProvider{}, provider), nil, profileRepo, spy).WithFinder(finder)
+
+	rec := httptest.NewRecorder()
+	h.AddBook(rec, httptest.NewRequest(http.MethodPost, "/api/v1/author/book", bytes.NewBufferString(`{"foreignBookId":"gb:owned","authorName":"Owned Author","searchOnAdd":true}`)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if titles := spy.titles(); len(titles) != 0 {
+		t.Fatalf("search calls = %v, want none for already-owned direct book", titles)
+	}
+	book, err := bookRepo.GetByForeignID(ctx, "gb:owned")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if book == nil {
+		t.Fatal("book = nil, want created book")
+	}
+	if book.FilePath != finder.ownedPath || book.EbookFilePath != finder.ownedPath {
+		t.Fatalf("file paths = legacy %q ebook %q, want %q", book.FilePath, book.EbookFilePath, finder.ownedPath)
+	}
+	if book.Status != models.BookStatusImported {
+		t.Fatalf("status = %q, want imported after owned-file detection", book.Status)
+	}
+}
+
+func TestAddBook_DirectProviderBookSearchesWhenNotOwned(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+	provider := &namedBookProvider{
+		name: "googlebooks",
+		books: map[string]*models.Book{
+			"gb:not-owned": {
+				ForeignID:        "gb:not-owned",
+				Title:            "Not Yet Owned",
+				SortTitle:        "Not Yet Owned",
+				Description:      "Provider-native metadata for a book not yet in the local library.",
+				MetadataProvider: "googlebooks",
+				Author:           &models.Author{Name: "Owned Author", MetadataProvider: "googlebooks"},
+			},
+		},
+	}
+	spy := &searcherSpy{}
+	finder := &stubLibraryFinder{
+		ownedTitle: "Some Other Book",
+		ownedPath:  "/library/Owned Author/Some Other Book.epub",
+	}
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, metadata.NewAggregator(&stubMetaProvider{}, provider), nil, profileRepo, spy).WithFinder(finder)
+
+	rec := httptest.NewRecorder()
+	h.AddBook(rec, httptest.NewRequest(http.MethodPost, "/api/v1/author/book", bytes.NewBufferString(`{"foreignBookId":"gb:not-owned","authorName":"Owned Author","searchOnAdd":true}`)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	titles := waitForSearcherCalls(t, spy, 1)
+	if len(titles) != 1 || titles[0] != "Not Yet Owned" {
+		t.Fatalf("search calls = %v, want Not Yet Owned", titles)
 	}
 }
 
