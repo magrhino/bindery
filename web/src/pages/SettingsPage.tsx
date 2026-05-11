@@ -12,6 +12,7 @@ import { useAuth } from '../auth/AuthContext'
 type Tab = 'indexers' | 'clients' | 'notifications' | 'quality' | 'metadata' | 'general' | 'import' | 'rootfolders' | 'logs' | 'blocklist' | 'calibre' | 'abs' | 'grimmory'
 
 const inputCls = 'w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600'
+const absReviewResultLimit = 10
 const tabCls = (active: boolean) =>
   `px-4 py-2 rounded-md text-sm font-medium transition-colors ${active ? 'bg-slate-200 dark:bg-zinc-800 text-slate-900 dark:text-white' : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/50 dark:hover:bg-zinc-800/50'}`
 
@@ -2077,18 +2078,22 @@ function AudiobookshelfSection() {
                           {authorSearchId === item.id ? 'Searching...' : 'Author'}
                         </button>
                       </div>
-                      {(authorResults[item.id] ?? []).slice(0, 3).map(author => (
-                        <button
-                          key={author.foreignAuthorId}
-                          type="button"
-                          onClick={() => resolveReviewAuthor(item, author)}
-                          disabled={reviewActionId === item.id}
-                          className="w-full text-left rounded border border-slate-200 dark:border-zinc-800 bg-white/70 dark:bg-zinc-950/40 px-2 py-1.5 text-xs hover:border-emerald-400 disabled:opacity-50"
-                        >
-                          <span className="block font-medium text-slate-800 dark:text-zinc-200 truncate">{author.authorName}</span>
-                          {author.disambiguation && <span className="block text-[11px] text-slate-500 dark:text-zinc-500 truncate">{author.disambiguation}</span>}
-                        </button>
-                      ))}
+                      {(authorResults[item.id] ?? []).length > 0 && (
+                        <div className="max-h-48 space-y-2 overflow-y-auto pr-1">
+                          {(authorResults[item.id] ?? []).slice(0, absReviewResultLimit).map(author => (
+                            <button
+                              key={author.foreignAuthorId}
+                              type="button"
+                              onClick={() => resolveReviewAuthor(item, author)}
+                              disabled={reviewActionId === item.id}
+                              className="w-full text-left rounded border border-slate-200 dark:border-zinc-800 bg-white/70 dark:bg-zinc-950/40 px-2 py-1.5 text-xs hover:border-emerald-400 disabled:opacity-50"
+                            >
+                              <span className="block font-medium text-slate-800 dark:text-zinc-200 truncate">{author.authorName}</span>
+                              {author.disambiguation && <span className="block text-[11px] text-slate-500 dark:text-zinc-500 truncate">{author.disambiguation}</span>}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <div className="space-y-2">
                       <div className="flex gap-2">
@@ -2106,18 +2111,22 @@ function AudiobookshelfSection() {
                           {bookSearchId === item.id ? 'Searching...' : 'Book'}
                         </button>
                       </div>
-                      {(bookResults[item.id] ?? []).slice(0, 3).map(book => (
-                        <button
-                          key={book.foreignBookId}
-                          type="button"
-                          onClick={() => resolveReviewBook(item, book)}
-                          disabled={reviewActionId === item.id}
-                          className="w-full text-left rounded border border-slate-200 dark:border-zinc-800 bg-white/70 dark:bg-zinc-950/40 px-2 py-1.5 text-xs hover:border-emerald-400 disabled:opacity-50"
-                        >
-                          <span className="block font-medium text-slate-800 dark:text-zinc-200 truncate">{book.title}</span>
-                          {book.author?.authorName && <span className="block text-[11px] text-slate-500 dark:text-zinc-500 truncate">{book.author.authorName}</span>}
-                        </button>
-                      ))}
+                      {(bookResults[item.id] ?? []).length > 0 && (
+                        <div className="max-h-48 space-y-2 overflow-y-auto pr-1">
+                          {(bookResults[item.id] ?? []).slice(0, absReviewResultLimit).map(book => (
+                            <button
+                              key={book.foreignBookId}
+                              type="button"
+                              onClick={() => resolveReviewBook(item, book)}
+                              disabled={reviewActionId === item.id}
+                              className="w-full text-left rounded border border-slate-200 dark:border-zinc-800 bg-white/70 dark:bg-zinc-950/40 px-2 py-1.5 text-xs hover:border-emerald-400 disabled:opacity-50"
+                            >
+                              <span className="block font-medium text-slate-800 dark:text-zinc-200 truncate">{book.title}</span>
+                              {book.author?.authorName && <span className="block text-[11px] text-slate-500 dark:text-zinc-500 truncate">{book.author.authorName}</span>}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
