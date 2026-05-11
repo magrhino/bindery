@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import SettingsPage from './SettingsPage'
 import { api } from '../api/client'
 import type { ABSReviewItem, Author, Book } from '../api/client'
@@ -33,6 +33,8 @@ vi.mock('../api/client', async importOriginal => {
       absImportRuns: vi.fn(),
       absReviewItems: vi.fn(),
       absConflicts: vi.fn(),
+      resolveAbsReviewAuthor: vi.fn(),
+      resolveAbsReviewBook: vi.fn(),
       searchAuthors: vi.fn(),
       searchBooks: vi.fn(),
       listSettings: vi.fn(),
@@ -129,6 +131,7 @@ describe('SettingsPage ABS review search', () => {
     vi.mocked(api.absImportStatus).mockResolvedValue({ running: false, processed: 0 })
     vi.mocked(api.absImportRuns).mockResolvedValue([])
     vi.mocked(api.absConflicts).mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
+    vi.mocked(api.resolveAbsReviewAuthor).mockResolvedValue({ updated: 1 })
     vi.mocked(api.searchAuthors).mockResolvedValue([])
     vi.mocked(api.searchBooks).mockResolvedValue([])
     vi.mocked(api.listSettings).mockResolvedValue([{ key: 'hardcover.enhanced_series_enabled', value: 'false' }])
@@ -192,4 +195,76 @@ describe('SettingsPage ABS review search', () => {
     expect(firstBook?.parentElement).toHaveClass('max-h-48', 'overflow-y-auto')
   })
 
+  it('auto-links the selected book author before resolving the book', async () => {
+    const item = makeReviewItem()
+    const author = makeAuthor(42, {
+      foreignAuthorId: 'OL42A',
+      authorName: 'Martha Wells',
+    })
+    const book = makeBook(1, {
+      foreignBookId: 'OL1W',
+      title: 'All Systems Red',
+      author,
+    })
+    vi.mocked(api.searchBooks).mockResolvedValue([book])
+    vi.mocked(api.resolveAbsReviewBook).mockResolvedValue({
+      ...item,
+      resolvedAuthorForeignId: 'OL42A',
+      resolvedAuthorName: 'Martha Wells',
+      resolvedBookForeignId: 'OL1W',
+      resolvedBookTitle: 'All Systems Red',
+    })
+
+    await renderABSReview([item])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Book' }))
+    fireEvent.click(await screen.findByRole('button', { name: /All Systems Red/ }))
+
+    await waitFor(() => {
+      expect(api.resolveAbsReviewAuthor).toHaveBeenCalledWith(1, {
+        foreignAuthorId: 'OL42A',
+        authorName: 'Martha Wells',
+        applyTo: 'same_author',
+      })
+      expect(api.resolveAbsReviewBook).toHaveBeenCalledWith(1, {
+        foreignBookId: 'OL1W',
+        title: 'All Systems Red',
+        editedTitle: 'All Systems Red',
+      })
+    })
+    expect(vi.mocked(api.resolveAbsReviewAuthor).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(api.resolveAbsReviewBook).mock.invocationCallOrder[0],
+    )
+  })
+
+  it('does not auto-link the selected book author when one is already resolved', async () => {
+    const item = makeReviewItem({
+      resolvedAuthorForeignId: 'OL-existing',
+      resolvedAuthorName: 'Existing Author',
+    })
+    const book = makeBook(1, {
+      foreignBookId: 'OL1W',
+      title: 'All Systems Red',
+      author: makeAuthor(42, {
+        foreignAuthorId: 'OL42A',
+        authorName: 'Martha Wells',
+      }),
+    })
+    vi.mocked(api.searchBooks).mockResolvedValue([book])
+    vi.mocked(api.resolveAbsReviewBook).mockResolvedValue({
+      ...item,
+      resolvedBookForeignId: 'OL1W',
+      resolvedBookTitle: 'All Systems Red',
+    })
+
+    await renderABSReview([item])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Book' }))
+    fireEvent.click(await screen.findByRole('button', { name: /All Systems Red/ }))
+
+    await waitFor(() => {
+      expect(api.resolveAbsReviewBook).toHaveBeenCalled()
+    })
+    expect(api.resolveAbsReviewAuthor).not.toHaveBeenCalled()
+  })
 })

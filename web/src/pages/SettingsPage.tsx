@@ -1497,7 +1497,16 @@ function AudiobookshelfSection() {
     setReviewActionId(item.id)
     setReviewError(null)
     const editedTitle = (bookQueries[item.id] ?? item.editedTitle ?? item.title).trim()
+    const authorForeignId = book.author?.foreignAuthorId?.trim() ?? ''
+    const authorName = book.author?.authorName?.trim() ?? ''
     try {
+      if (!item.resolvedAuthorForeignId?.trim() && authorForeignId && authorName) {
+        await api.resolveAbsReviewAuthor(item.id, {
+          foreignAuthorId: authorForeignId,
+          authorName,
+          applyTo: 'same_author',
+        })
+      }
       const updated = await api.resolveAbsReviewBook(item.id, {
         foreignBookId: book.foreignBookId,
         title: book.title,
