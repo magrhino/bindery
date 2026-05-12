@@ -127,13 +127,16 @@ func AllowUnauthPath(path string) bool {
 //
 //  1. Always try to resolve identity from a valid session cookie, so handlers
 //     on unauth-allowed paths (e.g. /auth/status) can still see who's logged in.
-//  2. Health / auth endpoints — always allowed through
-//  3. Mode == disabled            — always allowed
-//  4. Mode == local-only + local  — always allowed
-//  5. Valid X-Api-Key header or ?apikey= query — allowed
-//  6. Valid signed session cookie — allowed
-//  7. Mode == proxy: trusted peer IP + identity header → resolve/provision user
-//  8. Otherwise                   — 401
+//  2. In proxy mode, also try to resolve identity from the configured proxy
+//     header (gated by trusted-proxy CIDR), so /auth/status reports the
+//     proxy-authed user instead of always returning authenticated:false (#560).
+//  3. Health / auth endpoints — always allowed through
+//  4. Mode == disabled            — always allowed
+//  5. Mode == local-only + local  — always allowed
+//  6. Valid X-Api-Key header or ?apikey= query — allowed
+//  7. Valid signed session cookie — allowed
+//  8. Mode == proxy: trusted peer IP + identity header → resolve/provision user
+//  9. Otherwise                   — 401
 func Middleware(p Provider) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -149,13 +152,29 @@ func Middleware(p Provider) func(http.Handler) http.Handler {
 					cookieValid = true
 				}
 			}
+
+			// In proxy mode, resolve the upstream identity header up-front as
+			// well — gated by the trusted-proxy CIDR check inside
+			// resolveProxyIdentity. This must run before the AllowUnauthPath
+			// short-circuit so /auth/status (which is in that list) sees the
+			// authenticated user (#560). Untrusted sources are rejected inside
+			// resolveProxyIdentity, so a spoofed header from a public IP still
+			// returns (0, false) and we drop through unchanged.
+			mode := p.Mode()
+			proxyValid := false
+			if !cookieValid && mode == ModeProxy {
+				if uid, ok := resolveProxyIdentity(r, p); ok {
+					ctx = context.WithValue(ctx, userIDCtxKey, uid)
+					ctx = context.WithValue(ctx, userRoleCtxKey, p.UserRole(ctx, uid))
+					proxyValid = true
+				}
+			}
 			r = r.WithContext(ctx)
 
 			if AllowUnauthPath(r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
 			}
-			mode := p.Mode()
 			if mode == ModeDisabled {
 				next.ServeHTTP(w, r)
 				return
@@ -178,10 +197,8 @@ func Middleware(p Provider) func(http.Handler) http.Handler {
 			}
 
 			if mode == ModeProxy {
-				if uid, ok := resolveProxyIdentity(r, p); ok {
-					pctx := context.WithValue(r.Context(), userIDCtxKey, uid)
-					pctx = context.WithValue(pctx, userRoleCtxKey, p.UserRole(pctx, uid))
-					r = r.WithContext(pctx)
+				if proxyValid {
+					// Identity already attached above; just continue.
 					next.ServeHTTP(w, r)
 					return
 				}
