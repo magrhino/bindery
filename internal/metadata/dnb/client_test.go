@@ -615,6 +615,150 @@ func TestSearchBooks_ExtractsISBNsFromMARC020(t *testing.T) {
 	}
 }
 
+// marcWithGND has a 100 $0 carrying the parenthesised DE-588 form. Used to
+// verify recordToBook lifts the GND authority ID into Author.ForeignID.
+const marcWithGND = `<record xmlns="http://www.loc.gov/MARC21/slim">
+  <controlfield tag="001">7777</controlfield>
+  <datafield tag="100" ind1="1" ind2=" ">
+    <subfield code="a">Funke, Cornelia,</subfield>
+    <subfield code="0">(DE-588)123456789</subfield>
+    <subfield code="0">(DE-101)abc</subfield>
+  </datafield>
+  <datafield tag="245" ind1="1" ind2="0">
+    <subfield code="a">Tintenherz</subfield>
+  </datafield>
+</record>`
+
+// marcWithGNDURL uses the URL form of the GND authority link.
+const marcWithGNDURL = `<record xmlns="http://www.loc.gov/MARC21/slim">
+  <controlfield tag="001">8888</controlfield>
+  <datafield tag="100" ind1="1" ind2=" ">
+    <subfield code="a">Müller, Heiner,</subfield>
+    <subfield code="0">http://d-nb.info/gnd/118585665</subfield>
+  </datafield>
+  <datafield tag="245" ind1="1" ind2="0">
+    <subfield code="a">Werke</subfield>
+  </datafield>
+</record>`
+
+// marcSyntheticAuthor has 100 $a but no $0; recordToBook should fall back
+// to a "dnb:author:<slug>" ForeignID derived from the display name.
+const marcSyntheticAuthor = `<record xmlns="http://www.loc.gov/MARC21/slim">
+  <controlfield tag="001">9001</controlfield>
+  <datafield tag="100" ind1="1" ind2=" ">
+    <subfield code="a">Müller, Thomas,</subfield>
+  </datafield>
+  <datafield tag="245" ind1="1" ind2="0">
+    <subfield code="a">Ein Buch</subfield>
+  </datafield>
+</record>`
+
+func TestExtractGND(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"(DE-588)1234567X", "1234567X"},
+		{"(DE-588)118585665", "118585665"},
+		{" (DE-588) 99999X ", "99999X"},
+		{"http://d-nb.info/gnd/1234567X", "1234567X"},
+		{"https://d-nb.info/gnd/118585665", "118585665"},
+		{"http://d-nb.info/gnd/118585665/about", "118585665"},
+		{"", ""},
+		{"(DE-101)abc", ""}, // wrong authority code → not a GND value
+		{"(ISNI)0000000123456789", ""},
+		{"random nonsense", ""},
+		{"http://example.com/foo/bar", ""},
+	}
+	for _, tc := range cases {
+		got := extractGND(tc.in)
+		if got != tc.want {
+			t.Errorf("extractGND(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestSlug(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"Frank Herbert", "frank-herbert"},
+		{"Müller, Thomas", "muller-thomas"},
+		{"Heiner Müller", "heiner-muller"},
+		{"  J.R.R.   Tolkien  ", "j-r-r-tolkien"},
+		{"Anonyme – Auteur", "anonyme-auteur"},
+		{"García Márquez", "garcia-marquez"},
+		{"", ""},
+		{"---", ""},
+	}
+	for _, tc := range cases {
+		got := slug(tc.in)
+		if got != tc.want {
+			t.Errorf("slug(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestRecordToBook_AuthorForeignID_FromGND(t *testing.T) {
+	c := mockXMLClient(sruXMLN("1", marcWithGND), http.StatusOK)
+	books, err := c.SearchBooks(context.Background(), "Tintenherz")
+	if err != nil {
+		t.Fatalf("SearchBooks: %v", err)
+	}
+	if len(books) != 1 {
+		t.Fatalf("expected 1 book, got %d", len(books))
+	}
+	b := books[0]
+	if b.Author == nil {
+		t.Fatal("expected Author to be populated")
+	}
+	if b.Author.ForeignID != "dnb:gnd:123456789" {
+		t.Errorf("Author.ForeignID = %q, want dnb:gnd:123456789", b.Author.ForeignID)
+	}
+}
+
+func TestRecordToBook_AuthorForeignID_FromGNDURL(t *testing.T) {
+	c := mockXMLClient(sruXMLN("1", marcWithGNDURL), http.StatusOK)
+	books, err := c.SearchBooks(context.Background(), "Werke")
+	if err != nil {
+		t.Fatalf("SearchBooks: %v", err)
+	}
+	if len(books) != 1 || books[0].Author == nil {
+		t.Fatalf("expected 1 book with author, got %+v", books)
+	}
+	if books[0].Author.ForeignID != "dnb:gnd:118585665" {
+		t.Errorf("Author.ForeignID = %q, want dnb:gnd:118585665", books[0].Author.ForeignID)
+	}
+}
+
+func TestRecordToBook_AuthorForeignID_SyntheticWhenNoAuthorityLink(t *testing.T) {
+	c := mockXMLClient(sruXMLN("1", marcSyntheticAuthor), http.StatusOK)
+	books, err := c.SearchBooks(context.Background(), "Müller")
+	if err != nil {
+		t.Fatalf("SearchBooks: %v", err)
+	}
+	if len(books) != 1 || books[0].Author == nil {
+		t.Fatalf("expected 1 book with author, got %+v", books)
+	}
+	if books[0].Author.ForeignID != "dnb:author:thomas-muller" {
+		t.Errorf("Author.ForeignID = %q, want dnb:author:thomas-muller", books[0].Author.ForeignID)
+	}
+}
+
+// TestGetAuthor_SyntheticIDsReturnNil verifies that the prefix-based
+// aggregator dispatch can safely route GetAuthor calls for synthetic DNB
+// author IDs without producing an error — the caller will construct an
+// Author from name in that path.
+func TestGetAuthor_SyntheticIDsReturnNil(t *testing.T) {
+	cases := []string{"dnb:gnd:118585665", "dnb:author:frank-herbert"}
+	for _, id := range cases {
+		got, err := New().GetAuthor(context.Background(), id)
+		if err != nil {
+			t.Errorf("GetAuthor(%q): unexpected error: %v", id, err)
+		}
+		if got != nil {
+			t.Errorf("GetAuthor(%q): expected nil, got %+v", id, got)
+		}
+	}
+}
+
 func TestStripISBNQualifier(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"9783499015717", "9783499015717"},

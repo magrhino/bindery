@@ -1215,16 +1215,41 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 		fetched.Monitored = false
 		def := models.DefaultMetadataProfileID
 		fetched.MetadataProfileID = &def
-		if err := h.authors.CreateForUser(ctx, fetched, auth.UserIDFromContext(ctx)); err != nil {
-			if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-				return
+
+		// Dedupe path: if a canonical provider (OL / Hardcover / …) is being
+		// added for a SortName previously persisted as a synthetic DNB-only
+		// row, migrate that row in place rather than creating a duplicate.
+		// The synthetic row was created because the DNB record had only an
+		// author name (no GND link, no OL coverage). Now that a canonical
+		// identity exists, collapse the two onto a single primary key so
+		// the user keeps one author with all their books attached.
+		if !strings.HasPrefix(fetched.ForeignID, "dnb:") {
+			ownerID := auth.UserIDFromContext(ctx)
+			if existing, lookupErr := h.authors.GetByDNBSyntheticName(ctx, fetched.SortName, ownerID); lookupErr == nil && existing != nil {
+				if err := h.authors.UpgradeSyntheticDNB(ctx, existing.ForeignID, fetched); err != nil {
+					slog.Debug("AddBook: upgrade synthetic DNB author failed", "from", existing.ForeignID, "to", fetched.ForeignID, "error", err)
+				} else {
+					// Re-fetch the row by its new canonical ForeignID so subsequent
+					// steps see the upgraded record (ID preserved).
+					if upgraded, getErr := h.authors.GetByForeignID(ctx, fetched.ForeignID); getErr == nil && upgraded != nil {
+						author = upgraded
+					}
+				}
 			}
-			// Race: another request created it between our check and insert.
-			author, _ = h.authors.GetByForeignID(ctx, req.ForeignAuthorID)
-		} else {
-			author = fetched
-			h.fetchAuthorBooksAsync(author, false, h.resolveDefaultMediaType(ctx))
+		}
+
+		if author == nil {
+			if err := h.authors.CreateForUser(ctx, fetched, auth.UserIDFromContext(ctx)); err != nil {
+				if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+					return
+				}
+				// Race: another request created it between our check and insert.
+				author, _ = h.authors.GetByForeignID(ctx, req.ForeignAuthorID)
+			} else {
+				author = fetched
+				h.fetchAuthorBooksAsync(author, false, h.resolveDefaultMediaType(ctx))
+			}
 		}
 	}
 	if author == nil {

@@ -280,3 +280,54 @@ func TestAggregator_GetEditions_Cached(t *testing.T) {
 		t.Errorf("cached editions mismatch: %+v", got)
 	}
 }
+
+// TestAggregator_ResolveBookByISBN_AcceptsDNBWithSyntheticAuthorID is the
+// regression test for #608: prior to the DNB-author-foreign-id fix, the
+// aggregator silently dropped DNB-only ISBN hits because Author.ForeignID
+// was empty. Now that DNB populates a synthetic "dnb:gnd:" (or
+// "dnb:author:") ForeignID, ResolveBookByISBN must accept it.
+func TestAggregator_ResolveBookByISBN_AcceptsDNBWithSyntheticAuthorID(t *testing.T) {
+	primary := &mockProvider{name: "openlibrary"} // OL doesn't have this ISBN.
+	dnb := &mockProvider{name: "dnb", getByISBN: &models.Book{
+		ForeignID: "dnb:bib-001",
+		Title:     "Der Wüstenplanet",
+		Author: &models.Author{
+			ForeignID:        "dnb:gnd:118585665",
+			Name:             "Frank Herbert",
+			SortName:         "Herbert, Frank",
+			MetadataProvider: "dnb",
+		},
+	}}
+	agg := newTestAggregator(primary, dnb)
+
+	got, err := agg.ResolveBookByISBN(context.Background(), "9783453198975")
+	if err != nil {
+		t.Fatalf("ResolveBookByISBN: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected DNB result with synthetic author ForeignID to be accepted, got nil")
+	}
+	if got.Author == nil || got.Author.ForeignID != "dnb:gnd:118585665" {
+		t.Errorf("unexpected resolved author: %+v", got.Author)
+	}
+}
+
+// TestAggregator_ResolveBookByISBN_StillSkipsResultsWithoutAuthorID guards
+// the inverse: a provider that genuinely returns a book without any author
+// ForeignID is still dropped, so the caller sees nil instead of a placeholder
+// row it can't persist.
+func TestAggregator_ResolveBookByISBN_StillSkipsResultsWithoutAuthorID(t *testing.T) {
+	primary := &mockProvider{name: "openlibrary", getByISBN: &models.Book{
+		Title:  "Title Only",
+		Author: &models.Author{Name: "Unknown", ForeignID: ""},
+	}}
+	agg := newTestAggregator(primary)
+
+	got, err := agg.ResolveBookByISBN(context.Background(), "9780000000000")
+	if err != nil {
+		t.Fatalf("ResolveBookByISBN: %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected nil when no provider has an author ForeignID, got %+v", got)
+	}
+}
