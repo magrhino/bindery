@@ -1,10 +1,14 @@
 package qbittorrent
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -77,7 +81,7 @@ func TestAddTorrent_ConcurrentUniqueHashes(t *testing.T) {
 			defer wg.Done()
 			results[i], errs[i] = c.AddTorrent(
 				context.Background(),
-				"http://example.com/book.torrent",
+				"torrent-source://book",
 				"", "",
 			)
 		}()
@@ -126,6 +130,13 @@ func newTestClient(serverURL, username, password string) *Client {
 	c := New("localhost", 8080, username, password, "", false)
 	c.baseURL = serverURL
 	return c
+}
+
+func torrentFixture() ([]byte, string) {
+	info := []byte("d6:lengthi123e4:name8:book.txt12:piece lengthi16384e6:pieces20:aaaaaaaaaaaaaaaaaaaae")
+	sum := sha1.Sum(info)
+	data := []byte("d8:announce14:http://tracker4:info" + string(info) + "e")
+	return data, hex.EncodeToString(sum[:])
 }
 
 func TestNew(t *testing.T) {
@@ -335,6 +346,8 @@ func TestTest_Success(t *testing.T) {
 			_, _ = w.Write([]byte("Ok."))
 		case "/api/v2/app/version":
 			_, _ = w.Write([]byte("5.0.0"))
+		case "/api/v2/torrents/info":
+			_, _ = w.Write([]byte("[]"))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -387,6 +400,31 @@ func TestAddTorrent_Success(t *testing.T) {
 	c := newTestClient(srv.URL, "admin", "pass")
 	if _, err := c.AddTorrent(context.Background(), "magnet:?xt=urn:btih:abc123", "", ""); err != nil {
 		t.Fatalf("AddTorrent: %v", err)
+	}
+}
+
+func TestTest_TorrentListFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/app/version":
+			_, _ = w.Write([]byte("5.0.0"))
+		case "/api/v2/torrents/info":
+			http.Error(w, "broken list", http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "admin", "pass")
+	err := c.Test(context.Background())
+	if err == nil {
+		t.Fatal("expected Test to fail when torrent listing fails")
+	}
+	if !strings.Contains(err.Error(), "could not list torrents") {
+		t.Errorf("expected torrent-list error, got %q", err.Error())
 	}
 }
 
@@ -449,6 +487,210 @@ func TestAddTorrent_HTTPError(t *testing.T) {
 	c := newTestClient(srv.URL, "admin", "pass")
 	if _, err := c.AddTorrent(context.Background(), "magnet:?xt=urn:btih:abc", "", ""); err == nil {
 		t.Fatal("expected error on 400")
+	}
+}
+
+func TestAddTorrent_HTTPURLFetchesTorrentAndUploadsFile(t *testing.T) {
+	torrentData, wantHash := torrentFixture()
+	var gotAccept string
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAccept = r.Header.Get("Accept")
+		w.Header().Set("Content-Type", "application/x-bittorrent")
+		_, _ = w.Write(torrentData)
+	}))
+	defer source.Close()
+
+	var addHit bool
+	var gotCategory, gotSavePath string
+	var gotUploaded []byte
+	qbit := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/torrents/add":
+			addHit = true
+			if !strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data;") {
+				t.Fatalf("expected multipart upload, got %q", r.Header.Get("Content-Type"))
+			}
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatalf("ParseMultipartForm: %v", err)
+			}
+			if urls := r.FormValue("urls"); urls != "" {
+				t.Fatalf("torrent URL must not be sent to qBit, got urls=%q", urls)
+			}
+			gotCategory = r.FormValue("category")
+			gotSavePath = r.FormValue("savepath")
+			file, _, err := r.FormFile("torrents")
+			if err != nil {
+				t.Fatalf("expected torrents file upload: %v", err)
+			}
+			defer file.Close()
+			gotUploaded, _ = io.ReadAll(file)
+			_, _ = w.Write([]byte("Ok."))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer qbit.Close()
+
+	c := newTestClient(qbit.URL, "admin", "pass")
+	hash, err := c.AddTorrent(context.Background(), source.URL+"/12/download?id=abc", "books", "/downloads")
+	if err != nil {
+		t.Fatalf("AddTorrent: %v", err)
+	}
+	if hash != wantHash {
+		t.Errorf("hash: want %q, got %q", wantHash, hash)
+	}
+	if !addHit {
+		t.Fatal("expected qBit add endpoint to be called")
+	}
+	if gotAccept != "application/x-bittorrent" {
+		t.Errorf("Accept header: want application/x-bittorrent, got %q", gotAccept)
+	}
+	if gotCategory != "books" {
+		t.Errorf("category: want books, got %q", gotCategory)
+	}
+	if gotSavePath != "/downloads" {
+		t.Errorf("savepath: want /downloads, got %q", gotSavePath)
+	}
+	if !bytes.Equal(gotUploaded, torrentData) {
+		t.Errorf("uploaded torrent bytes differ from fetched bytes")
+	}
+}
+
+func TestAddTorrent_HTTPURLFetchFailureDoesNotCallQbitAdd(t *testing.T) {
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "missing", http.StatusNotFound)
+	}))
+	defer source.Close()
+
+	addHit := false
+	qbit := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v2/torrents/add" {
+			addHit = true
+		}
+		_, _ = w.Write([]byte("Ok."))
+	}))
+	defer qbit.Close()
+
+	c := newTestClient(qbit.URL, "admin", "pass")
+	_, err := c.AddTorrent(context.Background(), source.URL+"/missing.torrent", "books", "")
+	if err == nil {
+		t.Fatal("expected fetch failure")
+	}
+	if !strings.Contains(err.Error(), "HTTP 404") {
+		t.Errorf("expected HTTP 404 error, got %q", err.Error())
+	}
+	if addHit {
+		t.Fatal("qBit add endpoint should not be called when torrent fetch fails")
+	}
+}
+
+func TestAddTorrent_HTTPURLInvalidTorrentDoesNotCallQbitAdd(t *testing.T) {
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html>not a torrent</html>"))
+	}))
+	defer source.Close()
+
+	addHit := false
+	qbit := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v2/torrents/add" {
+			addHit = true
+		}
+		_, _ = w.Write([]byte("Ok."))
+	}))
+	defer qbit.Close()
+
+	c := newTestClient(qbit.URL, "admin", "pass")
+	_, err := c.AddTorrent(context.Background(), source.URL+"/bad.torrent", "books", "")
+	if err == nil {
+		t.Fatal("expected invalid torrent error")
+	}
+	if !strings.Contains(err.Error(), "invalid torrent file") {
+		t.Errorf("expected invalid torrent error, got %q", err.Error())
+	}
+	if addHit {
+		t.Fatal("qBit add endpoint should not be called for invalid torrent data")
+	}
+}
+
+func TestInfoHashFromTorrentFile_RejectsOversizedStringLength(t *testing.T) {
+	_, err := infoHashFromTorrentFile([]byte("d4:info9223372036854775807:xee"))
+	if err == nil {
+		t.Fatal("expected invalid torrent error")
+	}
+	if !strings.Contains(err.Error(), "string exceeds input") {
+		t.Errorf("expected string exceeds input error, got %q", err.Error())
+	}
+}
+
+func TestAddTorrent_HTTPURLOversizedTorrentDoesNotCallQbitAdd(t *testing.T) {
+	orig := maxTorrentFileBytes
+	maxTorrentFileBytes = 8
+	t.Cleanup(func() { maxTorrentFileBytes = orig })
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("123456789"))
+	}))
+	defer source.Close()
+
+	addHit := false
+	qbit := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v2/torrents/add" {
+			addHit = true
+		}
+		_, _ = w.Write([]byte("Ok."))
+	}))
+	defer qbit.Close()
+
+	c := newTestClient(qbit.URL, "admin", "pass")
+	_, err := c.AddTorrent(context.Background(), source.URL+"/too-large.torrent", "books", "")
+	if err == nil {
+		t.Fatal("expected oversized torrent error")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("expected oversized error, got %q", err.Error())
+	}
+	if addHit {
+		t.Fatal("qBit add endpoint should not be called for oversized torrent data")
+	}
+}
+
+func TestAddTorrent_HTTPRedirectToMagnetUsesURLField(t *testing.T) {
+	const magnet = "magnet:?xt=urn:btih:ABCDEF123&dn=Book"
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, magnet, http.StatusFound)
+	}))
+	defer source.Close()
+
+	var gotURL string
+	qbit := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/torrents/add":
+			if err := r.ParseForm(); err != nil {
+				t.Fatal(err)
+			}
+			gotURL = r.FormValue("urls")
+			_, _ = w.Write([]byte("Ok."))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer qbit.Close()
+
+	c := newTestClient(qbit.URL, "admin", "pass")
+	hash, err := c.AddTorrent(context.Background(), source.URL+"/redirect", "books", "")
+	if err != nil {
+		t.Fatalf("AddTorrent: %v", err)
+	}
+	if hash != "abcdef123" {
+		t.Errorf("hash: want abcdef123, got %q", hash)
+	}
+	if gotURL != magnet {
+		t.Errorf("urls field: want %q, got %q", magnet, gotURL)
 	}
 }
 
@@ -609,6 +851,8 @@ func TestGet_403Retry(t *testing.T) {
 				return
 			}
 			_, _ = w.Write([]byte("5.0.0"))
+		case "/api/v2/torrents/info":
+			_, _ = w.Write([]byte("[]"))
 		}
 	}))
 	defer srv.Close()
@@ -730,7 +974,7 @@ func TestAddTorrent_HashFoundUnderDifferentCategory(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "admin", "pass")
-	hash, err := c.AddTorrent(context.Background(), "http://example.com/book.torrent", "books", "")
+	hash, err := c.AddTorrent(context.Background(), "torrent-source://book", "books", "")
 	if err != nil {
 		t.Fatalf("AddTorrent: %v", err)
 	}
@@ -789,7 +1033,7 @@ func TestAddTorrent_HashLookupTimeout(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv.URL, "admin", "pass")
-	_, err := c.AddTorrent(context.Background(), "http://example.com/book.torrent", "books", "")
+	_, err := c.AddTorrent(context.Background(), "torrent-source://book", "books", "")
 	if err == nil {
 		t.Fatal("expected error on timeout, got nil")
 	}

@@ -1,9 +1,13 @@
 package downloader
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,6 +17,13 @@ import (
 
 	"github.com/vavallee/bindery/internal/models"
 )
+
+func adapterTorrentFixture() ([]byte, string) {
+	info := []byte("d6:lengthi123e4:name8:book.txt12:piece lengthi16384e6:pieces20:aaaaaaaaaaaaaaaaaaaae")
+	sum := sha1.Sum(info)
+	data := []byte("d8:announce14:http://tracker4:info" + string(info) + "e")
+	return data, hex.EncodeToString(sum[:])
+}
 
 func TestProtocolForClient(t *testing.T) {
 	if got := ProtocolForClient("sabnzbd"); got != "usenet" {
@@ -350,8 +361,12 @@ func TestTestClient_Qbittorrent(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v2/auth/login":
 			_, _ = w.Write([]byte("Ok."))
-		default:
+		case "/api/v2/app/version":
 			_, _ = w.Write([]byte("1.2.3"))
+		case "/api/v2/torrents/info":
+			_, _ = w.Write([]byte("[]"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	defer srv.Close()
@@ -596,6 +611,53 @@ func TestSendDownload_Qbittorrent(t *testing.T) {
 	}
 	if !result.UsesTorrentID {
 		t.Error("expected UsesTorrentID=true for qbittorrent")
+	}
+}
+
+func TestSendDownload_QbittorrentHTTPURLUploadsTorrentFile(t *testing.T) {
+	torrentData, wantHash := adapterTorrentFixture()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-bittorrent")
+		_, _ = w.Write(torrentData)
+	}))
+	defer source.Close()
+
+	var uploaded []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/torrents/add":
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatalf("ParseMultipartForm: %v", err)
+			}
+			if urls := r.FormValue("urls"); urls != "" {
+				t.Fatalf("qBit should receive uploaded bytes, not source URL %q", urls)
+			}
+			file, _, err := r.FormFile("torrents")
+			if err != nil {
+				t.Fatalf("expected torrent file upload: %v", err)
+			}
+			defer file.Close()
+			uploaded, _ = io.ReadAll(file)
+			_, _ = w.Write([]byte("Ok."))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	host, port := serverHostPort(t, srv.URL)
+	client := &models.DownloadClient{Type: "qbittorrent", Host: host, Port: port, Username: "u", Password: "p", Category: "books"}
+	result, err := SendDownload(context.Background(), client, source.URL+"/12/download?id=abc", "")
+	if err != nil {
+		t.Fatalf("SendDownload: %v", err)
+	}
+	if result.RemoteID != wantHash {
+		t.Errorf("RemoteID: want %q, got %q", wantHash, result.RemoteID)
+	}
+	if !bytes.Equal(uploaded, torrentData) {
+		t.Error("uploaded torrent bytes differ from fetched bytes")
 	}
 }
 

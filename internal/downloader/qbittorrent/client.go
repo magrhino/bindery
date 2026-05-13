@@ -3,15 +3,20 @@
 package qbittorrent
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +53,10 @@ func (e *AuthError) Error() string {
 // hashPollTimeout is the maximum time to wait for a newly-added torrent's hash
 // to appear in the unfiltered torrent list.
 var hashPollTimeout = 30 * time.Second
+
+// maxTorrentFileBytes caps the torrent payload Bindery will fetch before
+// uploading it to qBittorrent.
+var maxTorrentFileBytes int64 = 32 << 20
 
 // Client interacts with the qBittorrent WebUI API v2.
 // Authentication is cookie-based: Login() obtains a SID cookie which is
@@ -134,23 +143,31 @@ func (c *Client) Login(ctx context.Context) error {
 	return nil
 }
 
-// Test verifies connectivity by fetching the application version. The error
-// wording adapts to the failure mode: auth/config issues (the server
-// responded but rejected us) get a targeted hint; transport failures (the
-// server didn't respond at all) get a hint based on the error class.
+// Test verifies non-mutating connectivity by fetching the application version
+// and listing torrents. The error wording adapts to the failure mode:
+// auth/config issues (the server responded but rejected us) get a targeted
+// hint; transport failures (the server didn't respond at all) get a hint based
+// on the error class.
 func (c *Client) Test(ctx context.Context) error {
 	if _, err := c.get(ctx, "/api/v2/app/version"); err != nil {
-		var authErr *AuthError
-		if errors.As(err, &authErr) {
-			// Server responded — this is an auth/config issue, not unreachable.
-			return fmt.Errorf("connected to qBittorrent at %s but %w", c.baseURL, err)
-		}
-		return fmt.Errorf("could not reach qBittorrent at %s — %w%s", c.baseURL, err, nethint.ForErr(err))
+		return c.testError(err)
+	}
+	if _, err := c.GetTorrents(ctx, ""); err != nil {
+		return c.testError(fmt.Errorf("could not list torrents: %w", err))
 	}
 	return nil
 }
 
-// AddTorrent submits a magnet link or torrent URL to qBittorrent for download
+func (c *Client) testError(err error) error {
+	var authErr *AuthError
+	if errors.As(err, &authErr) {
+		// Server responded — this is an auth/config issue, not unreachable.
+		return fmt.Errorf("connected to qBittorrent at %s but %w", c.baseURL, err)
+	}
+	return fmt.Errorf("could not reach qBittorrent at %s — %w%s", c.baseURL, err, nethint.ForErr(err))
+}
+
+// AddTorrent submits a magnet link or torrent file to qBittorrent for download
 // and returns the torrent hash when it can be determined.
 func (c *Client) AddTorrent(ctx context.Context, magnetOrURL, category, savePath string) (string, error) {
 	// Serialise concurrent AddTorrent calls so that each goroutine's
@@ -161,66 +178,76 @@ func (c *Client) AddTorrent(ctx context.Context, magnetOrURL, category, savePath
 	c.addMu.Lock()
 	defer c.addMu.Unlock()
 
-	// Snapshot all existing hashes (unfiltered) so we can detect newly-added
-	// items regardless of which category qBittorrent assigns them initially.
-	// For indirect URLs (e.g. Prowlarr Torznab redirects), qBittorrent must
-	// follow the redirect and fetch the remote .torrent file before it assigns
-	// metadata and category. Polling with a category filter during this window
-	// returns nothing; the detection deadline expires and the hash is lost
-	// (#418). The before/after hash-set diff already uniquely identifies the
-	// new torrent, so the category filter is omitted from both polling calls.
+	if infoHash := infoHashFromMagnet(magnetOrURL); infoHash != "" {
+		if err := c.addTorrentURL(ctx, magnetOrURL, category, savePath); err != nil {
+			return "", err
+		}
+		return infoHash, nil
+	}
+
+	if isHTTPURL(magnetOrURL) {
+		torrent, err := c.fetchTorrentFile(ctx, magnetOrURL)
+		if err != nil {
+			return "", err
+		}
+		if torrent.magnetURL != "" {
+			infoHash := infoHashFromMagnet(torrent.magnetURL)
+			beforeSet := map[string]struct{}{}
+			if infoHash == "" {
+				beforeSet = c.snapshotHashes(ctx)
+			}
+			if err := c.addTorrentURL(ctx, torrent.magnetURL, category, savePath); err != nil {
+				return "", err
+			}
+			if infoHash != "" {
+				return infoHash, nil
+			}
+			return c.waitForNewTorrent(ctx, beforeSet, category)
+		}
+
+		infoHash, err := infoHashFromTorrentFile(torrent.data)
+		if err != nil {
+			return "", err
+		}
+		beforeSet := map[string]struct{}{}
+		if infoHash == "" {
+			beforeSet = c.snapshotHashes(ctx)
+		}
+		if err := c.addTorrentFile(ctx, torrent.filename, torrent.data, category, savePath); err != nil {
+			return "", err
+		}
+		if infoHash != "" {
+			return infoHash, nil
+		}
+		return c.waitForNewTorrent(ctx, beforeSet, category)
+	}
+
+	beforeSet := c.snapshotHashes(ctx)
+	if err := c.addTorrentURL(ctx, magnetOrURL, category, savePath); err != nil {
+		return "", err
+	}
+	return c.waitForNewTorrent(ctx, beforeSet, category)
+}
+
+func isHTTPURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "http" || u.Scheme == "https"
+}
+
+func (c *Client) snapshotHashes(ctx context.Context) map[string]struct{} {
 	beforeSet := map[string]struct{}{}
 	if before, err := c.GetTorrents(ctx, ""); err == nil {
 		for _, t := range before {
 			beforeSet[strings.ToLower(t.Hash)] = struct{}{}
 		}
 	}
+	return beforeSet
+}
 
-	form := url.Values{"urls": {magnetOrURL}}
-	if category != "" {
-		form.Set("category", category)
-	}
-	if savePath != "" {
-		form.Set("savepath", savePath)
-	}
-
-	if err := c.ensureLoggedIn(ctx); err != nil {
-		return "", err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.baseURL+"/api/v2/torrents/add",
-		strings.NewReader(form.Encode()))
-	if err != nil {
-		return "", fmt.Errorf("build add request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("add torrent: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-	text := strings.TrimSpace(string(body))
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("add torrent HTTP %d: %s", resp.StatusCode, text)
-	}
-	if text != "Ok." {
-		return "", fmt.Errorf("add torrent failed: %s", text)
-	}
-
-	if infoHash := infoHashFromMagnet(magnetOrURL); infoHash != "" {
-		return infoHash, nil
-	}
-
-	// Poll the unfiltered torrent list until the new torrent appears — qBittorrent
-	// must fetch and parse the .torrent file before the hash is visible, which can
-	// take a few seconds for remote URLs (e.g. Prowlarr Torznab redirects).
-	// We poll unfiltered so we find the torrent regardless of which category
-	// qBittorrent has assigned at the moment it first appears.
+func (c *Client) waitForNewTorrent(ctx context.Context, beforeSet map[string]struct{}, category string) (string, error) {
 	deadline := time.Now().Add(hashPollTimeout)
 	var lastAfter []Torrent
 	for {
@@ -270,6 +297,318 @@ func (c *Client) AddTorrent(ctx context.Context, magnetOrURL, category, savePath
 		"after_hashes", afterKeys,
 	)
 	return "", fmt.Errorf("add torrent accepted but hash could not be determined")
+}
+
+func (c *Client) addTorrentURL(ctx context.Context, magnetOrURL, category, savePath string) error {
+	form := url.Values{"urls": {magnetOrURL}}
+	return c.addTorrentForm(ctx, form, category, savePath)
+}
+
+func (c *Client) addTorrentForm(ctx context.Context, form url.Values, category, savePath string) error {
+	if category != "" {
+		form.Set("category", category)
+	}
+	if savePath != "" {
+		form.Set("savepath", savePath)
+	}
+
+	if err := c.ensureLoggedIn(ctx); err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.baseURL+"/api/v2/torrents/add",
+		strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("build add request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	return c.doAddRequest(req)
+}
+
+func (c *Client) addTorrentFile(ctx context.Context, filename string, data []byte, category, savePath string) error {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("torrents", filename)
+	if err != nil {
+		return fmt.Errorf("build torrent upload: %w", err)
+	}
+	if _, err := part.Write(data); err != nil {
+		return fmt.Errorf("write torrent upload: %w", err)
+	}
+	if category != "" {
+		if err := writer.WriteField("category", category); err != nil {
+			return fmt.Errorf("write torrent category: %w", err)
+		}
+	}
+	if savePath != "" {
+		if err := writer.WriteField("savepath", savePath); err != nil {
+			return fmt.Errorf("write torrent savepath: %w", err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("close torrent upload: %w", err)
+	}
+
+	if err := c.ensureLoggedIn(ctx); err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v2/torrents/add", &body)
+	if err != nil {
+		return fmt.Errorf("build add request: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	return c.doAddRequest(req)
+}
+
+func (c *Client) doAddRequest(req *http.Request) error {
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("add torrent: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+	text := strings.TrimSpace(string(body))
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("add torrent HTTP %d: %s", resp.StatusCode, text)
+	}
+	if text != "Ok." {
+		return fmt.Errorf("add torrent failed: %s", text)
+	}
+	return nil
+}
+
+type fetchedTorrent struct {
+	filename  string
+	data      []byte
+	magnetURL string
+}
+
+func (c *Client) fetchTorrentFile(ctx context.Context, rawURL string) (*fetchedTorrent, error) {
+	current := rawURL
+	fetchClient := &http.Client{
+		Transport: c.http.Transport,
+		Timeout:   c.http.Timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	for redirects := 0; redirects <= 5; redirects++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, current, nil)
+		if err != nil {
+			return nil, fmt.Errorf("build torrent download request: %w", err)
+		}
+		req.Header.Set("Accept", "application/x-bittorrent")
+
+		resp, err := fetchClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("download torrent file: %w", err)
+		}
+
+		if resp.StatusCode >= http.StatusMultipleChoices && resp.StatusCode < http.StatusBadRequest {
+			location := resp.Header.Get("Location")
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if location == "" {
+				return nil, fmt.Errorf("download torrent file: redirect without location")
+			}
+			if strings.HasPrefix(strings.ToLower(location), "magnet:") {
+				return &fetchedTorrent{magnetURL: location}, nil
+			}
+			next, err := req.URL.Parse(location)
+			if err != nil {
+				return nil, fmt.Errorf("download torrent file: invalid redirect location: %w", err)
+			}
+			if next.Scheme != "http" && next.Scheme != "https" {
+				return nil, fmt.Errorf("download torrent file: unsupported redirect scheme %q", next.Scheme)
+			}
+			current = next.String()
+			continue
+		}
+
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			return nil, fmt.Errorf("download torrent file HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+
+		data, err := readLimited(resp.Body, maxTorrentFileBytes)
+		if err != nil {
+			return nil, err
+		}
+		data = append(body, data...)
+		if int64(len(data)) > maxTorrentFileBytes {
+			return nil, fmt.Errorf("download torrent file: response exceeds %d bytes", maxTorrentFileBytes)
+		}
+		if len(data) == 0 {
+			return nil, fmt.Errorf("download torrent file: empty response")
+		}
+
+		filename := filenameFromURL(current)
+		return &fetchedTorrent{filename: filename, data: data}, nil
+	}
+
+	return nil, fmt.Errorf("download torrent file: too many redirects")
+}
+
+func readLimited(r io.Reader, maxBytes int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("download torrent file: %w", err)
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("download torrent file: response exceeds %d bytes", maxBytes)
+	}
+	return data, nil
+}
+
+func filenameFromURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "download.torrent"
+	}
+	name := path.Base(u.Path)
+	if name == "." || name == "/" || name == "" {
+		return "download.torrent"
+	}
+	if !strings.HasSuffix(strings.ToLower(name), ".torrent") {
+		name += ".torrent"
+	}
+	return name
+}
+
+func infoHashFromTorrentFile(data []byte) (string, error) {
+	if len(data) == 0 {
+		return "", fmt.Errorf("download torrent file: empty response")
+	}
+	if data[0] != 'd' {
+		return "", fmt.Errorf("download torrent file: invalid torrent file")
+	}
+
+	pos := 1
+	for pos < len(data) && data[pos] != 'e' {
+		key, next, err := readBencodeString(data, pos)
+		if err != nil {
+			return "", fmt.Errorf("download torrent file: invalid torrent file: %w", err)
+		}
+		pos = next
+		valueStart := pos
+		valueEnd, err := skipBencode(data, pos, 0)
+		if err != nil {
+			return "", fmt.Errorf("download torrent file: invalid torrent file: %w", err)
+		}
+		if key == "info" {
+			if data[valueStart] != 'd' {
+				return "", fmt.Errorf("download torrent file: invalid torrent file: info is not a dictionary")
+			}
+			hasPieces, err := bencodeDictHasKey(data[valueStart:valueEnd], "pieces")
+			if err != nil {
+				return "", fmt.Errorf("download torrent file: invalid torrent file: %w", err)
+			}
+			if !hasPieces {
+				return "", nil
+			}
+			sum := sha1.Sum(data[valueStart:valueEnd])
+			return hex.EncodeToString(sum[:]), nil
+		}
+		pos = valueEnd
+	}
+	if pos >= len(data) || data[pos] != 'e' {
+		return "", fmt.Errorf("download torrent file: invalid torrent file")
+	}
+	if pos != len(data)-1 {
+		return "", fmt.Errorf("download torrent file: invalid torrent file")
+	}
+	return "", fmt.Errorf("download torrent file: invalid torrent file: missing info dictionary")
+}
+
+func bencodeDictHasKey(data []byte, want string) (bool, error) {
+	if len(data) == 0 || data[0] != 'd' {
+		return false, fmt.Errorf("dictionary expected")
+	}
+	pos := 1
+	for pos < len(data) && data[pos] != 'e' {
+		key, next, err := readBencodeString(data, pos)
+		if err != nil {
+			return false, err
+		}
+		pos = next
+		valueEnd, err := skipBencode(data, pos, 0)
+		if err != nil {
+			return false, err
+		}
+		if key == want {
+			return true, nil
+		}
+		pos = valueEnd
+	}
+	return pos == len(data)-1 && data[pos] == 'e', nil
+}
+
+func readBencodeString(data []byte, pos int) (string, int, error) {
+	if pos >= len(data) || data[pos] < '0' || data[pos] > '9' {
+		return "", pos, fmt.Errorf("string expected")
+	}
+	length := 0
+	for pos < len(data) && data[pos] >= '0' && data[pos] <= '9' {
+		digit := int(data[pos] - '0')
+		if length > (len(data)-digit)/10 {
+			return "", pos, fmt.Errorf("string exceeds input")
+		}
+		length = length*10 + digit
+		pos++
+	}
+	if pos >= len(data) || data[pos] != ':' {
+		return "", pos, fmt.Errorf("string length missing colon")
+	}
+	pos++
+	if length > len(data)-pos {
+		return "", pos, fmt.Errorf("string exceeds input")
+	}
+	end := pos + length
+	return string(data[pos:end]), end, nil
+}
+
+func skipBencode(data []byte, pos, depth int) (int, error) {
+	if depth > 128 {
+		return pos, fmt.Errorf("bencode nesting too deep")
+	}
+	if pos >= len(data) {
+		return pos, fmt.Errorf("unexpected end of input")
+	}
+	switch data[pos] {
+	case 'i':
+		end := strings.IndexByte(string(data[pos+1:]), 'e')
+		if end < 0 {
+			return pos, fmt.Errorf("unterminated integer")
+		}
+		return pos + 1 + end + 1, nil
+	case 'l', 'd':
+		pos++
+		for pos < len(data) && data[pos] != 'e' {
+			next, err := skipBencode(data, pos, depth+1)
+			if err != nil {
+				return pos, err
+			}
+			pos = next
+		}
+		if pos >= len(data) {
+			return pos, fmt.Errorf("unterminated list or dictionary")
+		}
+		return pos + 1, nil
+	default:
+		if data[pos] >= '0' && data[pos] <= '9' {
+			_, next, err := readBencodeString(data, pos)
+			return next, err
+		}
+		return pos, fmt.Errorf("invalid bencode token %q", data[pos])
+	}
 }
 
 func infoHashFromMagnet(raw string) string {
