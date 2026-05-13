@@ -51,6 +51,10 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 - **Canonical author name search now scoped to current user** — The name-deduplication path during author creation previously searched the global author pool, which could conflict with authors belonging to other users in multi-user setups.
 
+### Chores
+
+- **Frontend regression coverage expanded** (#427) — Added MSW-backed tests for login, CSRF handling, auth state/guards, Book Detail search/grab flows, and Wanted page search/grab/bulk actions.
+
 ## [v1.9.0] — 2026-05-11
 
 ### Added

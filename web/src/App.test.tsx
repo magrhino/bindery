@@ -2,6 +2,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import App from './App'
 
+const { authState, logoutMock } = vi.hoisted(() => ({
+  authState: {
+    value: {
+      status: { authenticated: false, mode: 'disabled', setupRequired: false },
+      logout: vi.fn(),
+      isAdmin: false,
+    },
+  },
+  logoutMock: vi.fn(),
+}))
+
 // Mock all heavy page components so we only exercise Shell layout.
 vi.mock('./pages/AuthorsPage', () => ({ default: () => <div data-testid="page-authors" /> }))
 vi.mock('./pages/BooksPage', () => ({ default: () => <div data-testid="page-books" /> }))
@@ -12,7 +23,17 @@ vi.mock('./pages/SeriesPage', () => ({ default: () => <div data-testid="page-ser
 vi.mock('./pages/CalendarPage', () => ({ default: () => <div data-testid="page-calendar" /> }))
 vi.mock('./pages/DiscoverPage', () => ({ default: () => <div data-testid="page-discover" /> }))
 vi.mock('./pages/SettingsPage', () => ({ default: () => <div data-testid="page-settings" /> }))
-vi.mock('./pages/LoginPage', () => ({ default: () => <div data-testid="page-login" /> }))
+vi.mock('./pages/LoginPage', async () => {
+  const { Navigate } = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
+  return {
+    default: () => {
+      const status = authState.value.status
+      if (status?.setupRequired) return <Navigate to="/setup" replace />
+      if (status?.authenticated) return <Navigate to="/" replace />
+      return <div data-testid="page-login" />
+    },
+  }
+})
 vi.mock('./pages/SetupPage', () => ({ default: () => <div data-testid="page-setup" /> }))
 vi.mock('./pages/AuthorDetailPage', () => ({ default: () => <div /> }))
 vi.mock('./pages/BookDetailPage', () => ({ default: () => <div /> }))
@@ -20,7 +41,7 @@ vi.mock('./pages/BookDetailPage', () => ({ default: () => <div /> }))
 vi.mock('./auth/AuthGuard', () => ({ default: ({ children }: { children: React.ReactNode }) => <>{children}</> }))
 vi.mock('./auth/AuthContext', () => ({
   AuthProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  useAuth: () => ({ status: { authenticated: false, mode: 'disabled', setupRequired: false }, logout: vi.fn() }),
+  useAuth: () => authState.value,
 }))
 
 vi.mock('./api/client', () => ({
@@ -50,9 +71,35 @@ function renderShell() {
   return render(<App />)
 }
 
-describe('Shell — desktop navigation', () => {
-  beforeEach(() => { vi.clearAllMocks() })
+beforeEach(() => {
+  vi.clearAllMocks()
+  logoutMock.mockReset()
+  authState.value = {
+    status: { authenticated: false, mode: 'disabled', setupRequired: false },
+    logout: logoutMock,
+    isAdmin: false,
+  }
+  window.history.pushState(null, '', '/')
+})
 
+describe('App auth routes', () => {
+  it('redirects authenticated users away from the login route', () => {
+    authState.value = {
+      status: { authenticated: true, setupRequired: false, mode: 'enabled' },
+      logout: logoutMock,
+      isAdmin: true,
+    }
+    window.history.pushState(null, '', '/login')
+
+    renderShell()
+
+    expect(screen.queryByTestId('page-login')).not.toBeInTheDocument()
+    expect(screen.getByTestId('page-authors')).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/')
+  })
+})
+
+describe('Shell — desktop navigation', () => {
   it('renders all 8 nav links in the desktop nav bar', () => {
     renderShell()
     const desktopNav = document.querySelector('nav.hidden.lg\\:flex')
@@ -83,8 +130,6 @@ describe('Shell — desktop navigation', () => {
 })
 
 describe('Shell — mobile navigation', () => {
-  beforeEach(() => { vi.clearAllMocks() })
-
   it('renders a hamburger toggle button for mobile', () => {
     renderShell()
     expect(screen.getByRole('button', { name: /toggle menu/i })).toBeInTheDocument()
