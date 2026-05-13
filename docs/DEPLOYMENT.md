@@ -178,6 +178,8 @@ When Bindery and your download client run in **separate containers**, they typic
 
 Set a download-client path remap in **Settings → Download clients** or set the global `BINDERY_DOWNLOAD_PATH_REMAP` fallback to a comma-separated list of `from:to` pairs. Bindery applies a longest-prefix match to every path the download client reports, replacing the matched prefix before it tries to access the file. A per-client remap takes precedence when it matches the reported path; the global env var still applies as a fallback.
 
+Per-client remaps are stored on each download client, so separate qBittorrent / SABnzbd / NZBGet instances can map different mount points. Existing download clients keep an empty remap after upgrade, which preserves the previous global-only behavior until you add a client-specific value.
+
 For a per-client remap, open **Settings → Download clients**, edit the client, and set **Download client path remap**. The left side is the path the client reports; the right side is the path Bindery can read. For qBittorrent this normally means mapping the qBittorrent category save path or torrent content path to Bindery's download mount. Example: if qBittorrent reports `/downloads/books/My.Book` and Bindery sees that same folder as `/media/books/My.Book`, set `/downloads:/media/books`.
 
 **Common scenario — SABnzbd or qBittorrent and Bindery on the same NAS storage, different mount points:**
