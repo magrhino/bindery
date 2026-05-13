@@ -127,6 +127,7 @@ function makeClient(overrides: Partial<DownloadClient> = {}): DownloadClient {
     useSsl: false,
     urlBase: '',
     category: 'books',
+    pathRemap: '',
     enabled: true,
     ...overrides,
   }
@@ -820,6 +821,7 @@ describe('SettingsPage', () => {
     fireEvent.change(screen.getByPlaceholderText('/sabnzbd'), { target: { value: ' /sab ' } })
     fireEvent.change(screen.getByPlaceholderText('API Key'), { target: { value: 'sab-secret' } })
     fireEvent.change(screen.getByDisplayValue('books'), { target: { value: 'ebooks' } })
+    fireEvent.change(screen.getByLabelText('Download client path remap'), { target: { value: ' /media:/books ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() => {
@@ -831,6 +833,7 @@ describe('SettingsPage', () => {
         username: '',
         password: '',
         category: 'ebooks',
+        pathRemap: '/media:/books',
         type: 'sabnzbd',
         enabled: true,
         useSsl: true,
@@ -897,6 +900,7 @@ describe('SettingsPage', () => {
         password,
         apiKey: '',
         category,
+        pathRemap: '',
         type,
         enabled: true,
         useSsl: false,
@@ -921,6 +925,7 @@ describe('SettingsPage', () => {
     fireEvent.change(screen.getByPlaceholderText('Username'), { target: { value: 'qbit-user' } })
     fireEvent.change(screen.getByPlaceholderText('Password'), { target: { value: 'qbit-pass' } })
     fireEvent.change(screen.getByDisplayValue('books'), { target: { value: 'ebooks' } })
+    fireEvent.change(screen.getByLabelText('Download client path remap'), { target: { value: ' /media:/books ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() => {
@@ -934,11 +939,26 @@ describe('SettingsPage', () => {
         password: 'qbit-pass',
         apiKey: '',
         category: 'ebooks',
+        pathRemap: '/media:/books',
         useSsl: true,
         urlBase: '/qbittorrent',
       })
     })
     expect(await screen.findByText('qBit Books')).toBeInTheDocument()
+  })
+
+  it('shows qBittorrent path health errors under the client', async () => {
+    const client = makeClient({
+      id: 46,
+      name: 'qBit Books',
+      type: 'qbittorrent',
+      health: { status: 'error', message: 'qBittorrent category "books" saves to "/media/downloads"; expected "/books/downloads"' },
+    })
+
+    renderSettings({ clients: [client] })
+    await openClientsTab()
+
+    expect(await screen.findByText(/expected "\/books\/downloads"/)).toBeInTheDocument()
   })
 
   it('toggles, tests, and deletes a download client', async () => {

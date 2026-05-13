@@ -16,6 +16,25 @@ const absReviewResultLimit = 10
 const tabCls = (active: boolean) =>
   `px-4 py-2 rounded-md text-sm font-medium transition-colors ${active ? 'bg-slate-200 dark:bg-zinc-800 text-slate-900 dark:text-white' : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/50 dark:hover:bg-zinc-800/50'}`
 
+function PathRemapField({ id, label, value, onChange, placeholder, help }: { id: string; label: string; value: string; onChange: (value: string) => void; placeholder: string; help: string }) {
+  return (
+    <div>
+      <label htmlFor={id} className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">{label}</label>
+      <textarea
+        id={id}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        rows={3}
+        placeholder={placeholder}
+        className={inputCls}
+      />
+      <p className="text-[11px] text-slate-500 dark:text-zinc-500 mt-1">
+        {help} Use comma-separated <code className="text-[10px] bg-slate-200 dark:bg-zinc-800 px-1 rounded">from:to</code> prefix rewrites.
+      </p>
+    </div>
+  )
+}
+
 export default function SettingsPage() {
   const { t, i18n } = useTranslation()
   const { isAdmin } = useAuth()
@@ -343,7 +362,10 @@ export default function SettingsPage() {
                       <button
                         onClick={async () => {
                           try {
-                            await api.testDownloadClient(c.id)
+                            const result = await api.testDownloadClient(c.id)
+                            if (result.health) {
+                              setClients(prev => prev.map(x => x.id === c.id ? { ...x, health: result.health } : x))
+                            }
                             alert(t('common.connOk'))
                           } catch (err: unknown) {
                             alert(t('common.connFail', { error: err instanceof Error ? err.message : 'Unknown error' }))
@@ -364,6 +386,11 @@ export default function SettingsPage() {
                       </button>
                     </div>
                   </div>
+                  {c.type === 'qbittorrent' && c.health?.status === 'error' && (
+                    <div className="mt-1 px-3 py-2 bg-red-100 text-red-800 dark:bg-red-950/30 dark:text-red-300 border border-red-300 dark:border-red-900 rounded text-xs">
+                      {c.health.message}
+                    </div>
+                  )}
                   {editingClient === c.id && (
                     <EditClientForm
                       client={c}
@@ -1681,19 +1708,14 @@ function AudiobookshelfSection() {
           </div>
         )}
 
-        <div>
-          <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Path translation</label>
-          <textarea
-            value={draft.pathRemap}
-            onChange={e => setDraft(prev => ({ ...prev, pathRemap: e.target.value }))}
-            rows={3}
-            placeholder="/audiobookshelf:/books/audiobookshelf,/abs:/books"
-            className={inputCls}
-          />
-          <p className="text-[11px] text-slate-500 dark:text-zinc-500 mt-1">
-            Optional. Use comma-separated <code className="text-[10px] bg-slate-200 dark:bg-zinc-800 px-1 rounded">from:to</code> prefix rewrites when ABS reports shared-storage paths that Bindery sees under a different mount.
-          </p>
-        </div>
+        <PathRemapField
+          id="abs-path-remap"
+          label="ABS path remap"
+          value={draft.pathRemap}
+          onChange={value => setDraft(prev => ({ ...prev, pathRemap: value }))}
+          placeholder="/audiobookshelf:/books/audiobookshelf,/abs:/books"
+          help="Optional and separate from download-client remaps. Use when ABS reports shared-storage paths that Bindery sees under a different mount."
+        />
 
         <div className="flex flex-wrap gap-2">
           <button
@@ -4050,6 +4072,7 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
   const [useSSL, setUseSSL] = useState(client.useSsl || false)
   const [urlBase, setUrlBase] = useState(client.urlBase || '')
   const [category, setCategory] = useState(client.category)
+  const [pathRemap, setPathRemap] = useState(client.pathRemap || '')
   const labelCls = 'block text-xs text-slate-600 dark:text-zinc-400 mb-1'
 
   const handleTypeChange = (newType: string) => {
@@ -4063,8 +4086,8 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
 
   const submit = async () => {
     const data = isPasswordClient(type)
-      ? { ...client, name, type, host, port: parseInt(port), username: hasUsername(type) ? username : '', password: credential, apiKey: '', category, useSsl: useSSL, urlBase: urlBase.trim() }
-      : { ...client, name, type, host, port: parseInt(port), apiKey: credential, username: '', password: '', category, useSsl: useSSL, urlBase: urlBase.trim() }
+      ? { ...client, name, type, host, port: parseInt(port), username: hasUsername(type) ? username : '', password: credential, apiKey: '', category, pathRemap: pathRemap.trim(), useSsl: useSSL, urlBase: urlBase.trim() }
+      : { ...client, name, type, host, port: parseInt(port), apiKey: credential, username: '', password: '', category, pathRemap: pathRemap.trim(), useSsl: useSSL, urlBase: urlBase.trim() }
     const updated = await api.updateDownloadClient(client.id, data)
     onSaved(updated)
   }
@@ -4126,6 +4149,14 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
         {type === 'transmission' && <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">Optional absolute path override. Leave blank to use Transmission's configured default download directory.</p>}
         {type === 'deluge' && <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">Applied via the Deluge label plugin. Leave blank if the plugin is not installed.</p>}
       </div>
+      <PathRemapField
+        id={`edit-client-path-remap-${client.id}`}
+        label="Download client path remap"
+        value={pathRemap}
+        onChange={setPathRemap}
+        placeholder="/media:/books"
+        help="Optional and separate from ABS remaps. Use when this download client reports paths under a different mount than Bindery."
+      />
       <div className="flex gap-2 justify-end">
         <button onClick={onClose} className="px-3 py-1.5 text-sm text-slate-600 dark:text-zinc-400">Cancel</button>
         <button onClick={submit} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium">Save</button>
@@ -4245,6 +4276,7 @@ function AddClientForm({ onClose, onAdded }: { onClose: () => void; onAdded: (c:
   const [useSSL, setUseSSL] = useState(false)
   const [urlBase, setUrlBase] = useState('')
   const [category, setCategory] = useState('books')
+  const [pathRemap, setPathRemap] = useState('')
   const labelCls = 'block text-xs text-slate-600 dark:text-zinc-400 mb-1'
 
   const isPasswordClient = (t: string) => t === 'qbittorrent' || t === 'transmission' || t === 'nzbget' || t === 'deluge'
@@ -4280,8 +4312,8 @@ function AddClientForm({ onClose, onAdded }: { onClose: () => void; onAdded: (c:
 
   const submit = async () => {
     const data = isPasswordClient(type)
-      ? { name, host, port: parseInt(port), username: hasUsername(type) ? username : '', password: credential, apiKey: '', category, type, enabled: true, useSsl: useSSL, urlBase: urlBase.trim() }
-      : { name, host, port: parseInt(port), apiKey: credential, username: '', password: '', category, type, enabled: true, useSsl: useSSL, urlBase: urlBase.trim() }
+      ? { name, host, port: parseInt(port), username: hasUsername(type) ? username : '', password: credential, apiKey: '', category, pathRemap: pathRemap.trim(), type, enabled: true, useSsl: useSSL, urlBase: urlBase.trim() }
+      : { name, host, port: parseInt(port), apiKey: credential, username: '', password: '', category, pathRemap: pathRemap.trim(), type, enabled: true, useSsl: useSSL, urlBase: urlBase.trim() }
     const c = await api.addDownloadClient(data)
     onAdded(c)
   }
@@ -4343,6 +4375,14 @@ function AddClientForm({ onClose, onAdded }: { onClose: () => void; onAdded: (c:
         {type === 'transmission' && <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">Optional absolute path override. Leave blank to use Transmission's configured default download directory.</p>}
         {type === 'deluge' && <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">Applied via the Deluge label plugin. Leave blank if the plugin is not installed.</p>}
       </div>
+      <PathRemapField
+        id="add-client-path-remap"
+        label="Download client path remap"
+        value={pathRemap}
+        onChange={setPathRemap}
+        placeholder="/media:/books"
+        help="Optional and separate from ABS remaps. Use when this download client reports paths under a different mount than Bindery."
+      />
       <div className="flex gap-2 justify-end">
         <button onClick={onClose} className="px-3 py-1.5 text-sm text-slate-600 dark:text-zinc-400">Cancel</button>
         <button onClick={submit} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium">Save</button>
