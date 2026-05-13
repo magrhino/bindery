@@ -201,6 +201,11 @@ export default function QueuePage() {
                         {item.errorMessage}
                       </div>
                     )}
+                    {item.status === 'importFailed' && (
+                      <div className="mt-1 text-xs text-slate-600 dark:text-zinc-400 bg-slate-200/70 dark:bg-zinc-800/70 rounded px-2 py-1 break-words">
+                        {t('queue.retryImportHint')}
+                      </div>
+                    )}
                     {retryImportErrors[item.id] && (
                       <div className="mt-1 text-xs text-red-600 dark:text-red-400 bg-red-400/10 rounded px-2 py-1 break-words">
                         {t('queue.retryImportError', { error: retryImportErrors[item.id] })}
@@ -220,6 +225,7 @@ export default function QueuePage() {
                       <button
                         onClick={() => handleRetryImport(item.id)}
                         disabled={retryingImportIds.has(item.id)}
+                        title={t('queue.retryImportHint')}
                         className="px-3 py-2 text-xs bg-sky-600 hover:bg-sky-500 disabled:opacity-50 rounded font-medium touch-manipulation"
                       >
                         {retryingImportIds.has(item.id) ? t('queue.retryingImport') : t('queue.retryImport')}

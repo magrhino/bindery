@@ -192,6 +192,7 @@
     "remaining": "{{time}} remaining",
     "retryImport": "Retry import",
     "retryingImport": "Retrying…",
+    "retryImportHint": "After fixing the path remap or moving the completed files in the download client, retry import to reuse the existing download.",
     "retryImportError": "Retry failed: {{error}}",
     "remove": "Remove"
   },

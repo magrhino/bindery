@@ -35,6 +35,13 @@ function PathRemapField({ id, label, value, onChange, placeholder, help }: { id:
   )
 }
 
+function downloadClientPathRemapHelp(type: string) {
+  if (type === 'qbittorrent') {
+    return "Map the path qBittorrent reports to the path Bindery can read. Example: if qBittorrent shows /downloads/books but Bindery sees that folder at /media/books, use /downloads:/media/books. Bindery also uses this in reverse when sending new torrents."
+  }
+  return "Optional and separate from ABS remaps. Use when this download client reports paths under a different mount than Bindery."
+}
+
 export default function SettingsPage() {
   const { t, i18n } = useTranslation()
   const { isAdmin } = useAuth()
@@ -4177,8 +4184,8 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
         label="Download client path remap"
         value={pathRemap}
         onChange={setPathRemap}
-        placeholder="/media:/books"
-        help="Optional and separate from ABS remaps. Use when this download client reports paths under a different mount than Bindery."
+        placeholder={type === 'qbittorrent' ? '/downloads:/media/books' : '/media:/books'}
+        help={downloadClientPathRemapHelp(type)}
       />
       <div className="flex gap-2 justify-end">
         <button onClick={onClose} className="px-3 py-1.5 text-sm text-slate-600 dark:text-zinc-400">Cancel</button>
@@ -4403,8 +4410,8 @@ function AddClientForm({ onClose, onAdded }: { onClose: () => void; onAdded: (c:
         label="Download client path remap"
         value={pathRemap}
         onChange={setPathRemap}
-        placeholder="/media:/books"
-        help="Optional and separate from ABS remaps. Use when this download client reports paths under a different mount than Bindery."
+        placeholder={type === 'qbittorrent' ? '/downloads:/media/books' : '/media:/books'}
+        help={downloadClientPathRemapHelp(type)}
       />
       <div className="flex gap-2 justify-end">
         <button onClick={onClose} className="px-3 py-1.5 text-sm text-slate-600 dark:text-zinc-400">Cancel</button>

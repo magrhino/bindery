@@ -178,6 +178,8 @@ When Bindery and your download client run in **separate containers**, they typic
 
 Set a download-client path remap in **Settings → Download clients** or set the global `BINDERY_DOWNLOAD_PATH_REMAP` fallback to a comma-separated list of `from:to` pairs. Bindery applies a longest-prefix match to every path the download client reports, replacing the matched prefix before it tries to access the file. A per-client remap takes precedence when it matches the reported path; the global env var still applies as a fallback.
 
+For a per-client remap, open **Settings → Download clients**, edit the client, and set **Download client path remap**. The left side is the path the client reports; the right side is the path Bindery can read. For qBittorrent this normally means mapping the qBittorrent category save path or torrent content path to Bindery's download mount. Example: if qBittorrent reports `/downloads/books/My.Book` and Bindery sees that same folder as `/media/books/My.Book`, set `/downloads:/media/books`.
+
 **Common scenario — SABnzbd or qBittorrent and Bindery on the same NAS storage, different mount points:**
 
 | Container | NAS path | Mount point |
@@ -221,7 +223,7 @@ Multiple remaps are separated by commas: `BINDERY_DOWNLOAD_PATH_REMAP=/sab/compl
 
 For qBittorrent, Bindery also sends a save path when submitting torrent grabs. If a per-client remap is configured, Bindery inversely maps `BINDERY_DOWNLOAD_DIR` or `BINDERY_AUDIOBOOK_DOWNLOAD_DIR` back to qBittorrent's mount point before submitting the torrent. The Settings page checks the configured qBittorrent category and warns when its save path does not map to Bindery's expected download folder.
 
-After fixing a path or category mismatch, use **Queue → Retry import** on an `importFailed` item. Bindery resets the import retry counter and imports from the existing completed download, so the release does not need to be grabbed or downloaded again.
+After fixing a path or category mismatch, use **Queue → Retry import** on an `importFailed` item. This is also the right action after manually moving the completed torrent in qBittorrent to a path Bindery can read. Bindery resets the import retry counter and imports from the existing completed download, so the release does not need to be grabbed or downloaded again.
 
 ## Environment variables
 

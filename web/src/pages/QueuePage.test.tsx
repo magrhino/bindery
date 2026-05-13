@@ -32,6 +32,7 @@ vi.mock('react-i18next', () => ({
         'queue.remove': 'Remove',
         'queue.retryImport': 'Retry import',
         'queue.retryingImport': 'Retrying…',
+        'queue.retryImportHint': 'After fixing the path remap or moving the completed files in the download client, retry import to reuse the existing download.',
         'queue.retryImportError': `Retry failed: ${String(options?.error)}`,
       }
       return labels[key] ?? key
@@ -186,6 +187,7 @@ describe('QueuePage', () => {
     expect(screen.getByText('Import Failed')).toBeInTheDocument()
     expect(screen.getByText('Import failed:')).toBeInTheDocument()
     expect(screen.getByText('Missing target folder')).toBeInTheDocument()
+    expect(screen.getByText(/After fixing the path remap/)).toBeInTheDocument()
     expect(screen.getByText('Failed')).toBeInTheDocument()
     expect(screen.getByText('Error:')).toBeInTheDocument()
     expect(screen.getByText('Client rejected download')).toBeInTheDocument()
