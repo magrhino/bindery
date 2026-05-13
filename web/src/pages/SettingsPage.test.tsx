@@ -185,7 +185,7 @@ function seedSettingsMocks(options: {
     vi.mocked(api.status).mockResolvedValue(options.status ?? defaultStatus)
     vi.mocked(api.setSetting).mockResolvedValue(undefined)
     vi.mocked(api.triggerLibraryScan).mockResolvedValue({ message: 'started' })
-    vi.mocked(api.createBackup).mockResolvedValue({ filename: 'bindery-backup.zip' })
+    vi.mocked(api.createBackup).mockResolvedValue({ name: 'bindery-backup.zip', size: 0, modTime: '' })
     vi.mocked(api.addRootFolder).mockImplementation(async path => makeRootFolder({ id: 99, path }))
     vi.mocked(api.testHardcover).mockResolvedValue({
       ok: true,

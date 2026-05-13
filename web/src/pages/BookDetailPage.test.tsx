@@ -109,6 +109,7 @@ function makeDownload(overrides: Partial<Download> = {}): Download {
     size: 1048576,
     protocol: 'usenet',
     errorMessage: '',
+    addedAt: '2026-05-01T12:00:00Z',
     ...overrides,
   }
 }
