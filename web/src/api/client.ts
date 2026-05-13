@@ -314,6 +314,7 @@ export const api = {
   // Queue
   listQueue: () => request<QueueItem[]>('/queue'),
   grab: (data: GrabRequest) => request<Download>('/queue/grab', { method: 'POST', body: JSON.stringify(data) }),
+  retryImport: (id: number) => request<{ ok: boolean }>(`/queue/${id}/retry-import`, { method: 'POST' }),
   deleteFromQueue: (id: number) => request<void>(`/queue/${id}`, { method: 'DELETE' }),
 
   // Pending releases

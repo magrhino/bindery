@@ -686,6 +686,7 @@ func main() {
 		// Queue
 		r.Get("/queue", queueHandler.List)
 		r.Post("/queue/grab", queueHandler.Grab)
+		r.Post("/queue/{id}/retry-import", queueHandler.RetryImport)
 		r.Delete("/queue/{id}", queueHandler.Delete)
 		r.Get("/pending", pendingHandler.List)
 		r.Delete("/pending/{id}", pendingHandler.Delete)

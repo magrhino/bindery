@@ -8,6 +8,8 @@ export default function QueuePage() {
   const [pending, setPending] = useState<PendingRelease[]>([])
   const [loading, setLoading] = useState(true)
   const [grabbingPending, setGrabbingPending] = useState<number | null>(null)
+  const [retryingImportIds, setRetryingImportIds] = useState<Set<number>>(() => new Set())
+  const [retryImportErrors, setRetryImportErrors] = useState<Record<number, string>>({})
 
   const load = () => {
     Promise.all([
@@ -49,6 +51,34 @@ export default function QueuePage() {
       console.error(e)
     } finally {
       setGrabbingPending(null)
+    }
+  }
+
+  const clearRetryImportError = (id: number) => {
+    setRetryImportErrors(prev => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+  }
+
+  const handleRetryImport = async (id: number) => {
+    setRetryingImportIds(prev => new Set(prev).add(id))
+    clearRetryImportError(id)
+    try {
+      await api.retryImport(id)
+      load()
+    } catch (e) {
+      setRetryImportErrors(prev => ({
+        ...prev,
+        [id]: e instanceof Error ? e.message : 'Retry failed',
+      }))
+    } finally {
+      setRetryingImportIds(prev => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
     }
   }
 
@@ -171,6 +201,16 @@ export default function QueuePage() {
                         {item.errorMessage}
                       </div>
                     )}
+                    {item.status === 'importFailed' && (
+                      <div className="mt-1 text-xs text-slate-600 dark:text-zinc-400 bg-slate-200/70 dark:bg-zinc-800/70 rounded px-2 py-1 break-words">
+                        {t('queue.retryImportHint')}
+                      </div>
+                    )}
+                    {retryImportErrors[item.id] && (
+                      <div className="mt-1 text-xs text-red-600 dark:text-red-400 bg-red-400/10 rounded px-2 py-1 break-words">
+                        {t('queue.retryImportError', { error: retryImportErrors[item.id] })}
+                      </div>
+                    )}
                     {item.percentage && (
                       <div className="mt-2 h-1 bg-slate-200 dark:bg-zinc-800 rounded-full overflow-hidden">
                         <div
@@ -180,12 +220,24 @@ export default function QueuePage() {
                       </div>
                     )}
                   </div>
-                  <button
-                    onClick={() => handleDelete(item.id)}
-                    className="ml-4 px-3 py-2 text-xs text-red-400 hover:text-red-300 flex-shrink-0 touch-manipulation"
-                  >
-                    {t('queue.remove')}
-                  </button>
+                  <div className="ml-4 flex flex-col sm:flex-row items-end sm:items-center gap-2 flex-shrink-0">
+                    {item.status === 'importFailed' && (
+                      <button
+                        onClick={() => handleRetryImport(item.id)}
+                        disabled={retryingImportIds.has(item.id)}
+                        title={t('queue.retryImportHint')}
+                        className="px-3 py-2 text-xs bg-sky-600 hover:bg-sky-500 disabled:opacity-50 rounded font-medium touch-manipulation"
+                      >
+                        {retryingImportIds.has(item.id) ? t('queue.retryingImport') : t('queue.retryImport')}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleDelete(item.id)}
+                      className="px-3 py-2 text-xs text-red-400 hover:text-red-300 touch-manipulation"
+                    >
+                      {t('queue.remove')}
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

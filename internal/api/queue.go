@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -17,6 +18,8 @@ import (
 	"github.com/vavallee/bindery/internal/models"
 	"github.com/vavallee/bindery/internal/notifier"
 )
+
+var errAlreadyGrabbed = errors.New("already grabbed")
 
 type QueueHandler struct {
 	downloads            *db.DownloadRepo
@@ -438,17 +441,11 @@ func (h *QueueHandler) Grab(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existing, err := h.downloads.GetByGUID(r.Context(), req.GUID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if existing != nil {
+	dl, err := h.grab(r.Context(), req)
+	if errors.Is(err, errAlreadyGrabbed) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "already grabbed"})
 		return
 	}
-
-	dl, err := h.grab(r.Context(), req)
 	if err != nil {
 		status := http.StatusBadGateway
 		if strings.Contains(err.Error(), "no enabled download client") {
@@ -460,6 +457,29 @@ func (h *QueueHandler) Grab(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("download grabbed", "title", req.Title)
 	writeJSON(w, http.StatusAccepted, dl)
+}
+
+func (h *QueueHandler) RetryImport(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+
+	accepted, found, err := h.downloads.ResetImportRetry(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "download not found"})
+		return
+	}
+	if !accepted {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "download is not in importFailed state"})
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
 }
 
 // selectClient picks the best enabled client for the given protocol and media type.
@@ -482,6 +502,14 @@ func (h *QueueHandler) grab(ctx context.Context, req grabRequest) (*models.Downl
 	if req.Protocol == "" {
 		req.Protocol = "usenet"
 	}
+	existing, err := h.downloads.GetByGUID(ctx, req.GUID)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil && existing.Status != models.StateFailed {
+		return nil, errAlreadyGrabbed
+	}
+
 	client, err := h.selectClient(ctx, req.Protocol, req.MediaType)
 	if err != nil || client == nil {
 		return nil, fmt.Errorf("no enabled download client configured")
@@ -499,9 +527,22 @@ func (h *QueueHandler) grab(ctx context.Context, req grabRequest) (*models.Downl
 	if indexerID != nil && *indexerID == 0 {
 		indexerID = nil
 	}
+	editionID := (*int64)(nil)
+	indexerFlags := ""
+	if existing != nil {
+		if bookID == nil {
+			bookID = existing.BookID
+		}
+		if indexerID == nil {
+			indexerID = existing.IndexerID
+		}
+		editionID = existing.EditionID
+		indexerFlags = existing.IndexerFlags
+	}
 	dl := &models.Download{
 		GUID:             req.GUID,
 		BookID:           bookID,
+		EditionID:        editionID,
 		IndexerID:        indexerID,
 		DownloadClientID: &client.ID,
 		Title:            req.Title,
@@ -510,8 +551,18 @@ func (h *QueueHandler) grab(ctx context.Context, req grabRequest) (*models.Downl
 		Status:           models.StateGrabbed,
 		Protocol:         protocol,
 		Quality:          indexer.ParseRelease(req.Title).Format,
+		IndexerFlags:     indexerFlags,
 	}
-	if err := h.downloads.Create(ctx, dl); err != nil {
+	if existing != nil {
+		dl.ID = existing.ID
+		ok, err := h.downloads.RetryFailed(ctx, dl)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, errAlreadyGrabbed
+		}
+	} else if err := h.downloads.Create(ctx, dl); err != nil {
 		return nil, err
 	}
 

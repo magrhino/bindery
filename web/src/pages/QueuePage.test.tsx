@@ -14,6 +14,7 @@ vi.mock('../api/client', async importOriginal => {
       listQueue: vi.fn(),
       listPending: vi.fn(),
       deleteFromQueue: vi.fn(),
+      retryImport: vi.fn(),
       dismissPending: vi.fn(),
       grabPending: vi.fn(),
     },
@@ -29,6 +30,10 @@ vi.mock('react-i18next', () => ({
         'queue.title': 'Queue',
         'queue.empty': 'Queue is empty',
         'queue.remove': 'Remove',
+        'queue.retryImport': 'Retry import',
+        'queue.retryingImport': 'Retrying…',
+        'queue.retryImportHint': 'After fixing the path remap or moving the completed files in the download client, retry import to reuse the existing download.',
+        'queue.retryImportError': `Retry failed: ${String(options?.error)}`,
       }
       return labels[key] ?? key
     },
@@ -105,6 +110,7 @@ beforeEach(() => {
   vi.mocked(api.listQueue).mockResolvedValue([])
   vi.mocked(api.listPending).mockResolvedValue([])
   vi.mocked(api.deleteFromQueue).mockResolvedValue(undefined)
+  vi.mocked(api.retryImport).mockResolvedValue({ ok: true })
   vi.mocked(api.dismissPending).mockResolvedValue(undefined)
   vi.mocked(api.grabPending).mockResolvedValue(makeDownload())
 })
@@ -181,10 +187,57 @@ describe('QueuePage', () => {
     expect(screen.getByText('Import Failed')).toBeInTheDocument()
     expect(screen.getByText('Import failed:')).toBeInTheDocument()
     expect(screen.getByText('Missing target folder')).toBeInTheDocument()
+    expect(screen.getByText(/After fixing the path remap/)).toBeInTheDocument()
     expect(screen.getByText('Failed')).toBeInTheDocument()
     expect(screen.getByText('Error:')).toBeInTheDocument()
     expect(screen.getByText('Client rejected download')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Retry import' })).toHaveLength(1)
     expect(container.querySelector('[style="width: 45%;"]')).toBeInTheDocument()
+  })
+
+  it('retries an import-failed queue item and reloads the queue', async () => {
+    const retry = deferred<{ ok: boolean }>()
+    vi.mocked(api.listQueue)
+      .mockResolvedValueOnce([makeQueueItem({
+        id: 3,
+        title: 'Retry Me',
+        status: 'importFailed',
+        errorMessage: 'Missing target folder',
+      })])
+      .mockResolvedValueOnce([])
+    vi.mocked(api.retryImport).mockReturnValue(retry.promise)
+
+    renderQueuePage()
+
+    expect(await screen.findByText('Retry Me')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry import' }))
+    expect(api.retryImport).toHaveBeenCalledWith(3)
+    expect(screen.getByRole('button', { name: 'Retrying…' })).toBeDisabled()
+
+    await act(async () => {
+      retry.resolve({ ok: true })
+      await Promise.resolve()
+    })
+
+    await waitFor(() => expect(api.listQueue).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText('Queue is empty')).toBeInTheDocument()
+  })
+
+  it('shows an inline error when retrying an import fails', async () => {
+    vi.mocked(api.listQueue).mockResolvedValue([makeQueueItem({
+      id: 4,
+      title: 'Retry Fails',
+      status: 'importFailed',
+      errorMessage: 'Missing target folder',
+    })])
+    vi.mocked(api.retryImport).mockRejectedValue(new Error('download is not in importFailed state'))
+
+    renderQueuePage()
+
+    expect(await screen.findByText('Retry Fails')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry import' }))
+
+    expect(await screen.findByText('Retry failed: download is not in importFailed state')).toBeInTheDocument()
   })
 
   it('renders pending releases and supports grabbing a pending release', async () => {
