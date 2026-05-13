@@ -132,6 +132,10 @@ func newTestClient(serverURL, username, password string) *Client {
 	return c
 }
 
+func allowTorrentFetch(c *Client) {
+	c.validateTorrentURL = func(string) error { return nil }
+}
+
 func torrentFixture() ([]byte, string) {
 	info := []byte("d6:lengthi123e4:name8:book.txt12:piece lengthi16384e6:pieces20:aaaaaaaaaaaaaaaaaaaae")
 	sum := sha1.Sum(info)
@@ -534,6 +538,7 @@ func TestAddTorrent_HTTPURLFetchesTorrentAndUploadsFile(t *testing.T) {
 	defer qbit.Close()
 
 	c := newTestClient(qbit.URL, "admin", "pass")
+	allowTorrentFetch(c)
 	hash, err := c.AddTorrent(context.Background(), source.URL+"/12/download?id=abc", "books", "/downloads")
 	if err != nil {
 		t.Fatalf("AddTorrent: %v", err)
@@ -574,6 +579,7 @@ func TestAddTorrent_HTTPURLFetchFailureDoesNotCallQbitAdd(t *testing.T) {
 	defer qbit.Close()
 
 	c := newTestClient(qbit.URL, "admin", "pass")
+	allowTorrentFetch(c)
 	_, err := c.AddTorrent(context.Background(), source.URL+"/missing.torrent", "books", "")
 	if err == nil {
 		t.Fatal("expected fetch failure")
@@ -603,6 +609,7 @@ func TestAddTorrent_HTTPURLInvalidTorrentDoesNotCallQbitAdd(t *testing.T) {
 	defer qbit.Close()
 
 	c := newTestClient(qbit.URL, "admin", "pass")
+	allowTorrentFetch(c)
 	_, err := c.AddTorrent(context.Background(), source.URL+"/bad.torrent", "books", "")
 	if err == nil {
 		t.Fatal("expected invalid torrent error")
@@ -645,6 +652,7 @@ func TestAddTorrent_HTTPURLOversizedTorrentDoesNotCallQbitAdd(t *testing.T) {
 	defer qbit.Close()
 
 	c := newTestClient(qbit.URL, "admin", "pass")
+	allowTorrentFetch(c)
 	_, err := c.AddTorrent(context.Background(), source.URL+"/too-large.torrent", "books", "")
 	if err == nil {
 		t.Fatal("expected oversized torrent error")
@@ -682,6 +690,7 @@ func TestAddTorrent_HTTPRedirectToMagnetUsesURLField(t *testing.T) {
 	defer qbit.Close()
 
 	c := newTestClient(qbit.URL, "admin", "pass")
+	allowTorrentFetch(c)
 	hash, err := c.AddTorrent(context.Background(), source.URL+"/redirect", "books", "")
 	if err != nil {
 		t.Fatalf("AddTorrent: %v", err)
@@ -691,6 +700,84 @@ func TestAddTorrent_HTTPRedirectToMagnetUsesURLField(t *testing.T) {
 	}
 	if gotURL != magnet {
 		t.Errorf("urls field: want %q, got %q", magnet, gotURL)
+	}
+}
+
+func TestAddTorrent_HTTPURLDefaultValidationRejectsLoopbackBeforeFetch(t *testing.T) {
+	sourceHit := false
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sourceHit = true
+		_, _ = w.Write([]byte("should not be fetched"))
+	}))
+	defer source.Close()
+
+	addHit := false
+	qbit := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v2/torrents/add" {
+			addHit = true
+		}
+		_, _ = w.Write([]byte("Ok."))
+	}))
+	defer qbit.Close()
+
+	c := newTestClient(qbit.URL, "admin", "pass")
+	_, err := c.AddTorrent(context.Background(), source.URL+"/blocked.torrent", "books", "")
+	if err == nil {
+		t.Fatal("expected loopback URL validation failure")
+	}
+	if !strings.Contains(err.Error(), "url not allowed") {
+		t.Errorf("expected url validation error, got %q", err.Error())
+	}
+	if sourceHit {
+		t.Fatal("source URL must not be fetched after validation failure")
+	}
+	if addHit {
+		t.Fatal("qBit add endpoint should not be called after validation failure")
+	}
+}
+
+func TestAddTorrent_HTTPRedirectTargetValidationRejectsBeforeFetch(t *testing.T) {
+	targetHit := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHit = true
+		_, _ = w.Write([]byte("should not be fetched"))
+	}))
+	defer target.Close()
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/blocked.torrent", http.StatusFound)
+	}))
+	defer source.Close()
+
+	addHit := false
+	qbit := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v2/torrents/add" {
+			addHit = true
+		}
+		_, _ = w.Write([]byte("Ok."))
+	}))
+	defer qbit.Close()
+
+	c := newTestClient(qbit.URL, "admin", "pass")
+	c.validateTorrentURL = func(raw string) error {
+		if strings.HasPrefix(raw, target.URL) {
+			return fmt.Errorf("blocked redirect target")
+		}
+		return nil
+	}
+
+	_, err := c.AddTorrent(context.Background(), source.URL+"/redirect", "books", "")
+	if err == nil {
+		t.Fatal("expected redirect target validation failure")
+	}
+	if !strings.Contains(err.Error(), "blocked redirect target") {
+		t.Errorf("expected redirect target validation error, got %q", err.Error())
+	}
+	if targetHit {
+		t.Fatal("redirect target must not be fetched after validation failure")
+	}
+	if addHit {
+		t.Fatal("qBit add endpoint should not be called after redirect validation failure")
 	}
 }
 

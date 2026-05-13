@@ -328,6 +328,23 @@ func serverHostPort(t *testing.T, raw string) (string, int) {
 	return host, port
 }
 
+type rewriteHostTransport struct {
+	base http.RoundTripper
+	from string
+	to   string
+}
+
+func (t rewriteHostTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Host != t.from {
+		return t.base.RoundTrip(req)
+	}
+	clone := req.Clone(req.Context())
+	u := *req.URL
+	u.Host = t.to
+	clone.URL = &u
+	return t.base.RoundTrip(clone)
+}
+
 // ---------------------------------------------------------------------------
 // TestClient
 // ---------------------------------------------------------------------------
@@ -621,6 +638,18 @@ func TestSendDownload_QbittorrentHTTPURLUploadsTorrentFile(t *testing.T) {
 		_, _ = w.Write(torrentData)
 	}))
 	defer source.Close()
+	sourceURL, err := url.Parse(source.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetchHost := "10.0.0.1:" + sourceURL.Port()
+	oldTransport := http.DefaultTransport
+	http.DefaultTransport = rewriteHostTransport{
+		base: oldTransport,
+		from: fetchHost,
+		to:   sourceURL.Host,
+	}
+	t.Cleanup(func() { http.DefaultTransport = oldTransport })
 
 	var uploaded []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -649,7 +678,7 @@ func TestSendDownload_QbittorrentHTTPURLUploadsTorrentFile(t *testing.T) {
 
 	host, port := serverHostPort(t, srv.URL)
 	client := &models.DownloadClient{Type: "qbittorrent", Host: host, Port: port, Username: "u", Password: "p", Category: "books"}
-	result, err := SendDownload(context.Background(), client, source.URL+"/12/download?id=abc", "")
+	result, err := SendDownload(context.Background(), client, "http://"+fetchHost+"/12/download?id=abc", "")
 	if err != nil {
 		t.Fatalf("SendDownload: %v", err)
 	}

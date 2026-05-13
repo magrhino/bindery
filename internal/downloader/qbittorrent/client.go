@@ -23,6 +23,7 @@ import (
 
 	"github.com/vavallee/bindery/internal/downloader/nethint"
 	"github.com/vavallee/bindery/internal/downloader/urlbase"
+	"github.com/vavallee/bindery/internal/httpsec"
 )
 
 // AuthError signals that qBittorrent responded but rejected the login.
@@ -67,13 +68,14 @@ var maxTorrentFileBytes int64 = 32 << 20
 //   - APIKey  → password  (qBittorrent uses username/password, not an API key)
 //   - URLBase → reverse-proxy subpath, appended to baseURL (#369)
 type Client struct {
-	baseURL  string
-	username string
-	password string
-	http     *http.Client
-	mu       sync.Mutex // guards loggedIn
-	addMu    sync.Mutex // serialises AddTorrent: keeps before/after hash diff atomic
-	loggedIn bool
+	baseURL            string
+	username           string
+	password           string
+	http               *http.Client
+	validateTorrentURL func(string) error
+	mu                 sync.Mutex // guards loggedIn
+	addMu              sync.Mutex // serialises AddTorrent: keeps before/after hash diff atomic
+	loggedIn           bool
 }
 
 // New creates a qBittorrent client. urlBase is the optional reverse-proxy
@@ -91,6 +93,9 @@ func New(host string, port int, username, password, urlBase string, useSSL bool)
 		username: username,
 		password: password,
 		http:     &http.Client{Timeout: 15 * time.Second, Jar: jar},
+		validateTorrentURL: func(raw string) error {
+			return httpsec.ValidateOutboundURL(raw, httpsec.PolicyLAN)
+		},
 	}
 }
 
@@ -400,6 +405,9 @@ func (c *Client) fetchTorrentFile(ctx context.Context, rawURL string) (*fetchedT
 	}
 
 	for redirects := 0; redirects <= 5; redirects++ {
+		if err := c.validateTorrentFetchURL(current); err != nil {
+			return nil, fmt.Errorf("download torrent file: %w", err)
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, current, nil)
 		if err != nil {
 			return nil, fmt.Errorf("build torrent download request: %w", err)
@@ -455,6 +463,13 @@ func (c *Client) fetchTorrentFile(ctx context.Context, rawURL string) (*fetchedT
 	}
 
 	return nil, fmt.Errorf("download torrent file: too many redirects")
+}
+
+func (c *Client) validateTorrentFetchURL(raw string) error {
+	if c.validateTorrentURL == nil {
+		return httpsec.ValidateOutboundURL(raw, httpsec.PolicyLAN)
+	}
+	return c.validateTorrentURL(raw)
 }
 
 func readLimited(r io.Reader, maxBytes int64) ([]byte, error) {
