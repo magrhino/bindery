@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/vavallee/bindery/internal/db"
@@ -64,17 +65,211 @@ func TestQueueGrab_NoDownloadClient(t *testing.T) {
 }
 
 func TestQueueGrab_DuplicateGUID(t *testing.T) {
-	h, _, downloads, _, _, ctx := queueFixture(t)
-	if err := downloads.Create(ctx, &models.Download{
-		GUID: "dup-guid", Title: "T", Status: models.DownloadStatusDownloading, Protocol: "usenet",
-	}); err != nil {
-		t.Fatal(err)
+	for _, status := range []models.DownloadState{models.StateGrabbed, models.StateDownloading} {
+		t.Run(string(status), func(t *testing.T) {
+			h, _, downloads, _, _, ctx := queueFixture(t)
+			if err := downloads.Create(ctx, &models.Download{
+				GUID: "dup-guid", Title: "T", Status: status, Protocol: "usenet",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			body := bytes.NewBufferString(`{"guid":"dup-guid","nzbUrl":"http://example/x.nzb","title":"T"}`)
+			rec := httptest.NewRecorder()
+			h.Grab(rec, httptest.NewRequest(http.MethodPost, "/api/v1/queue/grab", body))
+			if rec.Code != http.StatusConflict {
+				t.Errorf("expected 409, got %d", rec.Code)
+			}
+		})
 	}
-	body := bytes.NewBufferString(`{"guid":"dup-guid","nzbUrl":"http://example/x.nzb","title":"T"}`)
+}
+
+func TestQueueGrab_RetriesFailedGUID(t *testing.T) {
+	addCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("mode") != "addurl" {
+			t.Fatalf("expected mode=addurl, got %s", r.URL.Query().Get("mode"))
+		}
+		addCalls++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":  true,
+			"nzo_ids": []string{"nzo-retry"},
+		})
+	}))
+	defer srv.Close()
+
+	h, database, downloads, clients, books, ctx := queueFixture(t)
+	host, port := testServerHostPort(t, srv.URL)
+	client := &models.DownloadClient{
+		Name:    "sab",
+		Type:    "sabnzbd",
+		Host:    host,
+		Port:    port,
+		Enabled: true,
+	}
+	if err := clients.Create(ctx, client); err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	author := &models.Author{
+		ForeignID:        "retry-author",
+		Name:             "Retry Author",
+		SortName:         "Retry Author",
+		MetadataProvider: "openlibrary",
+		Monitored:        true,
+		QualityProfileID: nil,
+		RootFolderID:     nil,
+	}
+	if err := db.NewAuthorRepo(database).Create(ctx, author); err != nil {
+		t.Fatalf("create author: %v", err)
+	}
+	book := &models.Book{
+		ForeignID:        "retry-book",
+		AuthorID:         author.ID,
+		Title:            "Retry Book",
+		SortTitle:        "retry book",
+		Genres:           []string{},
+		Status:           models.BookStatusWanted,
+		MetadataProvider: "openlibrary",
+		Monitored:        true,
+	}
+	if err := books.Create(ctx, book); err != nil {
+		t.Fatalf("create book: %v", err)
+	}
+	edition := &models.Edition{
+		ForeignID: "retry-edition",
+		BookID:    book.ID,
+		Title:     "Retry Edition",
+		Format:    "epub",
+		Language:  "eng",
+		IsEbook:   true,
+		Monitored: true,
+	}
+	if err := db.NewEditionRepo(database).Upsert(ctx, edition); err != nil {
+		t.Fatalf("create edition: %v", err)
+	}
+	idx := &models.Indexer{
+		Name:           "Retry Indexer",
+		Type:           "newznab",
+		URL:            "https://indexer.example",
+		Categories:     []int{7000},
+		Enabled:        true,
+		SupportsSearch: true,
+	}
+	if err := db.NewIndexerRepo(database).Create(ctx, idx); err != nil {
+		t.Fatalf("create indexer: %v", err)
+	}
+	existing := &models.Download{
+		GUID:         "retry-guid",
+		BookID:       &book.ID,
+		EditionID:    &edition.ID,
+		IndexerID:    &idx.ID,
+		Title:        "Old Title",
+		NZBURL:       "http://example/old.nzb",
+		Size:         1,
+		SABnzbdNzoID: strPtr("old-nzo"),
+		Status:       models.StateFailed,
+		Protocol:     "usenet",
+		IndexerFlags: "freeleech",
+		ErrorMessage: "old failure",
+	}
+	if err := downloads.Create(ctx, existing); err != nil {
+		t.Fatalf("create failed download: %v", err)
+	}
+
+	body := bytes.NewBufferString(`{"guid":"retry-guid","nzbUrl":"http://example/new.nzb","title":"New Title","size":42}`)
 	rec := httptest.NewRecorder()
 	h.Grab(rec, httptest.NewRequest(http.MethodPost, "/api/v1/queue/grab", body))
-	if rec.Code != http.StatusConflict {
-		t.Errorf("expected 409, got %d", rec.Code)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if addCalls != 1 {
+		t.Fatalf("expected one downloader add call, got %d", addCalls)
+	}
+	got, err := downloads.GetByGUID(ctx, "retry-guid")
+	if err != nil || got == nil {
+		t.Fatalf("reload download: %v", err)
+	}
+	if got.ID != existing.ID {
+		t.Fatalf("expected retry to reuse download row %d, got %d", existing.ID, got.ID)
+	}
+	if got.Status != models.StateDownloading {
+		t.Fatalf("expected downloading after successful retry, got %q", got.Status)
+	}
+	if got.Title != "New Title" || got.NZBURL != "http://example/new.nzb" || got.Size != 42 {
+		t.Fatalf("retry did not refresh release fields: %+v", got)
+	}
+	if got.BookID == nil || *got.BookID != book.ID {
+		t.Fatalf("expected retry to preserve book ID %d, got %v", book.ID, got.BookID)
+	}
+	if got.EditionID == nil || *got.EditionID != edition.ID {
+		t.Fatalf("expected retry to preserve edition ID %d, got %v", edition.ID, got.EditionID)
+	}
+	if got.IndexerID == nil || *got.IndexerID != idx.ID {
+		t.Fatalf("expected retry to preserve indexer ID %d, got %v", idx.ID, got.IndexerID)
+	}
+	if got.IndexerFlags != "freeleech" {
+		t.Fatalf("expected retry to preserve indexer flags, got %q", got.IndexerFlags)
+	}
+	if got.SABnzbdNzoID == nil || *got.SABnzbdNzoID != "nzo-retry" {
+		t.Fatalf("expected new NZO ID, got %v", got.SABnzbdNzoID)
+	}
+	if got.ErrorMessage != "" {
+		t.Fatalf("expected error message cleared, got %q", got.ErrorMessage)
+	}
+}
+
+func TestQueueGrab_FailedRetryFailureRemainsRetryable(t *testing.T) {
+	addCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api" || r.URL.Query().Get("mode") != "addurl" {
+			t.Fatalf("unexpected SAB request: %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		addCalls++
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": false})
+	}))
+	defer srv.Close()
+
+	h, _, downloads, clients, _, ctx := queueFixture(t)
+	host, port := testServerHostPort(t, srv.URL)
+	client := &models.DownloadClient{
+		Name:    "sab",
+		Type:    "sabnzbd",
+		Host:    host,
+		Port:    port,
+		Enabled: true,
+	}
+	if err := clients.Create(ctx, client); err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	if err := downloads.Create(ctx, &models.Download{
+		GUID: "retry-fail-guid", Title: "Old Title", NZBURL: "http://example/old.nzb",
+		Status: models.StateFailed, Protocol: "usenet", ErrorMessage: "old failure",
+	}); err != nil {
+		t.Fatalf("create failed download: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		body := bytes.NewBufferString(`{"guid":"retry-fail-guid","nzbUrl":"http://example/new.nzb","title":"New Title"}`)
+		rec := httptest.NewRecorder()
+		h.Grab(rec, httptest.NewRequest(http.MethodPost, "/api/v1/queue/grab", body))
+		if rec.Code != http.StatusBadGateway {
+			t.Fatalf("attempt %d: expected 502, got %d: %s", i+1, rec.Code, rec.Body.String())
+		}
+	}
+	if addCalls != 2 {
+		t.Fatalf("expected failed row to stay retryable; add calls=%d", addCalls)
+	}
+	got, err := downloads.GetByGUID(ctx, "retry-fail-guid")
+	if err != nil || got == nil {
+		t.Fatalf("reload download: %v", err)
+	}
+	if got.Status != models.StateFailed {
+		t.Fatalf("expected retry failure to remain failed, got %q", got.Status)
+	}
+	if !strings.Contains(got.ErrorMessage, "SABnzbd rejected download") {
+		t.Fatalf("expected persisted retry error, got %q", got.ErrorMessage)
 	}
 }
 

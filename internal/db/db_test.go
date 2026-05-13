@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vavallee/bindery/internal/models"
 )
@@ -998,6 +999,89 @@ func TestDownloadRepoCRUD(t *testing.T) {
 	list, _ = repo.List(ctx)
 	if len(list) != 0 {
 		t.Errorf("expected 0 downloads after delete, got %d", len(list))
+	}
+}
+
+func TestDownloadRepoRetryFailed(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	repo := NewDownloadRepo(database)
+
+	oldNzoID := "old-nzo"
+	oldTorrentID := "old-torrent"
+	dl := &models.Download{
+		GUID:         "retry-guid",
+		Title:        "Old Title",
+		NZBURL:       "https://example.com/old.nzb",
+		Size:         100,
+		SABnzbdNzoID: &oldNzoID,
+		TorrentID:    &oldTorrentID,
+		Status:       models.StateFailed,
+		Protocol:     "usenet",
+		Quality:      "epub",
+		ErrorMessage: "old failure",
+	}
+	if err := repo.Create(ctx, dl); err != nil {
+		t.Fatalf("create failed download: %v", err)
+	}
+	oldTime := time.Now().UTC().Add(-2 * time.Hour)
+	if _, err := database.ExecContext(ctx, `
+		UPDATE downloads
+		SET grabbed_at=?, completed_at=?, imported_at=?, import_retry_count=?
+		WHERE id=?`, oldTime, oldTime, oldTime, 3, dl.ID); err != nil {
+		t.Fatalf("seed retry metadata: %v", err)
+	}
+
+	retry := &models.Download{
+		ID:       dl.ID,
+		Title:    "New Title",
+		NZBURL:   "https://example.com/new.nzb",
+		Size:     200,
+		Status:   models.StateGrabbed,
+		Protocol: "usenet",
+		Quality:  "m4b",
+	}
+	ok, err := repo.RetryFailed(ctx, retry)
+	if err != nil {
+		t.Fatalf("RetryFailed: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected failed row to be claimed")
+	}
+
+	got, err := repo.GetByGUID(ctx, "retry-guid")
+	if err != nil || got == nil {
+		t.Fatalf("reload download: %v", err)
+	}
+	if got.Status != models.StateGrabbed {
+		t.Fatalf("expected grabbed retry state, got %q", got.Status)
+	}
+	if got.Title != "New Title" || got.NZBURL != "https://example.com/new.nzb" || got.Size != 200 || got.Quality != "m4b" {
+		t.Fatalf("retry did not refresh release fields: %+v", got)
+	}
+	if got.SABnzbdNzoID != nil || got.TorrentID != nil {
+		t.Fatalf("expected remote IDs cleared, got nzo=%v torrent=%v", got.SABnzbdNzoID, got.TorrentID)
+	}
+	if got.ErrorMessage != "" {
+		t.Fatalf("expected error message cleared, got %q", got.ErrorMessage)
+	}
+	if got.GrabbedAt != nil || got.CompletedAt != nil || got.ImportedAt != nil {
+		t.Fatalf("expected timestamps cleared, got grabbed=%v completed=%v imported=%v", got.GrabbedAt, got.CompletedAt, got.ImportedAt)
+	}
+	if got.ImportRetryCount != 0 {
+		t.Fatalf("expected retry count reset, got %d", got.ImportRetryCount)
+	}
+
+	ok, err = repo.RetryFailed(ctx, retry)
+	if err != nil {
+		t.Fatalf("second RetryFailed: %v", err)
+	}
+	if ok {
+		t.Fatal("expected non-failed row not to be claimed")
 	}
 }
 

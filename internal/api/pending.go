@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/vavallee/bindery/internal/db"
@@ -84,6 +85,10 @@ func (h *PendingHandler) Grab(w http.ResponseWriter, r *http.Request) {
 
 	dl, err := h.queue.grab(r.Context(), stored)
 	if err != nil {
+		if errors.Is(err, errAlreadyGrabbed) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "already grabbed"})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
