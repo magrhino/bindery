@@ -394,7 +394,9 @@ func (c *Client) fetchTorrentContent(ctx context.Context, rawURL string) (*fetch
 		if resp.StatusCode >= http.StatusMultipleChoices && resp.StatusCode < http.StatusBadRequest {
 			location := resp.Header.Get("Location")
 			_, _ = io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
+			if err := resp.Body.Close(); err != nil {
+				return nil, fmt.Errorf("close redirect body: %w", err)
+			}
 			if location == "" {
 				return nil, fmt.Errorf("redirect without location")
 			}

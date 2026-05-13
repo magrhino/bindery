@@ -6,6 +6,10 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **qBittorrent imports recover from mismatched container paths without re-downloading** — Download clients now support per-client path remaps, qBittorrent grabs are sent with the expected category save path, and Settings surfaces qBittorrent category path health warnings. Queue items stuck in `importFailed` can also be retried after fixing storage/path settings.
+
 ## [v1.10.0] — 2026-05-13
 
 ### Added

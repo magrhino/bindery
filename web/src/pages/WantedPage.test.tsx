@@ -274,7 +274,7 @@ describe('WantedPage', () => {
     await screen.findByRole('link', { name: 'Dune' })
     fireEvent.click(screen.getByRole('button', { name: 'Unmonitor' }))
 
-    expect(screen.getByRole('button', { name: '…' })).toBeDisabled()
+    expect(screen.queryByRole('link', { name: 'Dune' })).not.toBeInTheDocument()
     expect(api.updateBook).toHaveBeenCalledWith(1, { monitored: false })
 
     await act(async () => {
