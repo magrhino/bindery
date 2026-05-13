@@ -273,6 +273,76 @@ func TestQueueGrab_FailedRetryFailureRemainsRetryable(t *testing.T) {
 	}
 }
 
+func TestQueueRetryImport_AcceptsImportFailed(t *testing.T) {
+	h, database, downloads, _, _, ctx := queueFixture(t)
+	dl := &models.Download{
+		GUID:         "import-retry-guid",
+		Title:        "Import Retry",
+		NZBURL:       "http://example/retry.nzb",
+		Status:       models.StateImportFailed,
+		Protocol:     "usenet",
+		ErrorMessage: "path did not resolve",
+	}
+	if err := downloads.Create(ctx, dl); err != nil {
+		t.Fatalf("create import failed download: %v", err)
+	}
+	if _, err := database.ExecContext(ctx, "UPDATE downloads SET import_retry_count=? WHERE id=?", 3, dl.ID); err != nil {
+		t.Fatalf("seed retry count: %v", err)
+	}
+
+	req := withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/queue/"+strconv.FormatInt(dl.ID, 10)+"/retry-import", nil), "id", strconv.FormatInt(dl.ID, 10))
+	rec := httptest.NewRecorder()
+	h.RetryImport(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]bool
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !body["ok"] {
+		t.Fatalf("expected ok=true, got %v", body)
+	}
+	got, err := downloads.GetByGUID(ctx, "import-retry-guid")
+	if err != nil || got == nil {
+		t.Fatalf("reload download: %v", err)
+	}
+	if got.Status != models.StateImportFailed || got.ImportRetryCount != 0 || got.ErrorMessage != "path did not resolve" {
+		t.Fatalf("unexpected retry state: status=%q retry=%d error=%q", got.Status, got.ImportRetryCount, got.ErrorMessage)
+	}
+}
+
+func TestQueueRetryImport_NotFound(t *testing.T) {
+	h, _, _, _, _, _ := queueFixture(t)
+	req := withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/queue/999/retry-import", nil), "id", "999")
+	rec := httptest.NewRecorder()
+	h.RetryImport(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestQueueRetryImport_RejectsNonImportFailed(t *testing.T) {
+	h, _, downloads, _, _, ctx := queueFixture(t)
+	dl := &models.Download{
+		GUID:     "completed-guid",
+		Title:    "Already Completed",
+		NZBURL:   "http://example/completed.nzb",
+		Status:   models.StateCompleted,
+		Protocol: "usenet",
+	}
+	if err := downloads.Create(ctx, dl); err != nil {
+		t.Fatalf("create completed download: %v", err)
+	}
+
+	req := withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/queue/"+strconv.FormatInt(dl.ID, 10)+"/retry-import", nil), "id", strconv.FormatInt(dl.ID, 10))
+	rec := httptest.NewRecorder()
+	h.RetryImport(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestQueueDelete_NotFound(t *testing.T) {
 	h, _, _, _, _, _ := queueFixture(t)
 	req := withURLParam(httptest.NewRequest(http.MethodDelete, "/api/v1/queue/42", nil), "id", "42")

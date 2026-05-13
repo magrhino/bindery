@@ -1085,6 +1085,95 @@ func TestDownloadRepoRetryFailed(t *testing.T) {
 	}
 }
 
+func TestDownloadRepoResetImportRetry(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	repo := NewDownloadRepo(database)
+
+	nzoID := "old-nzo"
+	torrentID := "old-torrent"
+	dl := &models.Download{
+		GUID:         "import-retry-guid",
+		Title:        "Import Retry",
+		NZBURL:       "https://example.com/retry.nzb",
+		Size:         100,
+		SABnzbdNzoID: &nzoID,
+		TorrentID:    &torrentID,
+		Status:       models.StateImportFailed,
+		Protocol:     "usenet",
+		Quality:      "epub",
+		ErrorMessage: "visible import failure",
+	}
+	if err := repo.Create(ctx, dl); err != nil {
+		t.Fatalf("create import failed download: %v", err)
+	}
+	oldTime := time.Now().UTC().Add(-2 * time.Hour)
+	if _, err := database.ExecContext(ctx, `
+		UPDATE downloads
+		SET grabbed_at=?, completed_at=?, imported_at=?, import_retry_count=?
+		WHERE id=?`, oldTime, oldTime, oldTime, 3, dl.ID); err != nil {
+		t.Fatalf("seed import retry metadata: %v", err)
+	}
+
+	accepted, found, err := repo.ResetImportRetry(ctx, dl.ID)
+	if err != nil {
+		t.Fatalf("ResetImportRetry: %v", err)
+	}
+	if !accepted || !found {
+		t.Fatalf("ResetImportRetry accepted=%v found=%v, want true true", accepted, found)
+	}
+
+	got, err := repo.GetByGUID(ctx, "import-retry-guid")
+	if err != nil || got == nil {
+		t.Fatalf("reload download: %v", err)
+	}
+	if got.Status != models.StateImportFailed {
+		t.Fatalf("status changed to %q, want importFailed", got.Status)
+	}
+	if got.ImportRetryCount != 0 {
+		t.Fatalf("import retry count = %d, want 0", got.ImportRetryCount)
+	}
+	if got.ErrorMessage != "visible import failure" {
+		t.Fatalf("error message changed to %q", got.ErrorMessage)
+	}
+	if got.SABnzbdNzoID == nil || *got.SABnzbdNzoID != nzoID || got.TorrentID == nil || *got.TorrentID != torrentID {
+		t.Fatalf("remote IDs changed, got nzo=%v torrent=%v", got.SABnzbdNzoID, got.TorrentID)
+	}
+	if got.GrabbedAt == nil || got.CompletedAt == nil || got.ImportedAt == nil {
+		t.Fatalf("timestamps changed, got grabbed=%v completed=%v imported=%v", got.GrabbedAt, got.CompletedAt, got.ImportedAt)
+	}
+
+	nonFailed := &models.Download{
+		GUID:     "not-import-failed",
+		Title:    "Not Import Failed",
+		NZBURL:   "https://example.com/not-failed.nzb",
+		Status:   models.StateCompleted,
+		Protocol: "usenet",
+	}
+	if err := repo.Create(ctx, nonFailed); err != nil {
+		t.Fatalf("create completed download: %v", err)
+	}
+	accepted, found, err = repo.ResetImportRetry(ctx, nonFailed.ID)
+	if err != nil {
+		t.Fatalf("ResetImportRetry non-failed: %v", err)
+	}
+	if accepted || !found {
+		t.Fatalf("ResetImportRetry non-failed accepted=%v found=%v, want false true", accepted, found)
+	}
+
+	accepted, found, err = repo.ResetImportRetry(ctx, 999999)
+	if err != nil {
+		t.Fatalf("ResetImportRetry missing: %v", err)
+	}
+	if accepted || found {
+		t.Fatalf("ResetImportRetry missing accepted=%v found=%v, want false false", accepted, found)
+	}
+}
+
 func TestBlocklistRepoCRUD(t *testing.T) {
 	database, err := OpenMemory()
 	if err != nil {

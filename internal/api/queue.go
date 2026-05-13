@@ -459,6 +459,29 @@ func (h *QueueHandler) Grab(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, dl)
 }
 
+func (h *QueueHandler) RetryImport(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+
+	accepted, found, err := h.downloads.ResetImportRetry(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "download not found"})
+		return
+	}
+	if !accepted {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "download is not in importFailed state"})
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
+}
+
 // selectClient picks the best enabled client for the given protocol and media type.
 // It prefers a client whose category hints match the media type when multiple
 // clients of the same protocol type are configured.

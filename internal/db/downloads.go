@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -139,6 +140,34 @@ func (r *DownloadRepo) RetryFailed(ctx context.Context, d *models.Download) (boo
 	d.ImportedAt = nil
 	d.ImportRetryCount = 0
 	return true, nil
+}
+
+// ResetImportRetry atomically re-enables scanner retries for a download stuck
+// in StateImportFailed. It returns accepted=false when the row exists but is in
+// another state, and found=false when no row exists.
+func (r *DownloadRepo) ResetImportRetry(ctx context.Context, id int64) (accepted bool, found bool, err error) {
+	result, err := r.db.ExecContext(ctx,
+		"UPDATE downloads SET import_retry_count=0 WHERE id=? AND status=?",
+		id, models.StateImportFailed)
+	if err != nil {
+		return false, false, fmt.Errorf("reset import retry: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, false, fmt.Errorf("reset import retry rows affected: %w", err)
+	}
+	if affected > 0 {
+		return true, true, nil
+	}
+
+	var existingID int64
+	if err := r.db.QueryRowContext(ctx, "SELECT id FROM downloads WHERE id=?", id).Scan(&existingID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, false, nil
+		}
+		return false, false, fmt.Errorf("lookup download for import retry: %w", err)
+	}
+	return false, true, nil
 }
 
 func (r *DownloadRepo) UpdateStatus(ctx context.Context, id int64, next models.DownloadState) error {

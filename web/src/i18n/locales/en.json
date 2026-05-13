@@ -190,6 +190,9 @@
     "title": "Queue",
     "empty": "Queue is empty",
     "remaining": "{{time}} remaining",
+    "retryImport": "Retry import",
+    "retryingImport": "Retrying…",
+    "retryImportError": "Retry failed: {{error}}",
     "remove": "Remove"
   },
   "blocklist": {
