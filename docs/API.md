@@ -99,6 +99,7 @@ POST   /api/v1/downloadclient/{id}/test           probe connectivity (admin)
 
 GET    /api/v1/queue                              active downloads with live downloader overlay
 POST   /api/v1/queue/grab                         submit a search result to the download client
+POST   /api/v1/queue/{id}/retry-import           retry an importFailed item without re-downloading
 DELETE /api/v1/queue/{id}                         remove (also from downloader)
 
 GET    /api/v1/pending                            grabs awaiting delay-profile clearance

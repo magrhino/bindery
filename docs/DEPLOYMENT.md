@@ -190,16 +190,20 @@ spec:
 
 When Bindery and your download client run in **separate containers**, they typically mount the same storage volume at different paths. Bindery needs to read the files the download client just completed, but the path the client reports (e.g. `/downloads/complete/My.Book`) doesn't exist inside Bindery's container.
 
-Set `BINDERY_DOWNLOAD_PATH_REMAP` to a comma-separated list of `from:to` pairs. Bindery applies a longest-prefix match to every path the download client reports, replacing the matched prefix before it tries to access the file.
+Set a download-client path remap in **Settings → Download clients** or set the global `BINDERY_DOWNLOAD_PATH_REMAP` fallback to a comma-separated list of `from:to` pairs. Bindery applies a longest-prefix match to every path the download client reports, replacing the matched prefix before it tries to access the file. A per-client remap takes precedence when it matches the reported path; the global env var still applies as a fallback.
 
-**Common scenario — SABnzbd and Bindery on the same NAS storage, different mount points:**
+Per-client remaps are stored on each download client, so separate qBittorrent / SABnzbd / NZBGet instances can map different mount points. Existing download clients keep an empty remap after upgrade, which preserves the previous global-only behavior until you add a client-specific value.
+
+For a per-client remap, open **Settings → Download clients**, edit the client, and set **Download client path remap**. The left side is the path the client reports; the right side is the path Bindery can read. For qBittorrent this normally means mapping the qBittorrent category save path or torrent content path to Bindery's download mount. Example: if qBittorrent reports `/downloads/books/My.Book` and Bindery sees that same folder as `/media/books/My.Book`, set `/downloads:/media/books`.
+
+**Common scenario — SABnzbd or qBittorrent and Bindery on the same NAS storage, different mount points:**
 
 | Container | NAS path | Mount point |
 |-----------|----------|-------------|
-| SABnzbd | `/volume1/MEDIA` | `/downloads` |
+| Download client | `/volume1/MEDIA` | `/downloads` |
 | Bindery | `/volume1/MEDIA` | `/media` |
 
-SABnzbd reports `/downloads/complete/My.Book`; Bindery remaps to `/media/complete/My.Book`.
+The download client reports `/downloads/complete/My.Book`; Bindery remaps to `/media/complete/My.Book`.
 
 ### Docker Compose
 
@@ -231,7 +235,11 @@ nfs:
   mountPath: /media
 ```
 
-Multiple remaps are separated by commas: `BINDERY_DOWNLOAD_PATH_REMAP=/sab/complete:/media/complete,/sab/incomplete:/media/incomplete`. Longest prefix wins, so more-specific rules take precedence over shorter ones.
+Multiple remaps are separated by commas: `BINDERY_DOWNLOAD_PATH_REMAP=/sab/complete:/media/complete,/qbit:/media/qbit`. Longest prefix wins, so more-specific rules take precedence over shorter ones.
+
+For qBittorrent, Bindery also sends a save path when submitting torrent grabs. If a per-client remap is configured, Bindery inversely maps `BINDERY_DOWNLOAD_DIR` or `BINDERY_AUDIOBOOK_DOWNLOAD_DIR` back to qBittorrent's mount point before submitting the torrent. The Settings page checks the configured qBittorrent category and warns when its save path does not map to Bindery's expected download folder.
+
+After fixing a path or category mismatch, use **Queue → Retry import** on an `importFailed` item. This is also the right action after manually moving the completed torrent in qBittorrent to a path Bindery can read. Bindery resets the import retry counter and imports from the existing completed download, so the release does not need to be grabbed or downloaded again.
 
 ## Environment variables
 
@@ -248,7 +256,7 @@ Multiple remaps are separated by commas: `BINDERY_DOWNLOAD_PATH_REMAP=/sab/compl
 | `BINDERY_LIBRARY_DIR` | `/books` | Destination for imported ebook files |
 | `BINDERY_AUDIOBOOK_DIR` | falls back to `BINDERY_LIBRARY_DIR` | Destination for imported audiobook folders |
 | `BINDERY_ENHANCED_HARDCOVER_API` | `true` | Set to `false` to disable token-backed Hardcover series search, linking, catalog diffs, and missing-book fill even when an admin enables the feature in Settings. |
-| `BINDERY_DOWNLOAD_PATH_REMAP` | _(empty)_ | Comma-separated `from:to` pairs rewriting paths reported by the download client into paths Bindery can access. Required when SABnzbd and Bindery mount the same storage at different paths. Longest-prefix match wins. See [Path remapping](#path-remapping-multi-container--multi-pod-setups). |
+| `BINDERY_DOWNLOAD_PATH_REMAP` | _(empty)_ | Global comma-separated `from:to` pairs rewriting paths reported by download clients into paths Bindery can access. Per-client path remaps in Settings take precedence when they match. Longest-prefix match wins. See [Path remapping](#path-remapping-multi-container--multi-pod-setups). |
 | `BINDERY_PUID` | _(unset)_ | Sanity check — see [Running as a specific UID/GID](#running-as-a-specific-uidgid) |
 | `BINDERY_PGID` | _(unset)_ | Sanity check — same as `BINDERY_PUID` for the primary GID |
 | `BINDERY_COOKIE_SECURE` | `auto` | Session cookie `Secure` flag policy. `auto` (default) flips the flag on when TLS is detected directly or via `X-Forwarded-Proto: https`; `always` forces it on (use when your reverse proxy doesn't forward the header); `never` forces it off (legacy plain-HTTP installs). |
