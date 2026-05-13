@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vavallee/bindery/internal/downloader/nethint"
 	"github.com/vavallee/bindery/internal/downloader/urlbase"
 )
 
@@ -136,7 +137,7 @@ func (c *Client) Login(ctx context.Context) error {
 // Test verifies connectivity by fetching the application version. The error
 // wording adapts to the failure mode: auth/config issues (the server
 // responded but rejected us) get a targeted hint; transport failures (the
-// server didn't respond at all) get the Docker-networking hint.
+// server didn't respond at all) get a hint based on the error class.
 func (c *Client) Test(ctx context.Context) error {
 	if _, err := c.get(ctx, "/api/v2/app/version"); err != nil {
 		var authErr *AuthError
@@ -144,7 +145,7 @@ func (c *Client) Test(ctx context.Context) error {
 			// Server responded — this is an auth/config issue, not unreachable.
 			return fmt.Errorf("connected to qBittorrent at %s but %w", c.baseURL, err)
 		}
-		return fmt.Errorf("could not reach qBittorrent at %s — %w (in Docker use the service/container name, not localhost)", c.baseURL, err)
+		return fmt.Errorf("could not reach qBittorrent at %s — %w%s", c.baseURL, err, nethint.ForErr(err))
 	}
 	return nil
 }

@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/vavallee/bindery/internal/downloader/nethint"
 	"github.com/vavallee/bindery/internal/downloader/urlbase"
 )
 
@@ -90,7 +91,7 @@ func (c *Client) Login(ctx context.Context) error {
 // the password is correct.
 func (c *Client) Test(ctx context.Context) error {
 	if err := c.ensureLoggedIn(ctx); err != nil {
-		return fmt.Errorf("could not reach Deluge at %s — %w (in Docker use the service/container name, not localhost)", c.baseURL, err)
+		return fmt.Errorf("could not reach Deluge at %s — %w%s", c.baseURL, err, nethint.ForErr(err))
 	}
 	return nil
 }

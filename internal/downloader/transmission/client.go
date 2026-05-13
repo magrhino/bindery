@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vavallee/bindery/internal/downloader/nethint"
 	"github.com/vavallee/bindery/internal/downloader/urlbase"
 )
 
@@ -68,8 +69,13 @@ func (c *Client) Test(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	_, err = c.doRequest(req)
-	return err
+	if _, err = c.doRequest(req); err != nil {
+		if hint := nethint.ForErr(err); hint != "" {
+			return fmt.Errorf("could not reach Transmission at %s — %w%s", c.baseURL, err, hint)
+		}
+		return err
+	}
+	return nil
 }
 
 // AddTorrent submits a magnet link or torrent URL to Transmission for download.

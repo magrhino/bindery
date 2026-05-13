@@ -3,11 +3,14 @@ package deluge_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -339,5 +342,87 @@ func TestAddTorrent_URL_HashLookupTimeout(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected ERROR log with 'timed out' message, got %d records", len(records))
+	}
+}
+
+// roundTripFunc is a test helper that implements http.RoundTripper via a function.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// delugeNetTimeoutErr is a minimal net.Error that signals a timeout.
+type delugeNetTimeoutErr struct{}
+
+func (e *delugeNetTimeoutErr) Error() string   { return "i/o timeout" }
+func (e *delugeNetTimeoutErr) Timeout() bool   { return true }
+func (e *delugeNetTimeoutErr) Temporary() bool { return true }
+
+// TestTest_DNSNotFound verifies that a DNS lookup failure on Deluge appends the
+// Docker network hint.
+func TestTest_DNSNotFound(t *testing.T) {
+	dnsErr := &net.DNSError{Name: "deluge-container", IsNotFound: true}
+	c := deluge.New("deluge-container", 8112, "pw", "", false)
+	c.SetHTTPTransport(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("dial: %w", dnsErr)
+	}))
+
+	err := c.Test(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "same Docker network") {
+		t.Errorf("expected Docker network hint, got: %q", err.Error())
+	}
+}
+
+// TestTest_ConnectionRefused verifies that ECONNREFUSED appends the port hint.
+func TestTest_ConnectionRefused(t *testing.T) {
+	c := deluge.New("127.0.0.1", 8112, "pw", "", false)
+	c.SetHTTPTransport(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("dial tcp: %w", syscall.ECONNREFUSED)
+	}))
+
+	err := c.Test(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "service may not be running") {
+		t.Errorf("expected port hint, got: %q", err.Error())
+	}
+}
+
+// TestTest_Timeout verifies that a timeout error appends the firewall hint.
+func TestTest_Timeout(t *testing.T) {
+	c := deluge.New("10.0.0.1", 8112, "pw", "", false)
+	c.SetHTTPTransport(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, &delugeNetTimeoutErr{}
+	}))
+
+	err := c.Test(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "firewall or proxy") {
+		t.Errorf("expected firewall hint, got: %q", err.Error())
+	}
+}
+
+// TestTest_ServerError_NoHint verifies that a server-side error (bad password,
+// HTTP 500, etc.) does NOT append any network hint.
+func TestTest_ServerError_NoHint(t *testing.T) {
+	srv, _ := newTestServer(t, "correct")
+	// Use the wrong password so the server rejects login (application error, not
+	// a transport failure).
+	c := clientFromServer(srv, "wrong")
+
+	err := c.Test(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	for _, hint := range []string{"Docker network", "service may not be running", "firewall or proxy"} {
+		if strings.Contains(msg, hint) {
+			t.Errorf("server-side error must not produce hint %q; got: %q", hint, msg)
+		}
 	}
 }

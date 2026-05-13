@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/vavallee/bindery/internal/downloader/nethint"
 	"github.com/vavallee/bindery/internal/downloader/urlbase"
 )
 
@@ -44,7 +45,7 @@ func New(host string, port int, username, password, urlBase string, useSSL bool)
 func (c *Client) Test(ctx context.Context) error {
 	var resp versionResponse
 	if err := c.call(ctx, "version", nil, &resp); err != nil {
-		return fmt.Errorf("could not reach NZBGet at %s — %w (in Docker use the service/container name, not localhost)", c.baseURL, err)
+		return fmt.Errorf("could not reach NZBGet at %s — %w%s", c.baseURL, err, nethint.ForErr(err))
 	}
 	if resp.Result == "" {
 		return fmt.Errorf("NZBGet returned empty version — check credentials")

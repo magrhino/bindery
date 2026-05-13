@@ -2,9 +2,13 @@ package transmission
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -360,5 +364,101 @@ func TestDoRequest_RejectsRedirectToDifferentTarget(t *testing.T) {
 	}
 	if redirected {
 		t.Fatal("unexpectedly followed redirect to different target")
+	}
+}
+
+// roundTripFunc is a test helper that implements http.RoundTripper via a function.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// netTimeoutErr is a minimal net.Error that signals a timeout.
+type netTimeoutErr struct{}
+
+func (e *netTimeoutErr) Error() string   { return "i/o timeout" }
+func (e *netTimeoutErr) Timeout() bool   { return true }
+func (e *netTimeoutErr) Temporary() bool { return true }
+
+// newTransportClient creates a test Client with a custom HTTP transport.
+// Unlike newTestClient, this does not short-circuit via a real server URL —
+// the transport is responsible for all responses.
+func newTransportClient(transport http.RoundTripper) *Client {
+	c := New("fake-host", 9091, "", "", "", false)
+	parsed, _ := url.Parse("http://fake-host:9091/transmission/rpc")
+	c.rpcURL = parsed
+	c.baseURL = parsed.String()
+	c.http = &http.Client{Transport: transport}
+	// CheckRedirect was set in New(); replace http.Client entirely so we keep
+	// the CheckRedirect behaviour by setting it again.
+	c.http.CheckRedirect = c.checkRedirect
+	return c
+}
+
+// TestTest_DNSNotFound verifies that a DNS lookup failure appends the Docker
+// network hint.
+func TestTest_DNSNotFound(t *testing.T) {
+	dnsErr := &net.DNSError{Name: "transmission-container", IsNotFound: true}
+	c := newTransportClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("dial: %w", dnsErr)
+	}))
+
+	err := c.Test(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "same Docker network") {
+		t.Errorf("expected Docker network hint, got: %q", err.Error())
+	}
+}
+
+// TestTest_ConnectionRefused verifies that ECONNREFUSED appends the port hint.
+func TestTest_ConnectionRefused(t *testing.T) {
+	c := newTransportClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("dial tcp: %w", syscall.ECONNREFUSED)
+	}))
+
+	err := c.Test(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "service may not be running") {
+		t.Errorf("expected port hint, got: %q", err.Error())
+	}
+}
+
+// TestTest_Timeout verifies that a timeout error appends the firewall hint.
+func TestTest_Timeout(t *testing.T) {
+	c := newTransportClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, &netTimeoutErr{}
+	}))
+
+	err := c.Test(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "firewall or proxy") {
+		t.Errorf("expected firewall hint, got: %q", err.Error())
+	}
+}
+
+// TestTest_ServerError_NoHint verifies that a clean HTTP 500 does NOT append
+// any network hint.
+func TestTest_ServerError_NoHint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("internal error"))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "user", "pass")
+	err := c.Test(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	for _, hint := range []string{"Docker network", "service may not be running", "firewall or proxy"} {
+		if strings.Contains(msg, hint) {
+			t.Errorf("clean server error must not produce hint %q; got: %q", hint, msg)
+		}
 	}
 }

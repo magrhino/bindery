@@ -1,6 +1,9 @@
 package deluge
 
-import "time"
+import (
+	"net/http"
+	"time"
+)
 
 // HashPollTimeout exposes the package-level poll timeout for test overrides.
 var HashPollTimeout = &hashPollTimeout
@@ -11,4 +14,9 @@ func SetHashPollTimeout(d time.Duration) func() {
 	orig := hashPollTimeout
 	hashPollTimeout = d
 	return func() { hashPollTimeout = orig }
+}
+
+// SetHTTPTransport replaces the underlying http.Client transport for testing.
+func (c *Client) SetHTTPTransport(rt http.RoundTripper) {
+	c.http.Transport = rt
 }

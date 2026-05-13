@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/vavallee/bindery/internal/downloader/nethint"
 	"github.com/vavallee/bindery/internal/downloader/urlbase"
 )
 
@@ -38,7 +39,7 @@ func New(host string, port int, apiKey, urlBase string, useSSL bool) *Client {
 // Test verifies connectivity by fetching categories.
 func (c *Client) Test(ctx context.Context) error {
 	if _, err := c.GetCategories(ctx); err != nil {
-		return fmt.Errorf("could not reach SABnzbd at %s — %w (in Docker use the service/container name, not localhost)", c.baseURL, err)
+		return fmt.Errorf("could not reach SABnzbd at %s — %w%s", c.baseURL, err, nethint.ForErr(err))
 	}
 	return nil
 }

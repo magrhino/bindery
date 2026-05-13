@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -807,5 +810,101 @@ func TestAddTorrent_HashLookupTimeout(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected ERROR log with 'timed out' message, got %d records", len(records))
+	}
+}
+
+// roundTripFunc is a test helper that implements http.RoundTripper via a function.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// qbNetTimeoutErr is a minimal net.Error that signals a timeout.
+type qbNetTimeoutErr struct{}
+
+func (e *qbNetTimeoutErr) Error() string   { return "i/o timeout" }
+func (e *qbNetTimeoutErr) Timeout() bool   { return true }
+func (e *qbNetTimeoutErr) Temporary() bool { return true }
+
+// newTransportClient creates a qBittorrent Client with a custom HTTP transport.
+func newTransportClient(transport http.RoundTripper) *Client {
+	c := New("fake-host", 8080, "admin", "pass", "", false)
+	c.http = &http.Client{Transport: transport, Jar: c.http.Jar}
+	return c
+}
+
+// TestTest_DNSNotFound verifies that a DNS lookup failure appends the Docker
+// network hint and does NOT misclassify it as an auth error.
+func TestTest_DNSNotFound(t *testing.T) {
+	dnsErr := &net.DNSError{Name: "qbittorrent-container", IsNotFound: true}
+	c := newTransportClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("dial: %w", dnsErr)
+	}))
+
+	err := c.Test(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "connected to qBittorrent") {
+		t.Errorf("DNS failure must not be reported as auth error: %q", msg)
+	}
+	if !strings.Contains(msg, "same Docker network") {
+		t.Errorf("expected Docker network hint, got: %q", msg)
+	}
+}
+
+// TestTest_ConnectionRefused verifies that ECONNREFUSED appends the port hint.
+func TestTest_ConnectionRefused(t *testing.T) {
+	c := newTransportClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("dial tcp: %w", syscall.ECONNREFUSED)
+	}))
+
+	err := c.Test(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "service may not be running") {
+		t.Errorf("expected port hint, got: %q", err.Error())
+	}
+}
+
+// TestTest_Timeout_QBit verifies that a timeout error appends the firewall hint.
+func TestTest_Timeout_QBit(t *testing.T) {
+	c := newTransportClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, &qbNetTimeoutErr{}
+	}))
+
+	err := c.Test(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "firewall or proxy") {
+		t.Errorf("expected firewall hint, got: %q", err.Error())
+	}
+}
+
+// TestTest_ServerError_NoHint_QBit verifies that an HTTP 500 from the server
+// does NOT produce a network hint (qBittorrent responded, transport worked).
+func TestTest_ServerError_NoHint_QBit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			_, _ = w.Write([]byte("Ok."))
+		default:
+			http.Error(w, "server error", http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, "admin", "pass")
+	err := c.Test(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	for _, hint := range []string{"Docker network", "service may not be running", "firewall or proxy"} {
+		if strings.Contains(msg, hint) {
+			t.Errorf("server error must not produce hint %q; got: %q", hint, msg)
+		}
 	}
 }

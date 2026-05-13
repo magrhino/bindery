@@ -3,10 +3,14 @@ package nzbget
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -331,5 +335,96 @@ func TestBasicAuth(t *testing.T) {
 	}
 	if gotUser != "admin" || gotPass != "secret" {
 		t.Errorf("expected admin/secret, got %q/%q", gotUser, gotPass)
+	}
+}
+
+// roundTripFunc is a test helper that implements http.RoundTripper via a function.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// netTimeoutErr is a minimal net.Error that signals a timeout.
+type netTimeoutErr struct{}
+
+func (e *netTimeoutErr) Error() string   { return "i/o timeout" }
+func (e *netTimeoutErr) Timeout() bool   { return true }
+func (e *netTimeoutErr) Temporary() bool { return true }
+
+// TestTest_DNSNotFound verifies that a DNS lookup failure appends the Docker
+// network hint.
+func TestTest_DNSNotFound(t *testing.T) {
+	dnsErr := &net.DNSError{Name: "nzbget-container", IsNotFound: true}
+	c := New("nzbget-container", 6789, "u", "p", "", false)
+	c.http = &http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("dial: %w", dnsErr)
+		}),
+	}
+
+	err := c.Test(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "same Docker network") {
+		t.Errorf("expected Docker network hint, got: %q", err.Error())
+	}
+}
+
+// TestTest_ConnectionRefused verifies that ECONNREFUSED appends the port hint.
+func TestTest_ConnectionRefused(t *testing.T) {
+	c := New("127.0.0.1", 6789, "u", "p", "", false)
+	c.http = &http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("dial tcp: %w", syscall.ECONNREFUSED)
+		}),
+	}
+
+	err := c.Test(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "service may not be running") {
+		t.Errorf("expected port hint, got: %q", err.Error())
+	}
+}
+
+// TestTest_Timeout verifies that a timeout error appends the firewall hint.
+func TestTest_Timeout(t *testing.T) {
+	c := New("10.0.0.1", 6789, "u", "p", "", false)
+	c.http = &http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, &netTimeoutErr{}
+		}),
+	}
+
+	err := c.Test(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "firewall or proxy") {
+		t.Errorf("expected firewall hint, got: %q", err.Error())
+	}
+}
+
+// TestTest_ServerError_NoHint verifies that a clean HTTP 500 does NOT append
+// any network hint (it's a server-side error, not a transport failure).
+func TestTest_ServerError_NoHint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	host, port := serverHostPort(t, srv.URL)
+	c := New(host, port, "", "", "", false)
+
+	err := c.Test(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	for _, hint := range []string{"Docker network", "service may not be running", "firewall or proxy"} {
+		if strings.Contains(msg, hint) {
+			t.Errorf("clean server error must not produce hint %q; got: %q", hint, msg)
+		}
 	}
 }
