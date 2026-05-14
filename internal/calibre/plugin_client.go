@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -39,15 +40,16 @@ func NewPluginClient(baseURL, apiKey string) *PluginClient {
 	}
 }
 
-// Add POSTs the file path to the plugin and returns the Calibre book id.
+// Add POSTs the file path and Bindery metadata to the plugin and returns the
+// Calibre book id.
 // Retries once on 503 (library swap in progress); all other non-2xx
 // statuses surface immediately.
-func (c *PluginClient) Add(ctx context.Context, filePath string) (int64, error) {
-	return c.addWithRetry(ctx, filePath, 1)
+func (c *PluginClient) Add(ctx context.Context, filePath string, meta Metadata) (int64, error) {
+	return c.addWithRetry(ctx, filePath, meta, 1, false)
 }
 
-func (c *PluginClient) addWithRetry(ctx context.Context, filePath string, retries int) (int64, error) {
-	body, _ := json.Marshal(map[string]string{"path": filePath})
+func (c *PluginClient) addWithRetry(ctx context.Context, filePath string, meta Metadata, retries int, legacyPayload bool) (int64, error) {
+	body, _ := json.Marshal(pluginAddRequest{Path: filePath, Metadata: &meta, Legacy: legacyPayload})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/books", bytes.NewReader(body))
 	if err != nil {
 		return 0, err
@@ -68,7 +70,7 @@ func (c *PluginClient) addWithRetry(ctx context.Context, filePath string, retrie
 			return 0, ctx.Err()
 		case <-time.After(2 * time.Second):
 		}
-		return c.addWithRetry(ctx, filePath, retries-1)
+		return c.addWithRetry(ctx, filePath, meta, retries-1, legacyPayload)
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
 		return 0, fmt.Errorf("plugin client: authentication failed — check api_key in Settings → Calibre")
@@ -82,6 +84,11 @@ func (c *PluginClient) addWithRetry(ctx context.Context, filePath string, retrie
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil && resp.StatusCode < 400 {
 		return 0, fmt.Errorf("plugin client: decode response: %w", err)
 	}
+	if !legacyPayload && !meta.empty() && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) {
+		slog.Warn("plugin client: metadata payload rejected; retrying legacy path-only payload",
+			"status", resp.StatusCode, "error", result.Error)
+		return c.addWithRetry(ctx, filePath, Metadata{}, retries, true)
+	}
 	if resp.StatusCode == http.StatusConflict {
 		// 409 → book is already in the Calibre library. Surface the
 		// existing id (when the plugin includes it) so the caller can
@@ -93,6 +100,24 @@ func (c *PluginClient) addWithRetry(ctx context.Context, filePath string, retrie
 		return 0, fmt.Errorf("plugin client: server error %d: %s", resp.StatusCode, result.Error)
 	}
 	return result.ID, nil
+}
+
+type pluginAddRequest struct {
+	Path     string    `json:"path"`
+	Metadata *Metadata `json:"metadata,omitempty"`
+	Legacy   bool      `json:"-"`
+}
+
+func (r pluginAddRequest) MarshalJSON() ([]byte, error) {
+	if r.Legacy || r.Metadata == nil || r.Metadata.empty() {
+		return json.Marshal(struct {
+			Path string `json:"path"`
+		}{Path: r.Path})
+	}
+	return json.Marshal(struct {
+		Path     string   `json:"path"`
+		Metadata Metadata `json:"metadata"`
+	}{Path: r.Path, Metadata: *r.Metadata})
 }
 
 // Health probes GET /v1/health and returns a human-readable version

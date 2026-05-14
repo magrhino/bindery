@@ -55,7 +55,7 @@ type fakePusher struct {
 	calls map[string]func() (int64, error)
 }
 
-func (f *fakePusher) Add(_ context.Context, path string) (int64, error) {
+func (f *fakePusher) Add(_ context.Context, path string, _ Metadata) (int64, error) {
 	fn, ok := f.calls[path]
 	if !ok {
 		return 0, errors.New("unexpected path")

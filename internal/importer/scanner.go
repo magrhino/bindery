@@ -27,10 +27,10 @@ import (
 	"github.com/vavallee/bindery/internal/textutil"
 )
 
-// calibreAdder mirrors a just-imported file into Calibre by shelling out to
-// `calibredb add`. The scanner only invokes it when mode=calibredb.
+// calibreAdder mirrors a just-imported file into Calibre via calibredb or the
+// Bindery Bridge plugin. The scanner only invokes it when Calibre mode is on.
 type calibreAdder interface {
-	Add(ctx context.Context, filePath string) (int64, error)
+	Add(ctx context.Context, filePath string, meta calibre.Metadata) (int64, error)
 }
 
 // absNotifier is called after a successful audiobook import to trigger an
@@ -47,6 +47,7 @@ type Scanner struct {
 	clients              *db.DownloadClientRepo
 	books                *db.BookRepo
 	authors              *db.AuthorRepo
+	editions             *db.EditionRepo
 	history              *db.HistoryRepo
 	rootFolders          *db.RootFolderRepo
 	series               *db.SeriesRepo
@@ -54,6 +55,7 @@ type Scanner struct {
 	remapper             *Remapper
 	calibreAdder         calibreAdder
 	calibreMode          func() calibre.Mode
+	calibreCoverCacheDir string
 	settings             *db.SettingsRepo
 	libraryDir           string
 	audiobookDir         string
@@ -118,6 +120,13 @@ func (s *Scanner) WithSeriesRepo(sr *db.SeriesRepo) *Scanner {
 	return s
 }
 
+// WithEditions attaches the edition repo so Calibre handoffs can prefer the
+// selected or downloaded edition's ISBN, publisher, date, cover, and language.
+func (s *Scanner) WithEditions(er *db.EditionRepo) *Scanner {
+	s.editions = er
+	return s
+}
+
 // primarySeriesFor returns the primary series title and position for the given
 // book. Returns empty strings when the series repo is not configured or the
 // book has no primary series.
@@ -159,6 +168,13 @@ func (s *Scanner) effectiveLibraryDir(ctx context.Context, author *models.Author
 func (s *Scanner) WithCalibre(mode func() calibre.Mode, adder calibreAdder) *Scanner {
 	s.calibreMode = mode
 	s.calibreAdder = adder
+	return s
+}
+
+// WithCalibreCoverCache configures a writable cache directory for remote cover
+// images that need to be materialized before calibredb can consume them.
+func (s *Scanner) WithCalibreCoverCache(dir string) *Scanner {
+	s.calibreCoverCacheDir = dir
 	return s
 }
 
@@ -249,25 +265,25 @@ func (s *Scanner) pushToCWA(ctx context.Context, srcPath string) {
 // pushToCalibre mirrors a just-imported book into Calibre via calibredb add.
 // Failures are logged and swallowed — Calibre sync is best-effort and must
 // never roll back an otherwise-good Bindery import.
-func (s *Scanner) pushToCalibre(ctx context.Context, book *models.Book, _ *models.Author, path string) {
+func (s *Scanner) pushToCalibre(ctx context.Context, book *models.Book, author *models.Author, edition *models.Edition, seriesTitle, seriesNum, path string) {
 	if s.calibreMode == nil || book == nil {
 		return
 	}
 	mode := s.calibreMode()
 	if mode == calibre.ModeCalibredb || mode == calibre.ModePlugin {
-		s.pushCalibreAdd(ctx, book, path, mode)
+		s.pushCalibreAdd(ctx, book, s.calibreMetadata(ctx, book, author, edition, seriesTitle, seriesNum, mode), path, mode)
 	}
 }
 
 // pushCalibreAdd invokes the configured adder (calibredb CLI or plugin HTTP
 // client) and persists the resulting calibre_id. Failures are best-effort —
 // logged and swallowed so Bindery's own import stays good.
-func (s *Scanner) pushCalibreAdd(ctx context.Context, book *models.Book, path string, mode calibre.Mode) {
+func (s *Scanner) pushCalibreAdd(ctx context.Context, book *models.Book, meta calibre.Metadata, path string, mode calibre.Mode) {
 	if s.calibreAdder == nil {
 		slog.Debug("calibre: adder is nil, skipping", "mode", mode, "bookId", book.ID)
 		return
 	}
-	id, err := s.calibreAdder.Add(ctx, path)
+	id, err := s.calibreAdder.Add(ctx, path, meta)
 	if err != nil {
 		if errors.Is(err, calibre.ErrDisabled) {
 			return
@@ -289,6 +305,120 @@ func (s *Scanner) pushCalibreAdd(ctx context.Context, book *models.Book, path st
 		return
 	}
 	slog.Info("calibre: book mirrored", "mode", mode, "bookId", book.ID, "calibreId", id, "path", path)
+}
+
+func (s *Scanner) calibreMetadata(ctx context.Context, book *models.Book, author *models.Author, edition *models.Edition, seriesTitle, seriesNum string, mode calibre.Mode) calibre.Metadata {
+	if book == nil {
+		return calibre.Metadata{}
+	}
+	meta := calibre.Metadata{
+		Title:         book.Title,
+		Description:   book.Description,
+		Genres:        book.Genres,
+		Language:      calibre.NormalizeLanguageForCalibre(book.Language),
+		Series:        seriesTitle,
+		SeriesIndex:   seriesNum,
+		PublishedDate: calibre.FormatPublishedDate(book.ReleaseDate),
+		Rating:        book.AverageRating,
+		Identifiers: map[string]string{
+			"bindery": strconv.FormatInt(book.ID, 10),
+		},
+	}
+	if author != nil {
+		meta.Authors = []string{author.Name}
+		meta.AuthorSort = author.SortName
+	}
+	if provider := strings.TrimSpace(book.MetadataProvider); provider != "" && strings.TrimSpace(book.ForeignID) != "" {
+		meta.Identifiers[provider] = book.ForeignID
+	}
+	if strings.TrimSpace(book.ASIN) != "" {
+		meta.Identifiers["asin"] = book.ASIN
+	}
+	imageURL := book.ImageURL
+	if edition != nil {
+		if isbn := firstString(edition.ISBN13, edition.ISBN10); isbn != "" {
+			meta.Identifiers["isbn"] = isbn
+		}
+		if edition.ASIN != nil && strings.TrimSpace(*edition.ASIN) != "" {
+			meta.Identifiers["asin"] = *edition.ASIN
+		}
+		if strings.TrimSpace(edition.Publisher) != "" {
+			meta.Publisher = edition.Publisher
+		}
+		if edition.PublishDate != nil {
+			meta.PublishedDate = calibre.FormatPublishedDate(edition.PublishDate)
+		}
+		if strings.TrimSpace(edition.Language) != "" {
+			meta.Language = calibre.NormalizeLanguageForCalibre(edition.Language)
+		}
+		if strings.TrimSpace(edition.ImageURL) != "" {
+			imageURL = edition.ImageURL
+		}
+	}
+	if mode == calibre.ModeCalibredb {
+		if coverPath, err := calibre.MaterializeCover(ctx, s.calibreCoverCacheDir, imageURL); err != nil {
+			slog.Debug("calibre: cover materialization skipped", "bookId", book.ID, "error", err)
+		} else if coverPath != "" {
+			meta.CoverPath = coverPath
+		}
+	}
+	return meta
+}
+
+func firstString(values ...*string) string {
+	for _, v := range values {
+		if v != nil && strings.TrimSpace(*v) != "" {
+			return strings.TrimSpace(*v)
+		}
+	}
+	return ""
+}
+
+func (s *Scanner) resolveCalibreEdition(ctx context.Context, dl *models.Download, book *models.Book) *models.Edition {
+	if s.editions == nil || book == nil {
+		return nil
+	}
+	editions, err := s.editions.ListByBook(ctx, book.ID)
+	if err != nil {
+		slog.Debug("calibre: failed to list editions for metadata", "bookId", book.ID, "error", err)
+		return nil
+	}
+	if len(editions) == 0 {
+		return nil
+	}
+	if dl != nil && dl.EditionID != nil {
+		if ed := findEditionByID(editions, *dl.EditionID); ed != nil {
+			return ed
+		}
+	}
+	if book.SelectedEditionID != nil {
+		if ed := findEditionByID(editions, *book.SelectedEditionID); ed != nil {
+			return ed
+		}
+	}
+	for i := range editions {
+		if editionHasCalibreMetadata(editions[i]) {
+			return &editions[i]
+		}
+	}
+	return &editions[0]
+}
+
+func findEditionByID(editions []models.Edition, id int64) *models.Edition {
+	for i := range editions {
+		if editions[i].ID == id {
+			return &editions[i]
+		}
+	}
+	return nil
+}
+
+func editionHasCalibreMetadata(e models.Edition) bool {
+	return firstString(e.ISBN13, e.ISBN10, e.ASIN) != "" ||
+		strings.TrimSpace(e.Publisher) != "" ||
+		e.PublishDate != nil ||
+		strings.TrimSpace(e.Language) != "" ||
+		strings.TrimSpace(e.ImageURL) != ""
 }
 
 // importRetryLimit is the maximum number of times CheckDownloads will
@@ -739,6 +869,7 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 	// we fall through to the "unmatched import" log below.
 	var book *models.Book
 	var author *models.Author
+	var edition *models.Edition
 	if dl.BookID != nil {
 		b, err := s.books.GetByID(ctx, *dl.BookID)
 		if err != nil {
@@ -751,6 +882,7 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 			} else {
 				author = a
 			}
+			edition = s.resolveCalibreEdition(ctx, dl, book)
 		}
 	}
 
@@ -833,7 +965,7 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 			return dl.Title
 		}(), "path", destDir)
 
-		s.pushToCalibre(ctx, book, author, destDir)
+		s.pushToCalibre(ctx, book, author, edition, seriesTitle, seriesNum, destDir)
 		s.pushToABS(ctx)
 
 		s.createHistoryEvent(ctx, models.HistoryEventBookImported, dl.Title, dl.BookID, map[string]string{"path": destDir, "format": models.MediaTypeAudiobook})
@@ -891,7 +1023,7 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 		s.updateDownloadStatus(ctx, dl.ID, models.StateImported)
 		slog.Info("book imported", "title", book.Title, "path", destPath)
 
-		s.pushToCalibre(ctx, book, author, destPath)
+		s.pushToCalibre(ctx, book, author, edition, seriesTitle, seriesNum, destPath)
 		s.pushToCWA(ctx, destPath)
 
 		s.createHistoryEvent(ctx, models.HistoryEventBookImported, dl.Title, dl.BookID, map[string]string{"path": destPath, "format": models.MediaTypeEbook})

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -437,6 +438,8 @@ func main() {
 	importScanner.WithSettings(settingsRepo)
 	importScanner.WithRootFolders(rootFolderRepo)
 	importScanner.WithSeriesRepo(seriesRepo)
+	importScanner.WithEditions(editionRepo)
+	importScanner.WithCalibreCoverCache(filepath.Join(cfg.DataDir, "calibre-covers"))
 
 	// Startup check: warn if the configured default root folder no longer exists on disk.
 	if s, _ := settingsRepo.Get(ctxBoot, api.SettingDefaultLibraryRootFolderID); s != nil && s.Value != "" {
