@@ -6,6 +6,14 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Recommendations now return empty genre arrays instead of null** — Recommendation storage normalizes missing and legacy `null` genre values to `[]`, keeping API responses consistent for clients.
+
+### Chores
+
+- **Local check cleanup** — Restored downloader lint compliance and aligned the WantedPage test with optimistic unmonitor behavior so local checks can pass.
+
 ## [v1.10.0] — 2026-05-13
 
 ### Added
