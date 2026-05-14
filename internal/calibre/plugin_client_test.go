@@ -2,6 +2,7 @@ package calibre
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,13 +19,23 @@ func TestPluginClient_AddHappyPath(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
 			t.Errorf("Authorization = %q", got)
 		}
+		var body struct {
+			Path     string   `json:"path"`
+			Metadata Metadata `json:"metadata"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body.Path != "/library/book.epub" || body.Metadata.Title != "Dune" {
+			t.Fatalf("body = %+v, want path and metadata", body)
+		}
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"id":42,"duplicate":false}`))
 	}))
 	defer srv.Close()
 
 	c := NewPluginClient(srv.URL, "test-key")
-	id, err := c.Add(context.Background(), "/library/book.epub")
+	id, err := c.Add(context.Background(), "/library/book.epub", Metadata{Title: "Dune"})
 	if err != nil {
 		t.Fatalf("Add returned error: %v", err)
 	}
@@ -51,7 +62,7 @@ func TestPluginClient_Add503RetrySucceeds(t *testing.T) {
 	// but long enough to allow the 2s sleep + second request.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	id, err := c.Add(ctx, "/a.epub")
+	id, err := c.Add(ctx, "/a.epub", Metadata{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -71,7 +82,7 @@ func TestPluginClient_Add401ReturnsDescriptiveError(t *testing.T) {
 	defer srv.Close()
 
 	c := NewPluginClient(srv.URL, "bad")
-	_, err := c.Add(context.Background(), "/a.epub")
+	_, err := c.Add(context.Background(), "/a.epub", Metadata{})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -97,6 +108,43 @@ func TestPluginClient_Health(t *testing.T) {
 	}
 	if !strings.Contains(got, "0.1.0") || !strings.Contains(got, "9.7") {
 		t.Errorf("version string = %q", got)
+	}
+}
+
+func TestPluginClient_AddRetriesLegacyPayloadWhenMetadataRejected(t *testing.T) {
+	var bodies []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		bodies = append(bodies, body)
+		if len(bodies) == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"unknown field metadata"}`))
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":99}`))
+	}))
+	defer srv.Close()
+
+	c := NewPluginClient(srv.URL, "k")
+	id, err := c.Add(context.Background(), "/a.epub", Metadata{Title: "Dune"})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if id != 99 {
+		t.Fatalf("id = %d, want 99", id)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("bodies = %d, want 2", len(bodies))
+	}
+	if _, ok := bodies[0]["metadata"]; !ok {
+		t.Fatalf("first body missing metadata: %+v", bodies[0])
+	}
+	if _, ok := bodies[1]["metadata"]; ok {
+		t.Fatalf("legacy retry should omit metadata: %+v", bodies[1])
 	}
 }
 

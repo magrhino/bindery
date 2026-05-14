@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,7 +48,7 @@ type SyncProgress struct {
 // pluginPusher captures the subset of *PluginClient the syncer needs, so
 // tests can inject a fake without standing up an HTTP server.
 type pluginPusher interface {
-	Add(ctx context.Context, filePath string) (int64, error)
+	Add(ctx context.Context, filePath string, meta Metadata) (int64, error)
 }
 
 // BookLister is the subset of *db.BookRepo the syncer uses. Keeps the
@@ -179,7 +181,21 @@ func (s *Syncer) run(ctx context.Context, cfg Config) {
 		}
 		b := &eligible[i]
 		path := pushPath(b)
-		id, addErr := client.Add(ctx, path)
+		meta := Metadata{
+			Title:    b.Title,
+			Language: NormalizeLanguageForCalibre(b.Language),
+			Genres:   b.Genres,
+			Identifiers: map[string]string{
+				"bindery": strconv.FormatInt(b.ID, 10),
+			},
+		}
+		if strings.TrimSpace(b.ASIN) != "" {
+			meta.Identifiers["asin"] = b.ASIN
+		}
+		if strings.TrimSpace(b.MetadataProvider) != "" && strings.TrimSpace(b.ForeignID) != "" {
+			meta.Identifiers[b.MetadataProvider] = b.ForeignID
+		}
+		id, addErr := client.Add(ctx, path, meta)
 		switch {
 		case addErr == nil:
 			if id > 0 {

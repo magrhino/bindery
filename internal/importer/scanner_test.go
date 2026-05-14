@@ -2,13 +2,16 @@ package importer
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/vavallee/bindery/internal/calibre"
 	"github.com/vavallee/bindery/internal/db"
@@ -94,12 +97,14 @@ func TestTitleMatch(t *testing.T) {
 // wiring change surfaces here rather than in a live import.
 type fakeCalibreAdder struct {
 	calls  []string
+	metas  []calibre.Metadata
 	nextID int64
 	err    error
 }
 
-func (f *fakeCalibreAdder) Add(_ context.Context, path string) (int64, error) {
+func (f *fakeCalibreAdder) Add(_ context.Context, path string, meta calibre.Metadata) (int64, error) {
 	f.calls = append(f.calls, path)
+	f.metas = append(f.metas, meta)
 	return f.nextID, f.err
 }
 
@@ -145,7 +150,7 @@ func TestPushToCalibre_ModeOff(t *testing.T) {
 	fc := &fakeCalibreAdder{nextID: 99}
 	s.WithCalibre(modeFn(calibre.ModeOff), fc)
 
-	s.pushToCalibre(ctx, book, author, "/library/book.epub")
+	s.pushToCalibre(ctx, book, author, nil, "", "", "/library/book.epub")
 
 	if len(fc.calls) != 0 {
 		t.Errorf("Add must not be called when mode=off, got %v", fc.calls)
@@ -161,10 +166,13 @@ func TestPushToCalibre_ModeCalibredbHappyPath(t *testing.T) {
 	fc := &fakeCalibreAdder{nextID: 1234}
 	s.WithCalibre(modeFn(calibre.ModeCalibredb), fc)
 
-	s.pushToCalibre(ctx, book, author, "/library/book.epub")
+	s.pushToCalibre(ctx, book, author, nil, "", "", "/library/book.epub")
 
 	if len(fc.calls) != 1 || fc.calls[0] != "/library/book.epub" {
 		t.Errorf("Add calls = %v", fc.calls)
+	}
+	if len(fc.metas) != 1 || fc.metas[0].Title != "Title T" || len(fc.metas[0].Authors) != 1 || fc.metas[0].Authors[0] != "Author A" {
+		t.Errorf("metadata = %+v, want book title and author", fc.metas)
 	}
 	got, _ := bookRepo.GetByID(ctx, book.ID)
 	if got.CalibreID == nil || *got.CalibreID != 1234 {
@@ -179,7 +187,7 @@ func TestPushToCalibre_CalibredbFailDoesNotPoison(t *testing.T) {
 	fc := &fakeCalibreAdder{err: errors.New("exec: calibredb: not found")}
 	s.WithCalibre(modeFn(calibre.ModeCalibredb), fc)
 
-	s.pushToCalibre(ctx, book, author, "/library/book.epub")
+	s.pushToCalibre(ctx, book, author, nil, "", "", "/library/book.epub")
 
 	got, _ := bookRepo.GetByID(ctx, book.ID)
 	if got.CalibreID != nil {
@@ -194,7 +202,7 @@ func TestPushToCalibre_ErrDisabledSilent(t *testing.T) {
 	fc := &fakeCalibreAdder{err: calibre.ErrDisabled}
 	s.WithCalibre(modeFn(calibre.ModeCalibredb), fc)
 
-	s.pushToCalibre(ctx, book, author, "/library/book.epub")
+	s.pushToCalibre(ctx, book, author, nil, "", "", "/library/book.epub")
 
 	got, _ := bookRepo.GetByID(ctx, book.ID)
 	if got.CalibreID != nil {
@@ -217,7 +225,7 @@ func TestPushToCalibre_ModePluginHappyPath(t *testing.T) {
 	client := calibre.NewPluginClient(srv.URL, "test-key")
 	s.WithCalibre(modeFn(calibre.ModePlugin), client)
 
-	s.pushToCalibre(ctx, book, author, "/library/book.epub")
+	s.pushToCalibre(ctx, book, author, nil, "", "", "/library/book.epub")
 
 	got, _ := bookRepo.GetByID(ctx, book.ID)
 	if got.CalibreID == nil || *got.CalibreID != 5678 {
@@ -231,8 +239,136 @@ func TestPushToCalibre_ModePluginHappyPath(t *testing.T) {
 func TestPushToCalibre_NilResolver(t *testing.T) {
 	s, _, book, author, ctx := importScannerFixture(t)
 	// No WithCalibre call.
-	s.pushToCalibre(ctx, book, author, "/library/book.epub") // must not panic
+	s.pushToCalibre(ctx, book, author, nil, "", "", "/library/book.epub") // must not panic
 }
+
+func TestCalibreMetadata_PrefersEditionFieldsAndMapsSeries(t *testing.T) {
+	ctx := context.Background()
+	published := time.Date(2020, 3, 4, 0, 0, 0, 0, time.UTC)
+	release := time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)
+	asin := "B000FC1BN8"
+	book := &models.Book{
+		ID:               42,
+		ForeignID:        "OL123W",
+		Title:            "Dune",
+		Description:      "Desert planet.",
+		ReleaseDate:      &release,
+		Genres:           []string{"Science Fiction", "Classics"},
+		AverageRating:    4.6,
+		Language:         "eng",
+		ASIN:             "BOOKASIN",
+		MetadataProvider: "openlibrary",
+	}
+	author := &models.Author{Name: "Frank Herbert", SortName: "Herbert, Frank"}
+	edition := &models.Edition{
+		ISBN13:      strPtr("9780441172719"),
+		ASIN:        &asin,
+		Publisher:   "Ace",
+		PublishDate: &published,
+		Language:    "ger",
+		ImageURL:    "",
+	}
+
+	s := NewScanner(nil, nil, nil, nil, nil, t.TempDir(), "", "", "", "")
+	meta := s.calibreMetadata(ctx, book, author, edition, "Dune Chronicles", "1", calibre.ModeCalibredb)
+
+	if meta.Title != "Dune" || len(meta.Authors) != 1 || meta.Authors[0] != "Frank Herbert" {
+		t.Fatalf("basic metadata = %+v", meta)
+	}
+	if meta.AuthorSort != "Herbert, Frank" || meta.Description != "Desert planet." {
+		t.Fatalf("author/description metadata = %+v", meta)
+	}
+	if meta.Language != "de" {
+		t.Fatalf("Language = %q, want de from edition language", meta.Language)
+	}
+	if meta.PublishedDate != "2020-03-04" {
+		t.Fatalf("PublishedDate = %q, want edition date", meta.PublishedDate)
+	}
+	if meta.Publisher != "Ace" || meta.Series != "Dune Chronicles" || meta.SeriesIndex != "1" {
+		t.Fatalf("publisher/series metadata = %+v", meta)
+	}
+	if meta.Identifiers["isbn"] != "9780441172719" {
+		t.Fatalf("isbn identifier = %q", meta.Identifiers["isbn"])
+	}
+	if meta.Identifiers["asin"] != "B000FC1BN8" {
+		t.Fatalf("asin identifier = %q, want edition ASIN", meta.Identifiers["asin"])
+	}
+	if meta.Identifiers["bindery"] != "42" || meta.Identifiers["openlibrary"] != "OL123W" {
+		t.Fatalf("provider identifiers = %+v", meta.Identifiers)
+	}
+}
+
+func TestCalibreMetadata_CoverPathOnlyForCalibredb(t *testing.T) {
+	ctx := context.Background()
+	cacheDir := t.TempDir()
+	imageURL := "https://93.184.216.34/cover.jpg"
+	sum := sha256.Sum256([]byte(imageURL))
+	coverPath := filepath.Join(cacheDir, fmt.Sprintf("%x.jpg", sum))
+	if err := os.WriteFile(coverPath, []byte("cached cover"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	book := &models.Book{
+		ID:       42,
+		Title:    "Dune",
+		ImageURL: imageURL,
+		Genres:   []string{},
+	}
+	s := NewScanner(nil, nil, nil, nil, nil, t.TempDir(), "", "", "", "").WithCalibreCoverCache(cacheDir)
+
+	calibredbMeta := s.calibreMetadata(ctx, book, nil, nil, "", "", calibre.ModeCalibredb)
+	if calibredbMeta.CoverPath != coverPath {
+		t.Fatalf("calibredb CoverPath = %q, want %q", calibredbMeta.CoverPath, coverPath)
+	}
+
+	pluginMeta := s.calibreMetadata(ctx, book, nil, nil, "", "", calibre.ModePlugin)
+	if pluginMeta.CoverPath != "" {
+		t.Fatalf("plugin CoverPath = %q, want empty", pluginMeta.CoverPath)
+	}
+}
+
+func TestResolveCalibreEdition_PrefersDownloadThenSelected(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	ctx := context.Background()
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	editionRepo := db.NewEditionRepo(database)
+	author := &models.Author{ForeignID: "A", Name: "Author", SortName: "Author", Monitored: true}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	book := &models.Book{ForeignID: "B", AuthorID: author.ID, Title: "Book", SortTitle: "Book", Monitored: true, Status: models.BookStatusWanted, Genres: []string{}}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	selected := &models.Edition{ForeignID: "E1", BookID: book.ID, Title: "Selected", ISBN13: strPtr("111"), IsEbook: true}
+	downloaded := &models.Edition{ForeignID: "E2", BookID: book.ID, Title: "Downloaded", ISBN13: strPtr("222"), IsEbook: true}
+	if err := editionRepo.Upsert(ctx, selected); err != nil {
+		t.Fatal(err)
+	}
+	if err := editionRepo.Upsert(ctx, downloaded); err != nil {
+		t.Fatal(err)
+	}
+	book.SelectedEditionID = &selected.ID
+
+	s := NewScanner(nil, nil, bookRepo, authorRepo, nil, t.TempDir(), "", "", "", "").WithEditions(editionRepo)
+	dl := &models.Download{EditionID: &downloaded.ID}
+	got := s.resolveCalibreEdition(ctx, dl, book)
+	if got == nil || got.ID != downloaded.ID {
+		t.Fatalf("download edition = %+v, want %d", got, downloaded.ID)
+	}
+	got = s.resolveCalibreEdition(ctx, &models.Download{}, book)
+	if got == nil || got.ID != selected.ID {
+		t.Fatalf("selected edition = %+v, want %d", got, selected.ID)
+	}
+}
+
+func strPtr(s string) *string { return &s }
 
 // TestImportInternal_ThreeFileBundle_TracksAllInBookFiles verifies the #343
 // fix: importing a multi-format download (epub + mobi + pdf) stores a

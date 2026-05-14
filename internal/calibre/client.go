@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"regexp"
@@ -66,21 +67,24 @@ func (c *Client) binary() string {
 	return "calibredb"
 }
 
-// Add runs `calibredb add --with-library <lib> <file>` and returns the
-// Calibre book id assigned to the newly ingested file. A non-zero id is
-// always returned on success so callers can persist the mapping.
+// Add runs `calibredb add --with-library <lib> <metadata...> <file>` and
+// returns the Calibre book id assigned to the newly ingested file. A non-zero
+// id is always returned on success so callers can persist the mapping.
 //
 // calibredb's add output is unstructured plaintext — it does not offer a
 // machine-readable format for add — so we regex the "Added book ids: N"
 // line that has been stable across Calibre releases since ~2.x.
-func (c *Client) Add(ctx context.Context, filePath string) (int64, error) {
+func (c *Client) Add(ctx context.Context, filePath string, meta Metadata) (int64, error) {
 	if !c.Enabled() {
 		return 0, ErrDisabled
 	}
 	if c.cfg.LibraryPath == "" {
 		return 0, errors.New("calibre library_path is not configured")
 	}
-	out, err := c.run(ctx, c.binary(), "add", "--with-library", c.cfg.LibraryPath, filePath)
+	args := []string{"add", "--with-library", c.cfg.LibraryPath}
+	args = append(args, meta.addArgs()...)
+	args = append(args, filePath)
+	out, err := c.run(ctx, c.binary(), args...)
 	if err != nil {
 		return 0, fmt.Errorf("calibredb add: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -88,7 +92,27 @@ func (c *Client) Add(ctx context.Context, filePath string) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("calibredb add: %w: %s", err, strings.TrimSpace(string(out)))
 	}
+	if err := c.setMetadata(ctx, id, meta); err != nil {
+		slog.Warn("calibredb set_metadata failed; continuing with added book",
+			"calibreId", id, "path", filePath, "error", err)
+	}
 	return id, nil
+}
+
+func (c *Client) setMetadata(ctx context.Context, id int64, meta Metadata) error {
+	fields := meta.setFields()
+	if len(fields) == 0 {
+		return nil
+	}
+	args := []string{"set_metadata", "--with-library", c.cfg.LibraryPath, strconv.FormatInt(id, 10)}
+	for _, field := range fields {
+		args = append(args, "--field", field)
+	}
+	out, err := c.run(ctx, c.binary(), args...)
+	if err != nil {
+		return fmt.Errorf("calibredb set_metadata: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // Test probes the configured binary by asking for its version. A successful
