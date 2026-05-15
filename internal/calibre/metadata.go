@@ -23,7 +23,10 @@ const (
 	coverDirMode  = 0o750
 )
 
-var identifierTypeRe = regexp.MustCompile(`[^a-z0-9_-]+`)
+var (
+	identifierTypeRe    = regexp.MustCompile(`[^a-z0-9_-]+`)
+	calibredbDateOnlyRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+)
 
 // Metadata is the Bindery-owned metadata contract passed to every Calibre
 // handoff. It represents the Calibre database fields Bindery can populate
@@ -101,7 +104,7 @@ func (m Metadata) setFields() []string {
 		fields = append(fields, "publisher:"+v)
 	}
 	if v := strings.TrimSpace(m.PublishedDate); v != "" {
-		fields = append(fields, "pubdate:"+v)
+		fields = append(fields, "pubdate:"+formatCalibredbPubdate(v))
 	}
 	if m.Rating > 0 {
 		fields = append(fields, "rating:"+strconv.FormatFloat(m.Rating, 'f', -1, 64))
@@ -119,6 +122,14 @@ func (m Metadata) setFields() []string {
 		fields = append(fields, "series_index:"+v)
 	}
 	return fields
+}
+
+func formatCalibredbPubdate(v string) string {
+	v = strings.TrimSpace(v)
+	if calibredbDateOnlyRe.MatchString(v) {
+		return v + "T00:00:00+00:00"
+	}
+	return v
 }
 
 func cleanList(in []string) []string {

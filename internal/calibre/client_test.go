@@ -176,7 +176,7 @@ func TestAdd_WithMetadataBuildsAddAndSetMetadataArgs(t *testing.T) {
 		"--field", "comments:Desert planet.",
 		"--field", "author_sort:Herbert, Frank",
 		"--field", "publisher:Ace",
-		"--field", "pubdate:1965-08-01",
+		"--field", "pubdate:1965-08-01T00:00:00+00:00",
 		"--field", "rating:4.6",
 		"--field", "languages:en",
 		"--field", "tags:Science Fiction,Classics",

@@ -29,6 +29,26 @@ func TestNormalizeLanguageForCalibre(t *testing.T) {
 	}
 }
 
+func TestFormatCalibredbPubdate(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"date only", "1965-08-01", "1965-08-01T00:00:00+00:00"},
+		{"timestamp", "1965-08-01T00:00:00+00:00", "1965-08-01T00:00:00+00:00"},
+		{"blank", "   ", ""},
+		{"unexpected", "August 1965", "August 1965"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatCalibredbPubdate(tt.in); got != tt.want {
+				t.Fatalf("formatCalibredbPubdate(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIdentifiersForBook_UsesPresentBookAndEditionData(t *testing.T) {
 	editionASIN := "B000FC1BN8"
 	edition := &models.Edition{
