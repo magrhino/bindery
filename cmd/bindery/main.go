@@ -489,7 +489,7 @@ func main() {
 	calibreImportHandler := api.NewCalibreImportHandler(calibreImporter, func() calibre.Config {
 		return api.LoadCalibreConfig(settingsRepo)
 	})
-	calibreSyncer := calibre.NewSyncer(bookRepo)
+	calibreSyncer := calibre.NewSyncer(bookRepo).WithMetadata(authorRepo, editionRepo)
 	calibreSyncHandler := api.NewCalibreSyncHandler(
 		calibreSyncer,
 		func() calibre.Config { return api.LoadCalibreConfig(settingsRepo) },
