@@ -13,6 +13,11 @@ import (
 
 func TestPluginClient_AddHappyPath(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/health" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"plugin_version":"0.5.0","calibre_version":"9.8","library":"/books","capabilities":["book_metadata"]}`))
+			return
+		}
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/books" {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
@@ -41,6 +46,79 @@ func TestPluginClient_AddHappyPath(t *testing.T) {
 	}
 	if id != 42 {
 		t.Errorf("id = %d, want 42", id)
+	}
+}
+
+func TestPluginClient_AddOmitsMetadataWhenCapabilityMissing(t *testing.T) {
+	var posted map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/health" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"plugin_version":"0.4.0","calibre_version":"9.7","library":"/books"}`))
+			return
+		}
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/books" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&posted); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":42,"duplicate":false}`))
+	}))
+	defer srv.Close()
+
+	c := NewPluginClient(srv.URL, "test-key")
+	id, err := c.Add(context.Background(), "/library/book.epub", Metadata{Title: "Dune"})
+	if err != nil {
+		t.Fatalf("Add returned error: %v", err)
+	}
+	if id != 42 {
+		t.Errorf("id = %d, want 42", id)
+	}
+	if posted["path"] != "/library/book.epub" {
+		t.Fatalf("posted path = %v", posted["path"])
+	}
+	if _, ok := posted["metadata"]; ok {
+		t.Fatalf("metadata should be omitted for old plugin health response: %+v", posted)
+	}
+}
+
+func TestPluginClient_AddSendsMetadataWhenCapabilityProbeFails(t *testing.T) {
+	var posted struct {
+		Path     string   `json:"path"`
+		Metadata Metadata `json:"metadata"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/health" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"library swap"}`))
+			return
+		}
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/books" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&posted); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":42,"duplicate":false}`))
+	}))
+	defer srv.Close()
+
+	c := NewPluginClient(srv.URL, "test-key")
+	id, err := c.Add(context.Background(), "/library/book.epub", Metadata{Title: "Dune"})
+	if err != nil {
+		t.Fatalf("Add returned error: %v", err)
+	}
+	if id != 42 {
+		t.Errorf("id = %d, want 42", id)
+	}
+	if posted.Path != "/library/book.epub" {
+		t.Fatalf("posted path = %q", posted.Path)
+	}
+	if posted.Metadata.Title != "Dune" {
+		t.Fatalf("posted metadata title = %q, want Dune", posted.Metadata.Title)
 	}
 }
 
@@ -114,6 +192,11 @@ func TestPluginClient_Health(t *testing.T) {
 func TestPluginClient_AddRetriesLegacyPayloadWhenMetadataRejected(t *testing.T) {
 	var bodies []map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/health" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"plugin_version":"0.5.0","calibre_version":"9.8","library":"/books","capabilities":["book_metadata"]}`))
+			return
+		}
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode body: %v", err)
