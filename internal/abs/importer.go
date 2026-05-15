@@ -264,7 +264,6 @@ func (i *Importer) Run(ctx context.Context, cfg ImportConfig) (*ImportStats, err
 func (i *Importer) run(ctx context.Context, cfg ImportConfig) *ImportStats {
 	stats := &ImportStats{}
 	cfg = cfg.normalized()
-	summary := ImportSummary{DryRun: cfg.DryRun, Stats: *stats}
 	defer func() {
 		now := time.Now().UTC()
 		i.mu.Lock()
@@ -297,6 +296,35 @@ func (i *Importer) run(ctx context.Context, cfg ImportConfig) *ImportStats {
 		return stats
 	}
 
+	libraryIDs := cfg.LibraryIDs
+	startLibraryID := resumeLibraryIDFromCheckpoint(ctx, i.settings, libraryIDs, cfg.LibraryID)
+	startIndex := libraryStartIndex(libraryIDs, startLibraryID)
+	for idx := startIndex; idx < len(libraryIDs); idx++ {
+		libCfg := cfg
+		libCfg.LibraryID = libraryIDs[idx]
+		libCfg.LibraryIDs = libraryIDs
+		if _, err := i.runLibrary(ctx, libCfg, authorMatcher, stats); err != nil {
+			i.fail(err)
+			return stats
+		}
+	}
+
+	if i.settings != nil && !cfg.DryRun {
+		if err := i.settings.Set(ctx, SettingABSLastImportAt, time.Now().UTC().Format(time.RFC3339)); err != nil {
+			slog.Warn("abs import: persist last_import_at failed", "error", err)
+		}
+	}
+	i.setProgress(func(p *ImportProgress) {
+		p.Checkpoint = nil
+		p.ResumedFromCheckpoint = false
+		p.Message = importDoneMessage(cfg.DryRun)
+	})
+	return stats
+}
+
+func (i *Importer) runLibrary(ctx context.Context, cfg ImportConfig, authorMatcher *authorMatcher, totalStats *ImportStats) (*ImportStats, error) {
+	before := snapshotImportStats(totalStats)
+	summary := ImportSummary{DryRun: cfg.DryRun}
 	if checkpoint, err := loadImportCheckpoint(ctx, i.settings); err == nil && checkpoint != nil && checkpoint.LibraryID == cfg.LibraryID {
 		i.setProgress(func(p *ImportProgress) {
 			p.ResumedFromCheckpoint = true
@@ -313,13 +341,11 @@ func (i *Importer) run(ctx context.Context, cfg ImportConfig) *ImportStats {
 
 	sourceConfigJSON, err := encodeJSON(sourceSnapshot(cfg))
 	if err != nil {
-		i.fail(fmt.Errorf("encode abs import source config: %w", err))
-		return stats
+		return diffImportStats(before, totalStats), fmt.Errorf("encode abs import source config: %w", err)
 	}
 	checkpointJSON, err := encodeJSON(summary.Checkpoint)
 	if err != nil {
-		i.fail(fmt.Errorf("encode abs import checkpoint: %w", err))
-		return stats
+		return diffImportStats(before, totalStats), fmt.Errorf("encode abs import checkpoint: %w", err)
 	}
 	run := &models.ABSImportRun{
 		SourceID:         cfg.SourceID,
@@ -334,8 +360,7 @@ func (i *Importer) run(ctx context.Context, cfg ImportConfig) *ImportStats {
 	}
 	if i.runs != nil {
 		if err := i.runs.Create(ctx, run); err != nil {
-			i.fail(err)
-			return stats
+			return diffImportStats(before, totalStats), err
 		}
 		i.setProgress(func(p *ImportProgress) { p.RunID = run.ID })
 	}
@@ -344,10 +369,10 @@ func (i *Importer) run(ctx context.Context, cfg ImportConfig) *ImportStats {
 	if err != nil {
 		if run.ID != 0 && i.runs != nil {
 			summary.Error = err.Error()
+			summary.Stats = *diffImportStats(before, totalStats)
 			_ = i.runs.Finish(ctx, run.ID, runStatusFailed, summary)
 		}
-		i.fail(err)
-		return stats
+		return diffImportStats(before, totalStats), err
 	}
 
 	enumStats, err := enumFn(ctx, cfg.LibraryID, func(ctx context.Context, item NormalizedLibraryItem) error {
@@ -357,7 +382,7 @@ func (i *Importer) run(ctx context.Context, cfg ImportConfig) *ImportStats {
 		i.setProgress(func(p *ImportProgress) {
 			p.Message = importItemMessage(cfg.DryRun, firstNonEmpty(item.Title, item.ItemID))
 		})
-		result := i.importOne(ctx, cfg, run.ID, item, stats, allowImmediateImport(item), authorMatcher)
+		result := i.importOne(ctx, cfg, run.ID, item, totalStats, allowImmediateImport(item), authorMatcher)
 		i.setProgress(func(p *ImportProgress) {
 			p.Processed++
 			p.Results = appendImportProgressResult(p.Results, result)
@@ -369,27 +394,22 @@ func (i *Importer) run(ctx context.Context, cfg ImportConfig) *ImportStats {
 			if checkpoint, checkpointErr := loadImportCheckpoint(ctx, i.settings); checkpointErr == nil {
 				summary.Checkpoint = checkpoint
 			}
-			summary.Stats = *stats
+			summary.Stats = *diffImportStats(before, totalStats)
 			summary.Error = err.Error()
 			_ = i.runs.Finish(ctx, run.ID, runStatusFailed, summary)
 		}
-		i.fail(err)
-		return stats
+		return diffImportStats(before, totalStats), err
 	}
 
-	stats.LibrariesScanned = 1
-	stats.PagesScanned = enumStats.PagesScanned
-	stats.ItemsSeen = enumStats.ItemsSeen
-	stats.ItemsNormalized = enumStats.ItemsNormalized
-	stats.ItemsDetailFetched = enumStats.ItemsDetailFetched
+	totalStats.LibrariesScanned++
+	totalStats.PagesScanned += enumStats.PagesScanned
+	totalStats.ItemsSeen += enumStats.ItemsSeen
+	totalStats.ItemsNormalized += enumStats.ItemsNormalized
+	totalStats.ItemsDetailFetched += enumStats.ItemsDetailFetched
 
-	if i.settings != nil && !cfg.DryRun {
-		if err := i.settings.Set(ctx, SettingABSLastImportAt, time.Now().UTC().Format(time.RFC3339)); err != nil {
-			slog.Warn("abs import: persist last_import_at failed", "error", err)
-		}
-	}
 	summary.Checkpoint = nil
-	summary.Stats = *stats
+	libStats := diffImportStats(before, totalStats)
+	summary.Stats = *libStats
 	if run.ID != 0 && i.runs != nil {
 		if err := i.runs.Finish(ctx, run.ID, runStatusCompleted, summary); err != nil {
 			slog.Warn("abs import: finish run failed", "runID", run.ID, "error", err)
@@ -398,23 +418,85 @@ func (i *Importer) run(ctx context.Context, cfg ImportConfig) *ImportStats {
 	slog.Info("abs import complete",
 		"libraryID", cfg.LibraryID,
 		"dryRun", cfg.DryRun,
-		"pagesScanned", stats.PagesScanned,
-		"itemsSeen", stats.ItemsSeen,
-		"authorsCreated", stats.AuthorsCreated,
-		"booksCreated", stats.BooksCreated,
-		"booksLinked", stats.BooksLinked,
-		"booksUpdated", stats.BooksUpdated,
-		"seriesCreated", stats.SeriesCreated,
-		"seriesLinked", stats.SeriesLinked,
-		"editionsAdded", stats.EditionsAdded,
-		"skipped", stats.Skipped,
-		"failed", stats.Failed)
-	i.setProgress(func(p *ImportProgress) {
-		p.Checkpoint = nil
-		p.ResumedFromCheckpoint = false
-		p.Message = importDoneMessage(cfg.DryRun)
-	})
-	return stats
+		"pagesScanned", libStats.PagesScanned,
+		"itemsSeen", libStats.ItemsSeen,
+		"authorsCreated", libStats.AuthorsCreated,
+		"booksCreated", libStats.BooksCreated,
+		"booksLinked", libStats.BooksLinked,
+		"booksUpdated", libStats.BooksUpdated,
+		"seriesCreated", libStats.SeriesCreated,
+		"seriesLinked", libStats.SeriesLinked,
+		"editionsAdded", libStats.EditionsAdded,
+		"skipped", libStats.Skipped,
+		"failed", libStats.Failed)
+	return libStats, nil
+}
+
+func libraryStartIndex(libraryIDs []string, current string) int {
+	current = strings.TrimSpace(current)
+	if current == "" {
+		return 0
+	}
+	for idx, libraryID := range libraryIDs {
+		if libraryID == current {
+			return idx
+		}
+	}
+	return 0
+}
+
+func resumeLibraryIDFromCheckpoint(ctx context.Context, settings *db.SettingsRepo, libraryIDs []string, fallback string) string {
+	checkpoint, err := loadImportCheckpoint(ctx, settings)
+	if err != nil || checkpoint == nil {
+		return fallback
+	}
+	checkpointLibraryID := strings.TrimSpace(checkpoint.LibraryID)
+	if checkpointLibraryID == "" {
+		return fallback
+	}
+	for _, libraryID := range libraryIDs {
+		if libraryID == checkpointLibraryID {
+			return checkpointLibraryID
+		}
+	}
+	return fallback
+}
+
+func snapshotImportStats(stats *ImportStats) ImportStats {
+	if stats == nil {
+		return ImportStats{}
+	}
+	return *stats
+}
+
+func diffImportStats(before ImportStats, after *ImportStats) *ImportStats {
+	if after == nil {
+		return &ImportStats{}
+	}
+	return &ImportStats{
+		LibrariesScanned:     after.LibrariesScanned - before.LibrariesScanned,
+		PagesScanned:         after.PagesScanned - before.PagesScanned,
+		ItemsSeen:            after.ItemsSeen - before.ItemsSeen,
+		ItemsNormalized:      after.ItemsNormalized - before.ItemsNormalized,
+		ItemsDetailFetched:   after.ItemsDetailFetched - before.ItemsDetailFetched,
+		AuthorsCreated:       after.AuthorsCreated - before.AuthorsCreated,
+		AuthorsLinked:        after.AuthorsLinked - before.AuthorsLinked,
+		BooksCreated:         after.BooksCreated - before.BooksCreated,
+		BooksLinked:          after.BooksLinked - before.BooksLinked,
+		BooksUpdated:         after.BooksUpdated - before.BooksUpdated,
+		SeriesCreated:        after.SeriesCreated - before.SeriesCreated,
+		SeriesLinked:         after.SeriesLinked - before.SeriesLinked,
+		EditionsAdded:        after.EditionsAdded - before.EditionsAdded,
+		OwnedMarked:          after.OwnedMarked - before.OwnedMarked,
+		PendingManual:        after.PendingManual - before.PendingManual,
+		ReviewQueued:         after.ReviewQueued - before.ReviewQueued,
+		MetadataMatched:      after.MetadataMatched - before.MetadataMatched,
+		MetadataRelinked:     after.MetadataRelinked - before.MetadataRelinked,
+		MetadataConflicts:    after.MetadataConflicts - before.MetadataConflicts,
+		MetadataAutoResolved: after.MetadataAutoResolved - before.MetadataAutoResolved,
+		Skipped:              after.Skipped - before.Skipped,
+		Failed:               after.Failed - before.Failed,
+	}
 }
 
 func (i *Importer) resolveEnumerator(cfg ImportConfig, runID int64) (enumerateFunc, error) {
@@ -704,14 +786,16 @@ func appendImportProgressResult(results []ImportItemResult, result ImportItemRes
 }
 
 func sourceSnapshot(cfg ImportConfig) ImportSourceSnapshot {
+	cfg = cfg.normalized()
 	return ImportSourceSnapshot{
-		SourceID:  cfg.SourceID,
-		Label:     cfg.Label,
-		BaseURL:   cfg.BaseURL,
-		LibraryID: cfg.LibraryID,
-		PathRemap: cfg.PathRemap,
-		Enabled:   cfg.Enabled,
-		DryRun:    cfg.DryRun,
+		SourceID:   cfg.SourceID,
+		Label:      cfg.Label,
+		BaseURL:    cfg.BaseURL,
+		LibraryID:  cfg.LibraryID,
+		LibraryIDs: cfg.LibraryIDs,
+		PathRemap:  cfg.PathRemap,
+		Enabled:    cfg.Enabled,
+		DryRun:     cfg.DryRun,
 	}
 }
 
@@ -765,7 +849,8 @@ func resumeConfigFromRun(run models.ABSImportRun, fallback ImportConfig) ImportC
 	if hasSource {
 		cfg.SourceID = firstNonEmpty(source.SourceID, run.SourceID, cfg.SourceID)
 		cfg.BaseURL = firstNonEmpty(source.BaseURL, run.BaseURL, cfg.BaseURL)
-		cfg.LibraryID = firstNonEmpty(source.LibraryID, run.LibraryID, cfg.LibraryID)
+		cfg.LibraryID = firstNonEmpty(run.LibraryID, source.LibraryID, cfg.LibraryID)
+		cfg.LibraryIDs = normalizeLibraryIDs(cfg.LibraryID, source.LibraryIDs)
 		cfg.Label = firstNonEmpty(source.Label, run.SourceLabel, cfg.Label)
 		cfg.PathRemap = source.PathRemap
 	} else {

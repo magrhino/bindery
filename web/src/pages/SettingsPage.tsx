@@ -16,6 +16,27 @@ const ADMIN_TABS: Tab[] = ['indexers', 'clients', 'notifications', 'quality', 'm
 const inputCls = 'w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600'
 const absReviewResultLimit = 10
 
+function uniqueTrimmed(values: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const value of values) {
+    const trimmed = value.trim()
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    out.push(trimmed)
+  }
+  return out
+}
+
+function absConfigLibraryIds(config: ABSConfig): string[] {
+  return uniqueTrimmed(config.libraryIds?.length ? config.libraryIds : config.libraryId ? [config.libraryId] : [])
+}
+
+function sameStrings(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  return a.every((value, idx) => value === b[idx])
+}
+
 function SettingsNavLink({ tab, active, onSelect, label }: { tab: Tab; active: Tab; onSelect: (t: Tab) => void; label: string }) {
   return (
     <button
@@ -1297,7 +1318,7 @@ function ABSTab() {
 
 function AudiobookshelfSection() {
   const [config, setConfig] = useState<ABSConfig | null>(null)
-  const [draft, setDraft] = useState({ baseUrl: '', apiKey: '', label: 'Audiobookshelf', enabled: false, libraryId: '', pathRemap: '' })
+  const [draft, setDraft] = useState({ baseUrl: '', apiKey: '', label: 'Audiobookshelf', enabled: false, libraryIds: [] as string[], pathRemap: '' })
   const [libraries, setLibraries] = useState<ABSLibrary[]>([])
   const [showAuthorConflicts, setShowAuthorConflicts] = useState(true)
   const [showReviewItems, setShowReviewItems] = useState(true)
@@ -1340,7 +1361,7 @@ function AudiobookshelfSection() {
       apiKey: '',
       label: next.label || 'Audiobookshelf',
       enabled: next.enabled,
-      libraryId: next.libraryId ?? '',
+      libraryIds: absConfigLibraryIds(next),
       pathRemap: next.pathRemap ?? '',
     }))
   }
@@ -1379,9 +1400,6 @@ function AudiobookshelfSection() {
     try {
       const next = await api.absLibraries(payload)
       setLibraries(next)
-      if (next.length > 0 && !next.some(lib => lib.id === draft.libraryId) && !draft.libraryId) {
-        setDraft(prev => ({ ...prev, libraryId: next[0].id }))
-      }
     } catch (err: unknown) {
       setLibraryError(err instanceof Error ? err.message : 'Failed to load libraries')
     } finally {
@@ -1431,12 +1449,14 @@ function AudiobookshelfSection() {
     setSaving(true)
     setSaveError(null)
     try {
+      const libraryIds = uniqueTrimmed(draft.libraryIds)
       const next = await api.absSetConfig({
         baseUrl: draft.baseUrl.trim(),
         apiKey: draft.apiKey.trim() || undefined,
         label: draft.label.trim() || 'Audiobookshelf',
         enabled: draft.enabled,
-        libraryId: draft.libraryId,
+        libraryId: libraryIds[0] ?? '',
+        libraryIds,
         pathRemap: draft.pathRemap.trim(),
       })
       applyConfig(next)
@@ -1458,7 +1478,7 @@ function AudiobookshelfSection() {
       const next = await api.absTest(probePayload())
       setTestResult(next)
       if (next.defaultLibraryId) {
-        setDraft(prev => prev.libraryId ? prev : { ...prev, libraryId: next.defaultLibraryId })
+        setDraft(prev => prev.libraryIds.length ? prev : { ...prev, libraryIds: [next.defaultLibraryId] })
       }
       if (draft.baseUrl.trim() && (draft.apiKey.trim() || config?.apiKeyConfigured)) {
         loadLibraries(probePayload()).catch(() => {})
@@ -1669,20 +1689,26 @@ function AudiobookshelfSection() {
   }
 
   const hasImportCredentials = Boolean(draft.apiKey.trim() || config?.apiKeyConfigured)
-  const effectiveLibraryId = draft.libraryId || testResult?.defaultLibraryId || ''
+  const effectiveLibraryIds = draft.libraryIds.length > 0 ? draft.libraryIds : testResult?.defaultLibraryId ? [testResult.defaultLibraryId] : []
   const savedBaseUrl = config?.baseUrl ?? ''
   const savedLabel = config?.label || 'Audiobookshelf'
-  const savedLibraryId = config?.libraryId ?? ''
+  const savedLibraryIds = config ? absConfigLibraryIds(config) : []
   const savedPathRemap = config?.pathRemap ?? ''
   const hasUnsavedABSConfig = Boolean(config) && (
     draft.baseUrl.trim() !== savedBaseUrl.trim() ||
     (draft.label.trim() || 'Audiobookshelf') !== savedLabel ||
     draft.enabled !== config?.enabled ||
-    draft.libraryId !== savedLibraryId ||
+    !sameStrings(uniqueTrimmed(draft.libraryIds), savedLibraryIds) ||
     draft.pathRemap.trim() !== savedPathRemap.trim() ||
     Boolean(draft.apiKey.trim())
   )
-  const canStartImport = !importProgress?.running && !hasUnsavedABSConfig && Boolean(config?.enabled) && Boolean(config?.apiKeyConfigured) && Boolean(savedBaseUrl.trim()) && Boolean(savedLibraryId)
+  const canStartImport = !importProgress?.running && !hasUnsavedABSConfig && Boolean(config?.enabled) && Boolean(config?.apiKeyConfigured) && Boolean(savedBaseUrl.trim()) && savedLibraryIds.length > 0
+  const libraryRows = [
+    ...libraries,
+    ...draft.libraryIds
+      .filter(id => !libraries.some(lib => lib.id === id))
+      .map(id => ({ id, name: id, mediaType: 'book', icon: '', provider: '', folders: [] } as ABSLibrary)),
+  ]
   const absRunStatusLabel = (status: string) => {
     switch (status) {
       case 'rolled_back':
@@ -1731,11 +1757,11 @@ function AudiobookshelfSection() {
         <div>
           <h3 className="text-base font-semibold text-slate-800 dark:text-zinc-200">Audiobookshelf</h3>
           <p className="text-xs text-slate-600 dark:text-zinc-500 mt-1">
-            Configure one ABS source, test API-key auth, pick a single book library, then import ABS metadata into the Bindery catalog.
+            Configure one ABS source, test API-key auth, pick book libraries, then import ABS metadata into the Bindery catalog.
           </p>
           {draft.enabled && (
             <p className="text-[11px] text-sky-700 dark:text-sky-300 mt-1 max-w-xl">
-              For better initial matching, it helps to review the ABS library first and match audiobooks to Audible sources so ASINs are already present before import.
+              For better initial matching, it helps to review the selected ABS libraries first and match audiobooks to Audible sources so ASINs are already present before import.
             </p>
           )}
         </div>
@@ -1747,6 +1773,62 @@ function AudiobookshelfSection() {
         >
           <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform ${draft.enabled ? 'translate-x-5' : ''}`} />
         </button>
+      </div>
+
+      <div className="mb-4 p-3 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-50 dark:bg-zinc-950">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h4 className="text-sm font-medium text-slate-800 dark:text-zinc-200">Libraries</h4>
+            <p className="text-[11px] text-slate-600 dark:text-zinc-500 mt-0.5">
+              Select each ABS book library to import from this source.
+            </p>
+          </div>
+          <span className="text-[11px] text-slate-500 dark:text-zinc-500 whitespace-nowrap">
+            {draft.libraryIds.length} selected
+          </span>
+        </div>
+        {libraryRows.length > 0 ? (
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {libraryRows.map(lib => {
+              const checked = draft.libraryIds.includes(lib.id)
+              return (
+                <label
+                  key={lib.id}
+                  className={`flex items-center gap-3 rounded border px-3 py-2 text-sm cursor-pointer transition-colors ${
+                    checked
+                      ? 'border-emerald-500/70 bg-emerald-500/10 text-slate-900 dark:text-zinc-100'
+                      : 'border-slate-200 dark:border-zinc-800 bg-slate-100 dark:bg-zinc-900 text-slate-700 dark:text-zinc-300'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={e => {
+                      const selected = e.target.checked
+                      setDraft(prev => {
+                        const next = selected
+                          ? [...prev.libraryIds, lib.id]
+                          : prev.libraryIds.filter(id => id !== lib.id)
+                        return { ...prev, libraryIds: uniqueTrimmed(next) }
+                      })
+                    }}
+                  />
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium">{lib.name || lib.id}</span>
+                    <span className="block truncate text-[11px] text-slate-500 dark:text-zinc-500">
+                      {lib.provider ? `${lib.provider} · ${lib.id}` : lib.id}
+                    </span>
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+        ) : (
+          <p className="mt-3 text-xs text-slate-500 dark:text-zinc-500">
+            No libraries selected. Use Test connection or List libraries to discover accessible book libraries.
+          </p>
+        )}
+        {libraryError && <div className="mt-2 text-sm text-red-600 dark:text-red-400">{libraryError}</div>}
       </div>
 
       <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-4">
@@ -1782,8 +1864,8 @@ function AudiobookshelfSection() {
           />
           <p className="text-[11px] text-slate-500 dark:text-zinc-500 mt-1">
             {config?.apiKeyConfigured
-              ? 'A key is already stored and stays write-only. Leaving this blank keeps the saved key. Use a key for a user that can access the target book library; ABS admin permissions are not required.'
-              : 'Use a key for a user that can access the target book library. ABS admin permissions are not required, and the saved key never comes back to the browser after you store it.'}
+              ? 'A key is already stored and stays write-only. Leaving this blank keeps the saved key. Use a key for a user that can access the selected book libraries; ABS admin permissions are not required.'
+              : 'Use a key for a user that can access the selected book libraries. ABS admin permissions are not required, and the saved key never comes back to the browser after you store it.'}
           </p>
         </div>
 
@@ -1797,32 +1879,6 @@ function AudiobookshelfSection() {
         {saveError && <div className="text-sm text-red-600 dark:text-red-400">{saveError}</div>}
         {testError && <div className="text-sm text-red-600 dark:text-red-400">{testError}</div>}
         {libraryError && <div className="text-sm text-red-600 dark:text-red-400">{libraryError}</div>}
-
-        {(libraries.length > 0 || draft.libraryId) && (
-          <div>
-            <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Library</label>
-            <select
-              value={draft.libraryId}
-              onChange={e => setDraft(prev => ({ ...prev, libraryId: e.target.value }))}
-              className={inputCls}
-            >
-              <option value="">Select a library</option>
-              {libraries.map(lib => (
-                <option key={lib.id} value={lib.id}>
-                  {lib.name}{lib.provider ? ` · ${lib.provider}` : ''}
-                </option>
-              ))}
-            </select>
-            <p className="text-[11px] text-slate-500 dark:text-zinc-500 mt-1">
-              Save stores the selected library without contacting ABS. Use “List libraries” to show book libraries; imports reject non-book libraries before scanning.
-            </p>
-            {draft.libraryId && !libraries.some(lib => lib.id === draft.libraryId) && (
-              <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
-                Saved library ID: {draft.libraryId}. Click “List libraries” to refresh the selectable list.
-              </p>
-            )}
-          </div>
-        )}
 
         <PathRemapField
           id="abs-path-remap"
@@ -1862,7 +1918,7 @@ function AudiobookshelfSection() {
             <div>
               <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">Catalog import</label>
               <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">
-                Import authors, books, series, and editions from the selected ABS library. Shared filesystem paths are reconciled into Bindery ownership automatically; when ABS and Bindery use different mount prefixes, add a path translation above. Non-visible paths stay metadata-only and are counted for manual follow-up.
+                Import authors, books, series, and editions from the selected ABS libraries. Shared filesystem paths are reconciled into Bindery ownership automatically; when ABS and Bindery use different mount prefixes, add a path translation above. Non-visible paths stay metadata-only and are counted for manual follow-up.
               </p>
             </div>
             <div className="flex flex-col items-end gap-2 flex-shrink-0">
@@ -1889,7 +1945,7 @@ function AudiobookshelfSection() {
                   title={hasUnsavedABSConfig ? 'Save Audiobookshelf settings before starting an import' : undefined}
                   className="px-4 py-2 bg-sky-600 hover:bg-sky-500 rounded text-sm font-medium disabled:opacity-50"
                 >
-                  {importProgress?.running ? 'Running…' : importDryRun ? 'Run selected mode' : 'Import library'}
+                  {importProgress?.running ? 'Running…' : importDryRun ? 'Run selected mode' : 'Import libraries'}
                 </button>
               </div>
             </div>
@@ -1900,9 +1956,9 @@ function AudiobookshelfSection() {
               Save Audiobookshelf settings before starting an import so the run uses the stored source configuration.
             </p>
           )}
-          {!hasUnsavedABSConfig && !effectiveLibraryId && hasImportCredentials && (
+          {!hasUnsavedABSConfig && effectiveLibraryIds.length === 0 && hasImportCredentials && (
             <p className="text-[11px] text-amber-700 dark:text-amber-300">
-              Choose a library or use "Test connection" / "List libraries" to load an accessible default library before starting an import.
+              Choose at least one library or use "Test connection" / "List libraries" to load accessible book libraries before starting an import.
             </p>
           )}
 

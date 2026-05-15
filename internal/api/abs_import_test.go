@@ -54,11 +54,12 @@ func TestABSImportHandler_Start(t *testing.T) {
 			t.Fatalf("load config context value = %v, want request", ctx.Value(key))
 		}
 		return ABSStoredConfig{
-			BaseURL:   "https://abs.example.com",
-			APIKey:    "secret",
-			Label:     "Shelf",
-			LibraryID: "lib-books",
-			Enabled:   true,
+			BaseURL:    "https://abs.example.com",
+			APIKey:     "secret",
+			Label:      "Shelf",
+			LibraryID:  "lib-books",
+			LibraryIDs: []string{"lib-books", "lib-audio"},
+			Enabled:    true,
 		}
 	})
 
@@ -71,6 +72,9 @@ func TestABSImportHandler_Start(t *testing.T) {
 	}
 	if stub.lastCfg.LibraryID != "lib-books" || stub.lastCfg.BaseURL != "https://abs.example.com" {
 		t.Fatalf("cfg = %+v", stub.lastCfg)
+	}
+	if got := stub.lastCfg.LibraryIDs; len(got) != 2 || got[0] != "lib-books" || got[1] != "lib-audio" {
+		t.Fatalf("libraryIDs = %v, want stored ordered libraries", got)
 	}
 }
 

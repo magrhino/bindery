@@ -264,15 +264,15 @@ func main() {
 
 	// Wire ABS post-import scan notification (Bug #10). The notifier reads ABS
 	// config from settings at call time so that config changes (URL, API key,
-	// library ID) take effect without restarting Bindery.
+	// library IDs) take effect without restarting Bindery.
 	importScanner.WithABSNotifier(
 		abs.NewScanNotifier(settingsRepo),
-		func() string {
+		func() []string {
 			cfg := api.LoadABSConfig(context.Background(), settingsRepo)
 			if !cfg.Enabled {
-				return ""
+				return nil
 			}
-			return cfg.LibraryID
+			return cfg.LibraryIDs
 		},
 	)
 
@@ -306,13 +306,14 @@ func main() {
 		})
 	storedABS := api.LoadABSConfig(ctxBoot, settingsRepo)
 	resumeCfg := abs.ImportConfig{
-		SourceID:  abs.DefaultSourceID,
-		BaseURL:   storedABS.BaseURL,
-		APIKey:    storedABS.APIKey,
-		LibraryID: storedABS.LibraryID,
-		PathRemap: storedABS.PathRemap,
-		Label:     storedABS.Label,
-		Enabled:   storedABS.Enabled,
+		SourceID:   abs.DefaultSourceID,
+		BaseURL:    storedABS.BaseURL,
+		APIKey:     storedABS.APIKey,
+		LibraryID:  storedABS.LibraryID,
+		LibraryIDs: storedABS.LibraryIDs,
+		PathRemap:  storedABS.PathRemap,
+		Label:      storedABS.Label,
+		Enabled:    storedABS.Enabled,
 	}
 	if resumed, err := absImporter.ResumeInterrupted(ctxBoot, resumeCfg); err != nil {
 		slog.Warn("abs interrupted import resume skipped", "error", err)

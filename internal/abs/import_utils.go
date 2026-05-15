@@ -134,6 +134,29 @@ func dedupeStrings(values []string) []string {
 	return out
 }
 
+func normalizeLibraryIDs(primary string, values []string) []string {
+	primary = strings.TrimSpace(primary)
+	out := make([]string, 0, len(values)+1)
+	seen := make(map[string]struct{}, len(values)+1)
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	if primary != "" {
+		if _, ok := seen[primary]; !ok {
+			out = append([]string{primary}, out...)
+		}
+	}
+	return out
+}
+
 func normalizeLanguage(language string) string {
 	return strings.ToLower(strings.TrimSpace(language))
 }

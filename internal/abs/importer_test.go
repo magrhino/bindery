@@ -3,6 +3,7 @@ package abs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,6 +73,53 @@ func sampleABSItem() NormalizedLibraryItem {
 		EbookPath:       "/abs/Project Hail Mary/book.epub",
 		EbookINO:        "ebook-1",
 		DurationSeconds: 57600,
+	}
+}
+
+type fakeEnumerationClient struct {
+	pages map[string]map[int]*LibraryItemsPage
+	errs  map[string]map[int]error
+}
+
+func (f *fakeEnumerationClient) ListLibraryItems(_ context.Context, libraryID string, page, limit int) (*LibraryItemsPage, error) {
+	if byPage := f.errs[libraryID]; byPage != nil {
+		if err := byPage[page]; err != nil {
+			return nil, err
+		}
+	}
+	if byPage := f.pages[libraryID]; byPage != nil {
+		if resp := byPage[page]; resp != nil {
+			return resp, nil
+		}
+	}
+	return &LibraryItemsPage{MediaType: "book", Page: page, Limit: limit, Total: page * limit}, nil
+}
+
+func (f *fakeEnumerationClient) GetLibraryItem(context.Context, string) (*LibraryItem, error) {
+	return nil, errors.New("unexpected detail fetch")
+}
+
+func sampleLibraryItemForLibrary(libraryID, itemID, title string) LibraryItem {
+	duration := 3600.0
+	size := int64(1024)
+	return LibraryItem{
+		ID:        itemID,
+		LibraryID: libraryID,
+		IsFile:    true,
+		MediaType: "book",
+		Media: BookMedia{
+			Metadata: BookMetadata{
+				Title:   title,
+				Authors: []Author{{ID: "author-" + itemID, Name: "Author " + itemID}},
+				ASIN:    "ASIN-" + itemID,
+			},
+			Duration: &duration,
+			Size:     &size,
+			AudioFiles: []AudioFile{{
+				INO:  "audio-" + itemID,
+				Path: "/abs/" + itemID + ".m4b",
+			}},
+		},
 	}
 }
 
@@ -181,6 +229,238 @@ func TestImporter_ProgressResultsKeepsLatestHundredItems(t *testing.T) {
 	}
 }
 
+func TestImporter_RunEnumeratesConfiguredLibrariesInOrder(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, _, _, _, runRepo, _, _, _ := newABSImporterFixture(t)
+	var enumerated []string
+	importer.enumerateFn = func(_ context.Context, libraryID string, _ func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		enumerated = append(enumerated, libraryID)
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+
+	stats, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:   DefaultSourceID,
+		BaseURL:    "https://abs.example.com",
+		APIKey:     "secret",
+		LibraryIDs: []string{"lib-books", "lib-audio"},
+		Label:      "Shelf",
+		Enabled:    true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, want := strings.Join(enumerated, ","), "lib-books,lib-audio"; got != want {
+		t.Fatalf("enumerated = %q, want %q", got, want)
+	}
+	if stats.LibrariesScanned != 2 || stats.PagesScanned != 2 || stats.ItemsSeen != 2 {
+		t.Fatalf("stats = %+v, want aggregate counts for two libraries", stats)
+	}
+	runs, err := runRepo.ListRecent(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListRecent: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("run records = %d, want 2", len(runs))
+	}
+	seen := map[string]bool{}
+	for _, run := range runs {
+		seen[run.LibraryID] = true
+		hydrated := HydrateRun(run)
+		if len(hydrated.Source.LibraryIDs) != 2 {
+			t.Fatalf("run %d source libraryIds = %v, want both configured libraries", run.ID, hydrated.Source.LibraryIDs)
+		}
+		if hydrated.Summary.Stats.LibrariesScanned != 1 {
+			t.Fatalf("run %d summary stats = %+v, want per-library summary", run.ID, hydrated.Summary.Stats)
+		}
+	}
+	if !seen["lib-books"] || !seen["lib-audio"] {
+		t.Fatalf("run libraries = %+v, want lib-books and lib-audio", seen)
+	}
+}
+
+func TestImporter_RunStopsWhenSecondLibraryFails(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, _, _, _, runRepo, _, _, _ := newABSImporterFixture(t)
+	failErr := errors.New("abs page failed")
+	var enumerated []string
+	importer.enumerateFn = func(_ context.Context, libraryID string, _ func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		enumerated = append(enumerated, libraryID)
+		if libraryID == "lib-audio" {
+			return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, failErr
+		}
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+
+	stats, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:   DefaultSourceID,
+		BaseURL:    "https://abs.example.com",
+		APIKey:     "secret",
+		LibraryIDs: []string{"lib-books", "lib-audio", "lib-extra"},
+		Label:      "Shelf",
+		Enabled:    true,
+	})
+	if err == nil || !strings.Contains(err.Error(), failErr.Error()) {
+		t.Fatalf("Run error = %v, want %v", err, failErr)
+	}
+	if got, want := strings.Join(enumerated, ","), "lib-books,lib-audio"; got != want {
+		t.Fatalf("enumerated = %q, want %q", got, want)
+	}
+	if stats.LibrariesScanned != 1 {
+		t.Fatalf("stats = %+v, want only completed library counted", stats)
+	}
+	runs, err := runRepo.ListRecent(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListRecent: %v", err)
+	}
+	statuses := map[string]string{}
+	for _, run := range runs {
+		statuses[run.LibraryID] = run.Status
+	}
+	if statuses["lib-books"] != runStatusCompleted || statuses["lib-audio"] != runStatusFailed {
+		t.Fatalf("statuses = %+v, want completed books and failed audio", statuses)
+	}
+	if _, ok := statuses["lib-extra"]; ok {
+		t.Fatalf("lib-extra run exists after earlier failure: %+v", statuses)
+	}
+}
+
+func TestImporter_RunStartsAtConfiguredLibraryWithinLibraryIDs(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, _, _, _, _, _, _, _ := newABSImporterFixture(t)
+	var enumerated []string
+	importer.enumerateFn = func(_ context.Context, libraryID string, _ func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		enumerated = append(enumerated, libraryID)
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+
+	if _, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:   DefaultSourceID,
+		BaseURL:    "https://abs.example.com",
+		APIKey:     "secret",
+		LibraryID:  "lib-audio",
+		LibraryIDs: []string{"lib-books", "lib-audio", "lib-extra"},
+		Label:      "Shelf",
+		Enabled:    true,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, want := strings.Join(enumerated, ","), "lib-audio,lib-extra"; got != want {
+		t.Fatalf("enumerated = %q, want %q", got, want)
+	}
+}
+
+func TestImporter_RunStartsAtPersistedCheckpointLibraryWithinLibraryIDs(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, _, _, _, _, _, _, _ := newABSImporterFixture(t)
+	checkpoint := ImportCheckpoint{
+		LibraryID:  "lib-audio",
+		Page:       2,
+		LastItemID: "li-before-retry",
+		PageSize:   50,
+		UpdatedAt:  time.Now().UTC(),
+	}
+	if err := importer.settings.Set(context.Background(), SettingABSImportCheckpoint, mustJSONForTest(t, checkpoint)); err != nil {
+		t.Fatalf("Set checkpoint: %v", err)
+	}
+	var enumerated []string
+	importer.enumerateFn = func(_ context.Context, libraryID string, _ func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		enumerated = append(enumerated, libraryID)
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+
+	if _, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:   DefaultSourceID,
+		BaseURL:    "https://abs.example.com",
+		APIKey:     "secret",
+		LibraryID:  "lib-books",
+		LibraryIDs: []string{"lib-books", "lib-audio", "lib-extra"},
+		Label:      "Shelf",
+		Enabled:    true,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, want := strings.Join(enumerated, ","), "lib-audio,lib-extra"; got != want {
+		t.Fatalf("enumerated = %q, want %q", got, want)
+	}
+}
+
+func TestImporter_RunStoresCheckpointOnCurrentLibraryRun(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, _, _, _, runRepo, _, _, _ := newABSImporterFixture(t)
+	client := &fakeEnumerationClient{
+		pages: map[string]map[int]*LibraryItemsPage{
+			"lib-books": {
+				0: {MediaType: "book", Page: 0, Limit: 50, Total: 0},
+			},
+			"lib-audio": {
+				0: {
+					MediaType: "book",
+					Page:      0,
+					Limit:     1,
+					Total:     2,
+					Results:   []LibraryItem{sampleLibraryItemForLibrary("lib-audio", "li-audio", "Audio Book")},
+				},
+			},
+		},
+		errs: map[string]map[int]error{
+			"lib-audio": {1: errors.New("page 1 failed")},
+		},
+	}
+	importer.newClient = func(string, string) (enumerationClient, error) {
+		return client, nil
+	}
+
+	_, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:   DefaultSourceID,
+		BaseURL:    "https://abs.example.com",
+		APIKey:     "secret",
+		LibraryIDs: []string{"lib-books", "lib-audio"},
+		Label:      "Shelf",
+		Enabled:    true,
+	})
+	if err == nil {
+		t.Fatal("Run error = nil, want failure from lib-audio")
+	}
+	runs, err := runRepo.ListRecent(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListRecent: %v", err)
+	}
+	var audioRun, booksRun *models.ABSImportRun
+	for idx := range runs {
+		switch runs[idx].LibraryID {
+		case "lib-audio":
+			audioRun = &runs[idx]
+		case "lib-books":
+			booksRun = &runs[idx]
+		}
+	}
+	if booksRun == nil || booksRun.Status != runStatusCompleted {
+		t.Fatalf("books run = %+v, want completed", booksRun)
+	}
+	if audioRun == nil || audioRun.Status != runStatusFailed {
+		t.Fatalf("audio run = %+v, want failed", audioRun)
+	}
+	checkpoint, err := decodeImportCheckpoint(audioRun.CheckpointJSON)
+	if err != nil {
+		t.Fatalf("decode audio checkpoint: %v", err)
+	}
+	if checkpoint == nil || checkpoint.LibraryID != "lib-audio" {
+		t.Fatalf("audio checkpoint = %+v, want lib-audio", checkpoint)
+	}
+	booksCheckpoint, err := decodeImportCheckpoint(booksRun.CheckpointJSON)
+	if err != nil {
+		t.Fatalf("decode books checkpoint: %v", err)
+	}
+	if booksCheckpoint != nil {
+		t.Fatalf("books checkpoint = %+v, want cleared completed checkpoint", booksCheckpoint)
+	}
+}
+
 func TestImporter_ResumeInterruptedStartsFromPersistedCheckpoint(t *testing.T) {
 	t.Parallel()
 
@@ -286,6 +566,89 @@ func TestImporter_ResumeInterruptedStartsFromPersistedCheckpoint(t *testing.T) {
 	}
 
 	close(release)
+	deadline := time.After(time.Second)
+	for importer.Running() {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for resumed import to finish")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
+func TestImporter_ResumeInterruptedContinuesRemainingLibraries(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, _, _, _, runRepo, _, _, _ := newABSImporterFixture(t)
+	checkpoint := ImportCheckpoint{
+		LibraryID:  "lib-audio",
+		Page:       2,
+		LastItemID: "li-before-restart",
+		PageSize:   50,
+		UpdatedAt:  time.Now().UTC(),
+	}
+	run := &models.ABSImportRun{
+		SourceID:    DefaultSourceID,
+		SourceLabel: "Shelf",
+		BaseURL:     "https://abs.example.com",
+		LibraryID:   "lib-audio",
+		Status:      runStatusRunning,
+		DryRun:      true,
+		SourceConfigJSON: mustJSONForTest(t, sourceSnapshot(ImportConfig{
+			SourceID:   DefaultSourceID,
+			BaseURL:    "https://abs.example.com",
+			LibraryID:  "lib-audio",
+			LibraryIDs: []string{"lib-books", "lib-audio", "lib-extra"},
+			Label:      "Shelf",
+			Enabled:    true,
+			DryRun:     true,
+		})),
+		CheckpointJSON: mustJSONForTest(t, checkpoint),
+		SummaryJSON:    "{}",
+	}
+	if err := runRepo.Create(context.Background(), run); err != nil {
+		t.Fatalf("Create interrupted run: %v", err)
+	}
+
+	enumerated := make(chan string, 3)
+	importer.enumerateFn = func(_ context.Context, libraryID string, _ func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		enumerated <- libraryID
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+
+	resumed, err := importer.ResumeInterrupted(context.Background(), ImportConfig{
+		SourceID: DefaultSourceID,
+		APIKey:   "secret",
+		Enabled:  true,
+		BaseURL:  "https://current-settings.example.com",
+		Label:    "Current Settings",
+	})
+	if err != nil {
+		t.Fatalf("ResumeInterrupted: %v", err)
+	}
+	if !resumed {
+		t.Fatal("ResumeInterrupted resumed = false, want true")
+	}
+
+	var got []string
+	for len(got) < 2 {
+		select {
+		case libraryID := <-enumerated:
+			got = append(got, libraryID)
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for resumed libraries; got %v", got)
+		}
+	}
+	if joined := strings.Join(got, ","); joined != "lib-audio,lib-extra" {
+		t.Fatalf("resumed libraries = %q, want lib-audio,lib-extra", joined)
+	}
+	select {
+	case extra := <-enumerated:
+		t.Fatalf("unexpected resumed library %q", extra)
+	default:
+	}
+
 	deadline := time.After(time.Second)
 	for importer.Running() {
 		select {

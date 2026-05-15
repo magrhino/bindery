@@ -129,9 +129,105 @@ func TestABSSetConfigSavesLibraryIDWithoutLiveProbe(t *testing.T) {
 	if got == nil || got.Value != "lib_books" {
 		t.Fatalf("library id not persisted: %+v", got)
 	}
+	got, _ = repo.Get(ctx, SettingABSLibraryIDs)
+	if got == nil || got.Value != `["lib_books"]` {
+		t.Fatalf("library ids not persisted: %+v", got)
+	}
 	got, _ = repo.Get(ctx, SettingABSAPIKey)
 	if got == nil || got.Value != "secret" {
 		t.Fatalf("api key not persisted: %+v", got)
+	}
+}
+
+func TestABSSetConfigPersistsLibraryIDs(t *testing.T) {
+	h, repo, ctx := absFixture(t, nil)
+
+	body := bytes.NewBufferString(`{"baseUrl":"https://abs.example.com/","apiKey":"secret","libraryIds":["lib_books","lib_audio","lib_books"],"enabled":true,"label":"Shelf"}`)
+	rec := httptest.NewRecorder()
+	h.SetConfig(rec, httptest.NewRequest(http.MethodPut, "/api/v1/abs/config", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	assertSettingValue(t, repo, ctx, SettingABSLibraryID, "lib_books")
+	assertSettingValue(t, repo, ctx, SettingABSLibraryIDs, `["lib_books","lib_audio"]`)
+
+	var cfg ABSConfigResponse
+	if err := json.NewDecoder(rec.Body).Decode(&cfg); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if cfg.LibraryID != "lib_books" {
+		t.Fatalf("libraryId = %q, want lib_books", cfg.LibraryID)
+	}
+	if got, want := strings.Join(cfg.LibraryIDs, ","), "lib_books,lib_audio"; got != want {
+		t.Fatalf("libraryIds = %q, want %q", got, want)
+	}
+}
+
+func TestABSGetConfigFallsBackToLegacyLibraryID(t *testing.T) {
+	h, repo, ctx := absFixture(t, nil)
+	if err := repo.Set(ctx, SettingABSLibraryID, "lib_legacy"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.GetConfig(rec, httptest.NewRequest(http.MethodGet, "/api/v1/abs/config", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	var cfg ABSConfigResponse
+	if err := json.NewDecoder(rec.Body).Decode(&cfg); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if cfg.LibraryID != "lib_legacy" {
+		t.Fatalf("libraryId = %q, want lib_legacy", cfg.LibraryID)
+	}
+	if got, want := strings.Join(cfg.LibraryIDs, ","), "lib_legacy"; got != want {
+		t.Fatalf("libraryIds = %q, want %q", got, want)
+	}
+}
+
+func TestABSGetConfigFallsBackToLegacyLibraryIDWhenLibraryIDsEmpty(t *testing.T) {
+	h, repo, ctx := absFixture(t, nil)
+	if err := repo.Set(ctx, SettingABSLibraryID, "lib_legacy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Set(ctx, SettingABSLibraryIDs, "[]"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.GetConfig(rec, httptest.NewRequest(http.MethodGet, "/api/v1/abs/config", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	var cfg ABSConfigResponse
+	if err := json.NewDecoder(rec.Body).Decode(&cfg); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if cfg.LibraryID != "lib_legacy" {
+		t.Fatalf("libraryId = %q, want lib_legacy", cfg.LibraryID)
+	}
+	if got, want := strings.Join(cfg.LibraryIDs, ","), "lib_legacy"; got != want {
+		t.Fatalf("libraryIds = %q, want %q", got, want)
+	}
+}
+
+func TestABSSetConfigAllowsEmptyLibraryIDs(t *testing.T) {
+	h, repo, ctx := absFixture(t, nil)
+
+	body := bytes.NewBufferString(`{"baseUrl":"https://abs.example.com/","apiKey":"secret","libraryIds":[],"enabled":true,"label":"Shelf"}`)
+	rec := httptest.NewRecorder()
+	h.SetConfig(rec, httptest.NewRequest(http.MethodPut, "/api/v1/abs/config", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	assertSettingValue(t, repo, ctx, SettingABSLibraryID, "")
+	assertSettingValue(t, repo, ctx, SettingABSLibraryIDs, `[]`)
+	cfg := LoadABSConfig(ctx, repo)
+	if cfg.LibraryID != "" || len(cfg.LibraryIDs) != 0 {
+		t.Fatalf("cfg libraries = %q/%v, want empty", cfg.LibraryID, cfg.LibraryIDs)
 	}
 }
 

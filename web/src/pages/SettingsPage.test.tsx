@@ -171,8 +171,8 @@ function seedSettingsMocks(options: {
   vi.mocked(api.testProwlarr).mockResolvedValue({ ok: 'true', version: '1.0.0' })
   vi.mocked(api.deleteProwlarr).mockResolvedValue(undefined)
 
-    vi.mocked(api.absConfig).mockResolvedValue({ featureEnabled: false, baseUrl: '', label: '', enabled: false, libraryId: '', pathRemap: '', apiKeyConfigured: false })
-    vi.mocked(api.absSetConfig).mockResolvedValue({ featureEnabled: false, baseUrl: '', label: '', enabled: false, libraryId: '', pathRemap: '', apiKeyConfigured: false })
+    vi.mocked(api.absConfig).mockResolvedValue({ featureEnabled: false, baseUrl: '', label: '', enabled: false, libraryId: '', libraryIds: [], pathRemap: '', apiKeyConfigured: false })
+    vi.mocked(api.absSetConfig).mockResolvedValue({ featureEnabled: false, baseUrl: '', label: '', enabled: false, libraryId: '', libraryIds: [], pathRemap: '', apiKeyConfigured: false })
     vi.mocked(api.absLibraries).mockResolvedValue([])
     vi.mocked(api.absImportStart).mockResolvedValue({ running: true, dryRun: true, processed: 0 })
     vi.mocked(api.absImportStatus).mockResolvedValue({ running: false, processed: 0 })
@@ -275,8 +275,9 @@ describe('SettingsPage', () => {
   it('persists the enhanced Hardcover admin toggle separately from effective status', async () => {
     renderSettings()
 
-    await screen.findByText('Hardcover API Token')
-    fireEvent.click(sectionForHeading('settings.general.apiKeys').getByTitle('common.enable'))
+    await screen.findByRole('heading', { name: 'settings.general.apiKeys' })
+    const apiKeys = sectionForHeading('settings.general.apiKeys')
+    fireEvent.click(apiKeys.getByTitle('common.enable'))
 
     await waitFor(() => {
       expect(api.setSetting).toHaveBeenCalledWith('hardcover.enhanced_series_enabled', 'true')
@@ -600,6 +601,7 @@ describe('SettingsPage', () => {
       label: 'Shelf',
       enabled: true,
       libraryId: 'lib-books',
+      libraryIds: ['lib-books'],
       pathRemap: '/abs:/books',
       apiKeyConfigured: true,
     })
@@ -609,6 +611,7 @@ describe('SettingsPage', () => {
       label: data.label,
       enabled: data.enabled,
       libraryId: data.libraryId,
+      libraryIds: data.libraryIds ?? [data.libraryId],
       pathRemap: data.pathRemap,
       apiKeyConfigured: true,
     }))
@@ -631,6 +634,7 @@ describe('SettingsPage', () => {
         label: 'Shelf',
         enabled: true,
         libraryId: 'lib-books',
+        libraryIds: ['lib-books'],
         pathRemap: '/draft:/books',
       })
     })
@@ -640,6 +644,112 @@ describe('SettingsPage', () => {
     await waitFor(() => {
       expect(api.absImportStart).toHaveBeenCalledWith({ dryRun: true })
     })
+  })
+
+  it('uses a multi-library selector instead of the old Audiobookshelf library dropdown', async () => {
+    vi.mocked(api.absConfig).mockResolvedValue({
+      featureEnabled: true,
+      baseUrl: 'https://abs.example.com',
+      label: 'Shelf',
+      enabled: true,
+      libraryId: 'lib-books',
+      libraryIds: ['lib-books', 'lib-audio'],
+      pathRemap: '/abs:/books',
+      apiKeyConfigured: true,
+    })
+    vi.mocked(api.absLibraries).mockResolvedValue([
+      { id: 'lib-books', name: 'Books', mediaType: 'book', icon: '', provider: 'local', folders: [] },
+      { id: 'lib-audio', name: 'Audiobooks', mediaType: 'book', icon: '', provider: 'audible', folders: [] },
+    ])
+
+    renderSettings()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.tabs.abs' }))
+    expect(await screen.findByRole('heading', { name: 'Libraries' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('Library')).not.toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /Books/ })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /Audiobooks/ })).toBeChecked()
+  })
+
+  it('saves all selected Audiobookshelf libraries', async () => {
+    vi.mocked(api.absConfig).mockResolvedValue({
+      featureEnabled: true,
+      baseUrl: 'https://abs.example.com',
+      label: 'Shelf',
+      enabled: true,
+      libraryId: 'lib-books',
+      libraryIds: ['lib-books'],
+      pathRemap: '/abs:/books',
+      apiKeyConfigured: true,
+    })
+    vi.mocked(api.absLibraries).mockResolvedValue([
+      { id: 'lib-books', name: 'Books', mediaType: 'book', icon: '', provider: 'local', folders: [] },
+      { id: 'lib-audio', name: 'Audiobooks', mediaType: 'book', icon: '', provider: 'audible', folders: [] },
+    ])
+    vi.mocked(api.absSetConfig).mockImplementation(async data => ({
+      featureEnabled: true,
+      baseUrl: data.baseUrl,
+      label: data.label,
+      enabled: data.enabled,
+      libraryId: data.libraryId,
+      libraryIds: data.libraryIds ?? [],
+      pathRemap: data.pathRemap,
+      apiKeyConfigured: true,
+    }))
+
+    renderSettings()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.tabs.abs' }))
+    fireEvent.click(await screen.findByRole('checkbox', { name: /Audiobooks/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save source' }))
+
+    await waitFor(() => {
+      expect(api.absSetConfig).toHaveBeenCalledWith({
+        baseUrl: 'https://abs.example.com',
+        apiKey: undefined,
+        label: 'Shelf',
+        enabled: true,
+        libraryId: 'lib-books',
+        libraryIds: ['lib-books', 'lib-audio'],
+        pathRemap: '/abs:/books',
+      })
+    })
+  })
+
+  it('keeps ABS import disabled until selected libraries are saved', async () => {
+    vi.mocked(api.absConfig).mockResolvedValue({
+      featureEnabled: true,
+      baseUrl: 'https://abs.example.com',
+      label: 'Shelf',
+      enabled: true,
+      libraryId: '',
+      libraryIds: [],
+      pathRemap: '/abs:/books',
+      apiKeyConfigured: true,
+    })
+    vi.mocked(api.absLibraries).mockResolvedValue([
+      { id: 'lib-books', name: 'Books', mediaType: 'book', icon: '', provider: 'local', folders: [] },
+    ])
+    vi.mocked(api.absSetConfig).mockImplementation(async data => ({
+      featureEnabled: true,
+      baseUrl: data.baseUrl,
+      label: data.label,
+      enabled: data.enabled,
+      libraryId: data.libraryId,
+      libraryIds: data.libraryIds ?? [],
+      pathRemap: data.pathRemap,
+      apiKeyConfigured: true,
+    }))
+
+    renderSettings()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.tabs.abs' }))
+    const preview = await screen.findByRole('button', { name: 'Preview changes' })
+    expect(preview).toBeDisabled()
+    fireEvent.click(await screen.findByRole('checkbox', { name: /Books/ }))
+    expect(preview).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Save source' }))
+    await waitFor(() => expect(preview).toBeEnabled())
   })
 
   it('adds an indexer with parsed categories', async () => {

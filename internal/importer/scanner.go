@@ -63,7 +63,7 @@ type Scanner struct {
 	audiobookDir         string
 	audiobookDownloadDir string
 	absLib               absNotifier
-	absLibraryIDFn       func() string
+	absLibraryIDsFn      func() []string
 }
 
 // NewScanner creates an import scanner. downloadPathRemap is an optional
@@ -180,12 +180,12 @@ func (s *Scanner) WithCalibreCoverCache(dir string) *Scanner {
 	return s
 }
 
-// WithABSNotifier attaches an Audiobookshelf scan notifier. libraryIDFn is
-// called at import time to retrieve the current ABS audiobook library ID;
-// returning an empty string disables the notification for that import.
-func (s *Scanner) WithABSNotifier(n absNotifier, libraryIDFn func() string) *Scanner {
+// WithABSNotifier attaches an Audiobookshelf scan notifier. libraryIDsFn is
+// called at import time to retrieve the current ABS audiobook library IDs;
+// returning an empty slice disables the notification for that import.
+func (s *Scanner) WithABSNotifier(n absNotifier, libraryIDsFn func() []string) *Scanner {
 	s.absLib = n
-	s.absLibraryIDFn = libraryIDFn
+	s.absLibraryIDsFn = libraryIDsFn
 	return s
 }
 
@@ -193,18 +193,33 @@ func (s *Scanner) WithABSNotifier(n absNotifier, libraryIDFn func() string) *Sca
 // Failures are logged and swallowed — ABS sync is best-effort and must never
 // roll back an otherwise-good Bindery import.
 func (s *Scanner) pushToABS(ctx context.Context) {
-	if s.absLib == nil || s.absLibraryIDFn == nil {
+	if s.absLib == nil || s.absLibraryIDsFn == nil {
 		return
 	}
-	libraryID := s.absLibraryIDFn()
-	if libraryID == "" {
-		return
+	for _, libraryID := range uniqueNonEmptyStrings(s.absLibraryIDsFn()) {
+		if err := s.absLib.ScanLibrary(ctx, libraryID); err != nil {
+			slog.Warn("abs: library scan after audiobook import failed", "libraryID", libraryID, "error", err)
+			continue
+		}
+		slog.Info("abs: triggered library scan after audiobook import", "libraryID", libraryID)
 	}
-	if err := s.absLib.ScanLibrary(ctx, libraryID); err != nil {
-		slog.Warn("abs: library scan after audiobook import failed", "libraryID", libraryID, "error", err)
-		return
+}
+
+func uniqueNonEmptyStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
 	}
-	slog.Info("abs: triggered library scan after audiobook import", "libraryID", libraryID)
+	return out
 }
 
 // WithSettings attaches a SettingsRepo to the scanner so scan results can be
