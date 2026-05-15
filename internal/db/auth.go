@@ -85,6 +85,30 @@ func (r *UserRepo) GetByOIDC(ctx context.Context, issuer, sub string) (*User, er
 	return u, nil
 }
 
+// GetByEmail looks up a user by email address. Returns nil, nil when not found
+// or when email is empty.
+func (r *UserRepo) GetByEmail(ctx context.Context, email string) (*User, error) {
+	if email == "" {
+		return nil, nil
+	}
+	u, err := scanUser(r.db.QueryRowContext(ctx,
+		"SELECT "+userSelectCols+" FROM users WHERE email=?", email))
+	if err != nil {
+		return nil, fmt.Errorf("get user by email: %w", err)
+	}
+	return u, nil
+}
+
+// LinkOIDCSubject sets the oidc_issuer and oidc_sub fields on an existing user,
+// effectively binding an OIDC identity to a local account.
+func (r *UserRepo) LinkOIDCSubject(ctx context.Context, userID int64, issuer, sub string) error {
+	_, err := r.db.ExecContext(ctx,
+		"UPDATE users SET oidc_issuer=?, oidc_sub=?, updated_at=? WHERE id=?",
+		issuer, sub, time.Now().UTC(), userID,
+	)
+	return err
+}
+
 // GetOrCreateByOIDC resolves or creates a user identified by (issuer, sub).
 // On creation, username is derived from preferredUsername (falling back to sub),
 // email and displayName are stored as provided.

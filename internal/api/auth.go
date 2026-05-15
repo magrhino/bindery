@@ -41,13 +41,22 @@ const (
 
 // AuthHandler owns the login / setup / password / mode endpoints.
 type AuthHandler struct {
-	users    *db.UserRepo
-	settings *db.SettingsRepo
-	limiter  *auth.LoginLimiter
+	users            *db.UserRepo
+	settings         *db.SettingsRepo
+	limiter          *auth.LoginLimiter
+	localAuthEnabled bool
 }
 
 func NewAuthHandler(users *db.UserRepo, settings *db.SettingsRepo, limiter *auth.LoginLimiter) *AuthHandler {
-	return &AuthHandler{users: users, settings: settings, limiter: limiter}
+	return &AuthHandler{users: users, settings: settings, limiter: limiter, localAuthEnabled: true}
+}
+
+// WithLocalAuthEnabled controls whether local password login and local user
+// creation are allowed. When false, POST /auth/login returns 403 and the
+// admin user-create endpoint is also blocked.
+func (h *AuthHandler) WithLocalAuthEnabled(v bool) *AuthHandler {
+	h.localAuthEnabled = v
+	return h
 }
 
 // --- Request / response shapes -----------------------------------------------
@@ -64,11 +73,12 @@ type setupRequest struct {
 }
 
 type statusResponse struct {
-	Authenticated bool   `json:"authenticated"`
-	SetupRequired bool   `json:"setupRequired"`
-	Username      string `json:"username,omitempty"`
-	Role          string `json:"role,omitempty"`
-	Mode          string `json:"mode"`
+	Authenticated    bool   `json:"authenticated"`
+	SetupRequired    bool   `json:"setupRequired"`
+	Username         string `json:"username,omitempty"`
+	Role             string `json:"role,omitempty"`
+	Mode             string `json:"mode"`
+	LocalAuthEnabled bool   `json:"localAuthEnabled"`
 }
 
 type changePasswordRequest struct {
@@ -100,8 +110,9 @@ func (h *AuthHandler) Status(w http.ResponseWriter, r *http.Request) {
 	mode := h.mode(ctx)
 
 	resp := statusResponse{
-		SetupRequired: count == 0,
-		Mode:          string(mode),
+		SetupRequired:    count == 0,
+		Mode:             string(mode),
+		LocalAuthEnabled: h.localAuthEnabled,
 	}
 
 	if uid := auth.UserIDFromContext(ctx); uid != 0 {
@@ -168,6 +179,10 @@ func (h *AuthHandler) Setup(w http.ResponseWriter, r *http.Request) {
 
 // Login validates credentials, issues a signed session cookie on success.
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
+	if !h.localAuthEnabled {
+		writeErr(w, http.StatusForbidden, "local login is disabled")
+		return
+	}
 	ctx := r.Context()
 	ip := clientIP(r)
 	if !h.limiter.Allow(ip) {

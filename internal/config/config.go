@@ -29,6 +29,10 @@ type Config struct {
 	ProxyAutoProvision bool   // BINDERY_PROXY_AUTO_PROVISION
 	// OIDC settings (Phase 2).
 	OIDCRedirectBaseURL string // BINDERY_OIDC_REDIRECT_BASE_URL
+	// Auth policy controls (Phase 3).
+	LocalAuthEnabled  bool // BINDERY_LOCAL_AUTH_ENABLED (default true)
+	OIDCAutoProvision bool // BINDERY_OIDC_AUTO_PROVISION (default true)
+	OIDCEmailLink     bool // BINDERY_OIDC_EMAIL_LINK (default false)
 	// Log retention in days (BINDERY_LOG_RETENTION_DAYS, default 14).
 	LogRetentionDays int
 	// Login rate limit (per-IP sliding window).
@@ -71,6 +75,9 @@ func Load() *Config {
 		ProxyAuthHeader:        envOr("BINDERY_PROXY_AUTH_HEADER", "X-Forwarded-User"),
 		ProxyAutoProvision:     envBool("BINDERY_PROXY_AUTO_PROVISION", true),
 		OIDCRedirectBaseURL:    envOr("BINDERY_OIDC_REDIRECT_BASE_URL", ""),
+		LocalAuthEnabled:       envBool("BINDERY_LOCAL_AUTH_ENABLED", true),
+		OIDCAutoProvision:      envBool("BINDERY_OIDC_AUTO_PROVISION", true),
+		OIDCEmailLink:          envBool("BINDERY_OIDC_EMAIL_LINK", false),
 		LogRetentionDays:       envInt("BINDERY_LOG_RETENTION_DAYS", 14),
 		RateLimitMaxFailures:   envInt("BINDERY_RATE_LIMIT_MAX_FAILURES", 5),
 		RateLimitWindowMinutes: envInt("BINDERY_RATE_LIMIT_WINDOW_MINUTES", 15),

@@ -32,16 +32,26 @@ var oidcProviderIDRe = regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
 // set, false when the base URL will be derived from request headers. Used by
 // GetRedirectBase to tell the UI whether to show a "URL may not match" warning.
 type OIDCHandler struct {
-	mgr            *oidc.Manager
-	users          *db.UserRepo
-	settings       *db.SettingsRepo
-	auth           *AuthHandler
-	resolveBase    func(*http.Request) string
-	baseConfigured bool
+	mgr               *oidc.Manager
+	users             *db.UserRepo
+	settings          *db.SettingsRepo
+	auth              *AuthHandler
+	resolveBase       func(*http.Request) string
+	baseConfigured    bool
+	oidcAutoProvision bool
+	oidcEmailLink     bool
 }
 
 func NewOIDCHandler(mgr *oidc.Manager, users *db.UserRepo, settings *db.SettingsRepo, auth *AuthHandler, resolveBase func(*http.Request) string) *OIDCHandler {
-	return &OIDCHandler{mgr: mgr, users: users, settings: settings, auth: auth, resolveBase: resolveBase}
+	return &OIDCHandler{
+		mgr:               mgr,
+		users:             users,
+		settings:          settings,
+		auth:              auth,
+		resolveBase:       resolveBase,
+		oidcAutoProvision: true,
+		oidcEmailLink:     false,
+	}
 }
 
 // WithBaseConfigured sets the baseConfigured flag, indicating that
@@ -51,6 +61,23 @@ func NewOIDCHandler(mgr *oidc.Manager, users *db.UserRepo, settings *db.Settings
 // request headers, which can vary).
 func (h *OIDCHandler) WithBaseConfigured(configured bool) *OIDCHandler {
 	h.baseConfigured = configured
+	return h
+}
+
+// WithOIDCAutoProvision controls whether an unknown OIDC subject (issuer+sub
+// pair not found in the DB) triggers automatic user creation. When false, the
+// callback returns 403 instead of provisioning a new account.
+func (h *OIDCHandler) WithOIDCAutoProvision(v bool) *OIDCHandler {
+	h.oidcAutoProvision = v
+	return h
+}
+
+// WithOIDCEmailLink controls whether an unknown OIDC subject is matched
+// against existing users by email on first login. When true, a successful
+// email match links the OIDC identity to the existing account rather than
+// creating a new one or returning 403.
+func (h *OIDCHandler) WithOIDCEmailLink(v bool) *OIDCHandler {
+	h.oidcEmailLink = v
 	return h
 }
 
@@ -183,14 +210,49 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.users.GetOrCreateByOIDC(ctx,
-		claims.Issuer, claims.Sub,
-		claims.PreferredUsername, claims.Email, claims.Name,
-	)
+	// 1. Look up by (issuer, sub)
+	user, err := h.users.GetByOIDC(ctx, claims.Issuer, claims.Sub)
 	if err != nil {
-		slog.Error("oidc: user provisioning failed", "error", err)
-		writeErr(w, http.StatusInternalServerError, "user provisioning failed")
+		slog.Error("oidc: user lookup failed", "error", err)
+		writeErr(w, http.StatusInternalServerError, "user lookup failed")
 		return
+	}
+
+	// 2. Email-link: try to match an existing user by email
+	if user == nil && h.oidcEmailLink && claims.Email != "" {
+		byEmail, err := h.users.GetByEmail(ctx, claims.Email)
+		if err != nil {
+			slog.Error("oidc: email lookup failed", "error", err)
+			writeErr(w, http.StatusInternalServerError, "user lookup failed")
+			return
+		}
+		if byEmail != nil {
+			if err := h.users.LinkOIDCSubject(ctx, byEmail.ID, claims.Issuer, claims.Sub); err != nil {
+				slog.Error("oidc: link subject failed", "error", err)
+				writeErr(w, http.StatusInternalServerError, "user link failed")
+				return
+			}
+			slog.Info("oidc: linked existing user by email", "username", byEmail.Username, "email", claims.Email)
+			user = byEmail
+		}
+	}
+
+	// 3. Auto-provision or deny
+	if user == nil {
+		if !h.oidcAutoProvision {
+			slog.Warn("oidc: unknown user and auto-provisioning disabled", "issuer", claims.Issuer, "sub", sanitizeLog(claims.Sub))
+			writeErr(w, http.StatusForbidden, "access denied: account not provisioned")
+			return
+		}
+		user, err = h.users.GetOrCreateByOIDC(ctx,
+			claims.Issuer, claims.Sub,
+			claims.PreferredUsername, claims.Email, claims.Name,
+		)
+		if err != nil {
+			slog.Error("oidc: user provisioning failed", "error", err)
+			writeErr(w, http.StatusInternalServerError, "user provisioning failed")
+			return
+		}
 	}
 
 	// Reuse the existing session issuance — OIDC sits in front of it.

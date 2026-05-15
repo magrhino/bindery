@@ -420,3 +420,62 @@ func TestSetup_RejectsEmptyBody(t *testing.T) {
 		t.Errorf("expected 400, got %d", rec.Code)
 	}
 }
+
+// TestLogin_LocalAuthDisabled confirms POST /auth/login returns 403 when
+// local auth is disabled — before even touching the rate limiter or DB.
+func TestLogin_LocalAuthDisabled(t *testing.T) {
+	h, _, _, _ := newAuthFixture(t)
+	h = h.WithLocalAuthEnabled(false)
+
+	rec := httptest.NewRecorder()
+	h.Login(rec, httptest.NewRequest(http.MethodPost, "/auth/login",
+		jsonBody(t, loginRequest{Username: "admin", Password: "whatever"})))
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["error"] != "local login is disabled" {
+		t.Errorf("unexpected error message: %q", body["error"])
+	}
+}
+
+// TestStatus_LocalAuthEnabled_True verifies that a default handler reports
+// localAuthEnabled=true in the /auth/status response.
+func TestStatus_LocalAuthEnabled_True(t *testing.T) {
+	h, _, _, _ := newAuthFixture(t)
+	rec := httptest.NewRecorder()
+	h.Status(rec, httptest.NewRequest(http.MethodGet, "/auth/status", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp statusResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.LocalAuthEnabled {
+		t.Error("expected localAuthEnabled=true by default")
+	}
+}
+
+// TestStatus_LocalAuthEnabled_False verifies that WithLocalAuthEnabled(false)
+// propagates through to the /auth/status JSON response.
+func TestStatus_LocalAuthEnabled_False(t *testing.T) {
+	h, _, _, _ := newAuthFixture(t)
+	h = h.WithLocalAuthEnabled(false)
+	rec := httptest.NewRecorder()
+	h.Status(rec, httptest.NewRequest(http.MethodGet, "/auth/status", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp statusResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.LocalAuthEnabled {
+		t.Error("expected localAuthEnabled=false after WithLocalAuthEnabled(false)")
+	}
+}

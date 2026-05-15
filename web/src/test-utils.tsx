@@ -24,6 +24,7 @@ export function makeAuthStatus(overrides: Partial<AuthStatus> = {}): AuthStatus 
     authenticated: false,
     setupRequired: false,
     mode: 'enabled',
+    localAuthEnabled: true,
     ...overrides,
   }
 }

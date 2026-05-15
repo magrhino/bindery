@@ -39,7 +39,7 @@ describe('PublicOnlyRoute — login mode', () => {
   it('redirects authenticated users away from /login to /', () => {
     mockAuth = {
       loading: false,
-      status: { authenticated: true, setupRequired: false, mode: 'enabled' },
+      status: { authenticated: true, setupRequired: false, mode: 'enabled', localAuthEnabled: true },
     }
     renderAt('/login', 'login')
     expect(screen.getByTestId('home')).toBeInTheDocument()
@@ -49,7 +49,7 @@ describe('PublicOnlyRoute — login mode', () => {
   it('renders the login page for unauthenticated users', () => {
     mockAuth = {
       loading: false,
-      status: { authenticated: false, setupRequired: false, mode: 'enabled' },
+      status: { authenticated: false, setupRequired: false, mode: 'enabled', localAuthEnabled: true },
     }
     renderAt('/login', 'login')
     expect(screen.getByTestId('login-page')).toBeInTheDocument()
@@ -66,7 +66,7 @@ describe('PublicOnlyRoute — login mode', () => {
   it('routes to /setup when setup is still required, even on /login', () => {
     mockAuth = {
       loading: false,
-      status: { authenticated: false, setupRequired: true, mode: 'enabled' },
+      status: { authenticated: false, setupRequired: true, mode: 'enabled', localAuthEnabled: true },
     }
     renderAt('/login', 'login')
     expect(screen.getByTestId('setup')).toBeInTheDocument()

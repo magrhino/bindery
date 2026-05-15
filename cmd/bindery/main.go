@@ -397,13 +397,17 @@ func main() {
 	}
 
 	// API handlers
-	authHandler := api.NewAuthHandler(userRepo, settingsRepo, loginLimiter)
+	authHandler := api.NewAuthHandler(userRepo, settingsRepo, loginLimiter).
+		WithLocalAuthEnabled(cfg.LocalAuthEnabled)
 	oidcResolveBase := func(r *http.Request) string {
 		return api.ResolveOIDCRedirectBase(r, cfg.OIDCRedirectBaseURL, trustedCIDRs)
 	}
 	oidcHandler := api.NewOIDCHandler(oidcMgr, userRepo, settingsRepo, authHandler, oidcResolveBase).
-		WithBaseConfigured(cfg.OIDCRedirectBaseURL != "")
-	userMgmtHandler := api.NewUserManagementHandler(userRepo)
+		WithBaseConfigured(cfg.OIDCRedirectBaseURL != "").
+		WithOIDCAutoProvision(cfg.OIDCAutoProvision).
+		WithOIDCEmailLink(cfg.OIDCEmailLink)
+	userMgmtHandler := api.NewUserManagementHandler(userRepo).
+		WithLocalAuthEnabled(cfg.LocalAuthEnabled)
 	searchHandler := api.NewSearchHandler(metaAgg)
 	authorHandler := api.NewAuthorHandler(authorRepo, authorAliasRepo, bookRepo, seriesRepo, metaAgg, settingsRepo, metadataProfileRepo, sched).WithFinder(importScanner)
 	authorAliasHandler := api.NewAuthorAliasHandler(authorRepo, authorAliasRepo)

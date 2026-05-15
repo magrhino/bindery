@@ -56,6 +56,8 @@ export default function LoginPage() {
     return <Navigate to="/" replace />
   }
 
+  const localAuthEnabled = status?.localAuthEnabled !== false
+
   if (status?.mode === 'proxy') {
     return (
       <CardShell title={t('login.title')} subtitle="">
@@ -79,13 +81,16 @@ export default function LoginPage() {
               {t('login.signInWith', { name: p.name })}
             </a>
           ))}
-          <div className="relative flex items-center gap-3 py-1">
-            <div className="flex-1 border-t border-slate-200 dark:border-zinc-800" />
-            <span className="text-xs text-slate-500 dark:text-zinc-500">{t('login.orLocal')}</span>
-            <div className="flex-1 border-t border-slate-200 dark:border-zinc-800" />
-          </div>
+          {localAuthEnabled && (
+            <div className="relative flex items-center gap-3 py-1">
+              <div className="flex-1 border-t border-slate-200 dark:border-zinc-800" />
+              <span className="text-xs text-slate-500 dark:text-zinc-500">{t('login.orLocal')}</span>
+              <div className="flex-1 border-t border-slate-200 dark:border-zinc-800" />
+            </div>
+          )}
         </div>
       )}
+      {localAuthEnabled ? (
       <form onSubmit={submit} method="post" className="space-y-4">
         <Field label={t('login.username')}>
           <input
@@ -128,6 +133,11 @@ export default function LoginPage() {
           {submitting ? t('login.submitting') : t('login.submit')}
         </button>
       </form>
+      ) : oidcProviders.length === 0 ? (
+        <p className="text-sm text-slate-600 dark:text-zinc-400 text-center py-2">
+          {t('login.contactAdmin')}
+        </p>
+      ) : null}
     </CardShell>
   )
 }

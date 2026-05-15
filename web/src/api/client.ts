@@ -74,6 +74,7 @@ export interface AuthStatus {
   username?: string
   role?: string
   mode: 'enabled' | 'local-only' | 'disabled' | 'proxy'
+  localAuthEnabled: boolean
 }
 
 export interface ManagedUser {

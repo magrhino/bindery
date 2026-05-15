@@ -147,3 +147,60 @@ func TestRateLimitFromEnv(t *testing.T) {
 		t.Errorf("RateLimitWindowMinutes = %d; want 30", cfg.RateLimitWindowMinutes)
 	}
 }
+
+// TestAuthPolicyDefaults verifies the three auth-policy env vars default to
+// the expected safe values: local auth on, OIDC auto-provision on, email-link off.
+func TestAuthPolicyDefaults(t *testing.T) {
+	t.Setenv("BINDERY_LOCAL_AUTH_ENABLED", "")
+	t.Setenv("BINDERY_OIDC_AUTO_PROVISION", "")
+	t.Setenv("BINDERY_OIDC_EMAIL_LINK", "")
+
+	cfg := Load()
+
+	if !cfg.LocalAuthEnabled {
+		t.Error("LocalAuthEnabled: expected default true")
+	}
+	if !cfg.OIDCAutoProvision {
+		t.Error("OIDCAutoProvision: expected default true")
+	}
+	if cfg.OIDCEmailLink {
+		t.Error("OIDCEmailLink: expected default false")
+	}
+}
+
+// TestAuthPolicyFromEnv verifies explicit values override the defaults.
+func TestAuthPolicyFromEnv(t *testing.T) {
+	cases := []struct {
+		localAuth   string
+		autoProvision string
+		emailLink   string
+		wantLocal   bool
+		wantProv    bool
+		wantLink    bool
+	}{
+		{"false", "false", "true", false, false, true},
+		{"0", "0", "1", false, false, true},
+		{"no", "no", "yes", false, false, true},
+		{"true", "true", "false", true, true, false},
+		{"1", "1", "0", true, true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.localAuth+"/"+c.autoProvision+"/"+c.emailLink, func(t *testing.T) {
+			t.Setenv("BINDERY_LOCAL_AUTH_ENABLED", c.localAuth)
+			t.Setenv("BINDERY_OIDC_AUTO_PROVISION", c.autoProvision)
+			t.Setenv("BINDERY_OIDC_EMAIL_LINK", c.emailLink)
+
+			cfg := Load()
+
+			if cfg.LocalAuthEnabled != c.wantLocal {
+				t.Errorf("LocalAuthEnabled=%v, want %v", cfg.LocalAuthEnabled, c.wantLocal)
+			}
+			if cfg.OIDCAutoProvision != c.wantProv {
+				t.Errorf("OIDCAutoProvision=%v, want %v", cfg.OIDCAutoProvision, c.wantProv)
+			}
+			if cfg.OIDCEmailLink != c.wantLink {
+				t.Errorf("OIDCEmailLink=%v, want %v", cfg.OIDCEmailLink, c.wantLink)
+			}
+		})
+	}
+}

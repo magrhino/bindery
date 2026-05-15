@@ -41,6 +41,7 @@ vi.mock('react-i18next', () => ({
         'login.errorFailed': 'Login failed',
         'login.proxyHint': 'Sign in via your SSO provider',
         'login.orLocal': 'or',
+        'login.contactAdmin': 'Contact your administrator for access',
       }
       return strings[key] ?? key
     },
@@ -158,5 +159,31 @@ describe('LoginPage', () => {
 
     expect(screen.getByText('Sign in via your SSO provider')).toBeInTheDocument()
     expect(screen.queryByLabelText('Username')).not.toBeInTheDocument()
+  })
+
+  it('hides the local login form when localAuthEnabled is false and OIDC providers exist', async () => {
+    authState.status = makeAuthStatus({ localAuthEnabled: false })
+    useOidcProviders([{ id: 'corp', name: 'Corp SSO', status: { state: 'ok' } }])
+
+    renderLoginPage()
+
+    // OIDC button should be present
+    expect(await screen.findByRole('link', { name: 'Sign in with Corp SSO' })).toBeInTheDocument()
+    // Local form must not be rendered
+    expect(screen.queryByLabelText('Username')).not.toBeInTheDocument()
+    // "or" divider must not be rendered when local auth is disabled
+    expect(screen.queryByText('or')).not.toBeInTheDocument()
+  })
+
+  it('shows contact-admin message when localAuthEnabled is false and no OIDC providers', async () => {
+    authState.status = makeAuthStatus({ localAuthEnabled: false })
+    useOidcProviders([])
+
+    renderLoginPage()
+
+    // Local form must not be rendered
+    expect(screen.queryByLabelText('Username')).not.toBeInTheDocument()
+    // Contact admin message should appear
+    expect(await screen.findByText('Contact your administrator for access')).toBeInTheDocument()
   })
 })

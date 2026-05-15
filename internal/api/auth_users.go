@@ -17,11 +17,19 @@ import (
 // DELETE /api/v1/auth/users/:id
 // PUT    /api/v1/auth/users/:id/role
 type UserManagementHandler struct {
-	users *db.UserRepo
+	users            *db.UserRepo
+	localAuthEnabled bool
 }
 
 func NewUserManagementHandler(users *db.UserRepo) *UserManagementHandler {
-	return &UserManagementHandler{users: users}
+	return &UserManagementHandler{users: users, localAuthEnabled: true}
+}
+
+// WithLocalAuthEnabled controls whether local password accounts may be
+// created via the admin API. When false, POST /auth/users returns 403.
+func (h *UserManagementHandler) WithLocalAuthEnabled(v bool) *UserManagementHandler {
+	h.localAuthEnabled = v
+	return h
 }
 
 type userResponse struct {
@@ -62,6 +70,10 @@ func (h *UserManagementHandler) List(w http.ResponseWriter, r *http.Request) {
 // Create adds a new user (admin-only).
 // POST /api/v1/auth/users
 func (h *UserManagementHandler) Create(w http.ResponseWriter, r *http.Request) {
+	if !h.localAuthEnabled {
+		writeErr(w, http.StatusForbidden, "local accounts are disabled")
+		return
+	}
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
