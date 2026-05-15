@@ -49,6 +49,26 @@ func TestFormatCalibredbPubdate(t *testing.T) {
 	}
 }
 
+func TestCalibredbSeriesIndexSkipsNonNumericValues(t *testing.T) {
+	meta := Metadata{Series: "Discworld", SeriesIndex: "Book 2"}
+	if got, want := meta.addArgs(), []string{"--series", "Discworld"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("addArgs = %#v, want %#v", got, want)
+	}
+	if got, want := meta.setFields(), []string{"series:Discworld"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("setFields = %#v, want %#v", got, want)
+	}
+}
+
+func TestCalibredbSeriesIndexKeepsNumericValues(t *testing.T) {
+	meta := Metadata{Series: "Dune Chronicles", SeriesIndex: " 1.5 "}
+	if got, want := meta.addArgs(), []string{"--series", "Dune Chronicles", "--series-index", "1.5"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("addArgs = %#v, want %#v", got, want)
+	}
+	if got, want := meta.setFields(), []string{"series:Dune Chronicles", "series_index:1.5"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("setFields = %#v, want %#v", got, want)
+	}
+}
+
 func TestIdentifiersForBook_UsesPresentBookAndEditionData(t *testing.T) {
 	editionASIN := "B000FC1BN8"
 	edition := &models.Edition{

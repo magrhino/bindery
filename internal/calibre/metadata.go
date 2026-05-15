@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -83,7 +84,7 @@ func (m Metadata) addArgs() []string {
 	if v := strings.TrimSpace(m.Series); v != "" {
 		args = append(args, "--series", v)
 	}
-	if v := strings.TrimSpace(m.SeriesIndex); v != "" {
+	if v := cleanCalibreSeriesIndex(m.SeriesIndex); v != "" {
 		args = append(args, "--series-index", v)
 	}
 	if tags := cleanList(m.Genres); len(tags) > 0 {
@@ -118,10 +119,22 @@ func (m Metadata) setFields() []string {
 	if v := strings.TrimSpace(m.Series); v != "" {
 		fields = append(fields, "series:"+v)
 	}
-	if v := strings.TrimSpace(m.SeriesIndex); v != "" {
+	if v := cleanCalibreSeriesIndex(m.SeriesIndex); v != "" {
 		fields = append(fields, "series_index:"+v)
 	}
 	return fields
+}
+
+func cleanCalibreSeriesIndex(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+		return ""
+	}
+	return strconv.FormatFloat(f, 'f', -1, 64)
 }
 
 func formatCalibredbPubdate(v string) string {
