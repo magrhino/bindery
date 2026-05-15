@@ -261,6 +261,7 @@ func TestCalibreMetadata_PrefersEditionFieldsAndMapsSeries(t *testing.T) {
 	}
 	author := &models.Author{Name: "Frank Herbert", SortName: "Herbert, Frank"}
 	edition := &models.Edition{
+		ForeignID:   "OL999M",
 		ISBN13:      strPtr("9780441172719"),
 		ASIN:        &asin,
 		Publisher:   "Ace",
@@ -295,6 +296,43 @@ func TestCalibreMetadata_PrefersEditionFieldsAndMapsSeries(t *testing.T) {
 	}
 	if meta.Identifiers["bindery"] != "42" || meta.Identifiers["openlibrary"] != "OL123W" {
 		t.Fatalf("provider identifiers = %+v", meta.Identifiers)
+	}
+	if meta.Identifiers["openlibrary_edition"] != "OL999M" {
+		t.Fatalf("openlibrary edition identifier = %q, want OL999M", meta.Identifiers["openlibrary_edition"])
+	}
+}
+
+func TestCalibreMetadata_NormalizesPresentProviderIdentifiers(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name      string
+		provider  string
+		foreignID string
+		wantType  string
+		wantValue string
+	}{
+		{"openlibrary", "openlibrary", "/works/OL123W", "openlibrary", "OL123W"},
+		{"hardcover", "hardcover", "hc:dune", "hardcover", "dune"},
+		{"googlebooks", "googlebooks", "gb:zyTCAlFPjgYC", "google", "zyTCAlFPjgYC"},
+		{"dnb", "dnb", "dnb:123456789", "dnb", "123456789"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			book := &models.Book{
+				ID:               42,
+				ForeignID:        tt.foreignID,
+				Title:            "Dune",
+				MetadataProvider: tt.provider,
+			}
+			s := NewScanner(nil, nil, nil, nil, nil, t.TempDir(), "", "", "", "")
+			meta := s.calibreMetadata(ctx, book, nil, nil, "", "", calibre.ModePlugin)
+			if meta.Identifiers[tt.wantType] != tt.wantValue {
+				t.Fatalf("identifier %q = %q, want %q in %+v", tt.wantType, meta.Identifiers[tt.wantType], tt.wantValue, meta.Identifiers)
+			}
+			if meta.Identifiers["bindery"] != "42" {
+				t.Fatalf("bindery identifier = %q, want 42", meta.Identifiers["bindery"])
+			}
+		})
 	}
 }
 

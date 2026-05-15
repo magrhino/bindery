@@ -53,14 +53,28 @@ func (f *fakeBookLister) SetCalibreID(_ context.Context, id, calibreID int64) er
 // correctly inside one sync run.
 type fakePusher struct {
 	calls map[string]func() (int64, error)
+	mu    sync.Mutex
+	metas map[string]Metadata
 }
 
-func (f *fakePusher) Add(_ context.Context, path string, _ Metadata) (int64, error) {
+func (f *fakePusher) Add(_ context.Context, path string, meta Metadata) (int64, error) {
+	f.mu.Lock()
+	if f.metas == nil {
+		f.metas = map[string]Metadata{}
+	}
+	f.metas[path] = meta
+	f.mu.Unlock()
 	fn, ok := f.calls[path]
 	if !ok {
 		return 0, errors.New("unexpected path")
 	}
 	return fn()
+}
+
+func (f *fakePusher) meta(path string) Metadata {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.metas[path]
 }
 
 func TestSyncer_Start_MixedOutcomesCountedCorrectly(t *testing.T) {
@@ -108,6 +122,47 @@ func TestSyncer_Start_MixedOutcomesCountedCorrectly(t *testing.T) {
 	}
 	if books.set[2] != 202 {
 		t.Errorf("expected duplicate book to persist calibre_id=202 from 409 response, got %d", books.set[2])
+	}
+}
+
+func TestSyncer_Start_PassesPresentBookIdentifiers(t *testing.T) {
+	books := &fakeBookLister{
+		books: []models.Book{{
+			ID:               42,
+			Title:            "Dune",
+			FilePath:         "/l/dune.epub",
+			ForeignID:        "gb:zyTCAlFPjgYC",
+			MetadataProvider: "googlebooks",
+			ASIN:             "B000FC1BN8",
+		}},
+	}
+	pusher := &fakePusher{calls: map[string]func() (int64, error){
+		"/l/dune.epub": func() (int64, error) { return 101, nil },
+	}}
+
+	s := NewSyncer(books)
+	s.newClient = func(_ Config) pluginPusher { return pusher }
+
+	if err := s.Start(context.Background(), Config{}, ModePlugin); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitUntil(t, 2*time.Second, func() bool { return !s.Running() })
+
+	meta := pusher.meta("/l/dune.epub")
+	if meta.Identifiers["bindery"] != "42" {
+		t.Fatalf("bindery identifier = %q, want 42", meta.Identifiers["bindery"])
+	}
+	if meta.Identifiers["google"] != "zyTCAlFPjgYC" {
+		t.Fatalf("google identifier = %q, want zyTCAlFPjgYC", meta.Identifiers["google"])
+	}
+	if meta.Identifiers["asin"] != "B000FC1BN8" {
+		t.Fatalf("asin identifier = %q, want B000FC1BN8", meta.Identifiers["asin"])
+	}
+	if _, ok := meta.Identifiers["isbn"]; ok {
+		t.Fatalf("syncer should not invent edition isbn identifier: %+v", meta.Identifiers)
+	}
+	if _, ok := meta.Identifiers["openlibrary_edition"]; ok {
+		t.Fatalf("syncer should not invent edition identifier: %+v", meta.Identifiers)
 	}
 }
 
