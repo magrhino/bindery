@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -182,18 +180,10 @@ func (s *Syncer) run(ctx context.Context, cfg Config) {
 		b := &eligible[i]
 		path := pushPath(b)
 		meta := Metadata{
-			Title:    b.Title,
-			Language: NormalizeLanguageForCalibre(b.Language),
-			Genres:   b.Genres,
-			Identifiers: map[string]string{
-				"bindery": strconv.FormatInt(b.ID, 10),
-			},
-		}
-		if strings.TrimSpace(b.ASIN) != "" {
-			meta.Identifiers["asin"] = b.ASIN
-		}
-		if strings.TrimSpace(b.MetadataProvider) != "" && strings.TrimSpace(b.ForeignID) != "" {
-			meta.Identifiers[b.MetadataProvider] = b.ForeignID
+			Title:       b.Title,
+			Language:    NormalizeLanguageForCalibre(b.Language),
+			Genres:      b.Genres,
+			Identifiers: IdentifiersForBook(b, nil),
 		}
 		id, addErr := client.Add(ctx, path, meta)
 		switch {

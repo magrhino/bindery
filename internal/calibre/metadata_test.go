@@ -1,6 +1,11 @@
 package calibre
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+
+	"github.com/vavallee/bindery/internal/models"
+)
 
 func TestNormalizeLanguageForCalibre(t *testing.T) {
 	tests := []struct {
@@ -23,3 +28,76 @@ func TestNormalizeLanguageForCalibre(t *testing.T) {
 		}
 	}
 }
+
+func TestIdentifiersForBook_UsesPresentBookAndEditionData(t *testing.T) {
+	editionASIN := "B000FC1BN8"
+	edition := &models.Edition{
+		ForeignID: "/books/OL999M",
+		ISBN13:    strPtr("9780441172719"),
+		ISBN10:    strPtr("0441172717"),
+		ASIN:      &editionASIN,
+	}
+	book := &models.Book{
+		ID:               42,
+		ForeignID:        "/works/OL123W",
+		MetadataProvider: "openlibrary",
+		ASIN:             "BOOKASIN",
+	}
+
+	got := IdentifiersForBook(book, edition)
+	want := map[string]string{
+		"asin":                "B000FC1BN8",
+		"bindery":             "42",
+		"isbn":                "9780441172719",
+		"openlibrary":         "OL123W",
+		"openlibrary_edition": "OL999M",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("IdentifiersForBook = %#v, want %#v", got, want)
+	}
+}
+
+func TestIdentifiersForBook_NormalizesProviderIdentifiers(t *testing.T) {
+	tests := []struct {
+		name      string
+		provider  string
+		foreignID string
+		wantType  string
+		wantValue string
+	}{
+		{"hardcover", "hardcover", "hc:dune", "hardcover", "dune"},
+		{"googlebooks", "googlebooks", "gb:zyTCAlFPjgYC", "google", "zyTCAlFPjgYC"},
+		{"google", "google", "gb:zyTCAlFPjgYC", "google", "zyTCAlFPjgYC"},
+		{"dnb", "dnb", "dnb:123456789", "dnb", "123456789"},
+		{"fallback", "Other.Provider", " provider:value ", "other_provider", "provider:value"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IdentifiersForBook(&models.Book{
+				ID:               7,
+				ForeignID:        tt.foreignID,
+				MetadataProvider: tt.provider,
+			}, nil)
+			if got[tt.wantType] != tt.wantValue {
+				t.Fatalf("identifier %q = %q, want %q in %#v", tt.wantType, got[tt.wantType], tt.wantValue, got)
+			}
+			if got["bindery"] != "7" {
+				t.Fatalf("bindery identifier = %q, want 7", got["bindery"])
+			}
+		})
+	}
+}
+
+func TestIdentifierArgs_CleansAndSortsIdentifiers(t *testing.T) {
+	got := identifierArgs(map[string]string{
+		"Google Books": " gb:abc,123 ",
+		"isbn":         " 9780441172719 ",
+		"empty":        "",
+	})
+	want := []string{"google_books:gb:abc 123", "isbn:9780441172719"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("identifierArgs = %#v, want %#v", got, want)
+	}
+}
+
+func strPtr(s string) *string { return &s }

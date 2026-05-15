@@ -320,28 +320,14 @@ func (s *Scanner) calibreMetadata(ctx context.Context, book *models.Book, author
 		SeriesIndex:   seriesNum,
 		PublishedDate: calibre.FormatPublishedDate(book.ReleaseDate),
 		Rating:        book.AverageRating,
-		Identifiers: map[string]string{
-			"bindery": strconv.FormatInt(book.ID, 10),
-		},
+		Identifiers:   calibre.IdentifiersForBook(book, edition),
 	}
 	if author != nil {
 		meta.Authors = []string{author.Name}
 		meta.AuthorSort = author.SortName
 	}
-	if provider := strings.TrimSpace(book.MetadataProvider); provider != "" && strings.TrimSpace(book.ForeignID) != "" {
-		meta.Identifiers[provider] = book.ForeignID
-	}
-	if strings.TrimSpace(book.ASIN) != "" {
-		meta.Identifiers["asin"] = book.ASIN
-	}
 	imageURL := book.ImageURL
 	if edition != nil {
-		if isbn := firstString(edition.ISBN13, edition.ISBN10); isbn != "" {
-			meta.Identifiers["isbn"] = isbn
-		}
-		if edition.ASIN != nil && strings.TrimSpace(*edition.ASIN) != "" {
-			meta.Identifiers["asin"] = *edition.ASIN
-		}
 		if strings.TrimSpace(edition.Publisher) != "" {
 			meta.Publisher = edition.Publisher
 		}
