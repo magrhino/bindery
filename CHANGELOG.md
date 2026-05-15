@@ -6,6 +6,18 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **Calibre metadata handoff** — Calibre pushes now carry Bindery book, author,
+  edition, series, identifier, language, rating, description, and cover
+  metadata through both `calibredb` and metadata-capable Bindery Bridge plugin
+  syncs, with legacy plugin fallback preserved.
+
+### Fixed
+
+- **Calibre ID reuse** — Plugin sync no longer reuses a stored source-library
+  Calibre ID when pushing into a different Calibre library.
+
 ## [v1.11.1] — 2026-05-15
 
 ### Fixed
