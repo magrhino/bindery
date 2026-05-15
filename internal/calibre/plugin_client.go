@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,6 +20,8 @@ import (
 // response body.
 var ErrAlreadyInCalibre = errors.New("plugin client: book already in Calibre library")
 
+const pluginCapabilityBookMetadata = "book_metadata"
+
 // PluginClient calls the Bindery Bridge Calibre plugin's HTTP API
 // (protocol /v1/, see bindery-plugins/docs/protocol.md). It implements the
 // importer's calibreAdder interface so the scanner can swap it in when the
@@ -27,6 +30,11 @@ type PluginClient struct {
 	baseURL string
 	apiKey  string
 	http    *http.Client
+
+	capMu                 sync.Mutex
+	capabilitiesLoaded    bool
+	supportsBookMetadata  bool
+	metadataWarningLogged bool
 }
 
 // NewPluginClient builds a client against the plugin's base URL (e.g.
@@ -45,7 +53,17 @@ func NewPluginClient(baseURL, apiKey string) *PluginClient {
 // Retries once on 503 (library swap in progress); all other non-2xx
 // statuses surface immediately.
 func (c *PluginClient) Add(ctx context.Context, filePath string, meta Metadata) (int64, error) {
-	return c.addWithRetry(ctx, filePath, meta, 1, false)
+	legacyPayload := false
+	if !meta.empty() {
+		supported, err := c.supportsMetadata(ctx)
+		if err != nil {
+			c.warnMetadataUnavailable("plugin client: metadata capability probe failed; sending metadata and will retry legacy payload if rejected", "error", err)
+		} else if !supported {
+			c.warnMetadataUnavailable("plugin client: plugin does not advertise metadata support; upgrade Bindery Bridge to export metadata")
+			legacyPayload = true
+		}
+	}
+	return c.addWithRetry(ctx, filePath, meta, 1, legacyPayload)
 }
 
 func (c *PluginClient) addWithRetry(ctx context.Context, filePath string, meta Metadata, retries int, legacyPayload bool) (int64, error) {
@@ -120,33 +138,86 @@ func (r pluginAddRequest) MarshalJSON() ([]byte, error) {
 	}{Path: r.Path, Metadata: *r.Metadata})
 }
 
+type pluginHealth struct {
+	PluginVersion  string   `json:"plugin_version"`
+	CalibreVersion string   `json:"calibre_version"`
+	Library        string   `json:"library"`
+	Capabilities   []string `json:"capabilities"`
+}
+
+func (c *PluginClient) supportsMetadata(ctx context.Context) (bool, error) {
+	c.capMu.Lock()
+	defer c.capMu.Unlock()
+	if c.capabilitiesLoaded {
+		return c.supportsBookMetadata, nil
+	}
+	h, err := c.fetchHealth(ctx)
+	if err != nil {
+		return false, err
+	}
+	c.cacheCapabilitiesLocked(h)
+	return c.supportsBookMetadata, nil
+}
+
+func (c *PluginClient) warnMetadataUnavailable(msg string, args ...any) {
+	c.capMu.Lock()
+	defer c.capMu.Unlock()
+	if c.metadataWarningLogged {
+		return
+	}
+	c.metadataWarningLogged = true
+	slog.Warn(msg, args...)
+}
+
+func (c *PluginClient) cacheCapabilities(h pluginHealth) {
+	c.capMu.Lock()
+	defer c.capMu.Unlock()
+	c.cacheCapabilitiesLocked(h)
+}
+
+func (c *PluginClient) cacheCapabilitiesLocked(h pluginHealth) {
+	c.capabilitiesLoaded = true
+	c.supportsBookMetadata = false
+	for _, cap := range h.Capabilities {
+		if cap == pluginCapabilityBookMetadata {
+			c.supportsBookMetadata = true
+			return
+		}
+	}
+}
+
 // Health probes GET /v1/health and returns a human-readable version
 // string for the Settings → Test button.
 func (c *PluginClient) Health(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/health", nil)
+	h, err := c.fetchHealth(ctx)
 	if err != nil {
 		return "", err
+	}
+	c.cacheCapabilities(h)
+	return fmt.Sprintf("calibredb plugin v%s (Calibre %s)", h.PluginVersion, h.CalibreVersion), nil
+}
+
+func (c *PluginClient) fetchHealth(ctx context.Context) (pluginHealth, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/health", nil)
+	if err != nil {
+		return pluginHealth{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("User-Agent", "bindery plugin-api/v1")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("plugin client: health: %w", err)
+		return pluginHealth{}, fmt.Errorf("plugin client: health: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized {
-		return "", fmt.Errorf("plugin client: authentication failed — check api_key in Settings → Calibre")
+		return pluginHealth{}, fmt.Errorf("plugin client: authentication failed — check api_key in Settings → Calibre")
 	}
 	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("plugin client: health: server error %d", resp.StatusCode)
+		return pluginHealth{}, fmt.Errorf("plugin client: health: server error %d", resp.StatusCode)
 	}
-	var h struct {
-		PluginVersion  string `json:"plugin_version"`
-		CalibreVersion string `json:"calibre_version"`
-		Library        string `json:"library"`
-	}
+	var h pluginHealth
 	if err := json.NewDecoder(resp.Body).Decode(&h); err != nil {
-		return "", fmt.Errorf("plugin client: decode health: %w", err)
+		return pluginHealth{}, fmt.Errorf("plugin client: decode health: %w", err)
 	}
-	return fmt.Sprintf("calibredb plugin v%s (Calibre %s)", h.PluginVersion, h.CalibreVersion), nil
+	return h, nil
 }
