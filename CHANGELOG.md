@@ -6,6 +6,10 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **Hardcover edition metadata lookup** — Hardcover-backed books can now return edition-level metadata, including ISBNs, ASINs, publisher, format, page count, cover, language, and audiobook duration, using Hardcover's current editions query shape.
+
 ## [v1.12.0] — 2026-05-18
 
 ### Added

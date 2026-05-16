@@ -25,6 +25,8 @@ const (
 
 	authorWorksPageSize = 100
 	authorWorksMaxBooks = 500
+	editionsPageSize    = 100
+	editionsMaxCount    = 1000
 
 	hardcoverSuccessResponseBodyLimit = 8 << 20
 )
@@ -313,15 +315,95 @@ func (c *Client) GetBook(ctx context.Context, foreignID string) (*models.Book, e
 	return &b, nil
 }
 
-// GetEditions is not supported by Hardcover.
-func (c *Client) GetEditions(_ context.Context, _ string) ([]models.Edition, error) {
-	return nil, nil
+func (c *Client) GetEditions(ctx context.Context, bookForeignID string) ([]models.Edition, error) {
+	id := strings.TrimSpace(strings.TrimPrefix(bookForeignID, idPrefix))
+	if id == "" {
+		return nil, nil
+	}
+
+	gql := `query GetEditions($slug: String!, $limit: Int!, $offset: Int!) {
+		editions(
+			where: {book: {slug: {_eq: $slug}}},
+			limit: $limit,
+			offset: $offset,
+			order_by: {id: asc}
+		) {
+			id
+			title
+			isbn_10
+			isbn_13
+			asin
+			publisher { name }
+			release_date
+			release_year
+			physical_format
+			edition_format
+			edition_information
+			pages
+			image { url }
+			language { language }
+			reading_format { format }
+			audio_seconds
+			book { title }
+		}
+	}`
+	vars := map[string]any{"slug": id}
+	if numericID, ok := hardcoverNumericID(id); ok {
+		gql = `query GetEditions($bookID: Int!, $limit: Int!, $offset: Int!) {
+		editions(
+			where: {book_id: {_eq: $bookID}},
+			limit: $limit,
+			offset: $offset,
+			order_by: {id: asc}
+		) {
+			id
+			title
+			isbn_10
+			isbn_13
+			asin
+			publisher { name }
+			release_date
+			release_year
+			physical_format
+			edition_format
+			edition_information
+			pages
+			image { url }
+			language { language }
+			reading_format { format }
+			audio_seconds
+			book { title }
+		}
+	}`
+		vars = map[string]any{"bookID": numericID}
+	}
+
+	editions := make([]models.Edition, 0, editionsPageSize)
+	for offset := 0; offset < editionsMaxCount; offset += editionsPageSize {
+		vars["limit"] = editionsPageSize
+		vars["offset"] = offset
+		var resp struct {
+			Data struct {
+				Editions []hcEdition `json:"editions"`
+			} `json:"data"`
+		}
+		if err := c.query(ctx, gql, vars, &resp); err != nil {
+			return nil, fmt.Errorf("hardcover get editions: %w", err)
+		}
+		for _, e := range resp.Data.Editions {
+			editions = append(editions, hardcoverEditionToModel(e))
+		}
+		if len(resp.Data.Editions) < editionsPageSize {
+			break
+		}
+	}
+	return editions, nil
 }
 
 func (c *Client) GetBookByISBN(ctx context.Context, isbn string) (*models.Book, error) {
 	gql := `query GetBookByISBN($isbn: String!) {
 		editions(where: {_or: [{isbn_10: {_eq: $isbn}}, {isbn_13: {_eq: $isbn}}]}, limit: 1) {
-			language { iso_639_1 }
+			language { language }
 			book {
 				id
 				title
@@ -353,8 +435,8 @@ func (c *Client) GetBookByISBN(ctx context.Context, isbn string) (*models.Book, 
 	}
 	ed := resp.Data.Editions[0]
 	b := c.toBook(ed.Book)
-	if ed.Language != nil && ed.Language.ISO6391 != "" {
-		b.Language = ed.Language.ISO6391
+	if language := hardcoverLanguageName(ed.Language); language != "" {
+		b.Language = language
 	}
 	return &b, nil
 }
@@ -699,7 +781,15 @@ type hcImage struct {
 }
 
 type hcLanguage struct {
-	ISO6391 string `json:"iso_639_1"`
+	Language string `json:"language"`
+}
+
+type hcPublisher struct {
+	Name string `json:"name"`
+}
+
+type hcReadingFormat struct {
+	Format string `json:"format"`
 }
 
 type hcAuthor struct {
@@ -729,6 +819,28 @@ type hcBook struct {
 	AudioSeconds  *int             `json:"audio_seconds"`
 	Contributions []hcContribution `json:"contributions"`
 	AuthorNames   []string         `json:"author_names"`
+}
+
+type hcEdition struct {
+	ID                 int              `json:"id"`
+	Title              string           `json:"title"`
+	ISBN10             string           `json:"isbn_10"`
+	ISBN13             string           `json:"isbn_13"`
+	ASIN               string           `json:"asin"`
+	Publisher          *hcPublisher     `json:"publisher"`
+	ReleaseDate        string           `json:"release_date"`
+	ReleaseYear        *int             `json:"release_year"`
+	PhysicalFormat     string           `json:"physical_format"`
+	EditionFormat      string           `json:"edition_format"`
+	EditionInformation string           `json:"edition_information"`
+	Pages              *int             `json:"pages"`
+	Image              *hcImage         `json:"image"`
+	Language           *hcLanguage      `json:"language"`
+	ReadingFormat      *hcReadingFormat `json:"reading_format"`
+	AudioSeconds       *int             `json:"audio_seconds"`
+	Book               *struct {
+		Title string `json:"title"`
+	} `json:"book"`
 }
 
 type hcAuthorSearchEnvelope struct {
@@ -1041,6 +1153,179 @@ func (c *Client) toBook(b hcBook) models.Book {
 		}
 	}
 	return bk
+}
+
+func hardcoverEditionToModel(e hcEdition) models.Edition {
+	title := strings.TrimSpace(e.Title)
+	if title == "" && e.Book != nil {
+		title = strings.TrimSpace(e.Book.Title)
+	}
+	format := firstNonEmpty(e.PhysicalFormat, e.EditionFormat, hardcoverReadingFormat(e))
+	ed := models.Edition{
+		ForeignID:   idPrefix + strconv.Itoa(e.ID),
+		Title:       title,
+		Publisher:   hardcoverPublisherName(e.Publisher),
+		PublishDate: parseHardcoverEditionDate(e.ReleaseDate, e.ReleaseYear),
+		Format:      format,
+		NumPages:    positiveIntPtr(e.Pages),
+		Language:    hardcoverLanguageName(e.Language),
+		ImageURL:    hardcoverImageURL(e.Image),
+		IsEbook:     hardcoverEditionIsEbook(format, hardcoverReadingFormat(e)),
+		EditionInfo: strings.TrimSpace(e.EditionInformation),
+		Monitored:   true,
+	}
+	ed.ISBN10 = nonEmptyStringPtr(e.ISBN10)
+	ed.ISBN13 = nonEmptyStringPtr(e.ISBN13)
+	ed.ASIN = nonEmptyStringPtr(e.ASIN)
+	return ed
+}
+
+func parseHardcoverEditionDate(releaseDate string, releaseYear *int) *time.Time {
+	releaseDate = strings.TrimSpace(releaseDate)
+	if releaseDate != "" {
+		for _, layout := range []string{"2006-01-02", time.RFC3339} {
+			t, err := time.Parse(layout, releaseDate)
+			if err == nil {
+				return &t
+			}
+		}
+	}
+	if releaseYear != nil && *releaseYear > 0 {
+		t := time.Date(*releaseYear, 1, 1, 0, 0, 0, 0, time.UTC)
+		return &t
+	}
+	return nil
+}
+
+func hardcoverEditionIsEbook(values ...string) bool {
+	for _, value := range values {
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		if normalized == "" {
+			continue
+		}
+		if strings.Contains(normalized, "ebook") ||
+			strings.Contains(normalized, "e-book") ||
+			strings.Contains(normalized, "kindle") {
+			return true
+		}
+	}
+	return false
+}
+
+func hardcoverReadingFormat(e hcEdition) string {
+	if e.ReadingFormat == nil {
+		return ""
+	}
+	return strings.TrimSpace(e.ReadingFormat.Format)
+}
+
+func hardcoverPublisherName(publisher *hcPublisher) string {
+	if publisher == nil {
+		return ""
+	}
+	return strings.TrimSpace(publisher.Name)
+}
+
+func hardcoverLanguageName(language *hcLanguage) string {
+	if language == nil {
+		return ""
+	}
+	code := strings.ToLower(strings.TrimSpace(language.Language))
+	if code == "" {
+		return ""
+	}
+	if mapped, ok := hardcoverLanguageAliases[code]; ok {
+		return mapped
+	}
+	return code
+}
+
+var hardcoverLanguageAliases = map[string]string{
+	"english":    "eng",
+	"en":         "eng",
+	"german":     "ger",
+	"de":         "ger",
+	"deu":        "ger",
+	"french":     "fre",
+	"fr":         "fre",
+	"fra":        "fre",
+	"spanish":    "spa",
+	"es":         "spa",
+	"italian":    "ita",
+	"it":         "ita",
+	"dutch":      "dut",
+	"nl":         "dut",
+	"nld":        "dut",
+	"portuguese": "por",
+	"pt":         "por",
+	"japanese":   "jpn",
+	"ja":         "jpn",
+	"russian":    "rus",
+	"ru":         "rus",
+	"chinese":    "chi",
+	"zh":         "chi",
+	"danish":     "dan",
+	"da":         "dan",
+	"swedish":    "swe",
+	"sv":         "swe",
+	"norwegian":  "nor",
+	"no":         "nor",
+	"polish":     "pol",
+	"pl":         "pol",
+	"finnish":    "fin",
+	"fi":         "fin",
+	"hindi":      "hin",
+	"hi":         "hin",
+	"turkish":    "tur",
+	"tr":         "tur",
+	"arabic":     "ara",
+	"ar":         "ara",
+	"korean":     "kor",
+	"ko":         "kor",
+	"czech":      "cze",
+	"cs":         "cze",
+	"greek":      "gre",
+	"el":         "gre",
+	"hungarian":  "hun",
+	"hu":         "hun",
+	"romanian":   "rum",
+	"ro":         "rum",
+	"catalan":    "cat",
+	"ca":         "cat",
+	"latin":      "lat",
+	"la":         "lat",
+}
+
+func hardcoverImageURL(image *hcImage) string {
+	if image == nil {
+		return ""
+	}
+	return strings.TrimSpace(image.URL)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func nonEmptyStringPtr(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func positiveIntPtr(value *int) *int {
+	if value == nil || *value <= 0 {
+		return nil
+	}
+	n := *value
+	return &n
 }
 
 func sortName(name string) string {

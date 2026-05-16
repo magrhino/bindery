@@ -723,14 +723,261 @@ func TestGetBook_NotFound(t *testing.T) {
 	}
 }
 
-func TestGetEditions_AlwaysNil(t *testing.T) {
-	c := New()
-	editions, err := c.GetEditions(context.Background(), "any-id")
+func TestGetEditions_MapsGraphQLResponse(t *testing.T) {
+	var gotQuery string
+	var gotVars map[string]any
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		body, _ := io.ReadAll(r.Body)
+		var req gqlRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		gotQuery = req.Query
+		gotVars = req.Variables
+		data := map[string]interface{}{
+			"editions": []map[string]interface{}{
+				{
+					"id":                  123,
+					"title":               "Dune Deluxe",
+					"isbn_10":             "0441172717",
+					"isbn_13":             "9780441172719",
+					"asin":                "B0036S4B2G",
+					"publisher":           map[string]interface{}{"name": "Ace Books"},
+					"release_date":        "1965-08-01",
+					"release_year":        1965,
+					"physical_format":     "Hardcover",
+					"edition_format":      "Anniversary Edition",
+					"edition_information": "50th anniversary",
+					"pages":               412,
+					"image":               map[string]interface{}{"url": "https://img.example/dune.jpg"},
+					"language":            map[string]interface{}{"language": "English"},
+					"reading_format":      map[string]interface{}{"format": "Physical"},
+					"book":                map[string]interface{}{"title": "Dune"},
+				},
+			},
+		}
+		return gqlResponse(t, http.StatusOK, data), nil
+	})
+
+	editions, err := c.GetEditions(context.Background(), "hc:dune")
 	if err != nil {
 		t.Fatalf("GetEditions: %v", err)
 	}
-	if editions != nil {
-		t.Errorf("expected nil, got %v", editions)
+	if len(editions) != 1 {
+		t.Fatalf("expected 1 edition, got %d", len(editions))
+	}
+	if strings.Contains(gotQuery, "iso_639_1") {
+		t.Fatalf("GetEditions query uses unsupported language field: %s", gotQuery)
+	}
+	if !strings.Contains(gotQuery, "book: {slug: {_eq: $slug}}") {
+		t.Fatalf("GetEditions slug query did not filter by book slug: %s", gotQuery)
+	}
+	if gotVars["slug"] != "dune" {
+		t.Fatalf("slug variable = %#v, want dune", gotVars["slug"])
+	}
+	if gotVars["limit"] != float64(editionsPageSize) {
+		t.Fatalf("limit variable = %#v, want %d", gotVars["limit"], editionsPageSize)
+	}
+	if gotVars["offset"] != float64(0) {
+		t.Fatalf("offset variable = %#v, want 0", gotVars["offset"])
+	}
+	e := editions[0]
+	if e.ForeignID != "hc:123" {
+		t.Errorf("ForeignID = %q, want hc:123", e.ForeignID)
+	}
+	if e.Title != "Dune Deluxe" {
+		t.Errorf("Title = %q, want Dune Deluxe", e.Title)
+	}
+	if e.ISBN10 == nil || *e.ISBN10 != "0441172717" {
+		t.Errorf("ISBN10 = %v, want 0441172717", e.ISBN10)
+	}
+	if e.ISBN13 == nil || *e.ISBN13 != "9780441172719" {
+		t.Errorf("ISBN13 = %v, want 9780441172719", e.ISBN13)
+	}
+	if e.ASIN == nil || *e.ASIN != "B0036S4B2G" {
+		t.Errorf("ASIN = %v, want B0036S4B2G", e.ASIN)
+	}
+	if e.Publisher != "Ace Books" {
+		t.Errorf("Publisher = %q, want Ace Books", e.Publisher)
+	}
+	if e.PublishDate == nil || e.PublishDate.Format("2006-01-02") != "1965-08-01" {
+		t.Errorf("PublishDate = %v, want 1965-08-01", e.PublishDate)
+	}
+	if e.Format != "Hardcover" {
+		t.Errorf("Format = %q, want Hardcover", e.Format)
+	}
+	if e.NumPages == nil || *e.NumPages != 412 {
+		t.Errorf("NumPages = %v, want 412", e.NumPages)
+	}
+	if e.ImageURL != "https://img.example/dune.jpg" {
+		t.Errorf("ImageURL = %q, want cover URL", e.ImageURL)
+	}
+	if e.Language != "eng" {
+		t.Errorf("Language = %q, want eng", e.Language)
+	}
+	if e.EditionInfo != "50th anniversary" {
+		t.Errorf("EditionInfo = %q, want 50th anniversary", e.EditionInfo)
+	}
+	if !e.Monitored {
+		t.Error("Monitored = false, want true")
+	}
+	if e.IsEbook {
+		t.Error("IsEbook = true, want false")
+	}
+}
+
+func TestGetEditions_FormatFallbacks(t *testing.T) {
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		data := map[string]interface{}{
+			"editions": []map[string]interface{}{
+				{
+					"id":             124,
+					"title":          "",
+					"release_year":   2021,
+					"edition_format": "Kindle Edition",
+					"reading_format": map[string]interface{}{"format": "Ebook"},
+					"book":           map[string]interface{}{"title": "Dune"},
+				},
+				{
+					"id":             125,
+					"title":          "Dune Audio",
+					"reading_format": map[string]interface{}{"format": "Audiobook"},
+					"audio_seconds":  3600,
+				},
+			},
+		}
+		return gqlResponse(t, http.StatusOK, data), nil
+	})
+
+	editions, err := c.GetEditions(context.Background(), "hc:dune")
+	if err != nil {
+		t.Fatalf("GetEditions: %v", err)
+	}
+	if len(editions) != 2 {
+		t.Fatalf("expected 2 editions, got %d", len(editions))
+	}
+	ebook := editions[0]
+	if ebook.Title != "Dune" {
+		t.Errorf("fallback title = %q, want Dune", ebook.Title)
+	}
+	if ebook.Format != "Kindle Edition" {
+		t.Errorf("ebook Format = %q, want Kindle Edition", ebook.Format)
+	}
+	if !ebook.IsEbook {
+		t.Error("Kindle edition should be marked as ebook")
+	}
+	if ebook.PublishDate == nil || ebook.PublishDate.Format("2006-01-02") != "2021-01-01" {
+		t.Errorf("PublishDate = %v, want 2021-01-01", ebook.PublishDate)
+	}
+	audio := editions[1]
+	if audio.Format != "Audiobook" {
+		t.Errorf("audio Format = %q, want Audiobook", audio.Format)
+	}
+	if audio.IsEbook {
+		t.Error("audiobook should not be marked as ebook")
+	}
+}
+
+func TestGetEditions_NumericIDUsesBookID(t *testing.T) {
+	var gotQuery string
+	var gotVars map[string]any
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		body, _ := io.ReadAll(r.Body)
+		var req gqlRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		gotQuery = req.Query
+		gotVars = req.Variables
+		return gqlResponse(t, http.StatusOK, map[string]interface{}{"editions": []interface{}{}}), nil
+	})
+
+	editions, err := c.GetEditions(context.Background(), "hc:312460")
+	if err != nil {
+		t.Fatalf("GetEditions: %v", err)
+	}
+	if len(editions) != 0 {
+		t.Fatalf("expected no editions, got %d", len(editions))
+	}
+	if gotVars["bookID"] != float64(312460) {
+		t.Fatalf("bookID variable = %#v, want 312460", gotVars["bookID"])
+	}
+	if _, ok := gotVars["slug"]; ok {
+		t.Fatalf("slug variable present for numeric lookup: %#v", gotVars["slug"])
+	}
+	if !strings.Contains(gotQuery, "book_id: {_eq: $bookID}") {
+		t.Fatalf("query did not use book_id lookup: %s", gotQuery)
+	}
+	if strings.Contains(gotQuery, "iso_639_1") {
+		t.Fatalf("GetEditions query uses unsupported language field: %s", gotQuery)
+	}
+}
+
+func TestGetEditions_Paginates(t *testing.T) {
+	var offsets []int
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		body, _ := io.ReadAll(r.Body)
+		var req gqlRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		offset := int(req.Variables["offset"].(float64))
+		offsets = append(offsets, offset)
+		count := editionsPageSize
+		if offset > 0 {
+			count = 1
+		}
+		editions := make([]map[string]interface{}, 0, count)
+		for i := 0; i < count; i++ {
+			editions = append(editions, map[string]interface{}{
+				"id":    offset + i + 1,
+				"title": "Edition",
+			})
+		}
+		return gqlResponse(t, http.StatusOK, map[string]interface{}{"editions": editions}), nil
+	})
+
+	editions, err := c.GetEditions(context.Background(), "hc:dune")
+	if err != nil {
+		t.Fatalf("GetEditions: %v", err)
+	}
+	if len(editions) != editionsPageSize+1 {
+		t.Fatalf("edition count = %d, want %d", len(editions), editionsPageSize+1)
+	}
+	if len(offsets) != 2 || offsets[0] != 0 || offsets[1] != editionsPageSize {
+		t.Fatalf("offsets = %v, want [0 %d]", offsets, editionsPageSize)
+	}
+}
+
+func TestGetEditions_GraphQLError(t *testing.T) {
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		return gqlResponse(t, http.StatusOK, `{"errors":[{"message":"field not found"}]}`), nil
+	})
+
+	_, err := c.GetEditions(context.Background(), "hc:dune")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "hardcover get editions") {
+		t.Fatalf("error = %v, want hardcover get editions wrapper", err)
+	}
+}
+
+func TestGetEditions_HTTPError(t *testing.T) {
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusForbidden,
+			Body:       io.NopCloser(strings.NewReader("forbidden")),
+			Header:     make(http.Header),
+		}, nil
+	})
+
+	_, err := c.GetEditions(context.Background(), "hc:dune")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "hardcover get editions") {
+		t.Fatalf("error = %v, want hardcover get editions wrapper", err)
 	}
 }
 
@@ -763,11 +1010,18 @@ func TestGetBookByISBN_Found(t *testing.T) {
 }
 
 func TestGetBookByISBN_WithLanguage(t *testing.T) {
+	var gotQuery string
 	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		body, _ := io.ReadAll(r.Body)
+		var req gqlRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		gotQuery = req.Query
 		data := map[string]interface{}{
 			"editions": []map[string]interface{}{
 				{
-					"language": map[string]interface{}{"iso_639_1": "de"},
+					"language": map[string]interface{}{"language": "German"},
 					"book": map[string]interface{}{
 						"id":    88,
 						"title": "Der Herr der Ringe",
@@ -786,8 +1040,14 @@ func TestGetBookByISBN_WithLanguage(t *testing.T) {
 	if book == nil {
 		t.Fatal("expected non-nil book")
 	}
-	if book.Language != "de" {
-		t.Errorf("Language: want 'de', got %q", book.Language)
+	if strings.Contains(gotQuery, "iso_639_1") {
+		t.Fatalf("GetBookByISBN query uses unsupported language field: %s", gotQuery)
+	}
+	if !strings.Contains(gotQuery, "language { language }") {
+		t.Fatalf("GetBookByISBN query did not request language field: %s", gotQuery)
+	}
+	if book.Language != "ger" {
+		t.Errorf("Language: want 'ger', got %q", book.Language)
 	}
 }
 
@@ -1385,6 +1645,28 @@ func TestHcShelfStatusID(t *testing.T) {
 	}
 	if _, ok := hcShelfStatusID(42); ok {
 		t.Error("hcShelfStatusID(42) should return false")
+	}
+}
+
+func TestHardcoverLanguageName_NormalizesNamesAndCodes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   *hcLanguage
+		want string
+	}{
+		{name: "nil", in: nil, want: ""},
+		{name: "blank", in: &hcLanguage{Language: " "}, want: ""},
+		{name: "english name", in: &hcLanguage{Language: "English"}, want: "eng"},
+		{name: "german name", in: &hcLanguage{Language: "German"}, want: "ger"},
+		{name: "two letter code", in: &hcLanguage{Language: "de"}, want: "ger"},
+		{name: "three letter code", in: &hcLanguage{Language: "fre"}, want: "fre"},
+		{name: "unknown", in: &hcLanguage{Language: "Klingon"}, want: "klingon"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hardcoverLanguageName(tc.in); got != tc.want {
+				t.Errorf("hardcoverLanguageName(%+v) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
 	}
 }
 
