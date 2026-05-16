@@ -18,6 +18,8 @@ const (
 	hcStatusIgnored          = 6
 )
 
+const listBooksPageSize = 100
+
 // GetUserWishlist fetches the authenticated user's "Want to Read" books.
 // Returns candidates suitable for list-cross recommendations.
 // Requires the client to have an API token set via WithToken; returns nil if not configured.
@@ -183,48 +185,52 @@ func (c *Client) GetListBooks(ctx context.Context, listID int) ([]models.Book, e
 	if statusID, ok := hcShelfStatusID(listID); ok {
 		return c.getShelfBooks(ctx, statusID)
 	}
-	gql := `query GetListBooks($id: Int!) {
-		lists(where: {id: {_eq: $id}}, limit: 1) {
-			id
-			name
-			slug
-			list_books {
-				book {
-					id
-					title
-					slug
-					description
-					image { url }
-					release_year
-					ratings_count
-					rating
-					default_audio_edition_id
-					default_ebook_edition_id
-					contributions {
-						author { id name slug }
-					}
+	gql := `query GetListBooks($id: Int!, $limit: Int!, $offset: Int!) {
+		list_books(
+			where: {list_id: {_eq: $id}},
+			limit: $limit,
+			offset: $offset,
+			order_by: [{position: asc}, {id: asc}]
+		) {
+			book {
+				id
+				title
+				slug
+				description
+				image { url }
+				release_year
+				ratings_count
+				rating
+				default_audio_edition_id
+				default_ebook_edition_id
+				contributions {
+					author { id name slug }
 				}
 			}
 		}
 	}`
-	var resp struct {
-		Data struct {
-			Lists []struct {
+	books := make([]models.Book, 0, listBooksPageSize)
+	for offset := 0; ; offset += listBooksPageSize {
+		var resp struct {
+			Data struct {
 				ListBooks []struct {
 					Book hcBook `json:"book"`
 				} `json:"list_books"`
-			} `json:"lists"`
-		} `json:"data"`
-	}
-	if err := c.query(ctx, gql, map[string]any{"id": listID}, &resp); err != nil {
-		return nil, fmt.Errorf("hardcover get list books: %w", err)
-	}
-	if len(resp.Data.Lists) == 0 {
-		return nil, nil
-	}
-	books := make([]models.Book, 0, len(resp.Data.Lists[0].ListBooks))
-	for _, lb := range resp.Data.Lists[0].ListBooks {
-		books = append(books, c.toBook(lb.Book))
+			} `json:"data"`
+		}
+		if err := c.query(ctx, gql, map[string]any{
+			"id":     listID,
+			"limit":  listBooksPageSize,
+			"offset": offset,
+		}, &resp); err != nil {
+			return nil, fmt.Errorf("hardcover get list books: %w", err)
+		}
+		for _, lb := range resp.Data.ListBooks {
+			books = append(books, c.toBook(lb.Book))
+		}
+		if len(resp.Data.ListBooks) < listBooksPageSize {
+			break
+		}
 	}
 	return books, nil
 }

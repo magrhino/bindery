@@ -1858,7 +1858,7 @@ func TestGetListBooks_PositiveID(t *testing.T) {
 		_ = json.Unmarshal(body, &req)
 		gotVars = req.Variables
 		gotQuery = req.Query
-		resp := `{"data":{"lists":[{"id":42,"name":"Favorites","slug":"favorites","list_books":[{"book":{"id":99,"title":"Dune","slug":"dune","contributions":[{"author":{"id":1,"name":"Frank Herbert","slug":"frank-herbert"}}]}}]}]}}`
+		resp := `{"data":{"list_books":[{"book":{"id":99,"title":"Dune","slug":"dune","contributions":[{"author":{"id":1,"name":"Frank Herbert","slug":"frank-herbert"}}]}}]}}`
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(strings.NewReader(resp)),
@@ -1877,8 +1877,70 @@ func TestGetListBooks_PositiveID(t *testing.T) {
 	if gotVars["id"] != float64(42) {
 		t.Errorf("id var = %v, want 42", gotVars["id"])
 	}
-	if !strings.Contains(gotQuery, "lists(where:") {
-		t.Errorf("query should use plural lists(where:) field, got: %q", gotQuery)
+	if gotVars["limit"] != float64(listBooksPageSize) {
+		t.Errorf("limit var = %v, want %d", gotVars["limit"], listBooksPageSize)
+	}
+	if gotVars["offset"] != float64(0) {
+		t.Errorf("offset var = %v, want 0", gotVars["offset"])
+	}
+	if !strings.Contains(gotQuery, "list_books(") {
+		t.Errorf("query should use root list_books field, got: %q", gotQuery)
+	}
+	if !strings.Contains(gotQuery, "list_id: {_eq: $id}") {
+		t.Errorf("query should scope by list_id, got: %q", gotQuery)
+	}
+	if !strings.Contains(gotQuery, "limit: $limit") || !strings.Contains(gotQuery, "offset: $offset") {
+		t.Errorf("query should include limit and offset, got: %q", gotQuery)
+	}
+	if !strings.Contains(gotQuery, "order_by: [{position: asc}, {id: asc}]") {
+		t.Errorf("query should order by position and id, got: %q", gotQuery)
+	}
+	if strings.Contains(gotQuery, "lists(where:") {
+		t.Errorf("query should not use nested lists field, got: %q", gotQuery)
+	}
+}
+
+func TestGetListBooks_PositiveIDPaginates(t *testing.T) {
+	var offsets []int
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		var req gqlRequest
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		offset := int(req.Variables["offset"].(float64))
+		offsets = append(offsets, offset)
+		count := listBooksPageSize
+		if offset > 0 {
+			count = 1
+		}
+		listBooks := make([]map[string]interface{}, 0, count)
+		for i := 0; i < count; i++ {
+			bookID := offset + i + 1
+			listBooks = append(listBooks, map[string]interface{}{
+				"book": map[string]interface{}{
+					"id":    bookID,
+					"title": "Paged Book",
+					"slug":  "paged-book",
+					"contributions": []map[string]interface{}{
+						{"author": map[string]interface{}{"id": 1, "name": "Author", "slug": "author"}},
+					},
+				},
+			})
+		}
+		return gqlResponse(t, http.StatusOK, map[string]interface{}{"list_books": listBooks}), nil
+	})
+	c = c.WithToken("hc-token")
+
+	books, err := c.GetListBooks(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("GetListBooks: %v", err)
+	}
+	if len(books) != listBooksPageSize+1 {
+		t.Fatalf("book count = %d, want %d", len(books), listBooksPageSize+1)
+	}
+	if len(offsets) != 2 || offsets[0] != 0 || offsets[1] != listBooksPageSize {
+		t.Fatalf("offsets = %v, want [0 %d]", offsets, listBooksPageSize)
 	}
 }
 
