@@ -237,9 +237,14 @@ func (c *Client) GetListBooks(ctx context.Context, listID int) ([]models.Book, e
 
 // getShelfBooks fetches all books on a built-in Hardcover shelf by status_id.
 func (c *Client) getShelfBooks(ctx context.Context, statusID int) ([]models.Book, error) {
-	gql := `query GetShelfBooks($statusID: Int!) {
+	gql := `query GetShelfBooks($statusID: Int!, $limit: Int!, $offset: Int!) {
 		me {
-			user_books(where: {status_id: {_eq: $statusID}}, limit: 500) {
+			user_books(
+				where: {status_id: {_eq: $statusID}},
+				limit: $limit,
+				offset: $offset,
+				order_by: [{id: asc}]
+			) {
 				book {
 					id
 					title
@@ -258,24 +263,34 @@ func (c *Client) getShelfBooks(ctx context.Context, statusID int) ([]models.Book
 			}
 		}
 	}`
-	var resp struct {
-		Data struct {
-			Me []struct {
-				UserBooks []struct {
-					Book hcBook `json:"book"`
-				} `json:"user_books"`
-			} `json:"me"`
-		} `json:"data"`
-	}
-	if err := c.query(ctx, gql, map[string]any{"statusID": statusID}, &resp); err != nil {
-		return nil, fmt.Errorf("hardcover get shelf books: %w", err)
-	}
-	if len(resp.Data.Me) == 0 {
-		return nil, nil
-	}
-	books := make([]models.Book, 0, len(resp.Data.Me[0].UserBooks))
-	for _, ub := range resp.Data.Me[0].UserBooks {
-		books = append(books, c.toBook(ub.Book))
+	books := make([]models.Book, 0, listBooksPageSize)
+	for offset := 0; ; offset += listBooksPageSize {
+		var resp struct {
+			Data struct {
+				Me []struct {
+					UserBooks []struct {
+						Book hcBook `json:"book"`
+					} `json:"user_books"`
+				} `json:"me"`
+			} `json:"data"`
+		}
+		if err := c.query(ctx, gql, map[string]any{
+			"statusID": statusID,
+			"limit":    listBooksPageSize,
+			"offset":   offset,
+		}, &resp); err != nil {
+			return nil, fmt.Errorf("hardcover get shelf books: %w", err)
+		}
+		if len(resp.Data.Me) == 0 {
+			break
+		}
+		userBooks := resp.Data.Me[0].UserBooks
+		for _, ub := range userBooks {
+			books = append(books, c.toBook(ub.Book))
+		}
+		if len(userBooks) < listBooksPageSize {
+			break
+		}
 	}
 	return books, nil
 }

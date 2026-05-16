@@ -1868,7 +1868,59 @@ func TestGetListBooks_BuiltinShelfRoutesToUserBooks(t *testing.T) {
 			if gotVars["statusID"] != wantStatusID {
 				t.Errorf("statusID var = %v, want %v", gotVars["statusID"], wantStatusID)
 			}
+			if gotVars["limit"] != float64(listBooksPageSize) {
+				t.Errorf("limit var = %v, want %d", gotVars["limit"], listBooksPageSize)
+			}
+			if gotVars["offset"] != float64(0) {
+				t.Errorf("offset var = %v, want 0", gotVars["offset"])
+			}
 		})
+	}
+}
+
+func TestGetListBooks_BuiltinShelfPaginates(t *testing.T) {
+	var offsets []int
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		var req gqlRequest
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		offset := int(req.Variables["offset"].(float64))
+		offsets = append(offsets, offset)
+		count := listBooksPageSize
+		if offset > 0 {
+			count = 2
+		}
+		userBooks := make([]map[string]interface{}, 0, count)
+		for i := 0; i < count; i++ {
+			bookID := offset + i + 1
+			userBooks = append(userBooks, map[string]interface{}{
+				"book": map[string]interface{}{
+					"id":    bookID,
+					"title": "Paged Shelf Book",
+					"slug":  "paged-shelf-book",
+					"contributions": []map[string]interface{}{
+						{"author": map[string]interface{}{"id": 1, "name": "Author", "slug": "author"}},
+					},
+				},
+			})
+		}
+		return gqlResponse(t, http.StatusOK, map[string]interface{}{
+			"me": []map[string]interface{}{{"user_books": userBooks}},
+		}), nil
+	})
+	c = c.WithToken("hc-token")
+
+	books, err := c.GetListBooks(context.Background(), -1)
+	if err != nil {
+		t.Fatalf("GetListBooks shelf: %v", err)
+	}
+	if len(books) != listBooksPageSize+2 {
+		t.Fatalf("book count = %d, want %d", len(books), listBooksPageSize+2)
+	}
+	if len(offsets) != 2 || offsets[0] != 0 || offsets[1] != listBooksPageSize {
+		t.Fatalf("offsets = %v, want [0 %d]", offsets, listBooksPageSize)
 	}
 }
 
