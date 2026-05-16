@@ -1604,6 +1604,29 @@ func TestGetUserWishlist_NoToken(t *testing.T) {
 	}
 }
 
+func TestGetUserWishlist_UsesTokenSource(t *testing.T) {
+	var gotAuth string
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		gotAuth = r.Header.Get("Authorization")
+		return gqlResponse(t, http.StatusOK, map[string]interface{}{
+			"me": []map[string]interface{}{{"user_books": []interface{}{}}},
+		}), nil
+	}).WithTokenSource(func(context.Context) string {
+		return "Bearer source-token"
+	})
+
+	candidates, err := c.GetUserWishlist(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("GetUserWishlist: %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("expected empty candidates, got %d", len(candidates))
+	}
+	if gotAuth != "Bearer source-token" {
+		t.Fatalf("Authorization = %q, want Bearer source-token", gotAuth)
+	}
+}
+
 func TestGetUserWishlist_Success(t *testing.T) {
 	var gotAuth string
 	year := 2019

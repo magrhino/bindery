@@ -24,7 +24,7 @@ const listBooksPageSize = 100
 // Returns candidates suitable for list-cross recommendations.
 // Requires the client to have an API token set via WithToken; returns nil if not configured.
 func (c *Client) GetUserWishlist(ctx context.Context, limit int) ([]models.RecommendationCandidate, error) {
-	if c.token == "" {
+	if c.authorizationToken(ctx) == "" {
 		return nil, nil
 	}
 	if limit <= 0 {
