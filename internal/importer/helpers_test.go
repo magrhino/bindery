@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -152,8 +153,8 @@ func TestCopyDir(t *testing.T) {
 	}
 
 	dst := filepath.Join(t.TempDir(), "dest")
-	if err := copyDir(src, dst); err != nil {
-		t.Fatalf("copyDir: %v", err)
+	if err := copyDirContext(context.Background(), src, dst); err != nil {
+		t.Fatalf("copyDirContext: %v", err)
 	}
 	for _, name := range []string{"a.m4b", "sub/b.jpg"} {
 		if _, err := os.Stat(filepath.Join(dst, name)); err != nil {
@@ -164,7 +165,7 @@ func TestCopyDir(t *testing.T) {
 
 func TestCopyDir_MissingSource(t *testing.T) {
 	dst := filepath.Join(t.TempDir(), "dest")
-	if err := copyDir("/nope/does-not-exist", dst); err == nil {
+	if err := copyDirContext(context.Background(), "/nope/does-not-exist", dst); err == nil {
 		t.Error("expected error copying missing source")
 	}
 }

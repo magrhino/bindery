@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -804,10 +805,18 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 
 	s.updateDownloadStatus(ctx, dl.ID, models.StateImportPending)
 
+	// Resolve the import mode ONCE for the whole download (issue #705 finding 2).
+	// Re-reading "import.mode" per file means an operator toggling copy↔move in
+	// the UI mid-run mixes copy and move within a single download; the final
+	// cleanup could then RemoveAll the still-seeding source of a file that was
+	// deliberately copied. The decided mode is threaded through every call site
+	// below — no further DB reads of "import.mode" occur for this import.
+	importMode := s.importMode(ctx, downloadPath, s.libraryDir)
+
 	// External mode: skip all file operations and reset the book to wanted so
 	// the library scan can reconcile it after the user's external tool (Calibre,
 	// Grimmory, etc.) processes and places the file in the library directory.
-	if s.importMode(ctx, downloadPath, s.libraryDir) == "external" {
+	if importMode == "external" {
 		if dl.BookID != nil {
 			if b, err := s.books.GetByID(ctx, *dl.BookID); err == nil && b != nil {
 				b.Status = models.BookStatusWanted
@@ -897,7 +906,7 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 			return
 		}
 		destDir := UniqueDir(audiobookDest)
-		mode := s.importMode(ctx, downloadPath, destDir)
+		mode := importMode
 		slog.Info("importing audiobook folder", "src", downloadPath, "dst", destDir, "mode", mode)
 		// Single-file audiobook releases (e.g. a lone .m4b from a torrent) give
 		// us a file path rather than a folder. MoveDir/CopyDir/HardlinkDir all
@@ -965,6 +974,10 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 
 	var imported, failed int
 	var lastFileErr error
+	// importedSrcFiles records the source path of every file that landed in the
+	// library, so move-mode cleanup can delete exactly those files rather than
+	// RemoveAll-ing the whole download path (issue #705 finding 4).
+	var importedSrcFiles []string
 	for _, srcFile := range bookFiles {
 		if book == nil {
 			// Try to match from filename
@@ -981,7 +994,7 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 			failed++
 			continue
 		}
-		mode := s.importMode(ctx, srcFile, destPath)
+		mode := importMode
 		slog.Info("importing book", "src", srcFile, "dst", destPath, "mode", mode)
 
 		var fileErr error
@@ -1000,13 +1013,19 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 			continue
 		}
 		imported++
+		importedSrcFiles = append(importedSrcFiles, srcFile)
 
 		// Record each imported file individually in book_files so multi-file
 		// downloads (epub + mobi + pdf) are all tracked rather than overwriting.
 		if err := s.books.AddBookFile(ctx, book.ID, models.MediaTypeEbook, destPath); err != nil {
 			slog.Error("failed to record book file", "bookID", book.ID, "error", err)
 		}
-		s.updateDownloadStatus(ctx, dl.ID, models.StateImported)
+		// NOTE: StateImported is intentionally NOT set here (issue #705 finding 1).
+		// Writing the terminal "imported" state after the first successful file
+		// would mark an incomplete multi-file download as fully imported; a later
+		// file failing would then leave a terminal-imported but partial download,
+		// and move-mode cleanup would delete the source of the file that never
+		// landed. The terminal state is decided once, after the loop.
 		slog.Info("book imported", "title", book.Title, "path", destPath)
 
 		s.pushToCalibre(ctx, book, author, edition, seriesTitle, seriesNum, destPath)
@@ -1033,21 +1052,129 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 		return
 	}
 
-	// A clean run leaves the download folder holding only non-book byproducts
-	// (par2, nfo, sfv, sample). For "move" mode bindery has no further use for
-	// them so the folder is removed. For "copy"/"hardlink" modes the source must
-	// be preserved so the torrent client can continue seeding.
+	// Partial failure (issue #705 finding 1): at least one file imported but at
+	// least one other file failed. The download is NOT fully imported. Mark it
+	// failed (retryable) and SKIP source cleanup entirely — in move mode the
+	// source of the failed file must survive so a retry (or the operator) can
+	// recover it, and the already-imported files' sources are left alone too.
+	if imported > 0 && failed > 0 {
+		reason := fmt.Sprintf("partial import: %d of %d file(s) failed", failed, imported+failed)
+		if lastFileErr != nil {
+			reason = fmt.Sprintf("%s: %v", reason, lastFileErr)
+		}
+		slog.Warn("partial import — skipping source cleanup to avoid data loss",
+			"title", dl.Title, "imported", imported, "failed", failed)
+		s.failImport(ctx, dl, models.StateImportFailed, reason)
+		return
+	}
+
+	// A clean run (imported > 0, failed == 0): every book file landed. Mark the
+	// download imported exactly once, then clean up.
 	if imported > 0 && failed == 0 {
-		if s.importMode(ctx, downloadPath, s.libraryDir) == "move" {
-			if err := os.RemoveAll(downloadPath); err != nil {
-				slog.Warn("failed to remove download folder after import", "path", downloadPath, "error", err)
-			}
+		s.updateDownloadStatus(ctx, dl.ID, models.StateImported)
+
+		// For "move" mode bindery has no further use for the source files. The
+		// download folder may, however, be a path shared with sibling torrents
+		// (issue #705 finding 4): for single-file-at-root torrents or older
+		// qBittorrent clients downloadPath can resolve to the client's save
+		// root. os.RemoveAll there would delete other torrents' still-seeding
+		// data. So in move mode we delete only the specific imported source
+		// files and then prune now-empty parent directories with os.Remove —
+		// which fails on non-empty directories and therefore can never destroy
+		// a shared root or sibling data.
+		if importMode == "move" {
+			s.cleanupMovedSources(downloadPath, importedSrcFiles)
 		}
 		if cleanupFunc != nil {
 			if err := cleanupFunc(); err != nil {
 				slog.Warn("cleanup failed", cleanupWarnAttrs(cleanupClientType, cleanupRemoteID, err)...)
 			}
 		}
+	}
+}
+
+// cleanupMovedSources removes the source files that were successfully moved
+// into the library and then prunes any directories left empty by their
+// removal, walking upward from each file towards downloadPath (inclusive).
+//
+// It deliberately uses os.Remove (never os.RemoveAll) for directories: os.Remove
+// fails on a non-empty directory, so a downloadPath that is actually a shared
+// save root holding sibling torrents' data is left untouched. MoveFileCtx
+// already deletes the source file on a successful move, so most entries here
+// are no-ops on the file itself; the value is the empty-directory pruning.
+func (s *Scanner) cleanupMovedSources(downloadPath string, importedSrcFiles []string) {
+	cleanDownloadPath := filepath.Clean(downloadPath)
+
+	// Refuse to prune if downloadPath is empty, relative, the filesystem root, or
+	// equal to / an ancestor of a configured library root. This is a
+	// belt-and-braces guard on top of the os.Remove non-empty-dir protection.
+	if cleanDownloadPath == "" || cleanDownloadPath == "." ||
+		cleanDownloadPath == string(filepath.Separator) ||
+		!filepath.IsAbs(cleanDownloadPath) {
+		slog.Warn("move cleanup: refusing to prune unsafe download path", "path", downloadPath)
+		return
+	}
+	for _, root := range []string{s.libraryDir, s.audiobookDir} {
+		if root == "" {
+			continue
+		}
+		cleanRoot := filepath.Clean(root)
+		if cleanDownloadPath == cleanRoot || pathUnderDir(cleanRoot, cleanDownloadPath) {
+			slog.Warn("move cleanup: download path equals or contains a library root — skipping cleanup",
+				"downloadPath", cleanDownloadPath, "libraryRoot", cleanRoot)
+			return
+		}
+	}
+
+	// dirsToPrune collects every directory at or below downloadPath that may now
+	// be empty, deepest-first so children are removed before parents.
+	prune := make(map[string]bool)
+	for _, src := range importedSrcFiles {
+		cleanSrc := filepath.Clean(src)
+		// Only touch files that actually live under downloadPath — never delete
+		// something outside the download we were asked to import.
+		if cleanSrc != cleanDownloadPath && !pathUnderDir(cleanSrc, cleanDownloadPath) {
+			slog.Warn("move cleanup: imported source outside download path, skipping",
+				"src", cleanSrc, "downloadPath", cleanDownloadPath)
+			continue
+		}
+		if err := os.Remove(cleanSrc); err != nil && !os.IsNotExist(err) {
+			slog.Warn("move cleanup: failed to remove imported source file", "src", cleanSrc, "error", err)
+		}
+		// Mark every ancestor directory from the file up to (and including)
+		// downloadPath as a pruning candidate.
+		for dir := filepath.Dir(cleanSrc); ; dir = filepath.Dir(dir) {
+			prune[dir] = true
+			if dir == cleanDownloadPath || !pathUnderDir(dir, cleanDownloadPath) {
+				break
+			}
+		}
+	}
+
+	// Remove empty directories deepest-first. os.Remove silently fails (and is
+	// skipped) on any directory still holding sibling files or other torrents'
+	// data, so a shared save root is preserved automatically.
+	dirs := make([]string, 0, len(prune))
+	for d := range prune {
+		dirs = append(dirs, d)
+	}
+	// Deepest paths first: longer cleaned paths sort after shorter ancestors.
+	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
+	for _, dir := range dirs {
+		// Never prune above downloadPath.
+		if dir != cleanDownloadPath && !pathUnderDir(dir, cleanDownloadPath) {
+			continue
+		}
+		if err := os.Remove(dir); err != nil {
+			if !os.IsNotExist(err) {
+				// ENOTEMPTY / EEXIST is expected and benign: the directory still
+				// holds other data (sibling torrent files, byproducts) and must
+				// be kept. Anything else is logged at debug level only.
+				slog.Debug("move cleanup: directory not pruned (kept)", "dir", dir, "reason", err)
+			}
+			continue
+		}
+		slog.Debug("move cleanup: pruned empty directory", "dir", dir)
 	}
 }
 

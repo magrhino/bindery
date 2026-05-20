@@ -131,6 +131,14 @@ func MoveFile(src, dst string) error {
 // Cross-filesystem safe: tries rename first, else recursive copy + delete.
 // The destination directory must not already exist.
 func MoveDir(src, dst string) error {
+	return moveDirCtx(context.Background(), src, dst)
+}
+
+// moveDirCtx is the context-aware implementation of MoveDir. On the slow
+// (cross-filesystem) path the recursive copy honours ctx; if ctx is cancelled
+// the partial destination is removed but the source is left intact — never
+// remove the still-seeding source after a cancelled or failed copy.
+func moveDirCtx(ctx context.Context, src, dst string) error {
 	info, err := os.Stat(src)
 	if err != nil {
 		return fmt.Errorf("stat source dir: %w", err)
@@ -152,10 +160,12 @@ func MoveDir(src, dst string) error {
 	}
 
 	// Slow path: recursive copy, then verify, then remove.
-	if err := copyDir(src, dst); err != nil {
+	if err := copyDirContext(ctx, src, dst); err != nil {
 		_ = os.RemoveAll(dst)
 		return fmt.Errorf("copy dir: %w", err)
 	}
+	// The copy completed without error (and without cancellation — copyDirContext
+	// returns ctx.Err() on cancel). Only now is it safe to remove the source.
 	return os.RemoveAll(src)
 }
 
@@ -187,6 +197,13 @@ func HardlinkFile(src, dst string) error {
 // Used by "copy" import mode for audiobook folders so the download client can
 // continue seeding from the original location.
 func CopyDir(src, dst string) error {
+	return copyDirPublicCtx(context.Background(), src, dst)
+}
+
+// copyDirPublicCtx is the context-aware implementation of CopyDir. On
+// cancellation the partial destination is removed; the source is never
+// touched (copy mode preserves seeding).
+func copyDirPublicCtx(ctx context.Context, src, dst string) error {
 	info, err := os.Stat(src)
 	if err != nil {
 		return fmt.Errorf("stat source dir: %w", err)
@@ -200,7 +217,7 @@ func CopyDir(src, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
 		return fmt.Errorf("create parent dir: %w", err)
 	}
-	if err := copyDir(src, dst); err != nil {
+	if err := copyDirContext(ctx, src, dst); err != nil {
 		_ = os.RemoveAll(dst)
 		return fmt.Errorf("copy dir: %w", err)
 	}
@@ -279,14 +296,20 @@ func hardlinkDirRooted(srcRoot, dstRoot *os.Root, rel string) error {
 	return nil
 }
 
-// copyDir recursively copies srcDir contents into dstDir, preserving the
+// copyDirContext recursively copies srcDir contents into dstDir, preserving the
 // internal layout. dstDir will be created (including parents).
 //
 // Uses os.Root to scope all filesystem operations, preventing symlink-based
 // TOCTOU traversal (gosec G122). A symlink inside the source tree that
 // points outside the root is rejected by the kernel, not by user-space
 // checks that can race.
-func copyDir(srcDir, dstDir string) error {
+//
+// ctx is checked before every directory entry and before every file copy, so a
+// cancelled import (30-min cap or shutdown) stops the copy promptly and returns
+// ctx.Err() instead of running to completion in a detached goroutine. This is
+// what lets callers safely skip os.RemoveAll(src) on cancellation — the copy
+// never finishes, so the seeding source is never deleted.
+func copyDirContext(ctx context.Context, srcDir, dstDir string) error {
 	if err := os.MkdirAll(dstDir, 0o750); err != nil {
 		return err
 	}
@@ -302,10 +325,13 @@ func copyDir(srcDir, dstDir string) error {
 	}
 	defer func() { _ = dstRoot.Close() }()
 
-	return copyDirRooted(srcRoot, dstRoot, ".")
+	return copyDirRooted(ctx, srcRoot, dstRoot, ".")
 }
 
-func copyDirRooted(srcRoot, dstRoot *os.Root, rel string) error {
+func copyDirRooted(ctx context.Context, srcRoot, dstRoot *os.Root, rel string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f, err := srcRoot.Open(rel)
 	if err != nil {
 		return err
@@ -316,6 +342,9 @@ func copyDirRooted(srcRoot, dstRoot *os.Root, rel string) error {
 		return err
 	}
 	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		child := filepath.Join(rel, e.Name())
 		if !e.Type().IsRegular() && !e.IsDir() {
 			continue // skip symlinks and other non-regular entries
@@ -324,7 +353,7 @@ func copyDirRooted(srcRoot, dstRoot *os.Root, rel string) error {
 			if err := dstRoot.Mkdir(child, 0o750); err != nil && !os.IsExist(err) {
 				return err
 			}
-			if err := copyDirRooted(srcRoot, dstRoot, child); err != nil {
+			if err := copyDirRooted(ctx, srcRoot, dstRoot, child); err != nil {
 				return err
 			}
 			continue
@@ -442,29 +471,19 @@ func CopyFileCtx(ctx context.Context, src, dst string) error {
 }
 
 // MoveDirCtx is like MoveDir but returns ctx.Err() if the context is
-// cancelled. The background goroutine may still be running on NFS after
-// cancellation but will complete or be cleaned up on process restart.
+// cancelled. Unlike the previous detached-goroutine implementation, the copy
+// is performed inline with per-entry cancellation checks: when ctx fires the
+// copy stops promptly and the source is NOT removed. A cancelled or shut-down
+// import therefore can never delete the still-seeding source after the fact.
 func MoveDirCtx(ctx context.Context, src, dst string) error {
-	ch := make(chan error, 1)
-	go func() { ch <- MoveDir(src, dst) }()
-	select {
-	case err := <-ch:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return moveDirCtx(ctx, src, dst)
 }
 
-// CopyDirCtx is like CopyDir but returns ctx.Err() if the context is cancelled.
+// CopyDirCtx is like CopyDir but returns ctx.Err() if the context is
+// cancelled. The copy honours ctx per-entry; on cancellation the partial
+// destination is removed and the source is left untouched.
 func CopyDirCtx(ctx context.Context, src, dst string) error {
-	ch := make(chan error, 1)
-	go func() { ch <- CopyDir(src, dst) }()
-	select {
-	case err := <-ch:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return copyDirPublicCtx(ctx, src, dst)
 }
 
 func sanitizePath(s string) string {
