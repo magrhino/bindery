@@ -7,8 +7,12 @@ import "time"
 // JSON is stored so it can be re-evaluated on subsequent scheduler sweeps
 // without another network round-trip to the indexer.
 type PendingRelease struct {
-	ID          int64     `json:"id"`
-	BookID      int64     `json:"bookId"`
+	ID     int64 `json:"id"`
+	BookID int64 `json:"bookId"`
+	// MediaType is "ebook" or "audiobook" — it scopes the entry to the format
+	// being searched so a dual-format book's ebook and audiobook pending
+	// entries can be managed independently (see #707).
+	MediaType   string    `json:"mediaType"`
 	Title       string    `json:"title"`
 	IndexerID   *int64    `json:"indexerId,omitempty"`
 	GUID        string    `json:"guid"`

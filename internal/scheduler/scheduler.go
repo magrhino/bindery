@@ -65,6 +65,12 @@ type Scheduler struct {
 	// never nil — New falls back to context.Background() when given a nil ctx.
 	appCtx context.Context
 
+	// bgWg tracks raw goroutines that are not managed by the cron scheduler
+	// (e.g. the startup telemetry ping and stall re-search). Stop() waits for
+	// all of them to finish after the cron scheduler drains, so they cannot
+	// run against resources that have already been torn down.
+	bgWg sync.WaitGroup
+
 	cron     *cron.Cron
 	scanner  *importer.Scanner
 	searcher bookSearcher
@@ -195,6 +201,16 @@ func (s *Scheduler) WithLogRepo(logs *db.LogRepo, retainDays int) {
 	s.logRetainDays = retainDays
 }
 
+// ctx returns the process-lifecycle context, falling back to
+// context.Background() when appCtx was not set (e.g. in unit tests that
+// construct a Scheduler literal directly rather than calling New).
+func (s *Scheduler) ctx() context.Context {
+	if s.appCtx != nil {
+		return s.appCtx
+	}
+	return context.Background()
+}
+
 // runJob wraps a cron callback so each invocation is recorded via the
 // metrics package — duration, completion count, and panic count. Jobs that
 // panic are recovered here so a single buggy job doesn't tear down the
@@ -222,7 +238,7 @@ func (s *Scheduler) Start() {
 	// up to 15s poll + file-move time.
 	s.cron.AddFunc("@every 15s", runJob("check-downloads", func() {
 		slog.Debug("job: check downloads")
-		s.scanner.CheckDownloads(context.Background())
+		s.scanner.CheckDownloads(s.ctx())
 	}))
 
 	// Stall detection runs every 5 minutes. Checking every 15s would be
@@ -230,7 +246,7 @@ func (s *Scheduler) Start() {
 	// enough to act well within any reasonable stall timeout.
 	s.cron.AddFunc("@every 5m", runJob("check-stalled", func() {
 		slog.Debug("job: check stalled downloads")
-		s.checkStalledDownloads(context.Background())
+		s.checkStalledDownloads(s.ctx())
 	}))
 
 	// Search for wanted books every 12 hours
@@ -248,14 +264,14 @@ func (s *Scheduler) Start() {
 	// Scan library every 6 hours
 	s.cron.AddFunc("@every 6h", runJob("scan-library", func() {
 		slog.Info("job: scan library")
-		s.scanner.ScanLibrary(context.Background())
+		s.scanner.ScanLibrary(s.ctx())
 	}))
 
 	// Sync Calibre library every 24 hours when a syncer is registered.
 	if s.calibreSyncer != nil {
 		s.cron.AddFunc("@every 24h", runJob("calibre-sync", func() {
 			slog.Info("job: calibre library sync")
-			s.calibreSyncer.RunSync(context.Background())
+			s.calibreSyncer.RunSync(s.ctx())
 		}))
 	}
 
@@ -264,11 +280,11 @@ func (s *Scheduler) Start() {
 		s.cron.AddFunc("@every 24h", runJob("recommendations", func() {
 			slog.Info("job: generate recommendations")
 			if s.settings != nil {
-				if setting, _ := s.settings.Get(context.Background(), "recommendations.enabled"); setting == nil || setting.Value != "true" {
+				if setting, _ := s.settings.Get(s.ctx(), "recommendations.enabled"); setting == nil || setting.Value != "true" {
 					return
 				}
 			}
-			if err := s.recommender.Run(context.Background(), 1); err != nil {
+			if err := s.recommender.Run(s.ctx(), 1); err != nil {
 				slog.Error("recommendation engine failed", "error", err)
 			}
 		}))
@@ -278,7 +294,7 @@ func (s *Scheduler) Start() {
 	if s.hcSyncer != nil {
 		s.cron.AddFunc("@every 24h", runJob("hardcover-sync", func() {
 			slog.Info("job: sync hardcover lists")
-			if err := s.hcSyncer.Sync(context.Background()); err != nil {
+			if err := s.hcSyncer.Sync(s.ctx()); err != nil {
 				slog.Error("hardcover list sync failed", "error", err)
 			}
 		}))
@@ -287,10 +303,15 @@ func (s *Scheduler) Start() {
 	// Send anonymous install ping every 24 hours.
 	if s.telemetry != nil {
 		s.cron.AddFunc("@every 24h", runJob("telemetry-ping", func() {
-			s.telemetry.Ping(context.Background())
+			s.telemetry.Ping(s.ctx())
 		}))
-		// Also fire once on startup (non-blocking).
-		go s.telemetry.Ping(context.Background())
+		// Also fire once on startup (non-blocking). Tracked so Stop() can
+		// wait for it to finish before tearing down other resources.
+		s.bgWg.Add(1)
+		go func() {
+			defer s.bgWg.Done()
+			s.telemetry.Ping(s.ctx())
+		}()
 	}
 
 	// Trim old log entries once per day.
@@ -304,14 +325,14 @@ func (s *Scheduler) Start() {
 			retainDays := defaultRetainDays
 			// Prefer the DB setting when available so UI changes take effect without restart.
 			if s.settings != nil {
-				if v, _ := s.settings.Get(context.Background(), "log.retention_days"); v != nil {
+				if v, _ := s.settings.Get(s.ctx(), "log.retention_days"); v != nil {
 					if n, err := strconv.Atoi(v.Value); err == nil && n > 0 {
 						retainDays = n
 					}
 				}
 			}
 			cutoff := time.Now().UTC().Add(-time.Duration(retainDays) * 24 * time.Hour)
-			if err := s.logs.Trim(context.Background(), cutoff); err != nil {
+			if err := s.logs.Trim(s.ctx(), cutoff); err != nil {
 				slog.Warn("log trim failed", "error", err)
 			}
 		}))
@@ -322,9 +343,14 @@ func (s *Scheduler) Start() {
 }
 
 // Stop gracefully stops the scheduler.
+// It waits for the cron scheduler's in-flight jobs to complete and then waits
+// for any background goroutines tracked by bgWg (startup telemetry ping, stall
+// re-search) to finish before returning.
 func (s *Scheduler) Stop() {
 	ctx := s.cron.Stop()
 	<-ctx.Done()
+	// Drain goroutines that were launched outside the cron scheduler.
+	s.bgWg.Wait()
 	slog.Info("scheduler stopped")
 }
 
@@ -420,13 +446,16 @@ func (s *Scheduler) searchAndGrabFormat(ctx context.Context, book models.Book, m
 			break
 		}
 		// Store delay-rejected releases so they can be re-evaluated next sweep.
+		// The sentinel "delay not met" matches both "usenet delay not met" and
+		// "torrent delay not met" produced by DelayProfileSpec. There is no typed
+		// flag on Decision today; left as-is per #707 (minor finding).
 		if s.pending != nil && strings.Contains(d.Rejection, "delay not met") {
-			s.storePending(ctx, book.ID, results[i], d.Rejection)
+			s.storePending(ctx, book.ID, mediaType, results[i], d.Rejection)
 		}
 	}
 	if best == nil {
-		// Re-evaluate any existing pending releases for this book with the current age.
-		best = s.checkPendingReleases(ctx, book, dm)
+		// Re-evaluate any existing pending releases for this book/format with the current age.
+		best = s.checkPendingReleases(ctx, book, mediaType, dm)
 		if best == nil {
 			return
 		}
@@ -513,19 +542,26 @@ func (s *Scheduler) searchAndGrabFormat(ctx context.Context, book models.Book, m
 		slog.Warn("failed to update download status", "download_id", dl.ID, "status", models.StateDownloading, "error", err)
 	}
 	slog.Info("sent to downloader", "client", client.Type, "title", best.Title)
+	// Scope the deletion to the format just grabbed. Deleting all pending
+	// entries for the book would discard the other format's candidates for a
+	// dual-format ('both') book, forcing an unnecessary re-search (see #707).
 	if s.pending != nil {
-		_ = s.pending.DeleteByBook(ctx, book.ID)
+		_ = s.pending.DeleteByBookAndMediaType(ctx, book.ID, mediaType)
 	}
 }
 
 // storePending records a delay-rejected release in pending_releases.
-func (s *Scheduler) storePending(ctx context.Context, bookID int64, res newznab.SearchResult, reason string) {
+// mediaType ("ebook" or "audiobook") is stored so that a successful grab of
+// one format does not delete the other format's pending entries for a
+// dual-format book (see #707).
+func (s *Scheduler) storePending(ctx context.Context, bookID int64, mediaType string, res newznab.SearchResult, reason string) {
 	blob, err := json.Marshal(res)
 	if err != nil {
 		return
 	}
 	pr := &models.PendingRelease{
 		BookID:      bookID,
+		MediaType:   mediaType,
 		Title:       res.Title,
 		GUID:        res.GUID,
 		Protocol:    res.Protocol,
@@ -544,13 +580,15 @@ func (s *Scheduler) storePending(ctx context.Context, bookID int64, res newznab.
 	}
 }
 
-// checkPendingReleases re-evaluates existing pending releases for a book.
+// checkPendingReleases re-evaluates existing pending releases for a book and
+// format. Only releases whose MediaType matches are considered, so a dual-format
+// book's ebook and audiobook pending entries are evaluated independently.
 // If any now passes the decision engine it is returned for immediate grab.
-func (s *Scheduler) checkPendingReleases(ctx context.Context, book models.Book, dm *decision.DecisionMaker) *newznab.SearchResult {
+func (s *Scheduler) checkPendingReleases(ctx context.Context, book models.Book, mediaType string, dm *decision.DecisionMaker) *newznab.SearchResult {
 	if s.pending == nil {
 		return nil
 	}
-	pendingList, err := s.pending.ListByBook(ctx, book.ID)
+	pendingList, err := s.pending.ListByBookAndMediaType(ctx, book.ID, mediaType)
 	if err != nil || len(pendingList) == 0 {
 		return nil
 	}
@@ -573,7 +611,7 @@ func (s *Scheduler) checkPendingReleases(ctx context.Context, book models.Book, 
 }
 
 func (s *Scheduler) searchWanted() {
-	ctx := context.Background()
+	ctx := s.ctx()
 
 	// Respect the global auto-grab kill-switch. When disabled, the
 	// scheduled wanted-scan is skipped entirely — users manage grabs
@@ -637,7 +675,7 @@ func runBoundedBookTasks(ctx context.Context, books []models.Book, concurrency i
 }
 
 func (s *Scheduler) refreshMetadata() {
-	ctx := context.Background()
+	ctx := s.ctx()
 
 	authors, err := s.authors.List(ctx)
 	if err != nil {
@@ -813,5 +851,11 @@ func (s *Scheduler) handleStalledDownload(ctx context.Context, dl *models.Downlo
 		})
 	}
 
-	go s.SearchAndGrabBook(ctx, *book)
+	// Track the goroutine so Stop() can drain it before tearing down
+	// resources (see #707).
+	s.bgWg.Add(1)
+	go func() {
+		defer s.bgWg.Done()
+		s.SearchAndGrabBook(ctx, *book)
+	}()
 }

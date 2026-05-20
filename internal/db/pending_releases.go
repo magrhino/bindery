@@ -23,13 +23,13 @@ func NewPendingReleaseRepo(db *sql.DB) *PendingReleaseRepo {
 func (r *PendingReleaseRepo) Upsert(ctx context.Context, pr *models.PendingRelease) error {
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO pending_releases
-		  (book_id, title, indexer_id, guid, protocol, size, age_minutes, quality,
+		  (book_id, media_type, title, indexer_id, guid, protocol, size, age_minutes, quality,
 		   custom_score, reason, first_seen, release_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(guid) DO UPDATE SET
 		  reason      = excluded.reason,
 		  age_minutes = excluded.age_minutes`,
-		pr.BookID, pr.Title, pr.IndexerID, pr.GUID, pr.Protocol,
+		pr.BookID, pr.MediaType, pr.Title, pr.IndexerID, pr.GUID, pr.Protocol,
 		pr.Size, pr.AgeMinutes, pr.Quality, pr.CustomScore,
 		pr.Reason, time.Now().UTC(), pr.ReleaseJSON,
 	)
@@ -39,7 +39,7 @@ func (r *PendingReleaseRepo) Upsert(ctx context.Context, pr *models.PendingRelea
 // List returns all pending releases ordered by first_seen descending.
 func (r *PendingReleaseRepo) List(ctx context.Context) ([]models.PendingRelease, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, book_id, title, indexer_id, guid, protocol, size, age_minutes,
+		SELECT id, book_id, media_type, title, indexer_id, guid, protocol, size, age_minutes,
 		       quality, custom_score, reason, first_seen, release_json
 		FROM pending_releases
 		ORDER BY first_seen DESC`)
@@ -50,10 +50,10 @@ func (r *PendingReleaseRepo) List(ctx context.Context) ([]models.PendingRelease,
 	return scanPendingReleases(rows)
 }
 
-// ListByBook returns all pending releases for a specific book.
+// ListByBook returns all pending releases for a specific book across all formats.
 func (r *PendingReleaseRepo) ListByBook(ctx context.Context, bookID int64) ([]models.PendingRelease, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, book_id, title, indexer_id, guid, protocol, size, age_minutes,
+		SELECT id, book_id, media_type, title, indexer_id, guid, protocol, size, age_minutes,
 		       quality, custom_score, reason, first_seen, release_json
 		FROM pending_releases WHERE book_id = ?
 		ORDER BY first_seen DESC`, bookID)
@@ -64,10 +64,26 @@ func (r *PendingReleaseRepo) ListByBook(ctx context.Context, bookID int64) ([]mo
 	return scanPendingReleases(rows)
 }
 
+// ListByBookAndMediaType returns pending releases for a specific book and format.
+// Use this in preference to ListByBook when re-evaluating candidates for a
+// single format so that the other format's entries are not disturbed.
+func (r *PendingReleaseRepo) ListByBookAndMediaType(ctx context.Context, bookID int64, mediaType string) ([]models.PendingRelease, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, book_id, media_type, title, indexer_id, guid, protocol, size, age_minutes,
+		       quality, custom_score, reason, first_seen, release_json
+		FROM pending_releases WHERE book_id = ? AND media_type = ?
+		ORDER BY first_seen DESC`, bookID, mediaType)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanPendingReleases(rows)
+}
+
 // GetByID returns a single pending release by its ID.
 func (r *PendingReleaseRepo) GetByID(ctx context.Context, id int64) (*models.PendingRelease, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, book_id, title, indexer_id, guid, protocol, size, age_minutes,
+		SELECT id, book_id, media_type, title, indexer_id, guid, protocol, size, age_minutes,
 		       quality, custom_score, reason, first_seen, release_json
 		FROM pending_releases WHERE id = ?`, id)
 	pr, err := scanPendingRelease(row)
@@ -89,9 +105,18 @@ func (r *PendingReleaseRepo) DeleteByGUID(ctx context.Context, guid string) erro
 	return err
 }
 
-// DeleteByBook removes all pending releases for a book.
+// DeleteByBook removes all pending releases for a book across all formats.
 func (r *PendingReleaseRepo) DeleteByBook(ctx context.Context, bookID int64) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM pending_releases WHERE book_id = ?`, bookID)
+	return err
+}
+
+// DeleteByBookAndMediaType removes pending releases for a book scoped to a
+// single media type ("ebook" or "audiobook"). Prefer this over DeleteByBook
+// when only one format has been grabbed so the other format's pending entries
+// are preserved (see #707).
+func (r *PendingReleaseRepo) DeleteByBookAndMediaType(ctx context.Context, bookID int64, mediaType string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM pending_releases WHERE book_id = ? AND media_type = ?`, bookID, mediaType)
 	return err
 }
 
@@ -120,7 +145,7 @@ func scanPendingReleaseRow(s pendingScanner) (*models.PendingRelease, error) {
 	var indexerID sql.NullInt64
 	var quality sql.NullString
 	err := s.Scan(
-		&pr.ID, &pr.BookID, &pr.Title, &indexerID, &pr.GUID,
+		&pr.ID, &pr.BookID, &pr.MediaType, &pr.Title, &indexerID, &pr.GUID,
 		&pr.Protocol, &pr.Size, &pr.AgeMinutes, &quality,
 		&pr.CustomScore, &pr.Reason, &pr.FirstSeen, &pr.ReleaseJSON,
 	)
