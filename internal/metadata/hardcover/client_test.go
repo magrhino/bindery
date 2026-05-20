@@ -471,6 +471,48 @@ func TestSearchBooks_ParsesSupplementalPayloadMetadata(t *testing.T) {
 	}
 }
 
+func TestSearchBooks_DropsNonScalarGenres(t *testing.T) {
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		assertSearchRequest(t, r, "Book", "dune")
+		return gqlResponse(t, http.StatusOK, map[string]interface{}{
+			"search": map[string]interface{}{
+				"results": map[string]interface{}{
+					"hits": []map[string]interface{}{
+						{
+							"document": map[string]interface{}{
+								"id":    42,
+								"title": "Dune",
+								"slug":  "dune",
+								"genres": []interface{}{
+									"Science Fiction",
+									true,
+									map[string]interface{}{"name": "Fantasy"},
+									[]interface{}{
+										"Classic",
+										false,
+										map[string]interface{}{"name": "Space Opera"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}), nil
+	})
+
+	books, err := c.SearchBooks(context.Background(), "dune")
+	if err != nil {
+		t.Fatalf("SearchBooks: %v", err)
+	}
+	if len(books) != 1 {
+		t.Fatalf("expected 1 book, got %d", len(books))
+	}
+	if !slices.Equal(books[0].Genres, []string{"Science Fiction", "Classic"}) {
+		t.Fatalf("Genres = %+v", books[0].Genres)
+	}
+}
+
 func TestSearchSeriesRefsRequiresHardcoverSeriesID(t *testing.T) {
 	for _, tt := range []struct {
 		name        string

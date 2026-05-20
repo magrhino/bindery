@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"strconv"
@@ -1160,8 +1161,32 @@ func searchStringList(value any, normalize func(string) string) []string {
 			out = append(out, value)
 		case json.Number:
 			add(v.String())
+		case float64:
+			add(strconv.FormatFloat(v, 'f', -1, 64))
+		case float32:
+			add(strconv.FormatFloat(float64(v), 'f', -1, 32))
+		case int:
+			add(strconv.Itoa(v))
+		case int8:
+			add(strconv.FormatInt(int64(v), 10))
+		case int16:
+			add(strconv.FormatInt(int64(v), 10))
+		case int32:
+			add(strconv.FormatInt(int64(v), 10))
+		case int64:
+			add(strconv.FormatInt(v, 10))
+		case uint:
+			add(strconv.FormatUint(uint64(v), 10))
+		case uint8:
+			add(strconv.FormatUint(uint64(v), 10))
+		case uint16:
+			add(strconv.FormatUint(uint64(v), 10))
+		case uint32:
+			add(strconv.FormatUint(uint64(v), 10))
+		case uint64:
+			add(strconv.FormatUint(v, 10))
 		default:
-			add(searchScalarString(v))
+			return
 		}
 	}
 	add(value)
@@ -1203,6 +1228,7 @@ func searchSeriesRefs(seriesValue, idValue, positionValue any) []models.SeriesRe
 		return nil
 	}
 	if id == "" {
+		slog.Debug("dropping Hardcover search series ref without numeric id", "title", title, "id", idValue)
 		return nil
 	}
 	return []models.SeriesRef{{
