@@ -208,6 +208,8 @@ func (c *Client) GetAuthorWorksByName(ctx context.Context, authorName string) ([
 			rating
 			users_count
 			audio_seconds
+			default_audio_edition_id
+			default_ebook_edition_id
 			contributions {
 				author { id name slug }
 			}
@@ -289,6 +291,8 @@ func (c *Client) GetBook(ctx context.Context, foreignID string) (*models.Book, e
 			release_year
 			ratings_count
 			rating
+			default_audio_edition_id
+			default_ebook_edition_id
 			contributions {
 				author { id name slug }
 			}
@@ -306,6 +310,8 @@ func (c *Client) GetBook(ctx context.Context, foreignID string) (*models.Book, e
 				release_year
 				ratings_count
 				rating
+				default_audio_edition_id
+				default_ebook_edition_id
 				contributions {
 					author { id name slug }
 				}
@@ -426,6 +432,8 @@ func (c *Client) GetBookByISBN(ctx context.Context, isbn string) (*models.Book, 
 				release_year
 				ratings_count
 				rating
+				default_audio_edition_id
+				default_ebook_edition_id
 				contributions {
 					author { id name slug }
 				}
@@ -636,6 +644,8 @@ func (c *Client) GetListBooks(ctx context.Context, listID int) ([]models.Book, e
 					release_year
 					ratings_count
 					rating
+					default_audio_edition_id
+					default_ebook_edition_id
 					contributions {
 						author { id name slug }
 					}
@@ -679,6 +689,8 @@ func (c *Client) getShelfBooks(ctx context.Context, statusID int) ([]models.Book
 					release_year
 					ratings_count
 					rating
+					default_audio_edition_id
+					default_ebook_edition_id
 					contributions {
 						author { id name slug }
 					}
@@ -821,24 +833,26 @@ type hcContribution struct {
 }
 
 type hcBook struct {
-	ID            int              `json:"id"`
-	Title         string           `json:"title"`
-	Subtitle      string           `json:"subtitle"`
-	Slug          string           `json:"slug"`
-	Description   string           `json:"description"`
-	Image         *hcImage         `json:"image"`
-	ReleaseYear   *int             `json:"release_year"`
-	RatingsCount  int              `json:"ratings_count"`
-	Rating        float64          `json:"rating"`
-	UsersCount    int              `json:"users_count"`
-	Genres        []string         `json:"genres"`
-	ISBNs         []string         `json:"isbns"`
-	HasAudiobook  bool             `json:"has_audiobook"`
-	HasEbook      bool             `json:"has_ebook"`
-	AudioSeconds  *int             `json:"audio_seconds"`
-	Contributions []hcContribution `json:"contributions"`
-	AuthorNames   []string         `json:"author_names"`
-	SeriesRefs    []models.SeriesRef
+	ID                    int              `json:"id"`
+	Title                 string           `json:"title"`
+	Subtitle              string           `json:"subtitle"`
+	Slug                  string           `json:"slug"`
+	Description           string           `json:"description"`
+	Image                 *hcImage         `json:"image"`
+	ReleaseYear           *int             `json:"release_year"`
+	RatingsCount          int              `json:"ratings_count"`
+	Rating                float64          `json:"rating"`
+	UsersCount            int              `json:"users_count"`
+	Genres                []string         `json:"genres"`
+	ISBNs                 []string         `json:"isbns"`
+	HasAudiobook          bool             `json:"has_audiobook"`
+	HasEbook              bool             `json:"has_ebook"`
+	AudioSeconds          *int             `json:"audio_seconds"`
+	DefaultAudioEditionID *int             `json:"default_audio_edition_id"`
+	DefaultEbookEditionID *int             `json:"default_ebook_edition_id"`
+	Contributions         []hcContribution `json:"contributions"`
+	AuthorNames           []string         `json:"author_names"`
+	SeriesRefs            []models.SeriesRef
 }
 
 type hcEdition struct {
@@ -1338,12 +1352,14 @@ func (c *Client) toBook(b hcBook) models.Book {
 	if len(b.Genres) > 0 {
 		bk.Genres = b.Genres
 	}
+	hasAudiobook := b.HasAudiobook || hasPositiveInt(b.DefaultAudioEditionID)
+	hasEbook := b.HasEbook || hasPositiveInt(b.DefaultEbookEditionID)
 	switch {
-	case b.HasAudiobook && b.HasEbook:
+	case hasAudiobook && hasEbook:
 		bk.MediaType = models.MediaTypeBoth
-	case b.HasAudiobook:
+	case hasAudiobook:
 		bk.MediaType = models.MediaTypeAudiobook
-	case b.HasEbook:
+	case hasEbook:
 		bk.MediaType = models.MediaTypeEbook
 	}
 	if b.Image != nil {
@@ -1374,6 +1390,10 @@ func (c *Client) toBook(b hcBook) models.Book {
 		}
 	}
 	return bk
+}
+
+func hasPositiveInt(value *int) bool {
+	return value != nil && *value > 0
 }
 
 func hardcoverEditionToModel(e hcEdition) models.Edition {

@@ -644,6 +644,11 @@ func TestGetAuthorWorksByName_WithToken(t *testing.T) {
 				t.Fatalf("query requested search-only Hardcover field %q: %s", field, req.Query)
 			}
 		}
+		for _, field := range []string{"default_audio_edition_id", "default_ebook_edition_id"} {
+			if !strings.Contains(req.Query, field) {
+				t.Fatalf("query did not request Hardcover format field %q: %s", field, req.Query)
+			}
+		}
 		gotVars = req.Variables
 		data := map[string]interface{}{
 			"books": []map[string]interface{}{
@@ -1478,6 +1483,56 @@ func TestToBook_NoSlug_UsesID(t *testing.T) {
 	b := c.toBook(hcBook{ID: 99, Title: "Slug-less Book", Slug: ""})
 	if b.ForeignID != "hc:99" {
 		t.Errorf("ForeignID: want 'hc:99', got %q", b.ForeignID)
+	}
+}
+
+func TestToBook_DefaultEditionIDsSetMediaType(t *testing.T) {
+	c := New()
+	audioID := 10
+	ebookID := 20
+	cases := []struct {
+		name string
+		book hcBook
+		want string
+	}{
+		{
+			name: "both",
+			book: hcBook{
+				DefaultAudioEditionID: &audioID,
+				DefaultEbookEditionID: &ebookID,
+			},
+			want: models.MediaTypeBoth,
+		},
+		{
+			name: "audiobook",
+			book: hcBook{
+				DefaultAudioEditionID: &audioID,
+			},
+			want: models.MediaTypeAudiobook,
+		},
+		{
+			name: "ebook",
+			book: hcBook{
+				DefaultEbookEditionID: &ebookID,
+			},
+			want: models.MediaTypeEbook,
+		},
+		{
+			name: "neither",
+			book: hcBook{},
+			want: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.book.ID = 1
+			tc.book.Title = "Format Test"
+			tc.book.Slug = "format-test"
+			got := c.toBook(tc.book)
+			if got.MediaType != tc.want {
+				t.Fatalf("MediaType = %q, want %q", got.MediaType, tc.want)
+			}
+		})
 	}
 }
 
