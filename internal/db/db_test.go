@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -140,17 +141,11 @@ func TestMigrate033ABSReviewResolutionIdempotent(t *testing.T) {
 
 func migrationVersionForTest(t *testing.T, filename string) int {
 	t.Helper()
-	entries, err := migrationsFS.ReadDir("migrations")
+	v, err := migrationVersion(filename)
 	if err != nil {
-		t.Fatalf("read migrations: %v", err)
+		t.Fatalf("migration version for %s: %v", filename, err)
 	}
-	for i, entry := range entries {
-		if entry.Name() == filename {
-			return i + 1
-		}
-	}
-	t.Fatalf("migration %s not found", filename)
-	return 0
+	return v
 }
 
 // TestMigrate008_CalibreOnFreshDB verifies the v0.8.0 Calibre migration
@@ -1475,10 +1470,11 @@ func TestMigrate026_DedupBooks(t *testing.T) {
 		t.Fatal("insert history:", err)
 	}
 
-	// Re-run migrate (026 is position 25 in the sorted migration list and was
-	// already applied to the empty DB; roll back its marker so migrate() re-runs
-	// it against the seeded duplicate rows).
-	database.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version=25`)
+	// Re-run migrate (026 was already applied to the empty DB; roll back its
+	// marker so migrate() re-runs it against the seeded duplicate rows). The
+	// version is the filename number, not the slice index.
+	v026 := migrationVersionForTest(t, "026_dedup_books.sql")
+	database.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version=?`, v026)
 	if err := migrate(database); err != nil {
 		t.Fatal("re-run migrate:", err)
 	}
@@ -1508,4 +1504,288 @@ func TestMigrate026_DedupBooks(t *testing.T) {
 	if hBookID != idA {
 		t.Errorf("history.book_id: expected %d (winner), got %d", idA, hBookID)
 	}
+}
+
+// TestApplyMigrationRollsBackOnFailure verifies that a migration which fails
+// partway through leaves the database completely unchanged: no partial DDL and
+// no schema_migrations row. This is the core guarantee of finding 1.
+func TestApplyMigrationRollsBackOnFailure(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	defer database.Close()
+
+	// A migration whose first statement succeeds (creates a table) and whose
+	// second statement is invalid SQL. A non-transactional runner would leave
+	// rollback_probe behind; a transactional one must not.
+	const badMigration = `-- +migrate Up
+CREATE TABLE rollback_probe (id INTEGER PRIMARY KEY);
+THIS IS NOT VALID SQL;
+`
+	err = applyMigration(database, 9001, "9001_bad.sql", badMigration)
+	if err == nil {
+		t.Fatal("expected applyMigration to fail on invalid SQL")
+	}
+
+	// The table from the first statement must NOT exist — the tx rolled back.
+	var name string
+	qerr := database.QueryRow(
+		"SELECT name FROM sqlite_master WHERE type='table' AND name='rollback_probe'",
+	).Scan(&name)
+	if qerr == nil {
+		t.Fatal("rollback_probe table survived a failed migration — not transactional")
+	}
+	if qerr != sql.ErrNoRows {
+		t.Fatalf("unexpected error checking for rollback_probe: %v", qerr)
+	}
+
+	// No schema_migrations row must have been recorded for the failed version.
+	var count int
+	if err := database.QueryRow(
+		"SELECT COUNT(*) FROM schema_migrations WHERE version = 9001",
+	).Scan(&count); err != nil {
+		t.Fatalf("count schema_migrations: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("failed migration recorded a schema_migrations row (count=%d)", count)
+	}
+}
+
+// TestApplyMigrationRestoresForeignKeysAfterFailure verifies that a migration
+// carrying `PRAGMA foreign_keys=OFF` which then fails still leaves FK
+// enforcement ON on the pooled connection. This is finding 4.
+func TestApplyMigrationRestoresForeignKeysAfterFailure(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	defer database.Close()
+
+	assertFKEnabled := func(stage string) {
+		t.Helper()
+		var on int
+		if err := database.QueryRow("PRAGMA foreign_keys").Scan(&on); err != nil {
+			t.Fatalf("read foreign_keys pragma (%s): %v", stage, err)
+		}
+		if on != 1 {
+			t.Fatalf("foreign_keys enforcement is OFF %s — finding 4 not fixed", stage)
+		}
+	}
+
+	assertFKEnabled("before migration")
+
+	// A migration that disables FKs (as 007/034 do) and then fails.
+	const badFKMigration = `-- +migrate Up
+PRAGMA foreign_keys=OFF;
+CREATE TABLE fk_probe (id INTEGER PRIMARY KEY);
+THIS IS NOT VALID SQL;
+`
+	err = applyMigration(database, 9002, "9002_bad_fk.sql", badFKMigration)
+	if err == nil {
+		t.Fatal("expected applyMigration to fail")
+	}
+
+	assertFKEnabled("after a failed FK-toggling migration")
+
+	// The probe table must also have been rolled back.
+	var name string
+	if qerr := database.QueryRow(
+		"SELECT name FROM sqlite_master WHERE type='table' AND name='fk_probe'",
+	).Scan(&name); qerr != sql.ErrNoRows {
+		t.Fatalf("fk_probe table survived a failed migration (err=%v)", qerr)
+	}
+}
+
+// TestParseMigrationStripsForeignKeysPragma verifies that bare PRAGMA
+// foreign_keys statements are pulled out of the transactional statement list
+// and reported, while the real DDL is preserved.
+func TestParseMigrationStripsForeignKeysPragma(t *testing.T) {
+	content007, err := migrationsFS.ReadFile("migrations/007_downloads_fk_set_null.sql")
+	if err != nil {
+		t.Fatalf("read 007: %v", err)
+	}
+	stmts, toggles := parseMigration(string(content007))
+	if !toggles {
+		t.Fatal("007 should be detected as toggling foreign_keys")
+	}
+	for _, s := range stmts {
+		if isForeignKeysPragma(s) {
+			t.Fatalf("PRAGMA foreign_keys leaked into transactional statements: %q", s)
+		}
+	}
+
+	// 026 has no PRAGMA foreign_keys line, so it is fully covered by the
+	// transactional runner with no special handling (finding 3).
+	content026, err := migrationsFS.ReadFile("migrations/026_dedup_books.sql")
+	if err != nil {
+		t.Fatalf("read 026: %v", err)
+	}
+	_, toggles026 := parseMigration(string(content026))
+	if toggles026 {
+		t.Fatal("026 unexpectedly toggles foreign_keys")
+	}
+}
+
+// TestMigrationVersionIsFilenameNumber verifies the canonical version is the
+// filename prefix, not the slice index. With the 010 gap, migration 011 must
+// resolve to version 11 (finding 2).
+func TestMigrationVersionIsFilenameNumber(t *testing.T) {
+	cases := map[string]int{
+		"001_initial.sql":                    1,
+		"009_author_aliases.sql":             9,
+		"011_calibre_mode.sql":               11,
+		"040_download_client_path_remap.sql": 40,
+	}
+	for name, want := range cases {
+		got, err := migrationVersion(name)
+		if err != nil {
+			t.Errorf("migrationVersion(%q): %v", name, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("migrationVersion(%q) = %d, want %d", name, got, want)
+		}
+	}
+	if _, err := migrationVersion("noprefix.sql"); err == nil {
+		t.Error("expected error for filename without numeric prefix")
+	}
+}
+
+// TestReconcileMigrationVersions verifies that a database written by the
+// legacy index-based runner is rewritten to filename-based versions exactly
+// once, without re-running or skipping any migration (finding 2, safety).
+func TestReconcileMigrationVersions(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	defer database.Close()
+
+	entries, err := migrationsFS.ReadDir("migrations")
+	if err != nil {
+		t.Fatalf("read migrations: %v", err)
+	}
+	sortEntriesForTest(entries)
+
+	// Simulate a legacy DB: wipe schema_migrations and refill with index-based
+	// versions (1..N) as the old runner would have.
+	if _, err := database.Exec("DELETE FROM schema_migrations"); err != nil {
+		t.Fatalf("clear schema_migrations: %v", err)
+	}
+	for i := range entries {
+		if _, err := database.Exec(
+			"INSERT INTO schema_migrations (version) VALUES (?)", i+1,
+		); err != nil {
+			t.Fatalf("seed legacy version %d: %v", i+1, err)
+		}
+	}
+
+	// Reconcile.
+	if err := reconcileMigrationVersions(database, entries); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	// Every recorded version must now equal a filename number, and the count
+	// must be unchanged (no migration lost).
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != len(entries) {
+		t.Fatalf("row count changed during reconciliation: got %d want %d", count, len(entries))
+	}
+	for _, entry := range entries {
+		v, err := migrationVersion(entry.Name())
+		if err != nil {
+			t.Fatalf("migrationVersion: %v", err)
+		}
+		var n int
+		if err := database.QueryRow(
+			"SELECT COUNT(*) FROM schema_migrations WHERE version = ?", v,
+		).Scan(&n); err != nil {
+			t.Fatalf("count version %d: %v", v, err)
+		}
+		if n != 1 {
+			t.Fatalf("after reconciliation version %d (%s) has %d rows, want 1", v, entry.Name(), n)
+		}
+	}
+
+	// Reconciling again must be a no-op (idempotent).
+	if err := reconcileMigrationVersions(database, entries); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+
+	// A full migrate() after reconciliation must not re-run anything: no
+	// "already exists" errors, and the count stays put.
+	if err := migrate(database); err != nil {
+		t.Fatalf("migrate after reconciliation re-ran a migration: %v", err)
+	}
+	if err := database.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil {
+		t.Fatalf("count after migrate: %v", err)
+	}
+	if count != len(entries) {
+		t.Fatalf("migrate after reconciliation changed row count: got %d want %d", count, len(entries))
+	}
+}
+
+// TestReconcileMigrationVersionsLeavesFreshDB verifies a database already on
+// the filename-based scheme (or fresh) is untouched by reconciliation.
+func TestReconcileMigrationVersionsLeavesFreshDB(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	defer database.Close()
+
+	entries, err := migrationsFS.ReadDir("migrations")
+	if err != nil {
+		t.Fatalf("read migrations: %v", err)
+	}
+	sortEntriesForTest(entries)
+
+	before := versionSetForTest(t, database)
+
+	if err := reconcileMigrationVersions(database, entries); err != nil {
+		t.Fatalf("reconcile on already-filename-based DB: %v", err)
+	}
+
+	after := versionSetForTest(t, database)
+
+	if len(before) != len(after) {
+		t.Fatalf("reconciliation changed row count on a filename-based DB: %d -> %d", len(before), len(after))
+	}
+	for v := range before {
+		if !after[v] {
+			t.Fatalf("reconciliation dropped version %d on a filename-based DB", v)
+		}
+	}
+}
+
+func sortEntriesForTest(entries []os.DirEntry) {
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
+}
+
+// versionSetForTest returns every version recorded in schema_migrations.
+func versionSetForTest(t *testing.T, database *sql.DB) map[int]bool {
+	t.Helper()
+	rows, err := database.Query("SELECT version FROM schema_migrations")
+	if err != nil {
+		t.Fatalf("query schema_migrations: %v", err)
+	}
+	defer rows.Close()
+	set := make(map[int]bool)
+	for rows.Next() {
+		var v int
+		if err := rows.Scan(&v); err != nil {
+			t.Fatalf("scan version: %v", err)
+		}
+		set[v] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate versions: %v", err)
+	}
+	return set
 }

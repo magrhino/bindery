@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -157,6 +158,23 @@ func setPragmas(db *sql.DB) error {
 	return nil
 }
 
+// migrationVersion parses the canonical version number from a migration
+// filename's numeric prefix (e.g. "011_calibre_mode.sql" -> 11). The version
+// is the filename number, NOT the position in the sorted slice: the migration
+// set has a gap at 010, so index-based numbering would offset every migration
+// from 011 onward and silently skip a future 010_*.sql file.
+func migrationVersion(filename string) (int, error) {
+	prefix, _, ok := strings.Cut(filename, "_")
+	if !ok {
+		return 0, fmt.Errorf("migration %q has no numeric prefix", filename)
+	}
+	v, err := strconv.Atoi(prefix)
+	if err != nil {
+		return 0, fmt.Errorf("migration %q has non-numeric prefix %q: %w", filename, prefix, err)
+	}
+	return v, nil
+}
+
 func migrate(database *sql.DB) error {
 	// Create a migrations tracking table
 	_, err := database.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -178,8 +196,19 @@ func migrate(database *sql.DB) error {
 		return entries[i].Name() < entries[j].Name()
 	})
 
-	for version, entry := range entries {
-		v := version + 1 // 1-indexed
+	// Older Bindery builds recorded schema_migrations.version as the 0-based
+	// slice index + 1 instead of the filename number. Reconcile any such DB to
+	// filename-based versions exactly once, before the apply loop, so neither
+	// scheme re-runs nor skips a migration. See reconcileMigrationVersions.
+	if err := reconcileMigrationVersions(database, entries); err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		v, err := migrationVersion(entry.Name())
+		if err != nil {
+			return err
+		}
 
 		// Check if already applied
 		var count int
@@ -202,40 +231,244 @@ func migrate(database *sql.DB) error {
 			return fmt.Errorf("read migration %s: %w", entry.Name(), err)
 		}
 
-		sqlStr := string(content)
-		if idx := strings.Index(sqlStr, "-- +migrate Down"); idx >= 0 {
-			sqlStr = sqlStr[:idx]
-		}
-		sqlStr = strings.Replace(sqlStr, "-- +migrate Up", "", 1)
-
-		// Execute each statement individually
-		for _, stmt := range strings.Split(sqlStr, ";") {
-			// Strip comment-only lines
-			lines := strings.Split(stmt, "\n")
-			var cleaned []string
-			for _, line := range lines {
-				trimmed := strings.TrimSpace(line)
-				if trimmed == "" || strings.HasPrefix(trimmed, "--") {
-					continue
-				}
-				cleaned = append(cleaned, line)
-			}
-			stmt = strings.TrimSpace(strings.Join(cleaned, "\n"))
-			if stmt == "" {
-				continue
-			}
-			if _, err := database.Exec(stmt); err != nil {
-				return fmt.Errorf("migration %d statement: %w\nSQL: %s", v, err, stmt)
-			}
-		}
-
-		if _, err := database.Exec("INSERT INTO schema_migrations (version) VALUES (?)", v); err != nil {
-			return fmt.Errorf("record migration %d: %w", v, err)
+		if err := applyMigration(database, v, entry.Name(), string(content)); err != nil {
+			return err
 		}
 		slog.Info("applied migration", "version", v, "file", entry.Name())
 	}
 
 	return nil
+}
+
+// reconcileMigrationVersions detects a schema_migrations table that was written
+// by the legacy index-based runner and rewrites its rows to filename-based
+// versions. The legacy runner stored version = (sorted slice index)+1; the
+// current runner stores version = the filename numeric prefix. Because the
+// migration set has a gap at 010, the two schemes diverge for every migration
+// from 011 onward.
+//
+// The reconciliation is safe and idempotent:
+//   - It only fires when the highest recorded version is consistent with the
+//     index scheme (<= migration count) AND inconsistent with the filename
+//     scheme (a row exists whose version is not a valid filename number).
+//   - The index->filename mapping is the sorted slice itself, so it is exact.
+//   - Once rewritten, all versions are valid filename numbers and the guard
+//     no longer fires.
+//
+// A fresh database has no schema_migrations rows and is left untouched.
+func reconcileMigrationVersions(database *sql.DB, entries []os.DirEntry) error {
+	// Build the set of valid filename-based versions, and the index->filename
+	// mapping (1-based index, matching the legacy +1 numbering).
+	filenameVersions := make(map[int]bool, len(entries))
+	indexToFilename := make(map[int]int, len(entries))
+	for i, entry := range entries {
+		fv, err := migrationVersion(entry.Name())
+		if err != nil {
+			return err
+		}
+		filenameVersions[fv] = true
+		indexToFilename[i+1] = fv
+	}
+
+	// Read in a helper so the result set is fully closed before the rewrite
+	// transaction below — the pool is single-connection, so an open query
+	// would deadlock database.Begin().
+	recorded, err := readRecordedVersions(database)
+	if err != nil {
+		return err
+	}
+
+	if len(recorded) == 0 {
+		return nil // fresh DB — nothing to reconcile
+	}
+
+	// If every recorded version is already a valid filename number, the DB is
+	// either fresh-on-new-runner or already reconciled. Leave it alone.
+	allFilenameBased := true
+	for _, v := range recorded {
+		if !filenameVersions[v] {
+			allFilenameBased = false
+			break
+		}
+	}
+	if allFilenameBased {
+		return nil
+	}
+
+	// At least one row is not a valid filename version. Only treat it as a
+	// legacy index-based DB if every recorded version is a valid index
+	// (1..len(entries)); otherwise the table is corrupt in a way we must not
+	// silently "fix".
+	for _, v := range recorded {
+		if v < 1 || v > len(entries) {
+			return fmt.Errorf(
+				"schema_migrations contains version %d that is neither a valid "+
+					"migration filename number nor a valid legacy index (1..%d); "+
+					"refusing to reconcile a corrupt migrations table",
+				v, len(entries))
+		}
+	}
+
+	// Every row is a valid legacy index. Rewrite them to filename versions in
+	// a single transaction. Rewrite in descending order so an intermediate
+	// (index, filename) pair can never collide with a not-yet-rewritten row.
+	tx, err := database.Begin()
+	if err != nil {
+		return fmt.Errorf("begin migration-version reconciliation: %w", err)
+	}
+	for i := len(recorded) - 1; i >= 0; i-- {
+		oldV := recorded[i]
+		newV := indexToFilename[oldV]
+		if newV == oldV {
+			continue
+		}
+		if _, err := tx.Exec(
+			"UPDATE schema_migrations SET version = ? WHERE version = ?", newV, oldV,
+		); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("reconcile migration version %d -> %d: %w", oldV, newV, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration-version reconciliation: %w", err)
+	}
+	slog.Info("reconciled schema_migrations to filename-based versions", "rows", len(recorded))
+	return nil
+}
+
+// readRecordedVersions returns every version in schema_migrations, ascending.
+// It exists as a separate function so the result set is closed (via defer)
+// before any caller starts a write transaction — the pool is single-connection.
+func readRecordedVersions(database *sql.DB) ([]int, error) {
+	rows, err := database.Query("SELECT version FROM schema_migrations ORDER BY version")
+	if err != nil {
+		return nil, fmt.Errorf("read schema_migrations for reconciliation: %w", err)
+	}
+	defer rows.Close()
+	var recorded []int
+	for rows.Next() {
+		var v int
+		if err := rows.Scan(&v); err != nil {
+			return nil, fmt.Errorf("scan schema_migrations version: %w", err)
+		}
+		recorded = append(recorded, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate schema_migrations: %w", err)
+	}
+	return recorded, nil
+}
+
+// applyMigration runs a single migration's statements and records it in
+// schema_migrations, all inside one transaction so a crash or error mid-way
+// leaves the database unchanged (no partial DDL, no missing version row).
+//
+// SQLite cannot change PRAGMA foreign_keys inside a transaction, so migrations
+// that need FK enforcement disabled for a table rebuild (007, 034) carry a
+// bare `PRAGMA foreign_keys=OFF/ON` line. Those lines are stripped from the
+// transactional body; instead FK enforcement is toggled OFF before BEGIN and
+// unconditionally restored to ON afterwards via defer — so a failed migration
+// can never leave FK enforcement off on the pooled connection.
+func applyMigration(database *sql.DB, version int, name, content string) (err error) {
+	statements, togglesForeignKeys := parseMigration(content)
+
+	if togglesForeignKeys {
+		if _, e := database.Exec("PRAGMA foreign_keys=OFF"); e != nil {
+			return fmt.Errorf("migration %d: disable foreign keys: %w", version, e)
+		}
+		// Restore FK enforcement no matter how this function returns. The
+		// pooled connection (MaxOpenConns=1) is shared for the process
+		// lifetime, so leaving it OFF would silently disable FK checks.
+		defer func() {
+			if _, e := database.Exec("PRAGMA foreign_keys=ON"); e != nil && err == nil {
+				err = fmt.Errorf("migration %d: restore foreign keys: %w", version, e)
+			}
+		}()
+	}
+
+	tx, err := database.Begin()
+	if err != nil {
+		return fmt.Errorf("migration %d: begin transaction: %w", version, err)
+	}
+	// Roll back on any early return. A no-op after a successful Commit.
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	for _, stmt := range statements {
+		if _, e := tx.Exec(stmt); e != nil {
+			return fmt.Errorf("migration %d statement: %w\nSQL: %s", version, e, stmt)
+		}
+	}
+
+	if togglesForeignKeys {
+		// Documented SQLite table-rebuild ordering: verify referential
+		// integrity before committing the FK-disabled rebuild.
+		var fkRows int
+		row := tx.QueryRow("SELECT COUNT(*) FROM pragma_foreign_key_check")
+		if e := row.Scan(&fkRows); e != nil {
+			return fmt.Errorf("migration %d: foreign_key_check: %w", version, e)
+		}
+		if fkRows > 0 {
+			return fmt.Errorf("migration %d: foreign_key_check found %d violation(s)", version, fkRows)
+		}
+	}
+
+	if _, e := tx.Exec("INSERT INTO schema_migrations (version) VALUES (?)", version); e != nil {
+		return fmt.Errorf("record migration %d: %w", version, e)
+	}
+
+	if e := tx.Commit(); e != nil {
+		return fmt.Errorf("migration %d: commit: %w", version, e)
+	}
+	return nil
+}
+
+// parseMigration splits a migration file's "Up" section into individual
+// executable statements. Bare `PRAGMA foreign_keys=ON/OFF` statements are
+// removed from the returned slice (they cannot run inside a transaction) and
+// reported via the second return value so the caller can toggle the pragma
+// outside the transaction.
+func parseMigration(content string) (statements []string, togglesForeignKeys bool) {
+	sqlStr := content
+	if idx := strings.Index(sqlStr, "-- +migrate Down"); idx >= 0 {
+		sqlStr = sqlStr[:idx]
+	}
+	sqlStr = strings.Replace(sqlStr, "-- +migrate Up", "", 1)
+
+	for _, stmt := range strings.Split(sqlStr, ";") {
+		// Strip comment-only lines
+		lines := strings.Split(stmt, "\n")
+		var cleaned []string
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || strings.HasPrefix(trimmed, "--") {
+				continue
+			}
+			cleaned = append(cleaned, line)
+		}
+		stmt = strings.TrimSpace(strings.Join(cleaned, "\n"))
+		if stmt == "" {
+			continue
+		}
+		// PRAGMA foreign_keys is a no-op inside a transaction; pull it out of
+		// the transactional body and signal the caller to handle it.
+		if isForeignKeysPragma(stmt) {
+			togglesForeignKeys = true
+			continue
+		}
+		statements = append(statements, stmt)
+	}
+	return statements, togglesForeignKeys
+}
+
+// isForeignKeysPragma reports whether stmt is a bare `PRAGMA foreign_keys=...`
+// statement, tolerating case and whitespace variations.
+func isForeignKeysPragma(stmt string) bool {
+	normalized := strings.ToLower(strings.Join(strings.Fields(stmt), ""))
+	return strings.HasPrefix(normalized, "pragmaforeign_keys=")
 }
 
 // multiuserPreFlight checks that the database is in a consistent state before
