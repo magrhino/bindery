@@ -863,6 +863,12 @@ func main() {
 		r.Post("/migrate/readarr", migrateHandler.ImportReadarr)
 		r.Get("/migrate/readarr/status", migrateHandler.ImportReadarrStatus)
 
+		// Goodreads library CSV import — a two-step migration aid: POST the
+		// export to /goodreads/preview for a dry-run, then POST the returned
+		// token to /goodreads/commit to add the resolved books.
+		r.Post("/migrate/goodreads/preview", migrateHandler.ImportGoodreadsPreview)
+		r.Post("/migrate/goodreads/commit", migrateHandler.ImportGoodreadsCommit)
+
 		// Image proxy — caches external cover images locally so the browser
 		// never leaks the user's IP to Goodreads / OpenLibrary / etc.
 		r.Get("/images", imageProxyHandler.Serve)

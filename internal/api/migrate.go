@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -66,6 +67,10 @@ type MigrateHandler struct {
 	// can return 202 immediately instead of blocking for minutes while
 	// OpenLibrary metadata is resolved for each author.
 	readarrImporter *migrate.ReadarrImporter
+
+	// goodreadsImporter coordinates the two-step Goodreads CSV import:
+	// a dry-run preview followed by a commit of the resolved books.
+	goodreadsImporter *migrate.GoodreadsImporter
 }
 
 func NewMigrateHandler(
@@ -84,6 +89,7 @@ func NewMigrateHandler(
 		readarrImporter: migrate.NewReadarrImporter(
 			authors, indexers, clients, blocklist, meta, onNewAuthor,
 		),
+		goodreadsImporter: migrate.NewGoodreadsImporter(authors, books, meta),
 	}
 }
 
@@ -197,4 +203,102 @@ func acceptUpload(w http.ResponseWriter, r *http.Request, maxBytes int64) (io.Re
 		return nil, fmt.Errorf("unsupported content-type %q; expected text/csv or sqlite binary", ct)
 	}
 	return f, nil
+}
+
+// ImportGoodreadsPreview accepts a multipart form with a "file" field holding
+// a Goodreads library CSV export and an optional "shelves" field (a
+// comma-separated subset of to-read,read,currently-reading; defaults to
+// to-read). It parses the CSV and resolves every in-scope row against the
+// metadata providers WITHOUT writing anything, returning a dry-run preview
+// with a token. The UI shows the counts, then POSTs the token to
+// /migrate/goodreads/commit to actually add the books.
+//
+// Resolution can take a while for a large export — every row makes at least
+// one OpenLibrary call and the importer paces itself. The work runs on a
+// context detached from the request so a client timeout does not abort it.
+func (h *MigrateHandler) ImportGoodreadsPreview(w http.ResponseWriter, r *http.Request) {
+	file, err := acceptUpload(w, r, 20<<20) // 20 MB cap — a big Goodreads export
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	defer file.Close()
+
+	rows, err := migrate.ParseGoodreadsCSV(file)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if len(rows) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no usable rows found in the Goodreads CSV"})
+		return
+	}
+
+	// acceptUpload already wrapped the body in MaxBytesReader and parsed the
+	// multipart form, so read from the parsed form directly rather than via
+	// FormValue (which would re-trigger the body-reading parse path).
+	opts := migrate.GoodreadsImportOptions{Shelves: parseShelfFilter(r.Form.Get("shelves"))}
+
+	// Detach from the request context: a slow browser must not abort a
+	// resolution pass that may run for minutes on a large library.
+	preview, err := h.goodreadsImporter.Preview(context.WithoutCancel(r.Context()), rows, opts)
+	if err != nil {
+		if errors.Is(err, migrate.ErrGoodreadsRunning) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		slog.Error("goodreads import: preview failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, preview)
+}
+
+// ImportGoodreadsCommit persists the resolved books from a preview token. The
+// JSON body is {"token": "..."}. The preview is consumed on commit so a
+// token cannot double-add.
+func (h *MigrateHandler) ImportGoodreadsCommit(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	body.Token = strings.TrimSpace(body.Token)
+	if body.Token == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token is required"})
+		return
+	}
+
+	result, err := h.goodreadsImporter.Commit(context.WithoutCancel(r.Context()), body.Token)
+	if err != nil {
+		if errors.Is(err, migrate.ErrGoodreadsPreviewNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+		slog.Error("goodreads import: commit failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// parseShelfFilter splits a comma-separated "shelves" form value into a slice
+// of Goodreads Exclusive Shelf names. Unknown values are dropped; an empty or
+// all-invalid input yields nil, which the importer treats as "to-read only".
+func parseShelfFilter(raw string) []string {
+	valid := map[string]bool{
+		migrate.GoodreadsShelfToRead:           true,
+		migrate.GoodreadsShelfRead:             true,
+		migrate.GoodreadsShelfCurrentlyReading: true,
+	}
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.ToLower(strings.TrimSpace(part))
+		if valid[part] {
+			out = append(out, part)
+		}
+	}
+	return out
 }

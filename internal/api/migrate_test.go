@@ -52,6 +52,28 @@ func multipartBody(t *testing.T, field, filename, content string) (*bytes.Buffer
 	return body, w.FormDataContentType()
 }
 
+// multipartBodyWithFields builds a multipart body with a "file" field plus
+// extra plain text form fields.
+func multipartBodyWithFields(t *testing.T, filename, content string, fields map[string]string) (*bytes.Buffer, string) {
+	t.Helper()
+	body := &bytes.Buffer{}
+	w := multipart.NewWriter(body)
+	fw, err := w.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(fw, content); err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range fields {
+		if err := w.WriteField(k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.Close()
+	return body, w.FormDataContentType()
+}
+
 func TestMigrate_ImportCSV_BadMultipart(t *testing.T) {
 	h := migrateFixture(t, &stubProvider{})
 
@@ -272,5 +294,126 @@ func TestMigrate_ImportReadarrStatus_BeforeFirstRun(t *testing.T) {
 	}
 	if p.Running {
 		t.Errorf("expected Running=false before any import, got %+v", p)
+	}
+}
+
+const goodreadsTestHeader = "Book Id,Title,Author,Author l-f,Additional Authors,ISBN,ISBN13,My Rating,Average Rating,Publisher,Binding,Number of Pages,Year Published,Original Publication Year,Date Read,Date Added,Bookshelves,Bookshelves with positions,Exclusive Shelf,My Review,Spoiler,Private Notes,Read Count,Owned Copies"
+
+// TestMigrate_Goodreads_PreviewAndCommit drives the two-step flow end to end
+// through the HTTP handlers with a stub metadata provider.
+func TestMigrate_Goodreads_PreviewAndCommit(t *testing.T) {
+	p := &stubProvider{
+		byISBN: &models.Book{
+			ForeignID: "OL-GR-W1",
+			Title:     "Project Hail Mary",
+			Author:    &models.Author{ForeignID: "OL-GR-A1", Name: "Andy Weir"},
+		},
+	}
+	h := migrateFixture(t, p)
+	h.goodreadsImporter.WithPacing(0) // no inter-lookup delay in tests
+
+	csv := goodreadsTestHeader + "\n" +
+		`1,Project Hail Mary,Andy Weir,"Weir, Andy",,="0593135202",="9780593135204",5,4.5,Pub,Hardcover,476,2021,2021,,2024/01/01,to-read,,to-read,,false,,0,0` + "\n" +
+		// a read-shelf row: excluded by the default to-read-only filter
+		`2,Some Read Book,Andy Weir,"Weir, Andy",,,,4,4.0,Pub,Paperback,300,2015,2015,,2023/01/01,read,,read,,false,,1,1` + "\n"
+
+	body, ct := multipartBody(t, "file", "goodreads.csv", csv)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/migrate/goodreads/preview", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	h.ImportGoodreadsPreview(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var preview migrate.GoodreadsPreview
+	if err := json.NewDecoder(rec.Body).Decode(&preview); err != nil {
+		t.Fatalf("decode preview: %v", err)
+	}
+	if preview.TotalRows != 2 {
+		t.Errorf("totalRows = %d, want 2", preview.TotalRows)
+	}
+	if preview.Resolved != 1 {
+		t.Errorf("resolved = %d, want 1 (to-read only)", preview.Resolved)
+	}
+	if preview.SkippedShelf != 1 {
+		t.Errorf("skippedShelf = %d, want 1", preview.SkippedShelf)
+	}
+	if preview.Token == "" {
+		t.Fatal("preview must return a token")
+	}
+
+	// Commit the token.
+	commitBody, _ := json.Marshal(map[string]string{"token": preview.Token})
+	creq := httptest.NewRequest(http.MethodPost, "/api/v1/migrate/goodreads/commit", bytes.NewReader(commitBody))
+	creq.Header.Set("Content-Type", "application/json")
+	crec := httptest.NewRecorder()
+	h.ImportGoodreadsCommit(crec, creq)
+	if crec.Code != http.StatusOK {
+		t.Fatalf("commit: expected 200, got %d: %s", crec.Code, crec.Body.String())
+	}
+	var result migrate.GoodreadsCommitResult
+	if err := json.NewDecoder(crec.Body).Decode(&result); err != nil {
+		t.Fatalf("decode commit: %v", err)
+	}
+	if result.Added != 1 {
+		t.Fatalf("commit added = %d, want 1; failures=%v", result.Added, result.Failures)
+	}
+}
+
+// TestMigrate_Goodreads_ShelfFilter verifies the shelves form field widens the
+// import beyond the to-read default.
+func TestMigrate_Goodreads_ShelfFilter(t *testing.T) {
+	p := &stubProvider{
+		byISBN: &models.Book{
+			ForeignID: "OL-GR-W2",
+			Title:     "Read Book",
+			Author:    &models.Author{ForeignID: "OL-GR-A2", Name: "Some Author"},
+		},
+	}
+	h := migrateFixture(t, p)
+	h.goodreadsImporter.WithPacing(0)
+
+	csv := goodreadsTestHeader + "\n" +
+		`1,Read Book,Some Author,"Author, Some",,="0000000000",="9780000000000",4,4.0,Pub,Paperback,300,2015,2015,,2023/01/01,read,,read,,false,,1,1` + "\n"
+
+	body, ct := multipartBodyWithFields(t, "goodreads.csv", csv, map[string]string{"shelves": "to-read,read"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/migrate/goodreads/preview", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	h.ImportGoodreadsPreview(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var preview migrate.GoodreadsPreview
+	if err := json.NewDecoder(rec.Body).Decode(&preview); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if preview.Resolved != 1 {
+		t.Errorf("resolved = %d, want 1 (read shelf explicitly included)", preview.Resolved)
+	}
+}
+
+func TestMigrate_Goodreads_CommitUnknownToken(t *testing.T) {
+	h := migrateFixture(t, &stubProvider{})
+	commitBody, _ := json.Marshal(map[string]string{"token": "does-not-exist"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/migrate/goodreads/commit", bytes.NewReader(commitBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ImportGoodreadsCommit(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for an unknown token, got %d", rec.Code)
+	}
+}
+
+func TestMigrate_Goodreads_PreviewBadCSV(t *testing.T) {
+	h := migrateFixture(t, &stubProvider{})
+	// A CSV with no Title column is rejected.
+	body, ct := multipartBody(t, "file", "bad.csv", "Author,ISBN\nSomeone,123\n")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/migrate/goodreads/preview", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	h.ImportGoodreadsPreview(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a CSV with no Title column, got %d", rec.Code)
 	}
 }

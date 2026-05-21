@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, HardcoverList, ImportList } from '../../api/client'
 import { inputCls } from './formStyles'
+import GoodreadsImportSection from './GoodreadsImportSection'
 
 interface MigrateResult {
   requested?: number
@@ -110,6 +111,7 @@ export default function ImportTab() {
           </div>
         )}
       </section>
+      <GoodreadsImportSection />
       <HardcoverListsSection />
 
       {err && (

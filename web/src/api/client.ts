@@ -482,6 +482,16 @@ export const api = {
   uploadMigrate: <T>(endpoint: 'csv' | 'readarr', body: FormData) =>
     uploadFile<T>(`/migrate/${endpoint}`, body),
 
+  // Goodreads CSV import — two steps: a dry-run preview that resolves every
+  // row, then a commit of the resolved books keyed by the preview token.
+  goodreadsPreview: (body: FormData) =>
+    uploadFile<GoodreadsPreview>('/migrate/goodreads/preview', body),
+  goodreadsCommit: (token: string) =>
+    request<GoodreadsCommitResult>('/migrate/goodreads/commit', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
+
   // Metadata Profiles
   listMetadataProfiles: () => request<MetadataProfile[]>('/metadataprofile'),
   addMetadataProfile: (data: Partial<MetadataProfile>) => request<MetadataProfile>('/metadataprofile', { method: 'POST', body: JSON.stringify(data) }),
@@ -1286,6 +1296,45 @@ export interface HardcoverList {
   name: string
   slug: string
   booksCount: number
+}
+
+// GoodreadsRow mirrors a parsed Goodreads CSV row returned in a preview.
+export interface GoodreadsRow {
+  rowNumber: number
+  title: string
+  author: string
+  additionalAuthors?: string
+  isbn?: string
+  isbn13?: string
+  exclusiveShelf: string
+  bookshelves?: string
+}
+
+export type GoodreadsOutcome = 'resolved' | 'skipped_shelf' | 'skipped_existing' | 'unresolved'
+
+export interface GoodreadsResolvedRow {
+  row: GoodreadsRow
+  outcome: GoodreadsOutcome
+  reason?: string
+  matchedBy?: string
+}
+
+export interface GoodreadsPreview {
+  token: string
+  totalRows: number
+  resolved: number
+  skippedShelf: number
+  skippedExisting: number
+  unresolved: number
+  shelfFilter: string[]
+  rows: GoodreadsResolvedRow[]
+}
+
+export interface GoodreadsCommitResult {
+  added: number
+  skipped: number
+  failed: number
+  failures?: Record<string, string>
 }
 
 export interface LogEntry {
