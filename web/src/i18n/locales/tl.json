@@ -171,7 +171,13 @@
     "selectBook": "Piliin ang {{title}}",
     "unmonitorHint": "Itigil ang pagbabantay sa librong ito",
     "showExcluded": "Ipakita ang mga ibinukod",
-    "excluded": "Ibinukod"
+    "excluded": "Ibinukod",
+    "colTitleAuthor": "Pamagat at may-akda",
+    "colFormat": "Format",
+    "colActions": "Mga aksyon",
+    "noCover": "Walang pabalat",
+    "authorUnknown": "Hindi alam ang may-akda",
+    "changeFormat": "Baguhin ang format para sa {{title}}"
   },
   "history": {
     "title": "Kasaysayan",

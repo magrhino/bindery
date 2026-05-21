@@ -152,7 +152,15 @@
     "ebookDone": "📖 ✓",
     "audiobookDone": "🎧 ✓",
     "selectBook": "{{title}} selecteren",
-    "unmonitorHint": "Stop met bewaken van dit boek"
+    "unmonitorHint": "Stop met bewaken van dit boek",
+    "showExcluded": "Uitgesloten tonen",
+    "excluded": "Uitgesloten",
+    "colTitleAuthor": "Titel & auteur",
+    "colFormat": "Formaat",
+    "colActions": "Acties",
+    "noCover": "Geen omslag",
+    "authorUnknown": "Auteur onbekend",
+    "changeFormat": "Formaat wijzigen voor {{title}}"
   },
   "history": {
     "title": "Geschiedenis",

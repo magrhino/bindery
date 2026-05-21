@@ -6,6 +6,10 @@ import BulkActionBar from '../components/BulkActionBar'
 import Pagination from '../components/Pagination'
 import { usePagination } from '../components/usePagination'
 
+// Shared grid template so the header row and every list row line up exactly.
+// columns: checkbox · cover · title+author · format · actions
+const ROW_GRID = 'grid grid-cols-[1.5rem_2rem_1fr_6rem_8.5rem] items-center gap-3'
+
 export default function WantedPage() {
   const { t } = useTranslation()
 
@@ -158,6 +162,8 @@ export default function WantedPage() {
     return (bytes / 1024).toFixed(0) + ' KB'
   }
 
+  const checkboxCls = 'rounded border-slate-400 dark:border-zinc-600 text-emerald-600 focus:ring-emerald-500 focus:ring-offset-0'
+
   return (
     <div className={selectedIds.size > 0 ? 'pb-16' : ''}>
       {toast && (
@@ -165,20 +171,22 @@ export default function WantedPage() {
           {toast}
         </div>
       )}
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-2xl font-bold">{t('wanted.title')}</h2>
-        <div className="flex items-center gap-4">
-          <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-zinc-400 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={showExcluded}
-              onChange={e => setShowExcluded(e.target.checked)}
-              className="rounded border-slate-400 dark:border-zinc-600 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0"
-            />
-            {t('wanted.showExcluded')}
-          </label>
-          <span className="text-sm text-slate-600 dark:text-zinc-500">{t('wanted.countLabel', { filtered: filtered.length, total: books.length })}</span>
-        </div>
+
+      {/* Page header: title · count · show-excluded */}
+      <div className="flex items-center gap-3 mb-3">
+        <h2 className="text-xl font-semibold text-slate-800 dark:text-zinc-200">{t('wanted.title')}</h2>
+        <span className="text-xs text-slate-500 dark:text-zinc-500">
+          {t('wanted.countLabel', { filtered: filtered.length, total: books.length })}
+        </span>
+        <label className="ml-auto flex items-center gap-1.5 text-xs text-slate-600 dark:text-zinc-400 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={showExcluded}
+            onChange={e => setShowExcluded(e.target.checked)}
+            className={checkboxCls}
+          />
+          {t('wanted.showExcluded')}
+        </label>
       </div>
 
       <input
@@ -186,7 +194,7 @@ export default function WantedPage() {
         value={search}
         onChange={e => setSearch(e.target.value)}
         placeholder={t('wanted.searchPlaceholder')}
-        className="w-full mb-4 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600 placeholder-slate-400 dark:placeholder-zinc-600"
+        className="w-full mb-3 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600 placeholder-slate-400 dark:placeholder-zinc-600"
       />
 
       {loading ? (
@@ -200,89 +208,127 @@ export default function WantedPage() {
           <p>{t('wanted.noMatch')}</p>
         </div>
       ) : (
-        <>
-          {/* Select-all row */}
-          <div className="flex items-center gap-2 mb-2 px-1">
+        <div className="border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 overflow-hidden">
+          {/* Column-header row with select-all checkbox */}
+          <div className={`${ROW_GRID} px-3 py-2 border-b border-slate-200 dark:border-zinc-800 bg-slate-200/60 dark:bg-zinc-800/60 text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-zinc-500`}>
             <input
               ref={selectAllRef}
               type="checkbox"
               checked={allPageSelected}
               onChange={e => e.target.checked ? selectAllOnPage() : clearSelection()}
-              className="rounded-full border-slate-400 dark:border-zinc-600 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0"
-              title="Select all on this page"
+              className={checkboxCls}
+              aria-label={t('common.selectAllPage')}
+              title={t('common.selectAllPage')}
             />
-            <span className="text-xs text-slate-500 dark:text-zinc-500">{t('common.selectAllPage')}</span>
+            <span aria-hidden />
+            <span>{t('wanted.colTitleAuthor')}</span>
+            <span>{t('wanted.colFormat')}</span>
+            <span className="text-right">{t('wanted.colActions')}</span>
           </div>
 
-          <div className="space-y-2">
-            {pageItems.map(book => (
-              <div key={book.id}>
-                <div className={`flex items-center justify-between p-3 border rounded-lg transition-colors ${selectedIds.has(book.id) ? 'border-emerald-500 bg-emerald-500/5 dark:bg-emerald-500/5' : 'border-slate-200 dark:border-zinc-800 bg-slate-100 dark:bg-zinc-900'}`}>
-                  <div className="flex items-center gap-3 min-w-0">
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.has(book.id)}
-                      onChange={() => toggleSelect(book.id)}
-                      className="rounded-full border-slate-400 dark:border-zinc-600 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0 flex-shrink-0"
-                      title={t('wanted.selectBook', { title: book.title })}
+          {pageItems.map((book, i) => {
+            const isSelected = selectedIds.has(book.id)
+            const year = book.releaseDate ? new Date(book.releaseDate).getFullYear() : null
+            const authorName = book.author?.authorName
+            return (
+              <div key={book.id} className={i < pageItems.length - 1 ? 'border-b border-slate-200 dark:border-zinc-800' : ''}>
+                <div className={`${ROW_GRID} px-3 py-1.5 transition-colors ${
+                  isSelected
+                    ? 'bg-emerald-500/10 dark:bg-emerald-500/10'
+                    : 'hover:bg-slate-200/50 dark:hover:bg-zinc-800/50'
+                }`}>
+                  {/* selection */}
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleSelect(book.id)}
+                    className={checkboxCls}
+                    aria-label={t('wanted.selectBook', { title: book.title })}
+                    title={t('wanted.selectBook', { title: book.title })}
+                  />
+
+                  {/* uniform cover slot */}
+                  {book.imageUrl ? (
+                    <img
+                      src={book.imageUrl}
+                      alt=""
+                      className="w-8 h-11 object-cover rounded bg-slate-200 dark:bg-zinc-800"
                     />
-                    {book.imageUrl && (
-                      <img src={book.imageUrl} alt="" className="w-10 h-14 object-cover rounded flex-shrink-0" />
-                    )}
-                    <div className="min-w-0">
-                      <Link to={`/book/${book.id}`} className="font-medium text-sm truncate block hover:text-emerald-500 dark:hover:text-emerald-400 transition-colors">
-                        {book.title}
-                      </Link>
-                      {book.author && (
+                  ) : (
+                    <div
+                      className="w-8 h-11 rounded bg-slate-200 dark:bg-zinc-800 grid place-items-center text-[8px] text-slate-400 dark:text-zinc-600 text-center leading-tight"
+                      aria-hidden
+                    >
+                      {t('wanted.noCover')}
+                    </div>
+                  )}
+
+                  {/* title + author · year */}
+                  <div className="min-w-0">
+                    <Link
+                      to={`/book/${book.id}`}
+                      className="block truncate text-sm font-medium text-slate-800 dark:text-zinc-200 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
+                    >
+                      {book.title}
+                    </Link>
+                    <div className="truncate text-xs text-slate-500 dark:text-zinc-500">
+                      {authorName ? (
                         <Link
                           to={`/author/${book.authorId}`}
-                          className="text-[11px] text-slate-500 dark:text-zinc-500 hover:text-emerald-500 dark:hover:text-emerald-400 transition-colors truncate block"
+                          className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
                         >
-                          {book.author.authorName}
+                          {authorName}
                         </Link>
+                      ) : (
+                        <span>{t('wanted.authorUnknown')}</span>
                       )}
-                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                        <select
-                          value={book.mediaType || 'ebook'}
-                          onChange={e => changeMediaType(book, e.target.value as 'ebook' | 'audiobook' | 'both')}
-                          className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded text-[11px] px-1.5 py-0.5 focus:outline-none"
-                          title="Change media type"
-                        >
-                          <option value="ebook">{t('books.mediaEbook')}</option>
-                          <option value="audiobook">{t('books.mediaAudiobook')}</option>
-                          <option value="both">{t('books.mediaBoth')}</option>
-                        </select>
-                        {book.mediaType === 'both' && (
-                          <span className="text-[10px] text-slate-500 dark:text-zinc-500">
-                            {book.ebookFilePath ? t('wanted.ebookDone') : t('wanted.ebookNeeded')}
-                            {' · '}
-                            {book.audiobookFilePath ? t('wanted.audiobookDone') : t('wanted.audiobookNeeded')}
-                          </span>
-                        )}
-                      </div>
-                      {book.releaseDate && (
-                        <p className="text-xs text-slate-600 dark:text-zinc-500">{new Date(book.releaseDate).getFullYear()}</p>
-                      )}
+                      {year != null && <span> · {year}</span>}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
+
+                  {/* format control — compact select, still changes the value */}
+                  <div className="min-w-0">
+                    <select
+                      value={book.mediaType || 'ebook'}
+                      onChange={e => changeMediaType(book, e.target.value as 'ebook' | 'audiobook' | 'both')}
+                      className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded text-[11px] px-1.5 py-0.5 focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
+                      aria-label={t('wanted.changeFormat', { title: book.title })}
+                      title={t('wanted.changeFormat', { title: book.title })}
+                    >
+                      <option value="ebook">{t('books.mediaEbook')}</option>
+                      <option value="audiobook">{t('books.mediaAudiobook')}</option>
+                      <option value="both">{t('books.mediaBoth')}</option>
+                    </select>
+                    {book.mediaType === 'both' && (
+                      <div className="mt-0.5 text-[10px] text-slate-500 dark:text-zinc-500 truncate">
+                        {book.ebookFilePath ? t('wanted.ebookDone') : t('wanted.ebookNeeded')}
+                        {' · '}
+                        {book.audiobookFilePath ? t('wanted.audiobookDone') : t('wanted.audiobookNeeded')}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* actions */}
+                  <div className="flex items-center justify-end gap-1.5">
                     {book.excluded && (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-amber-500/20 text-amber-700 dark:text-amber-400">
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/20 text-amber-700 dark:text-amber-400">
                         {t('wanted.excluded')}
                       </span>
                     )}
                     <button
+                      type="button"
                       onClick={() => unmonitor(book)}
                       disabled={unmonitoringId === book.id}
-                      className="px-2 py-1.5 bg-slate-200 dark:bg-zinc-800 hover:bg-amber-100 dark:hover:bg-amber-900/30 hover:text-amber-700 dark:hover:text-amber-400 rounded text-xs font-medium disabled:opacity-50 transition-colors"
+                      className="px-2 py-1 rounded text-xs font-medium bg-slate-200 dark:bg-zinc-800 hover:bg-amber-100 dark:hover:bg-amber-900/30 hover:text-amber-700 dark:hover:text-amber-400 text-slate-700 dark:text-zinc-300 disabled:opacity-50 transition-colors"
                       title={t('wanted.unmonitorHint')}
                     >
                       {unmonitoringId === book.id ? '…' : t('common.unmonitor')}
                     </button>
                     <button
+                      type="button"
                       onClick={() => searchBook(book)}
                       disabled={searchingId === book.id}
-                      className="px-3 py-1.5 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 rounded text-xs font-medium disabled:opacity-50"
+                      className="px-2 py-1 rounded text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-50 transition-colors"
                     >
                       {searchingId === book.id ? t('wanted.searching') : t('common.search')}
                     </button>
@@ -290,13 +336,13 @@ export default function WantedPage() {
                 </div>
 
                 {showResults === book.id && results.length === 0 && (
-                  <div className="mt-1 mb-3 px-3 py-2 bg-slate-200/50 dark:bg-zinc-800/50 rounded text-xs text-slate-600 dark:text-zinc-500">
+                  <div className="px-3 pb-2 text-xs text-slate-600 dark:text-zinc-500">
                     {t('wanted.noIndexerResults')}
                   </div>
                 )}
 
                 {showResults === book.id && results.length > 0 && (
-                  <div className="mt-1 mb-3 space-y-1">
+                  <div className="px-3 pb-2 space-y-1">
                     {results.slice(0, 10).map(r => (
                       <div key={r.guid} className="flex items-center justify-between p-2 bg-slate-200/50 dark:bg-zinc-800/50 rounded text-xs">
                         <div className="min-w-0 mr-3">
@@ -309,6 +355,7 @@ export default function WantedPage() {
                           </span>
                         </div>
                         <button
+                          type="button"
                           onClick={() => grab(r, book)}
                           disabled={grabbingGuid === r.guid || grabbedGuid === r.guid}
                           className={`px-2 py-2 rounded text-[10px] font-medium flex-shrink-0 touch-manipulation transition-colors disabled:cursor-default ${
@@ -326,10 +373,11 @@ export default function WantedPage() {
                   </div>
                 )}
               </div>
-            ))}
-          </div>
-        </>
+            )
+          })}
+        </div>
       )}
+
       <Pagination {...paginationProps} />
 
       <BulkActionBar

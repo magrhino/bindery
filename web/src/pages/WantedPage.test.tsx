@@ -25,6 +25,7 @@ vi.mock('react-i18next', () => ({
     t: (key: string, options?: Record<string, unknown>) => {
       if (key === 'wanted.countLabel') return `${String(options?.filtered)} of ${String(options?.total)}`
       if (key === 'wanted.selectBook') return `Select ${String(options?.title)}`
+      if (key === 'wanted.changeFormat') return `Change format for ${String(options?.title)}`
       if (key === 'bulkActionBar.selected') return `${String(options?.count)} selected`
 
       const labels: Record<string, string> = {
@@ -53,6 +54,11 @@ vi.mock('react-i18next', () => ({
         'books.mediaAudiobook': '🎧 Audiobook',
         'books.mediaBoth': '📖🎧 Both',
         'bulkActionBar.clear': 'Clear',
+        'wanted.colTitleAuthor': 'Title & author',
+        'wanted.colFormat': 'Format',
+        'wanted.colActions': 'Actions',
+        'wanted.noCover': 'No cover',
+        'wanted.authorUnknown': 'Author unknown',
       }
       return labels[key] ?? key
     },
@@ -169,6 +175,97 @@ describe('WantedPage', () => {
     expect(await screen.findByText('No wanted books. Add an author to start tracking.')).toBeInTheDocument()
     expect(screen.getByText('0 of 0')).toBeInTheDocument()
     expect(api.listWanted).toHaveBeenCalledWith({ includeExcluded: false })
+  })
+
+  it('renders a row with the book title and its author', async () => {
+    const tolkien: Author = { ...author, id: 99, authorName: 'J.R.R. Tolkien' }
+    vi.mocked(api.listWanted).mockResolvedValue([
+      makeBook({ id: 1, title: 'The Hobbit', authorId: 99, author: tolkien, releaseDate: '1937-09-21' }),
+    ])
+
+    renderWantedPage()
+
+    expect(await screen.findByRole('link', { name: 'The Hobbit' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'J.R.R. Tolkien' })).toBeInTheDocument()
+    // author line also carries the release year
+    expect(screen.getByText(/1937/)).toBeInTheDocument()
+  })
+
+  it('renders gracefully and shows a fallback when a book has no author', async () => {
+    vi.mocked(api.listWanted).mockResolvedValue([
+      makeBook({ id: 1, title: 'Orphan Book', author: undefined }),
+    ])
+
+    renderWantedPage()
+
+    expect(await screen.findByRole('link', { name: 'Orphan Book' })).toBeInTheDocument()
+    expect(screen.getByText('Author unknown')).toBeInTheDocument()
+  })
+
+  it('renders the column header row with a select-all checkbox', async () => {
+    vi.mocked(api.listWanted).mockResolvedValue([makeBook({ id: 1, title: 'Dune' })])
+
+    renderWantedPage()
+
+    await screen.findByRole('link', { name: 'Dune' })
+    expect(screen.getByText('Title & author')).toBeInTheDocument()
+    expect(screen.getByText('Format')).toBeInTheDocument()
+    expect(screen.getByText('Actions')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Select all on this page' })).toBeInTheDocument()
+  })
+
+  it('filters the list with the search box', async () => {
+    vi.mocked(api.listWanted).mockResolvedValue([
+      makeBook({ id: 1, title: 'Dune' }),
+      makeBook({ id: 2, title: 'Hyperion' }),
+    ])
+
+    renderWantedPage()
+
+    await screen.findByRole('link', { name: 'Dune' })
+    fireEvent.change(screen.getByPlaceholderText('Search by title or author...'), {
+      target: { value: 'hyper' },
+    })
+
+    expect(screen.queryByRole('link', { name: 'Dune' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Hyperion' })).toBeInTheDocument()
+  })
+
+  it('changes a book format with the per-row format control', async () => {
+    vi.mocked(api.listWanted).mockResolvedValue([makeBook({ id: 1, title: 'Dune' })])
+
+    renderWantedPage()
+
+    await screen.findByRole('link', { name: 'Dune' })
+    const formatSelect = screen.getByRole('combobox', { name: 'Change format for Dune' })
+    expect(formatSelect).toHaveValue('ebook')
+    fireEvent.change(formatSelect, { target: { value: 'audiobook' } })
+
+    await waitFor(() => expect(api.updateBook).toHaveBeenCalledWith(1, { mediaType: 'audiobook' }))
+  })
+
+  it('selecting a row drives the bulk action bar and select-all toggles every row', async () => {
+    vi.mocked(api.listWanted).mockResolvedValue([
+      makeBook({ id: 1, title: 'Dune' }),
+      makeBook({ id: 2, title: 'Hyperion' }),
+    ])
+
+    renderWantedPage()
+
+    await screen.findByRole('link', { name: 'Dune' })
+    expect(screen.queryByText('1 selected')).not.toBeInTheDocument()
+
+    // per-row selection
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select Dune' }))
+    expect(screen.getByText('1 selected')).toBeInTheDocument()
+
+    // select-all picks up every row
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select all on this page' }))
+    expect(screen.getByText('2 selected')).toBeInTheDocument()
+
+    // select-all again clears
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select all on this page' }))
+    expect(screen.queryByText(/selected/)).not.toBeInTheDocument()
   })
 
   it('searches a wanted book and renders result metadata', async () => {

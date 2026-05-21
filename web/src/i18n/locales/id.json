@@ -171,7 +171,13 @@
     "selectBook": "Pilih {{title}}",
     "unmonitorHint": "Berhenti memantau buku ini",
     "showExcluded": "Tampilkan yang dikecualikan",
-    "excluded": "Dikecualikan"
+    "excluded": "Dikecualikan",
+    "colTitleAuthor": "Judul & penulis",
+    "colFormat": "Format",
+    "colActions": "Tindakan",
+    "noCover": "Tanpa sampul",
+    "authorUnknown": "Penulis tidak diketahui",
+    "changeFormat": "Ubah format untuk {{title}}"
   },
   "history": {
     "title": "Riwayat",

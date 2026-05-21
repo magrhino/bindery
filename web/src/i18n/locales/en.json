@@ -173,7 +173,13 @@
     "selectBook": "Select {{title}}",
     "unmonitorHint": "Stop monitoring this book",
     "showExcluded": "Show excluded",
-    "excluded": "Excluded"
+    "excluded": "Excluded",
+    "colTitleAuthor": "Title & author",
+    "colFormat": "Format",
+    "colActions": "Actions",
+    "noCover": "No cover",
+    "authorUnknown": "Author unknown",
+    "changeFormat": "Change format for {{title}}"
   },
   "history": {
     "title": "History",

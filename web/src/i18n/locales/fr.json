@@ -152,7 +152,15 @@
     "ebookDone": "📖 ✓",
     "audiobookDone": "🎧 ✓",
     "selectBook": "Sélectionner {{title}}",
-    "unmonitorHint": "Arrêter la surveillance de ce livre"
+    "unmonitorHint": "Arrêter la surveillance de ce livre",
+    "showExcluded": "Afficher les exclus",
+    "excluded": "Exclu",
+    "colTitleAuthor": "Titre et auteur",
+    "colFormat": "Format",
+    "colActions": "Actions",
+    "noCover": "Aucune couverture",
+    "authorUnknown": "Auteur inconnu",
+    "changeFormat": "Changer le format de {{title}}"
   },
   "history": {
     "title": "Historique",

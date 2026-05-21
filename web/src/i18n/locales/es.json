@@ -171,7 +171,13 @@
     "selectBook": "Seleccionar {{title}}",
     "unmonitorHint": "Dejar de monitorizar este libro",
     "showExcluded": "Mostrar excluidos",
-    "excluded": "Excluido"
+    "excluded": "Excluido",
+    "colTitleAuthor": "Título y autor",
+    "colFormat": "Formato",
+    "colActions": "Acciones",
+    "noCover": "Sin portada",
+    "authorUnknown": "Autor desconocido",
+    "changeFormat": "Cambiar formato de {{title}}"
   },
   "history": {
     "title": "Historial",
