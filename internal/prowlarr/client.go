@@ -38,14 +38,39 @@ func NewWithTimeout(baseURL, apiKey string, timeout time.Duration) *Client {
 
 // remoteIndexer is the shape of each element in GET /api/v1/indexer.
 type remoteIndexer struct {
-	ID             int    `json:"id"`
-	Name           string `json:"name"`
-	Enable         bool   `json:"enable"`   // Prowlarr's per-indexer enabled flag
-	Protocol       string `json:"protocol"` // "usenet" or "torrent"
-	SupportsSearch bool   `json:"supportsSearch"`
-	Categories     []struct {
-		ID int `json:"id"`
-	} `json:"categories"`
+	ID             int              `json:"id"`
+	Name           string           `json:"name"`
+	Enable         bool             `json:"enable"`   // Prowlarr's per-indexer enabled flag
+	Protocol       string           `json:"protocol"` // "usenet" or "torrent"
+	SupportsSearch bool             `json:"supportsSearch"`
+	Tags           []int            `json:"tags"`
+	Categories     []remoteCategory `json:"categories"`
+	Capabilities   struct {
+		Categories []remoteCategory `json:"categories"`
+	} `json:"capabilities"`
+}
+
+type remoteCategory struct {
+	ID            int              `json:"id"`
+	Name          string           `json:"name"`
+	SubCategories []remoteCategory `json:"subCategories"`
+}
+
+type remoteApplication struct {
+	Enable    bool          `json:"enable"`
+	SyncLevel string        `json:"syncLevel"`
+	Tags      []int         `json:"tags"`
+	Fields    []remoteField `json:"fields"`
+}
+
+type remoteField struct {
+	Name  string          `json:"name"`
+	Value json.RawMessage `json:"value"`
+}
+
+type applicationCategoryScope struct {
+	categories []int
+	tags       []int
 }
 
 // IndexerInfo holds the information needed to create a Bindery indexer from a
@@ -72,15 +97,22 @@ func (c *Client) FetchIndexers(ctx context.Context) ([]IndexerInfo, error) {
 	if err := json.Unmarshal(data, &remotes); err != nil {
 		return nil, fmt.Errorf("decode prowlarr indexers: %w", err)
 	}
+	var scopes []applicationCategoryScope
+	if needsApplicationCategoryScopes(remotes) {
+		scopes, err = c.fetchApplicationCategoryScopes(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("fetch prowlarr applications: %w", err)
+		}
+	}
 
 	infos := make([]IndexerInfo, 0, len(remotes))
 	for _, ri := range remotes {
 		// Build the Torznab/Newznab URL: {base}/{id}/api
 		torznabURL := fmt.Sprintf("%s/%d/api", c.baseURL, ri.ID)
 
-		cats := make([]int, 0, len(ri.Categories))
-		for _, cat := range ri.Categories {
-			cats = append(cats, cat.ID)
+		cats := categoryIDs(ri.Categories)
+		if len(cats) == 0 {
+			cats = categoriesFromApplicationScopes(ri, scopes)
 		}
 
 		infos = append(infos, IndexerInfo{
@@ -95,6 +127,133 @@ func (c *Client) FetchIndexers(ctx context.Context) ([]IndexerInfo, error) {
 		})
 	}
 	return infos, nil
+}
+
+func needsApplicationCategoryScopes(remotes []remoteIndexer) bool {
+	for _, remote := range remotes {
+		if len(remote.Categories) == 0 && len(remote.Capabilities.Categories) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Client) fetchApplicationCategoryScopes(ctx context.Context) ([]applicationCategoryScope, error) {
+	data, err := c.get(ctx, "/api/v1/applications")
+	if err != nil {
+		return nil, err
+	}
+	var apps []remoteApplication
+	if err := json.Unmarshal(data, &apps); err != nil {
+		return nil, fmt.Errorf("decode prowlarr applications: %w", err)
+	}
+	scopes := make([]applicationCategoryScope, 0, len(apps))
+	for _, app := range apps {
+		if !app.Enable || strings.EqualFold(app.SyncLevel, "disabled") {
+			continue
+		}
+		cats := app.syncCategories()
+		if !hasBookOrAudiobookCategory(cats) {
+			continue
+		}
+		scopes = append(scopes, applicationCategoryScope{
+			categories: cats,
+			tags:       app.Tags,
+		})
+	}
+	return scopes, nil
+}
+
+func (a remoteApplication) syncCategories() []int {
+	for _, field := range a.Fields {
+		if field.Name != "syncCategories" {
+			continue
+		}
+		var cats []int
+		if err := json.Unmarshal(field.Value, &cats); err == nil {
+			return cats
+		}
+	}
+	return nil
+}
+
+func hasBookOrAudiobookCategory(categories []int) bool {
+	for _, cat := range categories {
+		if (cat >= 7000 && cat < 8000) || (cat >= 3000 && cat < 4000) {
+			return true
+		}
+	}
+	return false
+}
+
+func categoryIDs(categories []remoteCategory) []int {
+	var ids []int
+	seen := map[int]struct{}{}
+	for _, cat := range categories {
+		collectCategoryIDs(cat, &ids, seen)
+	}
+	return ids
+}
+
+func collectCategoryIDs(cat remoteCategory, ids *[]int, seen map[int]struct{}) {
+	if cat.ID != 0 {
+		if _, ok := seen[cat.ID]; !ok {
+			seen[cat.ID] = struct{}{}
+			*ids = append(*ids, cat.ID)
+		}
+	}
+	for _, sub := range cat.SubCategories {
+		collectCategoryIDs(sub, ids, seen)
+	}
+}
+
+func categoriesFromApplicationScopes(indexer remoteIndexer, scopes []applicationCategoryScope) []int {
+	if len(scopes) == 0 {
+		return nil
+	}
+	supported := intSet(categoryIDs(indexer.Capabilities.Categories))
+	if len(supported) == 0 {
+		return nil
+	}
+	var out []int
+	seen := map[int]struct{}{}
+	for _, scope := range scopes {
+		if !tagsMatch(indexer.Tags, scope.tags) {
+			continue
+		}
+		for _, cat := range scope.categories {
+			if _, ok := supported[cat]; !ok {
+				continue
+			}
+			if _, ok := seen[cat]; ok {
+				continue
+			}
+			seen[cat] = struct{}{}
+			out = append(out, cat)
+		}
+	}
+	return out
+}
+
+func tagsMatch(indexerTags, scopeTags []int) bool {
+	if len(scopeTags) == 0 {
+		return true
+	}
+	indexerSet := intSet(indexerTags)
+	for _, tag := range scopeTags {
+		if _, ok := indexerSet[tag]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func intSet(values []int) map[int]struct{} {
+	set := make(map[int]struct{}, len(values))
+	for _, value := range values {
+		set[value] = struct{}{}
+	}
+	return set
 }
 
 // Test verifies connectivity by fetching the Prowlarr system status.

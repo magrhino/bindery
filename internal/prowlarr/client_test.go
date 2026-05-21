@@ -89,6 +89,283 @@ func TestFetchIndexers_HappyPath(t *testing.T) {
 	}
 }
 
+func TestFetchIndexers_AppliesApplicationCategoryScopes(t *testing.T) {
+	indexerBody := `[
+		{
+			"id":3,
+			"name":"ScopedBookTracker",
+			"protocol":"torrent",
+			"supportsSearch":true,
+			"tags":[3],
+			"categories":[],
+			"capabilities":{
+				"categories":[
+					{"id":2000,"name":"Movies","subCategories":[{"id":2010,"name":"Movies/HD"}]},
+					{"id":3000,"name":"Audio","subCategories":[{"id":3030,"name":"Audio/Audiobook"}]},
+					{"id":7000,"name":"Books","subCategories":[{"id":7020,"name":"Books/EBook"}]},
+					{"id":7010,"name":"Books/Mags"},
+					{"id":7030,"name":"Books/Comics"},
+					{"id":100060,"name":"Ebooks - General Fiction"}
+				]
+			}
+		}
+	]`
+	applicationsBody := `[
+		{
+			"enable":true,
+			"syncLevel":"fullSync",
+			"tags":[3],
+			"fields":[{"name":"syncCategories","value":[3030,7000,7010,7020,7030,7040]}]
+		},
+		{
+			"enable":true,
+			"syncLevel":"fullSync",
+			"fields":[{"name":"syncCategories","value":[2000,2010]}]
+		}
+	]`
+	srv := prowlarrClientStub(t, indexerBody, applicationsBody)
+	defer srv.Close()
+
+	infos, err := New(srv.URL, "key").FetchIndexers(context.Background())
+	if err != nil {
+		t.Fatalf("FetchIndexers: %v", err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("expected 1 info, got %d", len(infos))
+	}
+	assertCategoryIDs(t, infos[0].Categories, []int{3030, 7000, 7010, 7020, 7030})
+}
+
+func TestFetchIndexers_AppliesApplicationChildOnlyCategoryScopes(t *testing.T) {
+	indexerBody := `[
+		{
+			"id":3,
+			"name":"ChildOnlyBookTracker",
+			"protocol":"torrent",
+			"supportsSearch":true,
+			"tags":[3],
+			"categories":[],
+			"capabilities":{
+				"categories":[
+					{"id":7010,"name":"Books/Mags"},
+					{"id":7030,"name":"Books/Comics"},
+					{"id":7040,"name":"Books/Technical"}
+				]
+			}
+		},
+		{
+			"id":4,
+			"name":"ChildOnlyAudioTracker",
+			"protocol":"torrent",
+			"supportsSearch":true,
+			"tags":[4],
+			"categories":[],
+			"capabilities":{
+				"categories":[
+					{"id":3010,"name":"Audio/MP3"},
+					{"id":3030,"name":"Audio/Audiobook"}
+				]
+			}
+		}
+	]`
+	applicationsBody := `[
+		{
+			"enable":true,
+			"syncLevel":"fullSync",
+			"tags":[3],
+			"fields":[{"name":"syncCategories","value":[7010,7030,7040]}]
+		},
+		{
+			"enable":true,
+			"syncLevel":"fullSync",
+			"tags":[4],
+			"fields":[{"name":"syncCategories","value":[3010,3030]}]
+		}
+	]`
+	srv := prowlarrClientStub(t, indexerBody, applicationsBody)
+	defer srv.Close()
+
+	infos, err := New(srv.URL, "key").FetchIndexers(context.Background())
+	if err != nil {
+		t.Fatalf("FetchIndexers: %v", err)
+	}
+	if len(infos) != 2 {
+		t.Fatalf("expected 2 infos, got %d", len(infos))
+	}
+	assertCategoryIDs(t, infos[0].Categories, []int{7010, 7030, 7040})
+	assertCategoryIDs(t, infos[1].Categories, []int{3010, 3030})
+}
+
+func TestFetchIndexers_RequiresApplicationTagMatchForCapabilityCategories(t *testing.T) {
+	indexerBody := `[
+		{
+			"id":3,
+			"name":"UntaggedBookTracker",
+			"protocol":"torrent",
+			"supportsSearch":true,
+			"tags":[5],
+			"categories":[],
+			"capabilities":{
+				"categories":[
+					{"id":7000,"name":"Books","subCategories":[{"id":7020,"name":"Books/EBook"}]}
+				]
+			}
+		}
+	]`
+	applicationsBody := `[
+		{
+			"enable":true,
+			"syncLevel":"fullSync",
+			"tags":[3],
+			"fields":[{"name":"syncCategories","value":[7000,7020]}]
+		}
+	]`
+	srv := prowlarrClientStub(t, indexerBody, applicationsBody)
+	defer srv.Close()
+
+	infos, err := New(srv.URL, "key").FetchIndexers(context.Background())
+	if err != nil {
+		t.Fatalf("FetchIndexers: %v", err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("expected 1 info, got %d", len(infos))
+	}
+	if len(infos[0].Categories) != 0 {
+		t.Fatalf("categories = %v, want []", infos[0].Categories)
+	}
+}
+
+func TestFetchIndexers_SkipsCapabilityCategoriesWithOnlyNonBookApplicationScope(t *testing.T) {
+	indexerBody := `[
+		{
+			"id":3,
+			"name":"BookTracker",
+			"protocol":"torrent",
+			"supportsSearch":true,
+			"categories":[],
+			"capabilities":{
+				"categories":[
+					{"id":7000,"name":"Books","subCategories":[{"id":7020,"name":"Books/EBook"}]}
+				]
+			}
+		}
+	]`
+	applicationsBody := `[
+		{
+			"enable":true,
+			"syncLevel":"fullSync",
+			"fields":[{"name":"syncCategories","value":[2000,2010]}]
+		}
+	]`
+	srv := prowlarrClientStub(t, indexerBody, applicationsBody)
+	defer srv.Close()
+
+	infos, err := New(srv.URL, "key").FetchIndexers(context.Background())
+	if err != nil {
+		t.Fatalf("FetchIndexers: %v", err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("expected 1 info, got %d", len(infos))
+	}
+	if len(infos[0].Categories) != 0 {
+		t.Fatalf("categories = %v, want []", infos[0].Categories)
+	}
+}
+
+func TestFetchIndexers_AppliesApplicationScopeWithAnyMatchingTag(t *testing.T) {
+	indexerBody := `[
+		{
+			"id":3,
+			"name":"PartiallyTaggedBookTracker",
+			"protocol":"torrent",
+			"supportsSearch":true,
+			"tags":[3],
+			"categories":[],
+			"capabilities":{
+				"categories":[
+					{"id":7000,"name":"Books","subCategories":[{"id":7020,"name":"Books/EBook"}]}
+				]
+			}
+		}
+	]`
+	applicationsBody := `[
+		{
+			"enable":true,
+			"syncLevel":"fullSync",
+			"tags":[3,4],
+			"fields":[{"name":"syncCategories","value":[7000,7020]}]
+		}
+	]`
+	srv := prowlarrClientStub(t, indexerBody, applicationsBody)
+	defer srv.Close()
+
+	infos, err := New(srv.URL, "key").FetchIndexers(context.Background())
+	if err != nil {
+		t.Fatalf("FetchIndexers: %v", err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("expected 1 info, got %d", len(infos))
+	}
+	assertCategoryIDs(t, infos[0].Categories, []int{7000, 7020})
+}
+
+func TestFetchIndexers_ReturnsApplicationScopeError(t *testing.T) {
+	indexerBody := `[
+		{
+			"id":3,
+			"name":"ScopedBookTracker",
+			"protocol":"torrent",
+			"supportsSearch":true,
+			"categories":[],
+			"capabilities":{
+				"categories":[
+					{"id":7000,"name":"Books","subCategories":[{"id":7020,"name":"Books/EBook"}]}
+				]
+			}
+		}
+	]`
+	srv := prowlarrClientStub(t, indexerBody, `not json`)
+	defer srv.Close()
+
+	_, err := New(srv.URL, "key").FetchIndexers(context.Background())
+	if err == nil {
+		t.Fatal("expected application scope error, got nil")
+	}
+	if !strings.Contains(err.Error(), "fetch prowlarr applications") {
+		t.Fatalf("error = %v, want fetch prowlarr applications", err)
+	}
+}
+
+func TestFetchIndexers_TopLevelCategoriesTakePrecedence(t *testing.T) {
+	body := `[
+		{
+			"id":4,
+			"name":"ConfiguredTracker",
+			"protocol":"torrent",
+			"supportsSearch":true,
+			"categories":[{"id":7020}],
+			"capabilities":{
+				"categories":[
+					{"id":3000,"name":"Audio","subCategories":[{"id":3030,"name":"Audio/Audiobook"}]},
+					{"id":7000,"name":"Books","subCategories":[{"id":7020,"name":"Books/EBook"}]},
+					{"id":100060,"name":"Ebooks - General Fiction"}
+				]
+			}
+		}
+	]`
+	srv := prowlarrStub(t, body)
+	defer srv.Close()
+
+	infos, err := New(srv.URL, "key").FetchIndexers(context.Background())
+	if err != nil {
+		t.Fatalf("FetchIndexers: %v", err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("expected 1 info, got %d", len(infos))
+	}
+	assertCategoryIDs(t, infos[0].Categories, []int{7020})
+}
+
 func TestFetchIndexers_Empty(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -206,5 +483,32 @@ func TestTest_NetworkError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "could not reach Prowlarr") {
 		t.Errorf("expected 'could not reach Prowlarr' in error, got %v", err)
+	}
+}
+
+func prowlarrClientStub(t *testing.T, indexerBody, applicationsBody string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/indexer":
+			_, _ = w.Write([]byte(indexerBody))
+		case "/api/v1/applications":
+			_, _ = w.Write([]byte(applicationsBody))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+}
+
+func assertCategoryIDs(t *testing.T, got, want []int) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("categories = %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("categories = %v, want %v", got, want)
+		}
 	}
 }
