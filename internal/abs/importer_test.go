@@ -3,6 +3,7 @@ package abs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,6 +73,53 @@ func sampleABSItem() NormalizedLibraryItem {
 		EbookPath:       "/abs/Project Hail Mary/book.epub",
 		EbookINO:        "ebook-1",
 		DurationSeconds: 57600,
+	}
+}
+
+type fakeEnumerationClient struct {
+	pages map[string]map[int]*LibraryItemsPage
+	errs  map[string]map[int]error
+}
+
+func (f *fakeEnumerationClient) ListLibraryItems(_ context.Context, libraryID string, page, limit int) (*LibraryItemsPage, error) {
+	if byPage := f.errs[libraryID]; byPage != nil {
+		if err := byPage[page]; err != nil {
+			return nil, err
+		}
+	}
+	if byPage := f.pages[libraryID]; byPage != nil {
+		if resp := byPage[page]; resp != nil {
+			return resp, nil
+		}
+	}
+	return &LibraryItemsPage{MediaType: "book", Page: page, Limit: limit, Total: page * limit}, nil
+}
+
+func (f *fakeEnumerationClient) GetLibraryItem(context.Context, string) (*LibraryItem, error) {
+	return nil, errors.New("unexpected detail fetch")
+}
+
+func sampleLibraryItemForLibrary(libraryID, itemID, title string) LibraryItem {
+	duration := 3600.0
+	size := int64(1024)
+	return LibraryItem{
+		ID:        itemID,
+		LibraryID: libraryID,
+		IsFile:    true,
+		MediaType: "book",
+		Media: BookMedia{
+			Metadata: BookMetadata{
+				Title:   title,
+				Authors: []Author{{ID: "author-" + itemID, Name: "Author " + itemID}},
+				ASIN:    "ASIN-" + itemID,
+			},
+			Duration: &duration,
+			Size:     &size,
+			AudioFiles: []AudioFile{{
+				INO:  "audio-" + itemID,
+				Path: "/abs/" + itemID + ".m4b",
+			}},
+		},
 	}
 }
 
@@ -181,6 +229,238 @@ func TestImporter_ProgressResultsKeepsLatestHundredItems(t *testing.T) {
 	}
 }
 
+func TestImporter_RunEnumeratesConfiguredLibrariesInOrder(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, _, _, _, runRepo, _, _, _ := newABSImporterFixture(t)
+	var enumerated []string
+	importer.enumerateFn = func(_ context.Context, libraryID string, _ func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		enumerated = append(enumerated, libraryID)
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+
+	stats, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:   DefaultSourceID,
+		BaseURL:    "https://abs.example.com",
+		APIKey:     "secret",
+		LibraryIDs: []string{"lib-books", "lib-audio"},
+		Label:      "Shelf",
+		Enabled:    true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, want := strings.Join(enumerated, ","), "lib-books,lib-audio"; got != want {
+		t.Fatalf("enumerated = %q, want %q", got, want)
+	}
+	if stats.LibrariesScanned != 2 || stats.PagesScanned != 2 || stats.ItemsSeen != 2 {
+		t.Fatalf("stats = %+v, want aggregate counts for two libraries", stats)
+	}
+	runs, err := runRepo.ListRecent(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListRecent: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("run records = %d, want 2", len(runs))
+	}
+	seen := map[string]bool{}
+	for _, run := range runs {
+		seen[run.LibraryID] = true
+		hydrated := HydrateRun(run)
+		if len(hydrated.Source.LibraryIDs) != 2 {
+			t.Fatalf("run %d source libraryIds = %v, want both configured libraries", run.ID, hydrated.Source.LibraryIDs)
+		}
+		if hydrated.Summary.Stats.LibrariesScanned != 1 {
+			t.Fatalf("run %d summary stats = %+v, want per-library summary", run.ID, hydrated.Summary.Stats)
+		}
+	}
+	if !seen["lib-books"] || !seen["lib-audio"] {
+		t.Fatalf("run libraries = %+v, want lib-books and lib-audio", seen)
+	}
+}
+
+func TestImporter_RunStopsWhenSecondLibraryFails(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, _, _, _, runRepo, _, _, _ := newABSImporterFixture(t)
+	failErr := errors.New("abs page failed")
+	var enumerated []string
+	importer.enumerateFn = func(_ context.Context, libraryID string, _ func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		enumerated = append(enumerated, libraryID)
+		if libraryID == "lib-audio" {
+			return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, failErr
+		}
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+
+	stats, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:   DefaultSourceID,
+		BaseURL:    "https://abs.example.com",
+		APIKey:     "secret",
+		LibraryIDs: []string{"lib-books", "lib-audio", "lib-extra"},
+		Label:      "Shelf",
+		Enabled:    true,
+	})
+	if err == nil || !strings.Contains(err.Error(), failErr.Error()) {
+		t.Fatalf("Run error = %v, want %v", err, failErr)
+	}
+	if got, want := strings.Join(enumerated, ","), "lib-books,lib-audio"; got != want {
+		t.Fatalf("enumerated = %q, want %q", got, want)
+	}
+	if stats.LibrariesScanned != 1 {
+		t.Fatalf("stats = %+v, want only completed library counted", stats)
+	}
+	runs, err := runRepo.ListRecent(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListRecent: %v", err)
+	}
+	statuses := map[string]string{}
+	for _, run := range runs {
+		statuses[run.LibraryID] = run.Status
+	}
+	if statuses["lib-books"] != runStatusCompleted || statuses["lib-audio"] != runStatusFailed {
+		t.Fatalf("statuses = %+v, want completed books and failed audio", statuses)
+	}
+	if _, ok := statuses["lib-extra"]; ok {
+		t.Fatalf("lib-extra run exists after earlier failure: %+v", statuses)
+	}
+}
+
+func TestImporter_RunStartsAtConfiguredLibraryWithinLibraryIDs(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, _, _, _, _, _, _, _ := newABSImporterFixture(t)
+	var enumerated []string
+	importer.enumerateFn = func(_ context.Context, libraryID string, _ func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		enumerated = append(enumerated, libraryID)
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+
+	if _, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:   DefaultSourceID,
+		BaseURL:    "https://abs.example.com",
+		APIKey:     "secret",
+		LibraryID:  "lib-audio",
+		LibraryIDs: []string{"lib-books", "lib-audio", "lib-extra"},
+		Label:      "Shelf",
+		Enabled:    true,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, want := strings.Join(enumerated, ","), "lib-audio,lib-extra"; got != want {
+		t.Fatalf("enumerated = %q, want %q", got, want)
+	}
+}
+
+func TestImporter_RunStartsAtPersistedCheckpointLibraryWithinLibraryIDs(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, _, _, _, _, _, _, _ := newABSImporterFixture(t)
+	checkpoint := ImportCheckpoint{
+		LibraryID:  "lib-audio",
+		Page:       2,
+		LastItemID: "li-before-retry",
+		PageSize:   50,
+		UpdatedAt:  time.Now().UTC(),
+	}
+	if err := importer.settings.Set(context.Background(), SettingABSImportCheckpoint, mustJSONForTest(t, checkpoint)); err != nil {
+		t.Fatalf("Set checkpoint: %v", err)
+	}
+	var enumerated []string
+	importer.enumerateFn = func(_ context.Context, libraryID string, _ func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		enumerated = append(enumerated, libraryID)
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+
+	if _, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:   DefaultSourceID,
+		BaseURL:    "https://abs.example.com",
+		APIKey:     "secret",
+		LibraryID:  "lib-books",
+		LibraryIDs: []string{"lib-books", "lib-audio", "lib-extra"},
+		Label:      "Shelf",
+		Enabled:    true,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, want := strings.Join(enumerated, ","), "lib-audio,lib-extra"; got != want {
+		t.Fatalf("enumerated = %q, want %q", got, want)
+	}
+}
+
+func TestImporter_RunStoresCheckpointOnCurrentLibraryRun(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, _, _, _, runRepo, _, _, _ := newABSImporterFixture(t)
+	client := &fakeEnumerationClient{
+		pages: map[string]map[int]*LibraryItemsPage{
+			"lib-books": {
+				0: {MediaType: "book", Page: 0, Limit: 50, Total: 0},
+			},
+			"lib-audio": {
+				0: {
+					MediaType: "book",
+					Page:      0,
+					Limit:     1,
+					Total:     2,
+					Results:   []LibraryItem{sampleLibraryItemForLibrary("lib-audio", "li-audio", "Audio Book")},
+				},
+			},
+		},
+		errs: map[string]map[int]error{
+			"lib-audio": {1: errors.New("page 1 failed")},
+		},
+	}
+	importer.newClient = func(string, string) (enumerationClient, error) {
+		return client, nil
+	}
+
+	_, err := importer.Run(context.Background(), ImportConfig{
+		SourceID:   DefaultSourceID,
+		BaseURL:    "https://abs.example.com",
+		APIKey:     "secret",
+		LibraryIDs: []string{"lib-books", "lib-audio"},
+		Label:      "Shelf",
+		Enabled:    true,
+	})
+	if err == nil {
+		t.Fatal("Run error = nil, want failure from lib-audio")
+	}
+	runs, err := runRepo.ListRecent(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListRecent: %v", err)
+	}
+	var audioRun, booksRun *models.ABSImportRun
+	for idx := range runs {
+		switch runs[idx].LibraryID {
+		case "lib-audio":
+			audioRun = &runs[idx]
+		case "lib-books":
+			booksRun = &runs[idx]
+		}
+	}
+	if booksRun == nil || booksRun.Status != runStatusCompleted {
+		t.Fatalf("books run = %+v, want completed", booksRun)
+	}
+	if audioRun == nil || audioRun.Status != runStatusFailed {
+		t.Fatalf("audio run = %+v, want failed", audioRun)
+	}
+	checkpoint, err := decodeImportCheckpoint(audioRun.CheckpointJSON)
+	if err != nil {
+		t.Fatalf("decode audio checkpoint: %v", err)
+	}
+	if checkpoint == nil || checkpoint.LibraryID != "lib-audio" {
+		t.Fatalf("audio checkpoint = %+v, want lib-audio", checkpoint)
+	}
+	booksCheckpoint, err := decodeImportCheckpoint(booksRun.CheckpointJSON)
+	if err != nil {
+		t.Fatalf("decode books checkpoint: %v", err)
+	}
+	if booksCheckpoint != nil {
+		t.Fatalf("books checkpoint = %+v, want cleared completed checkpoint", booksCheckpoint)
+	}
+}
+
 func TestImporter_ResumeInterruptedStartsFromPersistedCheckpoint(t *testing.T) {
 	t.Parallel()
 
@@ -286,6 +566,89 @@ func TestImporter_ResumeInterruptedStartsFromPersistedCheckpoint(t *testing.T) {
 	}
 
 	close(release)
+	deadline := time.After(time.Second)
+	for importer.Running() {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for resumed import to finish")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
+func TestImporter_ResumeInterruptedContinuesRemainingLibraries(t *testing.T) {
+	t.Parallel()
+
+	importer, _, _, _, _, _, runRepo, _, _, _ := newABSImporterFixture(t)
+	checkpoint := ImportCheckpoint{
+		LibraryID:  "lib-audio",
+		Page:       2,
+		LastItemID: "li-before-restart",
+		PageSize:   50,
+		UpdatedAt:  time.Now().UTC(),
+	}
+	run := &models.ABSImportRun{
+		SourceID:    DefaultSourceID,
+		SourceLabel: "Shelf",
+		BaseURL:     "https://abs.example.com",
+		LibraryID:   "lib-audio",
+		Status:      runStatusRunning,
+		DryRun:      true,
+		SourceConfigJSON: mustJSONForTest(t, sourceSnapshot(ImportConfig{
+			SourceID:   DefaultSourceID,
+			BaseURL:    "https://abs.example.com",
+			LibraryID:  "lib-audio",
+			LibraryIDs: []string{"lib-books", "lib-audio", "lib-extra"},
+			Label:      "Shelf",
+			Enabled:    true,
+			DryRun:     true,
+		})),
+		CheckpointJSON: mustJSONForTest(t, checkpoint),
+		SummaryJSON:    "{}",
+	}
+	if err := runRepo.Create(context.Background(), run); err != nil {
+		t.Fatalf("Create interrupted run: %v", err)
+	}
+
+	enumerated := make(chan string, 3)
+	importer.enumerateFn = func(_ context.Context, libraryID string, _ func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		enumerated <- libraryID
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+
+	resumed, err := importer.ResumeInterrupted(context.Background(), ImportConfig{
+		SourceID: DefaultSourceID,
+		APIKey:   "secret",
+		Enabled:  true,
+		BaseURL:  "https://current-settings.example.com",
+		Label:    "Current Settings",
+	})
+	if err != nil {
+		t.Fatalf("ResumeInterrupted: %v", err)
+	}
+	if !resumed {
+		t.Fatal("ResumeInterrupted resumed = false, want true")
+	}
+
+	var got []string
+	for len(got) < 2 {
+		select {
+		case libraryID := <-enumerated:
+			got = append(got, libraryID)
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for resumed libraries; got %v", got)
+		}
+	}
+	if joined := strings.Join(got, ","); joined != "lib-audio,lib-extra" {
+		t.Fatalf("resumed libraries = %q, want lib-audio,lib-extra", joined)
+	}
+	select {
+	case extra := <-enumerated:
+		t.Fatalf("unexpected resumed library %q", extra)
+	default:
+	}
+
 	deadline := time.After(time.Second)
 	for importer.Running() {
 		select {
@@ -3005,6 +3368,99 @@ func TestImporter_RollbackRemovesCreatedBatch(t *testing.T) {
 	}
 }
 
+func TestImporter_RollbackSecondLibraryPreservesFirstLibraryImport(t *testing.T) {
+	t.Parallel()
+
+	importer, _, bookRepo, _, _, provenanceRepo, _, _, _, _ := newABSImporterFixture(t)
+	ctx := context.Background()
+	itemForLibrary := func(libraryID, itemID, title string) NormalizedLibraryItem {
+		item := sampleABSItem()
+		item.LibraryID = libraryID
+		item.ItemID = itemID
+		item.Title = title
+		item.ASIN = "ASIN-" + itemID
+		item.Authors = []NormalizedAuthor{{ID: "author-" + itemID, Name: "Author " + title}}
+		item.Series = []NormalizedSeries{{ID: "series-" + itemID, Name: "Series " + title, Sequence: "1"}}
+		item.AudioFiles = []NormalizedAudioFile{{INO: "audio-" + itemID, Path: "/abs/" + itemID + ".m4b"}}
+		item.EbookPath = "/abs/" + itemID + ".epub"
+		item.EbookINO = "ebook-" + itemID
+		return item
+	}
+	first := itemForLibrary("lib-books", "li-books", "Books Library Title")
+	second := itemForLibrary("lib-audio", "li-audio", "Audio Library Title")
+	items := map[string]NormalizedLibraryItem{
+		first.LibraryID:  first,
+		second.LibraryID: second,
+	}
+	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		item, ok := items[libraryID]
+		if !ok {
+			return EnumerationStats{}, fmt.Errorf("unexpected library %q", libraryID)
+		}
+		if err := fn(ctx, item); err != nil {
+			return EnumerationStats{}, err
+		}
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1}, nil
+	}
+
+	if _, err := importer.Run(ctx, ImportConfig{
+		SourceID:   DefaultSourceID,
+		BaseURL:    "https://abs.example.com",
+		APIKey:     "secret",
+		LibraryIDs: []string{first.LibraryID, second.LibraryID},
+		Label:      "Shelf",
+		Enabled:    true,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	runs, err := importer.RecentRuns(ctx, 10)
+	if err != nil {
+		t.Fatalf("RecentRuns: %v", err)
+	}
+	runIDs := map[string]int64{}
+	for _, run := range runs {
+		runIDs[run.LibraryID] = run.ID
+	}
+	if runIDs[first.LibraryID] == 0 || runIDs[second.LibraryID] == 0 {
+		t.Fatalf("run IDs = %+v, want runs for both libraries", runIDs)
+	}
+
+	if _, err := importer.Rollback(ctx, runIDs[second.LibraryID]); err != nil {
+		t.Fatalf("Rollback second library: %v", err)
+	}
+
+	firstBook, err := bookRepo.GetByForeignID(ctx, absForeignID("book", first.LibraryID, first.ItemID))
+	if err != nil {
+		t.Fatalf("GetByForeignID first book: %v", err)
+	}
+	if firstBook == nil {
+		t.Fatal("first library book was removed by second library rollback")
+	}
+	firstLink, err := provenanceRepo.GetByExternal(ctx, DefaultSourceID, first.LibraryID, entityTypeBook, first.ItemID)
+	if err != nil {
+		t.Fatalf("GetByExternal first book: %v", err)
+	}
+	if firstLink == nil {
+		t.Fatal("first library provenance was removed by second library rollback")
+	}
+
+	secondBook, err := bookRepo.GetByForeignID(ctx, absForeignID("book", second.LibraryID, second.ItemID))
+	if err != nil {
+		t.Fatalf("GetByForeignID second book: %v", err)
+	}
+	if secondBook != nil {
+		t.Fatalf("second library book = %+v, want removed by rollback", secondBook)
+	}
+	secondLink, err := provenanceRepo.GetByExternal(ctx, DefaultSourceID, second.LibraryID, entityTypeBook, second.ItemID)
+	if err != nil {
+		t.Fatalf("GetByExternal second book: %v", err)
+	}
+	if secondLink != nil {
+		t.Fatalf("second library provenance = %+v, want removed by rollback", secondLink)
+	}
+}
+
 func TestImporter_RollbackKeepsRunCreatedSeriesWithUserMembership(t *testing.T) {
 	t.Parallel()
 
@@ -3200,6 +3656,188 @@ func TestImporter_RollbackDeletesCreatedEntitiesAfterSameRunRelink(t *testing.T)
 	}
 	if len(bookLinks) != 0 {
 		t.Fatalf("book provenance links = %+v, want none after deleting created book", bookLinks)
+	}
+}
+
+func TestImporter_RollbackFirstLibraryPreservesSecondLibrarySharedBook(t *testing.T) {
+	t.Parallel()
+
+	importer, authorRepo, bookRepo, seriesRepo, _, provenanceRepo, _, _, _, _ := newABSImporterFixture(t)
+	ctx := context.Background()
+	first := sampleABSItem()
+	first.LibraryID = "lib-books"
+	first.ItemID = "li-books"
+	first.Title = "Shared Library Book"
+	first.ASIN = "ASIN-LIB-BOOKS"
+	first.Authors = []NormalizedAuthor{{ID: "author-shared", Name: "Shared Author"}}
+	first.Series = []NormalizedSeries{{ID: "series-shared", Name: "Shared Series", Sequence: "1"}}
+	first.AudioFiles = []NormalizedAudioFile{{INO: "audio-books", Path: "/abs/books/shared.m4b"}}
+	first.EbookPath = ""
+	first.EbookINO = ""
+	second := first
+	second.LibraryID = "lib-audio"
+	second.ItemID = "li-audio"
+	second.ASIN = "ASIN-LIB-AUDIO"
+	second.AudioFiles = []NormalizedAudioFile{{INO: "audio-audio", Path: "/abs/audio/shared.m4b"}}
+	items := map[string]NormalizedLibraryItem{
+		first.LibraryID:  first,
+		second.LibraryID: second,
+	}
+	importer.enumerateFn = func(ctx context.Context, libraryID string, fn func(context.Context, NormalizedLibraryItem) error) (EnumerationStats, error) {
+		item, ok := items[libraryID]
+		if !ok {
+			return EnumerationStats{}, fmt.Errorf("unexpected library %q", libraryID)
+		}
+		if err := fn(ctx, item); err != nil {
+			return EnumerationStats{}, err
+		}
+		return EnumerationStats{PagesScanned: 1, ItemsSeen: 1, ItemsNormalized: 1, ItemsDetailFetched: 1}, nil
+	}
+
+	if _, err := importer.Run(ctx, ImportConfig{
+		SourceID:  DefaultSourceID,
+		BaseURL:   "https://abs.example.com",
+		APIKey:    "secret",
+		LibraryID: first.LibraryID,
+		Label:     "Shelf",
+		Enabled:   true,
+	}); err != nil {
+		t.Fatalf("Run first library: %v", err)
+	}
+	if _, err := importer.Run(ctx, ImportConfig{
+		SourceID:  DefaultSourceID,
+		BaseURL:   "https://abs.example.com",
+		APIKey:    "secret",
+		LibraryID: second.LibraryID,
+		Label:     "Shelf",
+		Enabled:   true,
+	}); err != nil {
+		t.Fatalf("Run second library: %v", err)
+	}
+
+	runs, err := importer.RecentRuns(ctx, 10)
+	if err != nil {
+		t.Fatalf("RecentRuns: %v", err)
+	}
+	runIDs := map[string]int64{}
+	for _, run := range runs {
+		runIDs[run.LibraryID] = run.ID
+	}
+	if runIDs[first.LibraryID] == 0 || runIDs[second.LibraryID] == 0 {
+		t.Fatalf("run IDs = %+v, want runs for both libraries", runIDs)
+	}
+	books, err := bookRepo.ListIncludingExcluded(ctx)
+	if err != nil {
+		t.Fatalf("List books before rollback: %v", err)
+	}
+	if len(books) != 1 {
+		t.Fatalf("books before rollback = %d, want shared local book", len(books))
+	}
+	bookID := books[0].ID
+	bookLinks, err := provenanceRepo.ListByLocal(ctx, entityTypeBook, bookID)
+	if err != nil {
+		t.Fatalf("ListByLocal book before rollback: %v", err)
+	}
+	if len(bookLinks) != 2 {
+		t.Fatalf("book links before rollback = %+v, want both libraries linked", bookLinks)
+	}
+	authors, err := authorRepo.List(ctx)
+	if err != nil {
+		t.Fatalf("List authors before rollback: %v", err)
+	}
+	if len(authors) != 1 {
+		t.Fatalf("authors before rollback = %d, want shared local author", len(authors))
+	}
+	authorID := authors[0].ID
+	authorLinks, err := provenanceRepo.ListByLocal(ctx, entityTypeAuthor, authorID)
+	if err != nil {
+		t.Fatalf("ListByLocal author before rollback: %v", err)
+	}
+	if len(authorLinks) != 2 {
+		t.Fatalf("author links before rollback = %+v, want both libraries linked", authorLinks)
+	}
+	allSeries, err := seriesRepo.List(ctx)
+	if err != nil {
+		t.Fatalf("List series before rollback: %v", err)
+	}
+	if len(allSeries) != 1 {
+		t.Fatalf("series before rollback = %d, want shared local series", len(allSeries))
+	}
+	seriesID := allSeries[0].ID
+
+	result, err := importer.Rollback(ctx, runIDs[first.LibraryID])
+	if err != nil {
+		t.Fatalf("Rollback first library: %v", err)
+	}
+	if result.Stats.Failed != 0 {
+		t.Fatalf("rollback result = %+v, want no failures", result)
+	}
+	books, err = bookRepo.ListIncludingExcluded(ctx)
+	if err != nil {
+		t.Fatalf("List books after rollback: %v", err)
+	}
+	if len(books) != 1 || books[0].ID != bookID {
+		t.Fatalf("books after rollback = %+v, want shared local book retained", books)
+	}
+	firstBookLink, err := provenanceRepo.GetByExternal(ctx, DefaultSourceID, first.LibraryID, entityTypeBook, first.ItemID)
+	if err != nil {
+		t.Fatalf("Get first book link after rollback: %v", err)
+	}
+	if firstBookLink != nil {
+		t.Fatalf("first book link after rollback = %+v, want removed", firstBookLink)
+	}
+	secondBookLink, err := provenanceRepo.GetByExternal(ctx, DefaultSourceID, second.LibraryID, entityTypeBook, second.ItemID)
+	if err != nil {
+		t.Fatalf("Get second book link after rollback: %v", err)
+	}
+	if secondBookLink == nil || secondBookLink.LocalID != bookID {
+		t.Fatalf("second book link after rollback = %+v, want retained local book %d", secondBookLink, bookID)
+	}
+	firstAuthorLink, err := provenanceRepo.GetByExternal(ctx, DefaultSourceID, first.LibraryID, entityTypeAuthor, "author-shared")
+	if err != nil {
+		t.Fatalf("Get first author link after rollback: %v", err)
+	}
+	if firstAuthorLink != nil {
+		t.Fatalf("first author link after rollback = %+v, want removed", firstAuthorLink)
+	}
+	secondAuthorLink, err := provenanceRepo.GetByExternal(ctx, DefaultSourceID, second.LibraryID, entityTypeAuthor, "author-shared")
+	if err != nil {
+		t.Fatalf("Get second author link after rollback: %v", err)
+	}
+	if secondAuthorLink == nil || secondAuthorLink.LocalID != authorID {
+		t.Fatalf("second author link after rollback = %+v, want retained local author %d", secondAuthorLink, authorID)
+	}
+	series, err := seriesRepo.GetByID(ctx, seriesID)
+	if err != nil {
+		t.Fatalf("Get series after rollback: %v", err)
+	}
+	if series == nil {
+		t.Fatal("series after rollback = nil, want shared local series retained")
+	}
+	if len(series.Books) != 1 || series.Books[0].BookID != bookID {
+		t.Fatalf("series books after rollback = %+v, want shared local book retained", series.Books)
+	}
+	seriesLinkExternalID := seriesMembershipExternalID("series-shared", bookID, first.ItemID)
+	firstSeriesLink, err := provenanceRepo.GetByExternal(ctx, DefaultSourceID, first.LibraryID, entityTypeSeries, seriesLinkExternalID)
+	if err != nil {
+		t.Fatalf("Get first series link after rollback: %v", err)
+	}
+	if firstSeriesLink != nil {
+		t.Fatalf("first series link after rollback = %+v, want removed", firstSeriesLink)
+	}
+	firstSeriesIdentity, err := provenanceRepo.GetByExternal(ctx, DefaultSourceID, first.LibraryID, entityTypeSeries, "series-shared")
+	if err != nil {
+		t.Fatalf("Get first series identity after rollback: %v", err)
+	}
+	if firstSeriesIdentity != nil {
+		t.Fatalf("first series identity after rollback = %+v, want removed", firstSeriesIdentity)
+	}
+	secondSeriesIdentity, err := provenanceRepo.GetByExternal(ctx, DefaultSourceID, second.LibraryID, entityTypeSeries, "series-shared")
+	if err != nil {
+		t.Fatalf("Get second series identity after rollback: %v", err)
+	}
+	if secondSeriesIdentity == nil || secondSeriesIdentity.LocalID != seriesID {
+		t.Fatalf("second series identity after rollback = %+v, want retained local series %d", secondSeriesIdentity, seriesID)
 	}
 }
 

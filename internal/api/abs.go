@@ -15,12 +15,13 @@ import (
 )
 
 const (
-	SettingABSBaseURL   = "abs.base_url"
-	SettingABSAPIKey    = "abs.api_key" //nolint:gosec // #nosec G101 -- settings key name, not a credential value
-	SettingABSLibraryID = "abs.library_id"
-	SettingABSEnabled   = "abs.enabled"
-	SettingABSLabel     = "abs.label"
-	SettingABSPathRemap = "abs.path_remap"
+	SettingABSBaseURL    = "abs.base_url"
+	SettingABSAPIKey     = "abs.api_key" //nolint:gosec // #nosec G101 -- settings key name, not a credential value
+	SettingABSLibraryID  = "abs.library_id"
+	SettingABSLibraryIDs = "abs.library_ids"
+	SettingABSEnabled    = "abs.enabled"
+	SettingABSLabel      = "abs.label"
+	SettingABSPathRemap  = "abs.path_remap"
 )
 
 type absClient interface {
@@ -38,22 +39,24 @@ type ABSHandler struct {
 }
 
 type ABSConfigResponse struct {
-	FeatureEnabled   bool   `json:"featureEnabled"`
-	BaseURL          string `json:"baseUrl"`
-	Label            string `json:"label"`
-	Enabled          bool   `json:"enabled"`
-	LibraryID        string `json:"libraryId"`
-	PathRemap        string `json:"pathRemap"`
-	APIKeyConfigured bool   `json:"apiKeyConfigured"`
+	FeatureEnabled   bool     `json:"featureEnabled"`
+	BaseURL          string   `json:"baseUrl"`
+	Label            string   `json:"label"`
+	Enabled          bool     `json:"enabled"`
+	LibraryID        string   `json:"libraryId"`
+	LibraryIDs       []string `json:"libraryIds"`
+	PathRemap        string   `json:"pathRemap"`
+	APIKeyConfigured bool     `json:"apiKeyConfigured"`
 }
 
 type absConfigRequest struct {
-	BaseURL   *string `json:"baseUrl"`
-	Label     *string `json:"label"`
-	Enabled   *bool   `json:"enabled"`
-	LibraryID *string `json:"libraryId"`
-	PathRemap *string `json:"pathRemap"`
-	APIKey    *string `json:"apiKey"`
+	BaseURL    *string   `json:"baseUrl"`
+	Label      *string   `json:"label"`
+	Enabled    *bool     `json:"enabled"`
+	LibraryID  *string   `json:"libraryId"`
+	LibraryIDs *[]string `json:"libraryIds"`
+	PathRemap  *string   `json:"pathRemap"`
+	APIKey     *string   `json:"apiKey"`
 }
 
 type absProbeRequest struct {
@@ -151,8 +154,19 @@ func (h *ABSHandler) SetConfig(w http.ResponseWriter, r *http.Request) {
 		label = "Audiobookshelf"
 	}
 	libraryID := current.LibraryID
+	libraryIDs := append([]string(nil), current.LibraryIDs...)
 	if req.LibraryID != nil {
 		libraryID = strings.TrimSpace(*req.LibraryID)
+	}
+	if req.LibraryIDs != nil {
+		libraryIDs = normalizeABSLibraryIDs("", *req.LibraryIDs)
+		if len(libraryIDs) > 0 {
+			libraryID = libraryIDs[0]
+		} else {
+			libraryID = ""
+		}
+	} else if req.LibraryID != nil {
+		libraryIDs = normalizeABSLibraryIDs(libraryID, nil)
 	}
 	pathRemap := current.PathRemap
 	if req.PathRemap != nil {
@@ -163,6 +177,12 @@ func (h *ABSHandler) SetConfig(w http.ResponseWriter, r *http.Request) {
 		enabled = *req.Enabled
 	}
 
+	libraryIDsJSON, err := json.Marshal(libraryIDs)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
 	// Persist every settings row atomically. A mid-write failure must not
 	// leave a half-applied config (e.g. enabled=true with a stale library ID).
 	kvs := []db.SettingKV{
@@ -170,6 +190,7 @@ func (h *ABSHandler) SetConfig(w http.ResponseWriter, r *http.Request) {
 		{Key: SettingABSLabel, Value: label},
 		{Key: SettingABSEnabled, Value: boolString(enabled)},
 		{Key: SettingABSLibraryID, Value: libraryID},
+		{Key: SettingABSLibraryIDs, Value: string(libraryIDsJSON)},
 		{Key: SettingABSPathRemap, Value: pathRemap},
 	}
 	if req.APIKey != nil && strings.TrimSpace(*req.APIKey) != "" {
@@ -185,8 +206,10 @@ func (h *ABSHandler) SetConfig(w http.ResponseWriter, r *http.Request) {
 		Label:            label,
 		Enabled:          enabled,
 		LibraryID:        libraryID,
+		LibraryIDs:       libraryIDs,
 		PathRemap:        pathRemap,
 		APIKeyConfigured: apiKey != "",
+		FeatureEnabled:   h.featureEnabled,
 	})
 }
 
@@ -244,12 +267,13 @@ func (h *ABSHandler) Libraries(w http.ResponseWriter, r *http.Request) {
 }
 
 type ABSStoredConfig struct {
-	BaseURL   string
-	APIKey    string
-	Label     string
-	LibraryID string
-	PathRemap string
-	Enabled   bool
+	BaseURL    string
+	APIKey     string
+	Label      string
+	LibraryID  string
+	LibraryIDs []string
+	PathRemap  string
+	Enabled    bool
 }
 
 func LoadABSConfig(ctx context.Context, settings *db.SettingsRepo) ABSStoredConfig {
@@ -264,13 +288,22 @@ func LoadABSConfig(ctx context.Context, settings *db.SettingsRepo) ABSStoredConf
 	if label == "" {
 		label = "Audiobookshelf"
 	}
+	libraryID := get(SettingABSLibraryID)
+	rawLibraryIDs := get(SettingABSLibraryIDs)
+	libraryIDs := decodeABSLibraryIDs(rawLibraryIDs)
+	if strings.TrimSpace(rawLibraryIDs) == "" || len(libraryIDs) == 0 {
+		libraryIDs = normalizeABSLibraryIDs(libraryID, libraryIDs)
+	} else {
+		libraryID = libraryIDs[0]
+	}
 	return ABSStoredConfig{
-		BaseURL:   get(SettingABSBaseURL),
-		APIKey:    get(SettingABSAPIKey),
-		Label:     label,
-		LibraryID: get(SettingABSLibraryID),
-		PathRemap: get(SettingABSPathRemap),
-		Enabled:   strings.EqualFold(get(SettingABSEnabled), "true"),
+		BaseURL:    get(SettingABSBaseURL),
+		APIKey:     get(SettingABSAPIKey),
+		Label:      label,
+		LibraryID:  libraryID,
+		LibraryIDs: libraryIDs,
+		PathRemap:  get(SettingABSPathRemap),
+		Enabled:    strings.EqualFold(get(SettingABSEnabled), "true"),
 	}
 }
 
@@ -286,6 +319,7 @@ func (h *ABSHandler) loadConfig(ctx context.Context) ABSConfigResponse {
 		Label:            cfg.Label,
 		Enabled:          cfg.Enabled,
 		LibraryID:        cfg.LibraryID,
+		LibraryIDs:       cfg.LibraryIDs,
 		PathRemap:        cfg.PathRemap,
 		APIKeyConfigured: cfg.APIKey != "",
 	}
@@ -322,6 +356,41 @@ func (h *ABSHandler) newConfiguredClient(baseURL, apiKey string) (absClient, err
 		return nil, errors.New("api_key is required")
 	}
 	return h.newFn(baseURL, apiKey)
+}
+
+func decodeABSLibraryIDs(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil
+	}
+	return values
+}
+
+func normalizeABSLibraryIDs(primary string, values []string) []string {
+	primary = strings.TrimSpace(primary)
+	out := make([]string, 0, len(values)+1)
+	seen := make(map[string]struct{}, len(values)+1)
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	if primary != "" {
+		if _, ok := seen[primary]; !ok {
+			out = append([]string{primary}, out...)
+		}
+	}
+	return out
 }
 
 func (h *ABSHandler) writeProbeError(w http.ResponseWriter, logMsg, baseURL string, err error) {

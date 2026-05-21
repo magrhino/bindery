@@ -45,13 +45,14 @@ func (h *ABSReviewHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := h.loadCfg(r.Context())
 	runCfg := abs.ImportConfig{
-		SourceID:  abs.DefaultSourceID,
-		BaseURL:   cfg.BaseURL,
-		APIKey:    cfg.APIKey,
-		LibraryID: strings.TrimSpace(cfg.LibraryID),
-		PathRemap: cfg.PathRemap,
-		Label:     cfg.Label,
-		Enabled:   cfg.Enabled,
+		SourceID:   abs.DefaultSourceID,
+		BaseURL:    cfg.BaseURL,
+		APIKey:     cfg.APIKey,
+		LibraryID:  strings.TrimSpace(cfg.LibraryID),
+		LibraryIDs: cfg.LibraryIDs,
+		PathRemap:  cfg.PathRemap,
+		Label:      cfg.Label,
+		Enabled:    cfg.Enabled,
 	}
 	for idx := range items {
 		var payload abs.NormalizedLibraryItem
@@ -100,13 +101,14 @@ func (h *ABSReviewHandler) Approve(w http.ResponseWriter, r *http.Request) {
 
 	cfg := h.loadCfg(r.Context())
 	runCfg := abs.ImportConfig{
-		SourceID:  strings.TrimSpace(item.SourceID),
-		BaseURL:   cfg.BaseURL,
-		APIKey:    cfg.APIKey,
-		LibraryID: strings.TrimSpace(item.LibraryID),
-		PathRemap: cfg.PathRemap,
-		Label:     cfg.Label,
-		Enabled:   cfg.Enabled,
+		SourceID:   strings.TrimSpace(item.SourceID),
+		BaseURL:    cfg.BaseURL,
+		APIKey:     cfg.APIKey,
+		LibraryID:  strings.TrimSpace(item.LibraryID),
+		LibraryIDs: cfg.LibraryIDs,
+		PathRemap:  cfg.PathRemap,
+		Label:      cfg.Label,
+		Enabled:    cfg.Enabled,
 	}
 	if err := runCfg.Validate(); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})

@@ -436,7 +436,7 @@ export const api = {
 
   // Audiobookshelf
   absConfig: () => request<ABSConfig>('/abs/config'),
-  absSetConfig: (data: { baseUrl: string; label: string; enabled: boolean; libraryId: string; pathRemap: string; apiKey?: string }) =>
+  absSetConfig: (data: { baseUrl: string; label: string; enabled: boolean; libraryId: string; libraryIds?: string[]; pathRemap: string; apiKey?: string }) =>
     request<ABSConfig>('/abs/config', { method: 'PUT', body: JSON.stringify(data) }),
   absTest: (data?: { baseUrl?: string; apiKey?: string }) =>
     request<ABSTestResult>('/abs/test', { method: 'POST', body: JSON.stringify(data ?? {}) }),
@@ -686,6 +686,7 @@ export interface ABSConfig {
   label: string
   enabled: boolean
   libraryId: string
+  libraryIds?: string[]
   pathRemap: string
   apiKeyConfigured: boolean
 }
@@ -799,6 +800,7 @@ export interface ABSImportRun {
     label: string
     baseUrl: string
     libraryId: string
+    libraryIds?: string[]
     pathRemap?: string
     enabled: boolean
     dryRun: boolean

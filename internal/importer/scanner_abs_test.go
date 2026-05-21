@@ -92,7 +92,7 @@ func TestTryImportInternal_NotifiesABSAfterAudiobookImport(t *testing.T) {
 
 	notifier := &fakeABSNotifier{}
 	const wantLibraryID = "lib-audiobooks-123"
-	s.WithABSNotifier(notifier, func() string { return wantLibraryID })
+	s.WithABSNotifier(notifier, func() []string { return []string{wantLibraryID} })
 
 	s.tryImportInternal(ctx, dl, downloadPath, "qbittorrent", "abc123", nil)
 
@@ -101,6 +101,30 @@ func TestTryImportInternal_NotifiesABSAfterAudiobookImport(t *testing.T) {
 	}
 	if notifier.scanCalls[0] != wantLibraryID {
 		t.Errorf("ScanLibrary called with libraryID=%q, want %q", notifier.scanCalls[0], wantLibraryID)
+	}
+}
+
+func TestTryImportInternal_NotifiesAllConfiguredABSLibraries(t *testing.T) {
+	t.Parallel()
+
+	audiobookDir := t.TempDir()
+	downloadPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(downloadPath, "book.m4b"), []byte("audio-data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, dl, _, ctx := absAudiobookFixture(t, audiobookDir)
+
+	notifier := &fakeABSNotifier{}
+	s.WithABSNotifier(notifier, func() []string { return []string{"lib-books", "lib-audio", "lib-books", ""} })
+
+	s.tryImportInternal(ctx, dl, downloadPath, "qbittorrent", "abc123", nil)
+
+	if got, want := len(notifier.scanCalls), 2; got != want {
+		t.Fatalf("ScanLibrary calls = %d, want %d: %v", got, want, notifier.scanCalls)
+	}
+	if notifier.scanCalls[0] != "lib-books" || notifier.scanCalls[1] != "lib-audio" {
+		t.Fatalf("ScanLibrary calls = %v, want lib-books then lib-audio", notifier.scanCalls)
 	}
 }
 
@@ -131,7 +155,7 @@ func TestTryImportInternal_DoesNotNotifyABSForEbookImport(t *testing.T) {
 	s := NewScanner(dlRepo, clientRepo, bookRepo, authorRepo, histRepo, libraryDir, "", "", "", "")
 
 	notifier := &fakeABSNotifier{}
-	s.WithABSNotifier(notifier, func() string { return "lib-audiobooks-123" })
+	s.WithABSNotifier(notifier, func() []string { return []string{"lib-audiobooks-123"} })
 
 	dl := &models.Download{
 		Title:  "Dune",
@@ -165,7 +189,7 @@ func TestTryImportInternal_ABSNotifySkippedWhenNoLibraryID(t *testing.T) {
 
 	notifier := &fakeABSNotifier{}
 	// Library ID resolver returns "" — ABS not configured.
-	s.WithABSNotifier(notifier, func() string { return "" })
+	s.WithABSNotifier(notifier, func() []string { return nil })
 
 	s.tryImportInternal(ctx, dl, downloadPath, "qbittorrent", "abc123", nil)
 

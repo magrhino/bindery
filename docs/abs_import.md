@@ -10,7 +10,7 @@ The ABS importer lets an admin:
 
 - configure one ABS source
 - test API-key access and discover visible book libraries
-- select a single target book library
+- select one or more target book libraries from that source
 - import ABS metadata into Bindery
 - review import runs, dry-runs, rollback previews, and review/conflict items
 
@@ -71,11 +71,14 @@ Bootstrap:
 
 1. An admin saves ABS settings under the `abs.*` keys. `PUT /api/v1/abs/config` normalizes and stores local settings without contacting ABS.
 2. The UI can explicitly probe the ABS instance to validate auth and list accessible book libraries. Probes require a saved base URL and use either a request API-key override or the stored write-only key.
-3. `POST /api/v1/abs/import` starts an async import using the stored config plus any request overrides.
-4. The importer validates that the selected library response is for a book library, rejects non-book items, and fetches detail payloads when list data is incomplete.
-5. Each normalized ABS item is mapped into Bindery authors, books, series, editions, provenance, and optional review/conflict records.
-6. Progress is exposed through `GET /api/v1/abs/import/status`.
-7. Completed runs are persisted and surfaced through recent-runs and rollback endpoints.
+3. `POST /api/v1/abs/import` starts an async import using the stored config.
+4. The importer processes selected libraries sequentially in saved order. Each library receives its own `abs_import_runs` row, source snapshot, checkpoint updates, summary, rollback scope, and provenance keyed by that library ID.
+5. The importer validates that each selected library response is for a book library, rejects non-book items, and fetches detail payloads when list data is incomplete.
+6. If a library import fails, the active run is marked failed and later libraries are not started. Completed earlier library runs remain intact.
+7. Interrupted-run resume restarts at the checkpointed library and then continues the remaining saved libraries in order.
+8. Each normalized ABS item is mapped into Bindery authors, books, series, editions, provenance, and optional review/conflict records.
+9. Progress is exposed through `GET /api/v1/abs/import/status`.
+10. Completed runs are persisted and surfaced through recent-runs and rollback endpoints.
 
 ## Mapping Rules
 
@@ -159,16 +162,19 @@ When a path is visible and valid, Bindery records it through the normal book-fil
 
 ## Storage Model
 
-Config is stored in existing settings rows for the single-source MVP:
+Config is stored in existing settings rows for the single ABS source:
 
 - `abs.base_url`
 - `abs.api_key`
 - `abs.library_id`
+- `abs.library_ids`
 - `abs.enabled`
 - `abs.label`
 - `abs.path_remap`
 
-Saving config validates local syntax only. It does not authorize against ABS or verify the selected library ID; `POST /api/v1/abs/test`, `POST /api/v1/abs/libraries`, and import enumeration handle live ABS validation.
+`abs.library_ids` stores the ordered selected library IDs as JSON. `abs.library_id` remains the compatibility field and mirrors the first selected library. When `abs.library_ids` is empty or missing, Bindery falls back to `abs.library_id`.
+
+Saving config validates local syntax only. It does not authorize against ABS or verify selected library IDs; `POST /api/v1/abs/test`, `POST /api/v1/abs/libraries`, and import enumeration handle live ABS validation.
 
 Run and provenance persistence adds these tables:
 

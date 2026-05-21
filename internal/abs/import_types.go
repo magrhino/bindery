@@ -47,14 +47,15 @@ type enumerateFunc func(ctx context.Context, libraryID string, fn func(context.C
 type enhancedHardcoverSeriesEnabledFunc func(context.Context) bool
 
 type ImportConfig struct {
-	SourceID  string
-	BaseURL   string
-	APIKey    string
-	LibraryID string
-	PathRemap string
-	Label     string
-	Enabled   bool
-	DryRun    bool
+	SourceID   string
+	BaseURL    string
+	APIKey     string
+	LibraryID  string
+	LibraryIDs []string
+	PathRemap  string
+	Label      string
+	Enabled    bool
+	DryRun     bool
 }
 
 func (c ImportConfig) normalized() ImportConfig {
@@ -65,6 +66,10 @@ func (c ImportConfig) normalized() ImportConfig {
 	c.BaseURL = strings.TrimSpace(c.BaseURL)
 	c.APIKey = strings.TrimSpace(c.APIKey)
 	c.LibraryID = strings.TrimSpace(c.LibraryID)
+	c.LibraryIDs = normalizeLibraryIDs(c.LibraryID, c.LibraryIDs)
+	if c.LibraryID == "" && len(c.LibraryIDs) > 0 {
+		c.LibraryID = c.LibraryIDs[0]
+	}
 	c.PathRemap = strings.TrimSpace(c.PathRemap)
 	c.Label = strings.TrimSpace(c.Label)
 	if c.Label == "" {
@@ -87,8 +92,8 @@ func (c ImportConfig) Validate() error {
 	if _, err := NormalizeAPIKey(c.APIKey); err != nil {
 		return err
 	}
-	if c.LibraryID == "" {
-		return errors.New("abs library_id is empty")
+	if len(c.LibraryIDs) == 0 {
+		return errors.New("abs library_ids is empty")
 	}
 	return nil
 }
@@ -123,13 +128,14 @@ type ImportStats struct {
 }
 
 type ImportSourceSnapshot struct {
-	SourceID  string `json:"sourceId"`
-	Label     string `json:"label"`
-	BaseURL   string `json:"baseUrl"`
-	LibraryID string `json:"libraryId"`
-	PathRemap string `json:"pathRemap,omitempty"`
-	Enabled   bool   `json:"enabled"`
-	DryRun    bool   `json:"dryRun"`
+	SourceID   string   `json:"sourceId"`
+	Label      string   `json:"label"`
+	BaseURL    string   `json:"baseUrl"`
+	LibraryID  string   `json:"libraryId"`
+	LibraryIDs []string `json:"libraryIds,omitempty"`
+	PathRemap  string   `json:"pathRemap,omitempty"`
+	Enabled    bool     `json:"enabled"`
+	DryRun     bool     `json:"dryRun"`
 }
 
 type ImportSummary struct {
