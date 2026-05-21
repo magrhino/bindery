@@ -106,5 +106,5 @@ Non-Claude agents that can't auto-load `SKILL.md` files should read the bodies u
 - Full CI matrix, security checks, and local rehearsal commands: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Deployment / env vars / upgrade path: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 - Roadmap and out-of-scope list: [docs/ROADMAP.md](docs/ROADMAP.md)
-- Auth modes (multiuser / OIDC / proxy): [docs/auth-multiuser.md](docs/auth-multiuser.md), [docs/auth-oidc.md](docs/auth-oidc.md), [docs/auth-proxy.md](docs/auth-proxy.md)
+- Auth modes (multiuser / OIDC / proxy): [docs/multi-user.md](docs/multi-user.md), [docs/auth-oidc.md](docs/auth-oidc.md), [docs/auth-proxy.md](docs/auth-proxy.md)
 - Vulnerability disclosure: [SECURITY.md](SECURITY.md)

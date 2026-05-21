@@ -31,6 +31,19 @@ Set the import mode in **Settings → File Naming**.
 | `BINDERY_LIBRARY_DIR` | Ebook library destination. |
 | `BINDERY_AUDIOBOOK_DIR` | Audiobook library destination. |
 
+## Per-author audiobook root folder
+
+By default, every author's audiobooks are imported to the global audiobook destination (`BINDERY_AUDIOBOOK_DIR`, which itself falls back to the ebook library when unset). You can override that destination for a single author.
+
+Open the author, click **Edit**, and use the **Audiobook root folder** selector in the Edit Author modal:
+
+- Pick any configured root folder to send **that author's** audiobooks there instead of the global audiobook destination.
+- Leave it on **Use global audiobook folder** (the default) to fall back to `BINDERY_AUDIOBOOK_DIR`.
+
+This is a separate setting from the author's ebook **Root folder** — choosing a custom ebook root never changes where the author's audiobooks land, and vice versa. That keeps audiobooks out of the ebook tree even when an author has a custom ebook root.
+
+The override applies wherever Bindery decides an audiobook's location: regular imports of completed downloads, Library Scan matching, and the Audiobookshelf importer's file-visibility checks. When the per-author audiobook root is unset, all of those fall back to the global audiobook directory.
+
 ## Torrent vs Usenet folders
 
 There is **no per-protocol download folder setting**, and you do not need one. Each download client (qBittorrent, SABnzbd, NZBGet) decides where it places completed files in its own configuration, so they are already separate.

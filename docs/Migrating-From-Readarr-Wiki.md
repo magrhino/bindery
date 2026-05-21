@@ -24,3 +24,45 @@ Bindery is a single instance. One author record covers ebook, audiobook, or both
 ## Bringing in books already on disk
 
 For files already on disk, use **Library Scan**. It takes the author and title from your folder layout: a file under `{Author}/{Book}/` — Readarr's and Calibre's default structure — is matched on the folder names, so the filename convention (`Author - Title` vs `Title - Author`) does not matter. Loose files with no author/book folders fall back to filename parsing, which can still be ambiguous, so keep an organised folder structure for the most reliable scan.
+
+## Importing your Goodreads library (CSV)
+
+If you tracked your reading on Goodreads, you can seed Bindery's wanted list from a Goodreads library export. This is a one-shot migration aid — it is **not** a live sync. Bindery does not poll Goodreads; if you add books on Goodreads later, re-export and re-import.
+
+### 1. Export the CSV from Goodreads
+
+1. Go to [goodreads.com/review/import](https://www.goodreads.com/review/import).
+2. Click **Export Library**. Goodreads generates a CSV after a short delay — refresh the page and download the link when it appears.
+3. The file is named like `goodreads_library_export.csv`.
+
+### 2. Upload it in Bindery
+
+1. Open **Settings → Import**.
+2. Under **Import from Goodreads CSV**, first pick which shelves to import using the **shelf filter** (see below), then click **Upload** and choose your exported `.csv`.
+
+The importer reads columns by name, so it tolerates the few header spellings Goodreads has shipped over the years and any column reordering. It only needs a **Title** column; ISBN/ISBN13 columns are used when present but are not required — books with no ISBN fall through to a title+author search.
+
+### 3. Shelf filter
+
+Every Goodreads row carries exactly one **Exclusive Shelf** value: `to-read`, `currently-reading`, or `read`. The shelf filter decides which of those Bindery imports.
+
+- The filter defaults to **`to-read` only** — the books you have not read yet, which is what most people want to start monitoring.
+- Tick `currently-reading` and/or `read` to widen the import. The filter can never be empty; clearing the last box falls back to `to-read`.
+- Rows on a shelf you did not select are counted as `skippedShelf` in the preview and are never imported.
+
+### 4. Preview, then commit
+
+The import is a two-step, dry-run-first flow — nothing is written until you confirm:
+
+1. **Preview (dry run).** After upload, Bindery parses the CSV and resolves every in-scope row against its metadata providers (by ISBN-13, then ISBN-10, then a title+author search). No data is written. The preview summarises:
+   - **resolved** — matched and ready to add
+   - **skippedExisting** — already in your library (deduped by metadata id, so re-running an import is safe)
+   - **skippedShelf** — filtered out by the shelf filter
+   - **unresolved** — no provider could match the row
+2. **Commit.** Click **Commit** to persist the resolved books. Each is added as a **monitored, wanted** book — nothing is auto-grabbed; grab from the **Wanted** page when you are ready. The resolved preview is held server-side for 30 minutes; commit within that window or re-upload.
+
+### 5. Failed rows
+
+Rows that could not be matched are listed in the preview under **unresolved**, with a reason (no ISBN match, title+author search found nothing, etc.). Use **Download failed rows** to get a Goodreads-shaped CSV of just those rows, with a `Reason` column. Fix an ISBN or title in that file and re-upload it to retry only the misses.
+
+Resolution quality depends on ISBN coverage: rows with a valid ISBN match most reliably. Older or self-published titles often have no ISBN in the export and fall back to title+author search, which can miss — that is expected.

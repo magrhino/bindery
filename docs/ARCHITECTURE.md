@@ -27,8 +27,8 @@ OpenLibrary    Google Books, Hardcover.app,   Audnex, Audible
 | **HTTP router** | [chi](https://github.com/go-chi/chi) v5 | Sub-routers per resource, middleware-driven auth/CSRF/rate-limit. |
 | **Backend language** | Go 1.25 | Standard library HTTP server, structured logging via `slog`. |
 | **Database** | SQLite, WAL mode | [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) — pure Go, no CGO. Single `bindery.db` file. |
-| **Schema migrations** | Embedded SQL files in `internal/migrate` | Linearly-numbered, additive-only, applied at startup. |
-| **Frontend** | React 19 + TypeScript + Tailwind CSS 3 | Built with [Vite](https://vite.dev), output baked into the binary via `go:embed`. |
+| **Schema migrations** | Embedded SQL files in `internal/db/migrations/` | Linearly-numbered, additive-only, applied at startup. |
+| **Frontend** | React 19 + TypeScript + Tailwind CSS 4 | Built with [Vite](https://vite.dev), output baked into the binary via `go:embed`. |
 | **Container** | Multi-stage build on [distroless/static-debian12:nonroot](https://github.com/GoogleContainerTools/distroless) | No shell, no package manager, runs as UID `65532`. |
 | **Helm chart** | `charts/bindery/` | ArgoCD- and Flux-friendly; supports `existingSecret`, NFS volumes, ingress. |
 
@@ -40,8 +40,8 @@ The `internal/` tree is organised by domain, not by layer:
 |---------|----------------|
 | `api` | HTTP handlers, request/response types, integration with `auth` middleware. |
 | `auth` | Local accounts (argon2id), API keys, CSRF, sessions, OIDC, forward-auth, rate limiting. |
-| `db` | Connection pooling, transaction helpers, repository interfaces. |
-| `migrate` | Embedded migrations (`NNN_description.sql`), applied idempotently at boot. |
+| `db` | Connection pooling, transaction helpers, repository interfaces, and the embedded schema migrations under `db/migrations/` (`NNN_description.sql`, applied idempotently at boot). |
+| `migrate` | Bulk-import of authors and related records from a `readarr.db` or a Goodreads CSV export. |
 | `models` | Domain types (Author, Book, Edition, Series, Indexer, etc.) shared across handlers, repos, and pipelines. |
 | `metadata` | OpenLibrary, Google Books, Hardcover, DNB, Audnex, Audible — fetchers and unifying interfaces. |
 | `indexer` | Newznab/Torznab clients, query builder, four-tier fallback, deduplication, ranking. |

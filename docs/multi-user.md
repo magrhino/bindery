@@ -2,7 +2,7 @@
 
 Bindery v1.0 introduces per-user library scoping. Every author, book, download, quality profile, metadata profile, and root folder is owned by a specific user. Users log in with their own credentials and see only their own library.
 
-For upgrade instructions and migration steps, see [docs/upgrade-v2.md](upgrade-v2.md).
+For upgrade instructions and migration steps, see [docs/upgrade-v1.md](upgrade-v1.md).
 
 ## Role model
 
@@ -10,8 +10,8 @@ Two roles exist: `admin` and `user`.
 
 - The **first account** created through the `/setup` wizard is always `admin`.
 - Users created by an admin via Settings → Users default to the `user` role.
-- OIDC auto-provisioned users get the `user` role unless their IdP group matches `allowed_admin_groups` in the provider config (see [docs/auth-oidc.md](auth-oidc.md)).
-- An admin can change any user's role at any time: **Settings → Users → Edit**, or `PUT /api/v1/auth/users/{id}` with `{"role": "admin"}`.
+- OIDC auto-provisioned users get the `user` role by default. To make the IdP authoritative for the admin role, set `BINDERY_OIDC_ADMIN_GROUP` so users in that IdP group are promoted automatically; see [OIDC role mapping](auth-oidc.md#oidc-role-mapping) in [docs/auth-oidc.md](auth-oidc.md).
+- An admin can change any user's role at any time: **Settings → Users → Edit**, or `PUT /api/v1/auth/users/{id}/role` with `{"role": "admin"}`.
 
 ### Capability matrix
 
@@ -45,7 +45,7 @@ curl -X POST http://bindery:8787/api/v1/auth/users \
   -d '{"username": "alice", "password": "correct-horse-battery", "role": "user"}'
 ```
 
-OIDC users are created automatically on first login — no pre-creation needed unless `BINDERY_PROXY_AUTO_PROVISION=false`.
+OIDC users are created automatically on first login — no pre-creation needed unless `BINDERY_OIDC_AUTO_PROVISION=false`.
 
 ### Listing users
 
@@ -60,7 +60,7 @@ Returns: `[{"id": 1, "username": "admin", "role": "admin", "last_seen": "..."}]`
 
 ```bash
 # Promote to admin
-curl -X PUT http://bindery:8787/api/v1/auth/users/2 \
+curl -X PUT http://bindery:8787/api/v1/auth/users/2/role \
   -H "X-Api-Key: <admin-api-key>" \
   -H "Content-Type: application/json" \
   -d '{"role": "admin"}'
@@ -119,5 +119,5 @@ curl -X POST http://bindery:8787/api/v1/author \
 | Data remains after a user is deleted | `DELETE /auth/users/{id}` does not cascade to library data | Reassign or delete the user's authors and books before deleting the user account (see "Deleting a user" above). |
 | `403 Forbidden` on an API call that worked before v1.0 | Session-cookie mutations now require `X-CSRF-Token` | Switch callers to `X-Api-Key` auth (CSRF-exempt), or add a `GET /auth/csrf` preflight to your script (see "CSRF tokens" above). |
 | Admin locked out — no admin account exists or all admins deleted | User row has `role='user'` or all admin rows were removed | Recover via direct DB update (no Bindery restart needed if you can write to the DB file): `sqlite3 /config/bindery.db "UPDATE users SET role='admin' WHERE username='<your-username>';"` — or in Kubernetes: `kubectl exec deploy/bindery -- sqlite3 /config/bindery.db "UPDATE users SET role='admin' WHERE id=1;"` |
-| OIDC user auto-provisioned as `user` but should be `admin` | `allowed_admin_groups` not configured for the OIDC provider | Add the IdP group name to `allowed_admin_groups` in the provider config. Promote the existing account manually: `PUT /api/v1/auth/users/{id}` with `{"role": "admin"}`. |
+| OIDC user auto-provisioned as `user` but should be `admin` | `BINDERY_OIDC_ADMIN_GROUP` not set, so the IdP group is never consulted | Set `BINDERY_OIDC_ADMIN_GROUP` to the IdP group name (and `BINDERY_OIDC_GROUP_CLAIM` if your IdP emits groups under a non-default claim). To promote a single existing account without group mapping: `PUT /api/v1/auth/users/{id}/role` with `{"role": "admin"}`. |
 | Non-admin user can reach admin settings page in UI | Browser cached a pre-v1.0 session or route bundle | Hard-refresh the page (`Ctrl+Shift+R`). If it persists, log out and back in. The backend enforces role checks regardless of what the UI renders. |

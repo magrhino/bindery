@@ -232,15 +232,22 @@ The full endpoint catalogue, authentication rules (API key, session cookie, loca
 | **Deployment** — Docker, Compose, k8s/Helm, binary, UID/GID, env vars, upgrades | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
 | **Architecture** — components, data flow, dependencies | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | **API** — REST endpoints, auth, integration patterns | [docs/API.md](docs/API.md) |
-| **ABS import** — setup, path remap, review queue, rollback, matching behavior | [docs/abs_import.md](docs/abs_import.md) |
-| **Enhanced Hardcover series** — token setup, series linking, catalog diffs, missing-book fill | [docs/Hardcover-Series-Wiki.md](docs/Hardcover-Series-Wiki.md) |
 | **Roadmap** — planned work and explicitly-out-of-scope items | [docs/ROADMAP.md](docs/ROADMAP.md) |
+| **Multi-user** — roles, user management, CSRF tokens | [docs/multi-user.md](docs/multi-user.md) |
+| **Upgrading to v1.0** — multi-user migration: backup, dry-run, rollback | [docs/upgrade-v1.md](docs/upgrade-v1.md) |
+| **OIDC auth** — Google / GitHub / Authelia / Keycloak setup | [docs/auth-oidc.md](docs/auth-oidc.md) |
+| **Forward-auth (proxy) auth** — Authelia / Authentik / oauth2-proxy | [docs/auth-proxy.md](docs/auth-proxy.md) |
+| **Auth troubleshooting** — symptom → cause → fix across all auth modes | [docs/troubleshooting-auth.md](docs/troubleshooting-auth.md) |
+| **ABS import (overview)** — what gets imported, setup, review queue, rollback | [docs/ABS-Import-Wiki.md](docs/ABS-Import-Wiki.md) |
+| **ABS import (reference)** — implementation detail, mapping rules, API surface | [docs/abs_import.md](docs/abs_import.md) |
+| **Enhanced Hardcover series** — token setup, series linking, catalog diffs, missing-book fill | [docs/Hardcover-Series-Wiki.md](docs/Hardcover-Series-Wiki.md) |
+| **Storage & hardlinks** — single-mount layout, import modes, per-author audiobook root | [docs/Storage-And-Hardlinks-Wiki.md](docs/Storage-And-Hardlinks-Wiki.md) |
+| **Migrating from Readarr** — `readarr.db` import, Goodreads CSV import, library scan | [docs/Migrating-From-Readarr-Wiki.md](docs/Migrating-From-Readarr-Wiki.md) |
+| **Troubleshooting** — permission-denied, path-remap, import failures | [docs/Troubleshooting-Wiki.md](docs/Troubleshooting-Wiki.md) |
 | **Contributing & CI checks** — dev setup, full quality/security matrix, local check suite | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | **Changelog** — release notes | [CHANGELOG.md](CHANGELOG.md) |
 | **Reverse-proxy & SSO setups** — Traefik / Caddy / Nginx / Authelia / Authentik recipes | [Wiki](https://github.com/vavallee/bindery/wiki/Reverse-proxy-and-SSO) |
-| **Troubleshooting** — permission-denied, path-remap, import failures | [Wiki](https://github.com/vavallee/bindery/wiki/Troubleshooting) |
 | **Indexer & download-client recipes** — NZBGeek / DrunkenSlug / Prowlarr / Jackett / SAB / qBit tips | [Wiki](https://github.com/vavallee/bindery/wiki/Indexer-and-downloader-recipes) |
-| **Migrating from Readarr** — step-by-step with known failure modes | [Wiki](https://github.com/vavallee/bindery/wiki/Migrating-from-Readarr) |
 
 ## Community
 

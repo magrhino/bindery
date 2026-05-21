@@ -60,7 +60,7 @@ Persistence:
 Frontend:
 
 - [../web/src/api/client.ts](../web/src/api/client.ts): ABS API client types and methods
-- [../web/src/pages/SettingsPage.tsx](../web/src/pages/SettingsPage.tsx): ABS settings/import UI
+- [../web/src/pages/settings/ABSTab.tsx](../web/src/pages/settings/ABSTab.tsx): ABS settings/import UI
 - [../web/src/components/ABSAuthorConflictsPanel.tsx](../web/src/components/ABSAuthorConflictsPanel.tsx): author conflict review panel
 
 Bootstrap:
@@ -120,7 +120,7 @@ Important applied fields:
 - ASIN
 - media type
 
-The importer fails safe on ambiguous title matches rather than guessing.
+The importer distinguishes an *unmatched* item from an *ambiguous* one. When the local matcher finds nothing close, the item is unmatched: the book is created directly (step 4 above) and `enrichBook` performs a confidence-gated upstream lookup. Only an *ambiguous* match — a close-but-uncertain local candidate — is parked in the review queue rather than guessed. The same distinction applies to author resolution.
 
 ### Series
 

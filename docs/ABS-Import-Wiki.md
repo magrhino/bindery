@@ -12,7 +12,7 @@ The current ABS importer supports one configured ABS source and one or more sele
 - import the ABS catalog metadata it can read for each visible item
 - create or match shared authors, books, series, and editions in Bindery
 - preserve ABS provenance so reruns stay idempotent
-- queue low-confidence items for manual review instead of guessing
+- import unmatched items directly and queue only genuinely ambiguous matches for manual review
 - show recent runs, dry-run previews, rollback previews, and conflict resolution state
 
 The importer is metadata-first and shared-filesystem-aware. If ABS reports file paths that Bindery can see under its configured library roots, Bindery records those files through the normal file ownership logic. If the paths are missing, outside scope, or mounted differently, the import can still succeed as metadata-only.
@@ -68,9 +68,10 @@ A good pre-import cleanup pass in ABS is worth it. If your library already has s
 
 ## Review Queue And Conflicts
 
-Bindery deliberately fails safe when matching is unclear.
+Bindery distinguishes between an item it could not match locally and an item it matched *ambiguously*.
 
-- Low-confidence items are sent to the review queue so you can resolve the author or book match yourself.
+- **Unmatched** authors and books — where Bindery's local matcher finds nothing close — are **not** sent to review. They are created/imported directly, and a confidence-gated upstream lookup still relinks the new row to the metadata provider when it finds a confident match. This is deliberate: an unmatched author is not an uncertain one, and parking every unmatched item in review previously sent the bulk of a folder-backed ABS library to the queue even for well-known authors.
+- **Ambiguous** matches — a close-but-uncertain local candidate — are the only items sent to the review queue, so you can confirm or correct the author or book match yourself.
 - When ABS metadata and upstream metadata disagree for mapped fields, Bindery keeps the current applied value temporarily and records a conflict so you can choose the winning source.
 - Placeholder ABS authors can be relinked during conflict review when Bindery can confidently connect them to upstream metadata.
 
