@@ -28,21 +28,32 @@ type Category struct {
 
 func (c *Category) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		Name          string `json:"name"`
-		SavePath      string `json:"savePath"`
-		SavePathSnake string `json:"save_path"`
-		DownloadPath  string `json:"download_path"`
+		Name          string          `json:"name"`
+		SavePath      json.RawMessage `json:"savePath"`
+		SavePathSnake json.RawMessage `json:"save_path"`
+		DownloadPath  json.RawMessage `json:"download_path"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	c.Name = raw.Name
-	c.SavePath = raw.SavePath
+	c.SavePath = categoryPathString(raw.SavePath)
 	if c.SavePath == "" {
-		c.SavePath = raw.SavePathSnake
+		c.SavePath = categoryPathString(raw.SavePathSnake)
 	}
 	if c.SavePath == "" {
-		c.SavePath = raw.DownloadPath
+		c.SavePath = categoryPathString(raw.DownloadPath)
 	}
 	return nil
+}
+
+func categoryPathString(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return ""
+	}
+	return value
 }

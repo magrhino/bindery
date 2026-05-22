@@ -14,12 +14,19 @@ func TestCheckDownloadClientHealth_QBittorrentCategoryPath(t *testing.T) {
 	tests := []struct {
 		name       string
 		categories string
+		pathRemap  string
 		wantStatus string
 		wantText   string
 	}{
 		{
 			name:       "remapped category path matches",
 			categories: `{"books":{"name":"books","savePath":"/media/downloads"}}`,
+			wantStatus: HealthOK,
+		},
+		{
+			name:       "qbit v5 boolean download_path still remaps category path",
+			categories: `{"books":{"download_path":false,"name":"books","savePath":"/media/books/downloads"}}`,
+			pathRemap:  "/media/books:/books",
 			wantStatus: HealthOK,
 		},
 		{
@@ -70,6 +77,10 @@ func TestCheckDownloadClientHealth_QBittorrentCategoryPath(t *testing.T) {
 			defer srv.Close()
 
 			host, port := serverHostPort(t, srv.URL)
+			pathRemap := tc.pathRemap
+			if pathRemap == "" {
+				pathRemap = "/media:/books"
+			}
 			client := &models.DownloadClient{
 				Type:      "qbittorrent",
 				Host:      host,
@@ -77,7 +88,7 @@ func TestCheckDownloadClientHealth_QBittorrentCategoryPath(t *testing.T) {
 				Username:  "u",
 				Password:  "p",
 				Category:  "books",
-				PathRemap: "/media:/books",
+				PathRemap: pathRemap,
 			}
 			got := CheckDownloadClientHealth(context.Background(), client, "/books/downloads", "")
 			if got.Status != tc.wantStatus {

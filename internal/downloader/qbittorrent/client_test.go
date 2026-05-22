@@ -1501,8 +1501,10 @@ func TestGetTorrents_V4AndV5_StateValues(t *testing.T) {
 // parses both the v4 and v5 JSON object shapes. The endpoint has always
 // returned a name->object map; the variation across versions is the per-entry
 // save-path key (`savePath`, `save_path`, `download_path`), which
-// Category.UnmarshalJSON normalizes. This fixture exercises every observed
-// key and confirms a missing-name entry is backfilled from its map key.
+// Category.UnmarshalJSON normalizes. qBittorrent v5.1.4 can also include a
+// boolean `download_path` flag alongside `savePath`; that alias must be ignored
+// instead of failing the whole categories response. This fixture exercises every
+// observed key and confirms a missing-name entry is backfilled from its map key.
 func TestGetCategories_V4AndV5_ResponseShapes(t *testing.T) {
 	fixtures := []struct {
 		name string
@@ -1519,6 +1521,10 @@ func TestGetCategories_V4AndV5_ResponseShapes(t *testing.T) {
 		{
 			name: "mixed_with_download_path_and_missing_name",
 			body: `{"Video":{"savePath":"/dl/video"},"eBooks":{"name":"eBooks","download_path":"/dl/ebooks"}}`,
+		},
+		{
+			name: "v5_1_4_boolean_download_path_flag",
+			body: `{"Video":{"name":"Video","download_path":false,"savePath":"/dl/video"},"eBooks":{"name":"eBooks","download_path":false,"savePath":"/dl/ebooks"}}`,
 		},
 	}
 	for _, f := range fixtures {
