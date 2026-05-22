@@ -59,6 +59,118 @@ func TestSyncer_SkipsIndexerWithNoBookCategories(t *testing.T) {
 	}
 }
 
+func TestSyncer_CreatesIndexerFromApplicationScopedCapabilities(t *testing.T) {
+	indexerBody := `[{
+		"id":5,
+		"name":"BookTracker",
+		"enable":true,
+		"protocol":"torrent",
+		"supportsSearch":true,
+		"tags":[3],
+		"categories":[],
+		"capabilities":{
+			"categories":[
+				{"id":7000,"name":"Books","subCategories":[{"id":7020,"name":"Books/EBook"}]},
+				{"id":7010,"name":"Books/Mags"},
+				{"id":7030,"name":"Books/Comics"},
+				{"id":7040,"name":"Books/Technical"}
+			]
+		}
+	}]`
+	applicationsBody := `[{
+		"enable":true,
+		"syncLevel":"fullSync",
+		"tags":[3],
+		"fields":[{"name":"syncCategories","value":[3030,7000,7010,7020,7030,7040,7050]}]
+	}]`
+	srv := prowlarrStubWithApplications(t, indexerBody, applicationsBody)
+	defer srv.Close()
+
+	store := &fakeIndexerStore{}
+	syncer := NewSyncer(New(srv.URL, "k"), store, fakeInstanceStore{})
+
+	if _, err := syncer.Sync(context.Background(), 1); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if len(store.created) != 1 {
+		t.Fatalf("created = %d, want 1", len(store.created))
+	}
+	assertCategoryIDs(t, store.created[0].Categories, []int{7010, 7020, 7030, 7040})
+}
+
+func TestSyncer_CreatesIndexerFromChildOnlyApplicationScope(t *testing.T) {
+	indexerBody := `[{
+		"id":5,
+		"name":"ChildOnlyBookTracker",
+		"enable":true,
+		"protocol":"torrent",
+		"supportsSearch":true,
+		"tags":[3],
+		"categories":[],
+		"capabilities":{
+			"categories":[
+				{"id":7010,"name":"Books/Mags"},
+				{"id":7030,"name":"Books/Comics"},
+				{"id":7040,"name":"Books/Technical"}
+			]
+		}
+	}]`
+	applicationsBody := `[{
+		"enable":true,
+		"syncLevel":"fullSync",
+		"tags":[3],
+		"fields":[{"name":"syncCategories","value":[7010,7030,7040]}]
+	}]`
+	srv := prowlarrStubWithApplications(t, indexerBody, applicationsBody)
+	defer srv.Close()
+
+	store := &fakeIndexerStore{}
+	syncer := NewSyncer(New(srv.URL, "k"), store, fakeInstanceStore{})
+
+	if _, err := syncer.Sync(context.Background(), 1); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if len(store.created) != 1 {
+		t.Fatalf("created = %d, want 1", len(store.created))
+	}
+	assertCategoryIDs(t, store.created[0].Categories, []int{7010, 7030, 7040})
+}
+
+func TestSyncer_SkipsCapabilityCategoriesWithoutApplicationScope(t *testing.T) {
+	indexerBody := `[{
+		"id":5,
+		"name":"BookTracker",
+		"enable":true,
+		"protocol":"torrent",
+		"supportsSearch":true,
+		"tags":[5],
+		"categories":[],
+		"capabilities":{
+			"categories":[
+				{"id":7000,"name":"Books","subCategories":[{"id":7020,"name":"Books/EBook"}]}
+			]
+		}
+	}]`
+	applicationsBody := `[{
+		"enable":true,
+		"syncLevel":"fullSync",
+		"tags":[3],
+		"fields":[{"name":"syncCategories","value":[7000,7020]}]
+	}]`
+	srv := prowlarrStubWithApplications(t, indexerBody, applicationsBody)
+	defer srv.Close()
+
+	store := &fakeIndexerStore{}
+	syncer := NewSyncer(New(srv.URL, "k"), store, fakeInstanceStore{})
+
+	if _, err := syncer.Sync(context.Background(), 1); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if len(store.created) != 0 {
+		t.Errorf("expected 0 created (no book/audiobook categories), got %d", len(store.created))
+	}
+}
+
 func TestSyncer_SkipsDisabledIndexer(t *testing.T) {
 	// Issue #675: an indexer disabled in Prowlarr must not be added to Bindery.
 	srv := prowlarrStub(t, `[{"id":6,"name":"DisabledIdx","enable":false,"protocol":"torrent","supportsSearch":true,"categories":[{"id":7020}]}]`)

@@ -71,6 +71,21 @@ func prowlarrStub(t *testing.T, body string) *httptest.Server {
 	}))
 }
 
+func prowlarrStubWithApplications(t *testing.T, indexerBody, applicationsBody string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/indexer":
+			_, _ = w.Write([]byte(indexerBody))
+		case "/api/v1/applications":
+			_, _ = w.Write([]byte(applicationsBody))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+}
+
 func TestFilterCategoriesForMedia(t *testing.T) {
 	cases := []struct {
 		name string
