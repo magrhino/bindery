@@ -183,6 +183,62 @@ func TestHydrateHardcoverEditionsDoesNotPromoteSkippedEditionASIN(t *testing.T) 
 	}
 }
 
+func TestHydrateHardcoverEditionsPromotesStoredEditionASIN(t *testing.T) {
+	books, editions, book, ctx := newHydrateBook(t, "hc:hydrated-book", "hardcover", models.MediaTypeAudiobook)
+	storedASIN := "B111STORED"
+	if ok, err := editions.UpsertMetadata(ctx, &models.Edition{
+		ForeignID: "hc:audio",
+		BookID:    book.ID,
+		Title:     "Stored Audio",
+		ASIN:      &storedASIN,
+		Format:    "Audiobook",
+		Monitored: true,
+	}); err != nil || !ok {
+		t.Fatalf("seed edition ok=%v err=%v", ok, err)
+	}
+	replacementASIN := "B999FETCHD"
+
+	result := HydrateHardcoverEditions(ctx, Options{
+		Book:     book,
+		Provider: "hardcover",
+		Editions: editions,
+		Books:    books,
+		FetchEditions: func(context.Context, string) ([]models.Edition, error) {
+			return []models.Edition{{
+				ForeignID: "hc:audio",
+				Title:     "Fetched Audio",
+				ASIN:      &replacementASIN,
+				Format:    "Audiobook",
+				Monitored: true,
+			}}, nil
+		},
+		Enricher: &fakeAudiobookEnricher{},
+	})
+	if result.Err != nil {
+		t.Fatalf("hydrate err = %v", result.Err)
+	}
+	if !result.ASINPromoted || !result.BookUpdated {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if book.ASIN != storedASIN {
+		t.Fatalf("promoted ASIN = %q, want stored %q", book.ASIN, storedASIN)
+	}
+	stored, err := books.GetByID(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ASIN != storedASIN {
+		t.Fatalf("stored book ASIN = %q, want %q", stored.ASIN, storedASIN)
+	}
+	edition, err := editions.GetByForeignID(ctx, "hc:audio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edition.ASIN == nil || *edition.ASIN != storedASIN {
+		t.Fatalf("edition ASIN was overwritten: %+v", edition)
+	}
+}
+
 func TestHydrateHardcoverEditionsDoesNotPromoteNonAudioASIN(t *testing.T) {
 	books, editions, book, ctx := newHydrateBook(t, "hc:hydrated-book", "hardcover", models.MediaTypeAudiobook)
 	kindleASIN := "B111111111"

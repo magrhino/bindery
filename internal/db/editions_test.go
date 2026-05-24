@@ -157,7 +157,7 @@ func TestEditionRepo_UpsertMetadataFillsMissingFields(t *testing.T) {
 
 	isbn13 := "9780000000001"
 	replacementASIN := "B999999999"
-	ok, err = repo.UpsertMetadata(ctx, &models.Edition{
+	incoming := &models.Edition{
 		ForeignID: "hc:ed1",
 		BookID:    b.ID,
 		Title:     "Updated Title",
@@ -168,12 +168,19 @@ func TestEditionRepo_UpsertMetadataFillsMissingFields(t *testing.T) {
 		Language:  "ger",
 		ImageURL:  "https://img/new.jpg",
 		Monitored: true,
-	})
+	}
+	ok, err = repo.UpsertMetadata(ctx, incoming)
 	if err != nil {
 		t.Fatalf("metadata conflict upsert: %v", err)
 	}
 	if !ok {
 		t.Fatal("metadata conflict upsert skipped unexpectedly")
+	}
+	if incoming.ISBN13 == nil || *incoming.ISBN13 != isbn13 {
+		t.Fatalf("incoming edition was not hydrated with filled ISBN13: %+v", incoming)
+	}
+	if incoming.ASIN == nil || *incoming.ASIN != asin || incoming.Format != "Audiobook" || incoming.ImageURL != "https://img/ed1.jpg" {
+		t.Fatalf("incoming edition was not hydrated with preserved stored fields: %+v", incoming)
 	}
 	got, err = repo.GetByForeignID(ctx, "hc:ed1")
 	if err != nil {

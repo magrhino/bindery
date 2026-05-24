@@ -144,9 +144,11 @@ func (r *EditionRepo) Upsert(ctx context.Context, e *models.Edition) error {
 }
 
 // UpsertMetadata inserts an edition discovered from an external metadata
-// provider, or fills empty fields on the existing row for the same book. It
-// deliberately refuses to re-parent a foreign edition ID that already belongs
-// to another book; callers can treat ok=false as a benign skipped conflict.
+// provider, or fills empty fields on the existing row for the same book. On a
+// successful insert or update, e is hydrated with the stored row so callers
+// that promote edition fields use the persisted values. It deliberately refuses
+// to re-parent a foreign edition ID that already belongs to another book;
+// callers can treat ok=false as a benign skipped conflict.
 func (r *EditionRepo) UpsertMetadata(ctx context.Context, e *models.Edition) (bool, error) {
 	if e == nil || strings.TrimSpace(e.ForeignID) == "" || e.BookID == 0 {
 		return false, nil
@@ -197,16 +199,27 @@ func (r *EditionRepo) UpsertMetadata(ctx context.Context, e *models.Edition) (bo
 		return false, nil
 	}
 
-	var bookID int64
-	row := r.db.QueryRowContext(ctx, "SELECT id, book_id FROM editions WHERE foreign_id = ?", e.ForeignID)
-	if err := row.Scan(&e.ID, &bookID); err != nil {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, foreign_id, book_id, title, isbn_13, isbn_10, asin, publisher,
+		       publish_date, format, num_pages, language, image_url, is_ebook,
+		       edition_info, monitored, created_at, updated_at
+		FROM editions WHERE foreign_id = ?`, e.ForeignID)
+	var stored models.Edition
+	var isStoredEbook, storedMonitored int
+	if err := row.Scan(&stored.ID, &stored.ForeignID, &stored.BookID, &stored.Title,
+		&stored.ISBN13, &stored.ISBN10, &stored.ASIN, &stored.Publisher,
+		&stored.PublishDate, &stored.Format, &stored.NumPages, &stored.Language,
+		&stored.ImageURL, &isStoredEbook, &stored.EditionInfo, &storedMonitored,
+		&stored.CreatedAt, &stored.UpdatedAt); err != nil {
 		return false, fmt.Errorf("lookup metadata edition %s: %w", e.ForeignID, err)
 	}
-	if bookID != e.BookID {
+	stored.IsEbook = isStoredEbook == 1
+	stored.Monitored = storedMonitored == 1
+	if stored.BookID != e.BookID {
 		e.ID = 0
 		return false, nil
 	}
-	e.UpdatedAt = now
+	*e = stored
 	return true, nil
 }
 
