@@ -418,7 +418,8 @@ func main() {
 		WithSeriesRepo(seriesRepo).
 		WithTokenSource(func(ctx context.Context) string {
 			return api.GetHardcoverAPIToken(ctx, settingsRepo)
-		})
+		}).
+		WithEditionHydration(editionRepo, metaAgg)
 	sched.WithHardcoverSyncer(hcSyncer)
 	sched.WithLogRepo(logRepo, cfg.LogRetentionDays)
 
@@ -468,9 +469,16 @@ func main() {
 	userMgmtHandler := api.NewUserManagementHandler(userRepo).
 		WithLocalAuthEnabled(cfg.LocalAuthEnabled)
 	searchHandler := api.NewSearchHandler(metaAgg)
-	authorHandler := api.NewAuthorHandler(authorRepo, authorAliasRepo, bookRepo, seriesRepo, metaAgg, settingsRepo, metadataProfileRepo, sched).WithFinder(importScanner)
+	authorHandler := api.NewAuthorHandler(authorRepo, authorAliasRepo, bookRepo, seriesRepo, metaAgg, settingsRepo, metadataProfileRepo, sched).
+		WithFinder(importScanner).
+		WithEditionHydration(editionRepo)
 	authorAliasHandler := api.NewAuthorAliasHandler(authorRepo, authorAliasRepo)
-	bookHandler := api.NewBookHandler(bookRepo, metaAgg, historyRepo, sched).WithSettings(settingsRepo).WithDownloads(downloadRepo).WithAuthors(authorRepo).WithSeries(seriesRepo)
+	bookHandler := api.NewBookHandler(bookRepo, metaAgg, historyRepo, sched).
+		WithSettings(settingsRepo).
+		WithDownloads(downloadRepo).
+		WithAuthors(authorRepo).
+		WithSeries(seriesRepo).
+		WithEditionHydration(editionRepo)
 	indexerHandler := api.NewIndexerHandler(indexerRepo, bookRepo, authorRepo, metadataProfileRepo, idxSearcher, settingsRepo, blocklistRepo).WithAliases(authorAliasRepo)
 	downloadHealth := downloader.NewHealthStore().WithNotifier(notif)
 	if clients, err := dlClientRepo.List(ctxBoot); err == nil {
@@ -515,7 +523,8 @@ func main() {
 	settingsHandler := api.NewSettingsHandler(settingsRepo)
 	seriesHandler := api.NewSeriesHandler(seriesRepo, bookRepo, authorRepo, metaAgg, sched).
 		WithHardcoverFeatureSettings(settingsRepo, cfg.EnhancedHardcoverAPI).
-		WithFinder(importScanner)
+		WithFinder(importScanner).
+		WithEditionHydration(editionRepo)
 	tagHandler := api.NewTagHandler(tagRepo)
 	importListHandler := api.NewImportListHandler(importListRepo, settingsRepo, hcSyncer)
 	metadataProfileHandler := api.NewMetadataProfileHandler(metadataProfileRepo)
@@ -548,6 +557,7 @@ func main() {
 	)
 	recHandler := api.NewRecommendationHandler(recRepo, recEngine, authorRepo, bookRepo, sched).
 		WithFinder(seriesRepo, importScanner).
+		WithEditionHydration(editionRepo, metaAgg).
 		WithAppContext(appCtx)
 	imageProxyHandler := api.NewImageProxyHandler(cfg.DataDir)
 	imageProxyHandler.StartEviction(24 * time.Hour)

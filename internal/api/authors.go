@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vavallee/bindery/internal/auth"
+	"github.com/vavallee/bindery/internal/bookhydrate"
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/metadata"
@@ -42,6 +43,9 @@ type AuthorHandler struct {
 	profiles *db.MetadataProfileRepo
 	searcher BookSearcher
 	finder   LibraryFinder
+	editions *db.EditionRepo
+
+	editionFetcher bookhydrate.EditionFetcher
 }
 
 func NewAuthorHandler(authors *db.AuthorRepo, aliases *db.AuthorAliasRepo, books *db.BookRepo, series *db.SeriesRepo, meta *metadata.Aggregator, settings *db.SettingsRepo, profiles *db.MetadataProfileRepo, searcher BookSearcher) *AuthorHandler {
@@ -54,6 +58,37 @@ func NewAuthorHandler(authors *db.AuthorRepo, aliases *db.AuthorAliasRepo, books
 func (h *AuthorHandler) WithFinder(f LibraryFinder) *AuthorHandler {
 	h.finder = f
 	return h
+}
+
+// WithEditionHydration wires edition persistence for supplemental Hardcover
+// books created while syncing author catalogues.
+func (h *AuthorHandler) WithEditionHydration(editions *db.EditionRepo) *AuthorHandler {
+	h.editions = editions
+	return h
+}
+
+// WithEditionFetcher overrides the edition fetcher used by tests.
+func (h *AuthorHandler) WithEditionFetcher(fetcher bookhydrate.EditionFetcher) *AuthorHandler {
+	h.editionFetcher = fetcher
+	return h
+}
+
+func (h *AuthorHandler) hydrateHardcoverEditions(ctx context.Context, book *models.Book) {
+	if book == nil || h.editions == nil {
+		return
+	}
+	fetcher := h.editionFetcher
+	if fetcher == nil && h.meta != nil {
+		fetcher = h.meta.GetEditions
+	}
+	bookhydrate.HydrateHardcoverEditions(ctx, bookhydrate.Options{
+		Book:          book,
+		Provider:      book.MetadataProvider,
+		Editions:      h.editions,
+		Books:         h.books,
+		FetchEditions: fetcher,
+		Enricher:      h.meta,
+	})
 }
 
 func (h *AuthorHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -1203,6 +1238,7 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool,
 			slog.Warn("failed to create book", "title", b.Title, "error", err)
 			continue
 		}
+		h.hydrateHardcoverEditions(ctx, &b)
 		added++
 
 		if fileFound := handleNewWantedBook(ctx, h.books, h.series, h.finder, b, author.Name); fileFound {

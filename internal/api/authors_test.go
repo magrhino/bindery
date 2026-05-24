@@ -82,6 +82,12 @@ type stubMetaProvider struct {
 	// returned by Name() — required when a test exercises a code path
 	// that routes by prefix via the aggregator (e.g. "dnb" for DNB IDs).
 	name string
+	// editionsByBook lets tests exercise metadata edition hydration.
+	editionsByBook map[string][]models.Edition
+	editionCalls   []string
+	// authorWorksByName lets tests act as an author-scoped supplemental
+	// provider such as Hardcover.
+	authorWorksByName []models.Book
 }
 
 func (p *stubMetaProvider) Name() string {
@@ -107,7 +113,11 @@ func (p *stubMetaProvider) GetBook(_ context.Context, fid string) (*models.Book,
 	}
 	return nil, nil
 }
-func (p *stubMetaProvider) GetEditions(_ context.Context, _ string) ([]models.Edition, error) {
+func (p *stubMetaProvider) GetEditions(_ context.Context, fid string) ([]models.Edition, error) {
+	p.editionCalls = append(p.editionCalls, fid)
+	if p.editionsByBook != nil {
+		return p.editionsByBook[fid], nil
+	}
 	return nil, nil
 }
 func (p *stubMetaProvider) GetBookByISBN(_ context.Context, _ string) (*models.Book, error) {
@@ -117,6 +127,10 @@ func (p *stubMetaProvider) GetBookByISBN(_ context.Context, _ string) (*models.B
 // GetAuthorWorks satisfies the worksProvider sub-interface used by Aggregator.
 func (p *stubMetaProvider) GetAuthorWorks(_ context.Context, _ string) ([]models.Book, error) {
 	return p.works, nil
+}
+
+func (p *stubMetaProvider) GetAuthorWorksByName(_ context.Context, _ string) ([]models.Book, error) {
+	return p.authorWorksByName, nil
 }
 
 // TestDeleteAuthor_WithDeleteFiles verifies the ?deleteFiles=true branch
@@ -603,6 +617,99 @@ func TestFetchAuthorBooks_AppliesAuthorMonitorModes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFetchAuthorBooksHydratesOnlySupplementalHardcoverBooks(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	editionRepo := db.NewEditionRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+	ctx := context.Background()
+	author := &models.Author{
+		ForeignID:        "OL-HYDRATE-A",
+		Name:             "Author",
+		SortName:         "Author",
+		MetadataProvider: "openlibrary",
+		Monitored:        true,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+
+	primary := &stubMetaProvider{
+		name: "openlibrary",
+		works: []models.Book{{
+			ForeignID:        "OL-HYDRATE-W",
+			Title:            "Primary Book",
+			SortTitle:        "Primary Book",
+			Status:           models.BookStatusWanted,
+			Genres:           []string{},
+			MetadataProvider: "openlibrary",
+		}},
+	}
+	audioASIN := "B000AUTHOR"
+	hardcover := &stubMetaProvider{
+		name: "hardcover",
+		authorWorksByName: []models.Book{{
+			ForeignID:        "hc:audio-book",
+			Title:            "Audio Book",
+			SortTitle:        "Audio Book",
+			Status:           models.BookStatusWanted,
+			Genres:           []string{},
+			MetadataProvider: "hardcover",
+			MediaType:        models.MediaTypeAudiobook,
+		}},
+		editionsByBook: map[string][]models.Edition{
+			"hc:audio-book": {{
+				ForeignID: "hc:audio-book-edition",
+				Title:     "Audio Book",
+				ASIN:      &audioASIN,
+				Format:    "Audiobook",
+				Monitored: true,
+			}},
+		},
+	}
+	agg := metadata.NewAggregator(primary, hardcover).WithAudnexClient(nil)
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, agg, nil, profileRepo, nil).
+		WithEditionHydration(editionRepo)
+	h.FetchAuthorBooks(author, false, "")
+
+	primaryBook, err := bookRepo.GetByForeignID(ctx, "OL-HYDRATE-W")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if primaryBook == nil {
+		t.Fatal("expected primary book")
+	}
+	if primaryBook.ASIN != "" {
+		t.Fatalf("primary OpenLibrary book was unexpectedly hydrated: %+v", primaryBook)
+	}
+	hardcoverBook, err := bookRepo.GetByForeignID(ctx, "hc:audio-book")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hardcoverBook == nil || hardcoverBook.ASIN != audioASIN {
+		t.Fatalf("hardcover book was not hydrated: %+v", hardcoverBook)
+	}
+	if len(primary.editionCalls) != 0 {
+		t.Fatalf("primary provider edition calls = %+v", primary.editionCalls)
+	}
+	if len(hardcover.editionCalls) != 1 || hardcover.editionCalls[0] != "hc:audio-book" {
+		t.Fatalf("hardcover edition calls = %+v", hardcover.editionCalls)
+	}
+	editions, err := editionRepo.ListByBook(ctx, hardcoverBook.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(editions) != 1 || editions[0].ForeignID != "hc:audio-book-edition" {
+		t.Fatalf("expected hydrated edition, got %+v", editions)
 	}
 }
 
