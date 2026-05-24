@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, Author, AuthorMonitorMode, MediaType, MetadataProfile, RootFolder } from '../api/client'
+import { api, AddAuthorRequest, Author, AuthorMonitorMode, MediaType, MetadataProfile, RootFolder } from '../api/client'
 import { splitAuthorSearchResults } from './addAuthorTitleGuard'
 
 interface Props {
@@ -43,6 +43,7 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
   const [mediaType, setMediaType] = useState<MediaType>('ebook')
   const [monitorMode, setMonitorMode] = useState<AuthorMonitorMode>(DEFAULT_MONITOR_MODE)
   const [monitorLatestCount, setMonitorLatestCount] = useState(DEFAULT_MONITOR_LATEST_COUNT)
+  const [monitorOptionsChanged, setMonitorOptionsChanged] = useState(false)
 
   useEffect(() => {
     api.listMetadataProfiles().then(ps => {
@@ -104,17 +105,20 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
   const addAuthor = async (author: Author) => {
     setAdding(author.foreignAuthorId)
     try {
-      await api.addAuthor({
+      const request: AddAuthorRequest = {
         foreignAuthorId: author.foreignAuthorId,
         authorName: author.authorName,
         monitored: true,
-        monitorMode,
-        monitorLatestCount,
         searchOnAdd,
         metadataProfileId: profileId,
         rootFolderId: rootFolderId,
         mediaType,
-      })
+      }
+      if (monitorOptionsChanged) {
+        request.monitorMode = monitorMode
+        request.monitorLatestCount = monitorLatestCount
+      }
+      await api.addAuthor(request)
       try {
         localStorage.setItem(AUTO_GRAB_STORAGE_KEY, String(searchOnAdd))
       } catch {
@@ -185,7 +189,10 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
             </label>
             <select
               value={monitorMode}
-              onChange={e => setMonitorMode(e.target.value as AuthorMonitorMode)}
+              onChange={e => {
+                setMonitorMode(e.target.value as AuthorMonitorMode)
+                setMonitorOptionsChanged(true)
+              }}
               className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
             >
               <option value="all">{t('monitorMode.all', 'All books')}</option>
@@ -203,7 +210,10 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
                 type="number"
                 min={1}
                 value={monitorLatestCount}
-                onChange={e => setMonitorLatestCount(Math.max(1, Number(e.target.value) || 1))}
+                onChange={e => {
+                  setMonitorLatestCount(Math.max(1, Number(e.target.value) || 1))
+                  setMonitorOptionsChanged(true)
+                }}
                 className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
               />
             </div>
