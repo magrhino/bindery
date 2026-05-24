@@ -34,16 +34,17 @@ var (
 const authorAutoSearchConcurrency = 4
 
 type AuthorHandler struct {
-	authors  *db.AuthorRepo
-	aliases  *db.AuthorAliasRepo
-	books    *db.BookRepo
-	series   *db.SeriesRepo
-	meta     *metadata.Aggregator
-	settings *db.SettingsRepo
-	profiles *db.MetadataProfileRepo
-	searcher BookSearcher
-	finder   LibraryFinder
-	editions *db.EditionRepo
+	authors                     *db.AuthorRepo
+	aliases                     *db.AuthorAliasRepo
+	books                       *db.BookRepo
+	series                      *db.SeriesRepo
+	meta                        *metadata.Aggregator
+	settings                    *db.SettingsRepo
+	profiles                    *db.MetadataProfileRepo
+	searcher                    BookSearcher
+	finder                      LibraryFinder
+	editions                    *db.EditionRepo
+	enhancedHardcoverEnvEnabled bool
 
 	editionFetcher bookhydrate.EditionFetcher
 }
@@ -73,21 +74,60 @@ func (h *AuthorHandler) WithEditionFetcher(fetcher bookhydrate.EditionFetcher) *
 	return h
 }
 
+// WithHardcoverFeatureSettings wires the enhanced Hardcover feature gate used
+// when a primary-provider book has only a supplemental Hardcover match.
+func (h *AuthorHandler) WithHardcoverFeatureSettings(settings *db.SettingsRepo, envEnabled bool) *AuthorHandler {
+	h.settings = settings
+	h.enhancedHardcoverEnvEnabled = envEnabled
+	return h
+}
+
+func (h *AuthorHandler) enhancedHardcoverEnabled(ctx context.Context) bool {
+	if h.settings == nil {
+		return h.enhancedHardcoverEnvEnabled
+	}
+	return HardcoverFeatureStateFor(ctx, h.settings, h.enhancedHardcoverEnvEnabled).EnhancedHardcoverAPI
+}
+
 func (h *AuthorHandler) hydrateHardcoverEditions(ctx context.Context, book *models.Book) {
+	h.hydrateHardcoverEditionsFrom(ctx, book, "")
+}
+
+func (h *AuthorHandler) hydrateMatchedHardcoverEditions(ctx context.Context, book *models.Book, hardcoverForeignID string) {
+	h.hydrateHardcoverEditionsFrom(ctx, book, hardcoverForeignID)
+}
+
+func (h *AuthorHandler) hydrateHardcoverEditionsFrom(ctx context.Context, book *models.Book, hardcoverForeignID string) {
 	if book == nil || h.editions == nil {
 		return
 	}
+	hardcoverForeignID = strings.TrimSpace(hardcoverForeignID)
+	if hardcoverForeignID == "" && !bookhydrate.IsHardcoverBook(book, book.MetadataProvider) {
+		hardcoverForeignID = strings.TrimSpace(book.HardcoverForeignID)
+	}
+	if hardcoverForeignID != "" {
+		if !strings.HasPrefix(hardcoverForeignID, "hc:") || !h.enhancedHardcoverEnabled(ctx) {
+			return
+		}
+	}
 	fetcher := h.editionFetcher
 	if fetcher == nil && h.meta != nil {
-		fetcher = h.meta.GetEditions
+		if hardcoverForeignID != "" {
+			fetcher = func(ctx context.Context, foreignID string) ([]models.Edition, error) {
+				return h.meta.GetEditionsFromProvider(ctx, "hardcover", foreignID)
+			}
+		} else {
+			fetcher = h.meta.GetEditions
+		}
 	}
 	bookhydrate.HydrateHardcoverEditions(ctx, bookhydrate.Options{
-		Book:          book,
-		Provider:      book.MetadataProvider,
-		Editions:      h.editions,
-		Books:         h.books,
-		FetchEditions: fetcher,
-		Enricher:      h.meta,
+		Book:              book,
+		Provider:          book.MetadataProvider,
+		ProviderForeignID: hardcoverForeignID,
+		Editions:          h.editions,
+		Books:             h.books,
+		FetchEditions:     fetcher,
+		Enricher:          h.meta,
 	})
 }
 
@@ -1188,6 +1228,7 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool,
 		//     truly redundant and is silently skipped (no format gain).
 		dedupKey := indexer.NormalizeTitleForDedup(b.Title)
 		if existing := seenTitles[dedupKey]; existing != nil {
+			hydrateExistingFromMatchedHardcover := false
 			switch {
 			case strings.HasPrefix(existing.ForeignID, "calibre:"):
 				// Upgrade calibre stub to real OL foreign_id.
@@ -1201,6 +1242,8 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool,
 				}
 				if err := h.books.Update(ctx, existing); err != nil {
 					slog.Warn("authors: update during dedup", "error", err, "book_id", existing.ID)
+				} else if existing.WantsAudiobook() {
+					hydrateExistingFromMatchedHardcover = true
 				}
 			case canUpgradeToBoth(existing.MediaType, b.MediaType):
 				// One Work is ebook, the other is audiobook — merge into a single
@@ -1214,6 +1257,7 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool,
 					slog.Warn("failed to upgrade book to dual-format", "title", existing.Title, "error", err)
 				} else {
 					slog.Debug("upgraded book to dual-format", "title", existing.Title, "foreignId", b.ForeignID)
+					hydrateExistingFromMatchedHardcover = true
 				}
 			default:
 				// Same media type duplicate — just refresh ratings if we have better data.
@@ -1224,6 +1268,10 @@ func (h *AuthorHandler) FetchAuthorBooks(author *models.Author, autoSearch bool,
 						slog.Warn("authors: update during dedup", "error", err, "book_id", existing.ID)
 					}
 				}
+				hydrateExistingFromMatchedHardcover = existing.WantsAudiobook()
+			}
+			if hydrateExistingFromMatchedHardcover {
+				h.hydrateMatchedHardcoverEditions(ctx, existing, b.HardcoverForeignID)
 			}
 			continue
 		}

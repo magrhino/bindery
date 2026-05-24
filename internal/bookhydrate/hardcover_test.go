@@ -319,6 +319,48 @@ func TestHydrateHardcoverEditionsDoesNotMutateFetchedEditions(t *testing.T) {
 	}
 }
 
+func TestHydrateHardcoverEditionsUsesProviderForeignID(t *testing.T) {
+	books, editions, book, ctx := newHydrateBook(t, "OL123W", "openlibrary", models.MediaTypeAudiobook)
+	audioASIN := "B222222222"
+	var gotForeignID string
+
+	result := HydrateHardcoverEditions(ctx, Options{
+		Book:              book,
+		Provider:          "openlibrary",
+		ProviderForeignID: "hc:matched-book",
+		Editions:          editions,
+		Books:             books,
+		FetchEditions: func(_ context.Context, foreignID string) ([]models.Edition, error) {
+			gotForeignID = foreignID
+			return []models.Edition{{
+				ForeignID: "hc:matched-audio",
+				ASIN:      &audioASIN,
+				Format:    "Audiobook",
+				Monitored: true,
+			}}, nil
+		},
+	})
+	if result.Err != nil {
+		t.Fatalf("hydrate err = %v", result.Err)
+	}
+	if gotForeignID != "hc:matched-book" {
+		t.Fatalf("fetch foreign ID = %q, want hc:matched-book", gotForeignID)
+	}
+	if !result.ASINPromoted || !result.BookUpdated {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if book.ForeignID != "OL123W" || book.ASIN != audioASIN {
+		t.Fatalf("book identity or ASIN changed unexpectedly: %+v", book)
+	}
+	list, err := editions.ListByBook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ForeignID != "hc:matched-audio" {
+		t.Fatalf("expected matched edition, got %+v", list)
+	}
+}
+
 func TestHydrateHardcoverEditionsSkipsNonHardcoverBook(t *testing.T) {
 	books, editions, book, ctx := newHydrateBook(t, "OL123W", "openlibrary", models.MediaTypeAudiobook)
 	calls := 0

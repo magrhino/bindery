@@ -471,6 +471,7 @@ func main() {
 	searchHandler := api.NewSearchHandler(metaAgg)
 	authorHandler := api.NewAuthorHandler(authorRepo, authorAliasRepo, bookRepo, seriesRepo, metaAgg, settingsRepo, metadataProfileRepo, sched).
 		WithFinder(importScanner).
+		WithHardcoverFeatureSettings(settingsRepo, cfg.EnhancedHardcoverAPI).
 		WithEditionHydration(editionRepo)
 	authorAliasHandler := api.NewAuthorAliasHandler(authorRepo, authorAliasRepo)
 	bookHandler := api.NewBookHandler(bookRepo, metaAgg, historyRepo, sched).

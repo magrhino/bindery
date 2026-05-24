@@ -31,12 +31,13 @@ type AudiobookEnricher interface {
 
 // Options describes a single Hardcover edition hydration attempt.
 type Options struct {
-	Book          *models.Book
-	Provider      string
-	Editions      EditionUpserter
-	Books         BookUpdater
-	FetchEditions EditionFetcher
-	Enricher      AudiobookEnricher
+	Book              *models.Book
+	Provider          string
+	ProviderForeignID string
+	Editions          EditionUpserter
+	Books             BookUpdater
+	FetchEditions     EditionFetcher
+	Enricher          AudiobookEnricher
 }
 
 // Result summarizes a best-effort hydration attempt.
@@ -72,17 +73,21 @@ func HydrateHardcoverEditions(ctx context.Context, opts Options) Result {
 	if book == nil || book.ID == 0 {
 		return result
 	}
-	if !IsHardcoverBook(book, opts.Provider) {
+	editionForeignID := strings.TrimSpace(opts.ProviderForeignID)
+	if editionForeignID == "" {
+		editionForeignID = book.ForeignID
+	}
+	if !IsHardcoverBook(book, opts.Provider) && !strings.HasPrefix(editionForeignID, "hc:") {
 		return result
 	}
 	if opts.Editions == nil || opts.FetchEditions == nil {
 		return result
 	}
 
-	editions, err := opts.FetchEditions(ctx, book.ForeignID)
+	editions, err := opts.FetchEditions(ctx, editionForeignID)
 	if err != nil {
 		result.Err = err
-		slog.Warn("hardcover edition hydration failed", "bookID", book.ID, "foreignID", book.ForeignID, "error", err)
+		slog.Warn("hardcover edition hydration failed", "bookID", book.ID, "foreignID", editionForeignID, "bookForeignID", book.ForeignID, "error", err)
 		return result
 	}
 	result.Fetched = len(editions)
@@ -99,11 +104,11 @@ func HydrateHardcoverEditions(ctx context.Context, opts Options) Result {
 			if result.Err == nil {
 				result.Err = err
 			}
-			slog.Warn("hardcover edition upsert failed", "bookID", book.ID, "foreignID", book.ForeignID, "editionID", edition.ForeignID, "error", err)
+			slog.Warn("hardcover edition upsert failed", "bookID", book.ID, "foreignID", editionForeignID, "bookForeignID", book.ForeignID, "editionID", edition.ForeignID, "error", err)
 			continue
 		}
 		if !ok {
-			slog.Debug("hardcover edition skipped because it belongs to another book", "bookID", book.ID, "foreignID", book.ForeignID, "editionID", edition.ForeignID)
+			slog.Debug("hardcover edition skipped because it belongs to another book", "bookID", book.ID, "foreignID", editionForeignID, "bookForeignID", book.ForeignID, "editionID", edition.ForeignID)
 			continue
 		}
 		result.Upserted++
