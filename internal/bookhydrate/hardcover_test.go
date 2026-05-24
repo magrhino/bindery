@@ -286,6 +286,39 @@ func TestHydrateHardcoverEditionsDoesNotPromoteNonAudioASIN(t *testing.T) {
 	}
 }
 
+func TestHydrateHardcoverEditionsDoesNotMutateFetchedEditions(t *testing.T) {
+	books, editions, book, ctx := newHydrateBook(t, "hc:hydrated-book", "hardcover", models.MediaTypeAudiobook)
+	audioASIN := "B111111111"
+	fetched := []models.Edition{{
+		ForeignID: "hc:audio",
+		ASIN:      &audioASIN,
+		Format:    "Audiobook",
+		Monitored: true,
+	}}
+
+	result := HydrateHardcoverEditions(ctx, Options{
+		Book:     book,
+		Provider: "hardcover",
+		Editions: editions,
+		Books:    books,
+		FetchEditions: func(context.Context, string) ([]models.Edition, error) {
+			return fetched, nil
+		},
+	})
+	if result.Err != nil {
+		t.Fatalf("hydrate err = %v", result.Err)
+	}
+	if result.Upserted != 1 || !result.ASINPromoted {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if fetched[0].BookID != 0 {
+		t.Fatalf("fetched edition BookID mutated to %d", fetched[0].BookID)
+	}
+	if fetched[0].Title != "" {
+		t.Fatalf("fetched edition Title mutated to %q", fetched[0].Title)
+	}
+}
+
 func TestHydrateHardcoverEditionsSkipsNonHardcoverBook(t *testing.T) {
 	books, editions, book, ctx := newHydrateBook(t, "OL123W", "openlibrary", models.MediaTypeAudiobook)
 	calls := 0

@@ -89,25 +89,26 @@ func HydrateHardcoverEditions(ctx context.Context, opts Options) Result {
 
 	acceptedAudioEditions := make([]models.Edition, 0, len(editions))
 	for i := range editions {
-		editions[i].BookID = book.ID
-		if strings.TrimSpace(editions[i].Title) == "" {
-			editions[i].Title = book.Title
+		edition := editions[i]
+		edition.BookID = book.ID
+		if strings.TrimSpace(edition.Title) == "" {
+			edition.Title = book.Title
 		}
-		ok, err := opts.Editions.UpsertMetadata(ctx, &editions[i])
+		ok, err := opts.Editions.UpsertMetadata(ctx, &edition)
 		if err != nil {
 			if result.Err == nil {
 				result.Err = err
 			}
-			slog.Warn("hardcover edition upsert failed", "bookID", book.ID, "foreignID", book.ForeignID, "editionID", editions[i].ForeignID, "error", err)
+			slog.Warn("hardcover edition upsert failed", "bookID", book.ID, "foreignID", book.ForeignID, "editionID", edition.ForeignID, "error", err)
 			continue
 		}
 		if !ok {
-			slog.Debug("hardcover edition skipped because it belongs to another book", "bookID", book.ID, "foreignID", book.ForeignID, "editionID", editions[i].ForeignID)
+			slog.Debug("hardcover edition skipped because it belongs to another book", "bookID", book.ID, "foreignID", book.ForeignID, "editionID", edition.ForeignID)
 			continue
 		}
 		result.Upserted++
-		if isLikelyAudioEdition(editions[i]) {
-			acceptedAudioEditions = append(acceptedAudioEditions, editions[i])
+		if isLikelyAudioEdition(edition) {
+			acceptedAudioEditions = append(acceptedAudioEditions, edition)
 		}
 	}
 
