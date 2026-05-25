@@ -29,8 +29,11 @@ const (
 )
 
 // validTransitions defines which state transitions are allowed.
+// StateGrabbed includes StateCompleted for the 409 duplicate-add case: when a
+// torrent is re-grabbed and qBittorrent already holds it at 100%, Bindery
+// skips the downloading phase and goes straight to import (#769).
 var validTransitions = map[DownloadState][]DownloadState{
-	StateGrabbed:       {StateDownloading, StateFailed},
+	StateGrabbed:       {StateDownloading, StateCompleted, StateFailed},
 	StateDownloading:   {StateCompleted, StateFailed},
 	StateCompleted:     {StateImportPending, StateImportFailed},
 	StateImportPending: {StateImporting, StateImportFailed, StateImportExternal},
