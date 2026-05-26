@@ -1963,8 +1963,90 @@ func TestRelinkUpstream_RelinksPlaceholderAuthorUsingInitialsFallback(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(aliases) != 1 || aliases[0].Name != "J. R. R. Tolkien" {
-		t.Fatalf("aliases = %+v, want original placeholder spelling", aliases)
+	if len(aliases) != 1 || aliases[0].Name != "J. R. R. Tolkien" || aliases[0].SourceOLID != "abs:author:lib-books:author-tolkien" {
+		t.Fatalf("aliases = %+v, want original placeholder spelling with previous foreign id", aliases)
+	}
+}
+
+func TestRelinkUpstream_PreservesNonNormalizedPreviousNameAlias(t *testing.T) {
+	fixture := newRelinkUpstreamFixture(t, &searchableAuthorProvider{
+		authors: map[string]*models.Author{
+			"OL398175A": {
+				ForeignID:        "OL398175A",
+				Name:             "Donald Trump",
+				SortName:         "Trump, Donald",
+				MetadataProvider: "openlibrary",
+			},
+		},
+	})
+
+	existing := fixture.createAuthor(t, &models.Author{
+		ForeignID:        "abs:author:lib-books:donald-j-trump",
+		Name:             "Donald J. Trump",
+		SortName:         "Trump, Donald J.",
+		MetadataProvider: "audiobookshelf",
+		Monitored:        true,
+	})
+	rec := fixture.relinkToCandidate(t, existing.ID, "OL398175A", "Donald Trump")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	got, err := fixture.authors.GetByID(fixture.ctx, existing.ID)
+	if err != nil || got == nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ForeignID != "OL398175A" || got.Name != "Donald Trump" {
+		t.Fatalf("author = %+v, want relinked Donald Trump", got)
+	}
+	aliases, err := fixture.aliases.ListByAuthor(fixture.ctx, got.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliases) != 1 || aliases[0].AuthorID != got.ID || aliases[0].Name != "Donald J. Trump" {
+		t.Fatalf("aliases = %+v, want previous name pointing at relinked author", aliases)
+	}
+	if aliases[0].SourceOLID != "abs:author:lib-books:donald-j-trump" {
+		t.Fatalf("alias sourceOlId = %q, want previous foreign id", aliases[0].SourceOLID)
+	}
+}
+
+func TestRelinkUpstream_PreviousNameAliasFallsBackToNewForeignID(t *testing.T) {
+	fixture := newRelinkUpstreamFixture(t, &searchableAuthorProvider{
+		authors: map[string]*models.Author{
+			"OL-CANON": {
+				ForeignID:        "OL-CANON",
+				Name:             "Canonical Author",
+				SortName:         "Author, Canonical",
+				MetadataProvider: "openlibrary",
+			},
+		},
+	})
+
+	existing := fixture.createAuthor(t, &models.Author{
+		Name:             "Placeholder Author",
+		SortName:         "Author, Placeholder",
+		MetadataProvider: "audiobookshelf",
+		Monitored:        true,
+	})
+	rec := fixture.relinkToCandidate(t, existing.ID, "OL-CANON", "Canonical Author")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	got, err := fixture.authors.GetByID(fixture.ctx, existing.ID)
+	if err != nil || got == nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	aliases, err := fixture.aliases.ListByAuthor(fixture.ctx, got.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliases) != 1 || aliases[0].Name != "Placeholder Author" {
+		t.Fatalf("aliases = %+v, want previous name alias", aliases)
+	}
+	if aliases[0].SourceOLID != "OL-CANON" {
+		t.Fatalf("alias sourceOlId = %q, want new upstream foreign id fallback", aliases[0].SourceOLID)
 	}
 }
 
@@ -2012,6 +2094,13 @@ func TestRelinkUpstream_AutomaticUsesPrimaryProviderWhenEnricherAlsoMatches(t *t
 	}
 	if got.ForeignID != "OL13200512A" || got.MetadataProvider != "openlibrary" {
 		t.Fatalf("author = %+v, want primary OpenLibrary relink", got)
+	}
+	aliases, err := fixture.aliases.ListByAuthor(fixture.ctx, got.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliases) != 0 {
+		t.Fatalf("aliases = %+v, want no alias for exact same-name relink", aliases)
 	}
 }
 

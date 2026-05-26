@@ -531,6 +531,7 @@ func (h *AuthorHandler) relinkExistingAuthorToUpstream(ctx context.Context, auth
 		return errors.New("author relink requires local and upstream authors")
 	}
 	oldName := author.Name
+	oldForeignID := strings.TrimSpace(author.ForeignID)
 	if foreignID := strings.TrimSpace(upstream.ForeignID); foreignID != "" {
 		author.ForeignID = foreignID
 	}
@@ -568,7 +569,11 @@ func (h *AuthorHandler) relinkExistingAuthorToUpstream(ctx context.Context, auth
 	if err := h.authors.Update(ctx, author); err != nil {
 		return err
 	}
-	h.recordAuthorCreateAlias(ctx, author, oldName)
+	aliasSource := oldForeignID
+	if aliasSource == "" {
+		aliasSource = strings.TrimSpace(author.ForeignID)
+	}
+	h.recordAuthorRelinkAlias(ctx, author, oldName, aliasSource)
 	h.recordAuthorCreateAlias(ctx, author, requestedName)
 	slog.Info("relinked existing author to upstream metadata", "author", author.Name, "foreignId", author.ForeignID, "previousName", oldName)
 	return nil
@@ -712,6 +717,20 @@ func (h *AuthorHandler) recordAuthorCreateAlias(ctx context.Context, author *mod
 	}
 	if err := h.aliases.Create(ctx, &models.AuthorAlias{AuthorID: author.ID, Name: variant, SourceOLID: author.ForeignID}); err != nil {
 		slog.Debug("author create alias skipped", "author", author.Name, "variant", variant, "error", err)
+	}
+}
+
+func (h *AuthorHandler) recordAuthorRelinkAlias(ctx context.Context, author *models.Author, variant, sourceForeignID string) {
+	if author == nil || h.aliases == nil {
+		return
+	}
+	variant = strings.TrimSpace(variant)
+	if variant == "" || strings.EqualFold(strings.TrimSpace(author.Name), variant) {
+		return
+	}
+	sourceForeignID = strings.TrimSpace(sourceForeignID)
+	if err := h.aliases.Create(ctx, &models.AuthorAlias{AuthorID: author.ID, Name: variant, SourceOLID: sourceForeignID}); err != nil {
+		slog.Debug("author relink alias skipped", "author", author.Name, "variant", variant, "sourceForeignID", sourceForeignID, "error", err)
 	}
 }
 
