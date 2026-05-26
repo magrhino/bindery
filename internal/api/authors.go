@@ -917,6 +917,7 @@ func (h *AuthorHandler) RelinkUpstream(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		ForeignID string `json:"foreignAuthorId"`
+		Name      string `json:"authorName"`
 	}
 	if r.Body != nil {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
@@ -925,6 +926,7 @@ func (h *AuthorHandler) RelinkUpstream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	req.ForeignID = strings.TrimSpace(req.ForeignID)
+	req.Name = strings.TrimSpace(req.Name)
 
 	author, err := h.authors.GetByID(r.Context(), id)
 	if err != nil {
@@ -945,7 +947,7 @@ func (h *AuthorHandler) RelinkUpstream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upstream, err := h.resolveRelinkUpstreamAuthor(r.Context(), author.Name, req.ForeignID)
+	upstream, err := h.resolveRelinkUpstreamAuthor(r.Context(), author.Name, req.ForeignID, req.Name)
 	switch {
 	case err == nil:
 	case errors.Is(err, errNoMetadataAggregator):
@@ -1629,7 +1631,7 @@ func dateOnly(t time.Time) time.Time {
 	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
 
-func (h *AuthorHandler) resolveRelinkUpstreamAuthor(ctx context.Context, name, foreignID string) (*models.Author, error) {
+func (h *AuthorHandler) resolveRelinkUpstreamAuthor(ctx context.Context, name, foreignID, candidateName string) (*models.Author, error) {
 	if h.meta == nil {
 		return nil, errNoMetadataAggregator
 	}
@@ -1638,13 +1640,40 @@ func (h *AuthorHandler) resolveRelinkUpstreamAuthor(ctx context.Context, name, f
 		return h.lookupUpstreamAuthorByName(ctx, name)
 	}
 	upstream, err := h.meta.GetAuthor(ctx, foreignID)
+	if err == nil && upstream != nil {
+		return upstream, nil
+	}
+	candidate, fallbackErr := h.lookupRelinkCandidateByForeignID(ctx, foreignID, candidateName)
+	if fallbackErr == nil {
+		return candidate, nil
+	}
+	if strings.TrimSpace(candidateName) != "" {
+		return nil, fallbackErr
+	}
 	if err != nil {
 		return nil, err
 	}
-	if upstream == nil {
+	return nil, errNoMetadataMatch
+}
+
+func (h *AuthorHandler) lookupRelinkCandidateByForeignID(ctx context.Context, foreignID, candidateName string) (*models.Author, error) {
+	foreignID = strings.TrimSpace(foreignID)
+	candidateName = strings.TrimSpace(candidateName)
+	if foreignID == "" || candidateName == "" {
 		return nil, errNoMetadataMatch
 	}
-	return upstream, nil
+	results, err := h.meta.SearchAuthorCandidates(ctx, candidateName)
+	if err != nil {
+		return nil, err
+	}
+	for idx := range results {
+		if strings.TrimSpace(results[idx].ForeignID) != foreignID {
+			continue
+		}
+		copy := results[idx]
+		return &copy, nil
+	}
+	return nil, errNoMetadataMatch
 }
 
 func (h *AuthorHandler) lookupUpstreamAuthorByName(ctx context.Context, name string) (*models.Author, error) {
@@ -1664,7 +1693,7 @@ func (h *AuthorHandler) lookupUpstreamAuthorByName(ctx context.Context, name str
 	var match *models.Author
 	matchedQuery := ""
 	for _, query := range queries {
-		results, err := h.meta.SearchAuthorCandidates(ctx, query)
+		results, err := h.meta.SearchAuthors(ctx, query)
 		if err != nil {
 			return nil, err
 		}

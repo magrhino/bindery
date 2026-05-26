@@ -85,7 +85,10 @@ export default function AuthorMetadataLinkModal({ author, onClose, onLinked }: P
     setError(null)
     setConflict(null)
     try {
-      const updated = await api.relinkAuthorUpstream(author.id, candidate.foreignAuthorId)
+      const updated = await api.relinkAuthorUpstream(author.id, {
+        foreignAuthorId: candidate.foreignAuthorId,
+        authorName: candidate.authorName,
+      })
       onLinked(updated)
       onClose()
     } catch (err) {

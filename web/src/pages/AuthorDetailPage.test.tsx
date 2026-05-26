@@ -1,6 +1,7 @@
+import { useEffect } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import AuthorDetailPage from './AuthorDetailPage'
 import { api } from '../api/client'
 import type { Author, Book } from '../api/client'
@@ -82,13 +83,22 @@ function installLocalStorageMock() {
   Object.defineProperty(window, 'localStorage', { value: storage, configurable: true })
 }
 
-function renderAuthorDetailPage(books: Book[], view: 'grid' | 'table' = 'grid', authorOverride: Partial<Author> = {}, initialPath = '/author/42') {
+function LocationProbe({ onLocation }: { onLocation?: (location: string) => void }) {
+  const location = useLocation()
+  useEffect(() => {
+    onLocation?.(`${location.pathname}${location.search}${location.hash}`)
+  }, [location, onLocation])
+  return null
+}
+
+function renderAuthorDetailPage(books: Book[], view: 'grid' | 'table' = 'grid', authorOverride: Partial<Author> = {}, initialPath = '/author/42', onLocation?: (location: string) => void) {
   localStorage.setItem('bindery.view.author-detail', view)
   vi.mocked(api.getAuthor).mockResolvedValue({ ...author, ...authorOverride })
   vi.mocked(api.listBooks).mockResolvedValue({ items: books, total: books.length, limit: 100, offset: 0 })
 
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
+      <LocationProbe onLocation={onLocation} />
       <Routes>
         <Route path="/author/:id" element={<AuthorDetailPage />} />
       </Routes>
@@ -185,7 +195,60 @@ describe('AuthorDetailPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Link' }))
 
-    await waitFor(() => expect(api.relinkAuthorUpstream).toHaveBeenCalledWith(42, 'hc:emilia-jae'))
+    await waitFor(() => expect(api.relinkAuthorUpstream).toHaveBeenCalledWith(42, {
+      foreignAuthorId: 'hc:emilia-jae',
+      authorName: 'Emilia Jae',
+    }))
+  })
+
+  it('opens link metadata from the query string once and removes the trigger param', async () => {
+    const locations: string[] = []
+    renderAuthorDetailPage([], 'grid', {
+      foreignAuthorId: 'abs:author:library:emilia-jae',
+      authorName: 'Emilia Jae',
+      sortName: 'Jae, Emilia',
+      metadataProvider: 'audiobookshelf',
+    }, '/author/42?linkMetadata=1&view=detail', location => locations.push(location))
+
+    expect(await screen.findByRole('heading', { name: 'Link metadata' })).toBeInTheDocument()
+    await waitFor(() => expect(api.searchAuthorLinkCandidates).toHaveBeenCalledWith(42, 'Emilia Jae'))
+    await waitFor(() => expect(locations[locations.length - 1]).toBe('/author/42?view=detail'))
+  })
+
+  it('does not reopen a query-opened metadata modal after a relink reloads the author', async () => {
+    const sparseAuthor = {
+      foreignAuthorId: 'OL13200512A',
+      authorName: 'Emilia Jae',
+      sortName: 'Jae, Emilia',
+      metadataProvider: 'openlibrary',
+      description: '',
+      imageUrl: '',
+      disambiguation: '',
+      ratingsCount: 0,
+      averageRating: 0,
+    }
+    const dnbAuthor = {
+      ...author,
+      ...sparseAuthor,
+      foreignAuthorId: 'dnb:123456789',
+      metadataProvider: 'dnb',
+      description: 'DNB author record.',
+    }
+    vi.mocked(api.searchAuthorLinkCandidates).mockResolvedValue([dnbAuthor])
+    vi.mocked(api.relinkAuthorUpstream).mockResolvedValue(dnbAuthor)
+    vi.mocked(api.getAuthor).mockResolvedValueOnce({ ...author, ...sparseAuthor }).mockResolvedValue(dnbAuthor)
+
+    renderAuthorDetailPage([], 'grid', sparseAuthor, '/author/42?linkMetadata=1')
+
+    expect(await screen.findByText('DNB')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Link' }))
+
+    await waitFor(() => expect(api.relinkAuthorUpstream).toHaveBeenCalledWith(42, {
+      foreignAuthorId: 'dnb:123456789',
+      authorName: 'Emilia Jae',
+    }))
+    await waitFor(() => expect(api.getAuthor).toHaveBeenCalledTimes(2))
+    expect(screen.queryByRole('heading', { name: 'Link metadata' })).not.toBeInTheDocument()
   })
 
   it('keeps table metadata visible and repeats it in compact title rows', async () => {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1126,6 +1127,7 @@ type searchableAuthorProvider struct {
 	stubMetaProvider
 	searchAuthorsByQuery map[string][]models.Author
 	authors              map[string]*models.Author
+	getAuthorErr         error
 }
 
 func (p *searchableAuthorProvider) SearchAuthors(_ context.Context, query string) ([]models.Author, error) {
@@ -1133,6 +1135,9 @@ func (p *searchableAuthorProvider) SearchAuthors(_ context.Context, query string
 }
 
 func (p *searchableAuthorProvider) GetAuthor(_ context.Context, foreignID string) (*models.Author, error) {
+	if p.getAuthorErr != nil {
+		return nil, p.getAuthorErr
+	}
 	if p.authors == nil {
 		return nil, nil
 	}
@@ -1200,7 +1205,17 @@ func (f *relinkUpstreamFixture) relink(t *testing.T, authorID int64) *httptest.R
 func (f *relinkUpstreamFixture) relinkTo(t *testing.T, authorID int64, foreignID string) *httptest.ResponseRecorder {
 	t.Helper()
 
-	body, _ := json.Marshal(map[string]string{"foreignAuthorId": foreignID})
+	return f.relinkToCandidate(t, authorID, foreignID, "")
+}
+
+func (f *relinkUpstreamFixture) relinkToCandidate(t *testing.T, authorID int64, foreignID, authorName string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	payload := map[string]string{"foreignAuthorId": foreignID}
+	if authorName != "" {
+		payload["authorName"] = authorName
+	}
+	body, _ := json.Marshal(payload)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/author/"+strconv.FormatInt(authorID, 10)+"/relink-upstream", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rctx := chi.NewRouteContext()
@@ -1952,6 +1967,53 @@ func TestRelinkUpstream_RelinksPlaceholderAuthorUsingInitialsFallback(t *testing
 	}
 }
 
+func TestRelinkUpstream_AutomaticUsesPrimaryProviderWhenEnricherAlsoMatches(t *testing.T) {
+	fixture := newRelinkUpstreamFixture(t,
+		&searchableAuthorProvider{
+			stubMetaProvider: stubMetaProvider{name: "openlibrary"},
+			searchAuthorsByQuery: map[string][]models.Author{
+				"Emilia Jae": {{ForeignID: "OL13200512A", Name: "Emilia Jae", MetadataProvider: "openlibrary"}},
+			},
+			authors: map[string]*models.Author{
+				"OL13200512A": {
+					ForeignID:        "OL13200512A",
+					Name:             "Emilia Jae",
+					SortName:         "Jae, Emilia",
+					Description:      "OpenLibrary author.",
+					MetadataProvider: "openlibrary",
+				},
+			},
+		},
+		&searchableAuthorProvider{
+			stubMetaProvider: stubMetaProvider{name: "hardcover"},
+			searchAuthorsByQuery: map[string][]models.Author{
+				"Emilia Jae": {{ForeignID: "hc:emilia-jae", Name: "Emilia Jae", MetadataProvider: "hardcover"}},
+			},
+		},
+	)
+
+	existing := fixture.createAuthor(t, &models.Author{
+		ForeignID:        "abs:author:library:emilia-jae",
+		Name:             "Emilia Jae",
+		SortName:         "Jae, Emilia",
+		MetadataProvider: "audiobookshelf",
+		Monitored:        true,
+	})
+
+	rec := fixture.relink(t, existing.ID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	got, err := fixture.authors.GetByID(fixture.ctx, existing.ID)
+	if err != nil || got == nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ForeignID != "OL13200512A" || got.MetadataProvider != "openlibrary" {
+		t.Fatalf("author = %+v, want primary OpenLibrary relink", got)
+	}
+}
+
 func TestRelinkUpstream_ManualCandidateReplacesSparseCanonicalLink(t *testing.T) {
 	fixture := newRelinkUpstreamFixture(t,
 		&searchableAuthorProvider{stubMetaProvider: stubMetaProvider{name: "openlibrary"}},
@@ -2016,6 +2078,80 @@ func TestRelinkUpstream_ManualCandidateReplacesSparseCanonicalLink(t *testing.T)
 	}
 	if len(books) != 1 || books[0].ID != book.ID {
 		t.Fatalf("books = %+v, want existing book preserved", books)
+	}
+}
+
+func TestRelinkUpstream_ManualCandidateFallsBackToVerifiedSearchResult(t *testing.T) {
+	fixture := newRelinkUpstreamFixture(t,
+		&searchableAuthorProvider{stubMetaProvider: stubMetaProvider{name: "openlibrary"}},
+		&searchableAuthorProvider{
+			stubMetaProvider: stubMetaProvider{name: "dnb"},
+			searchAuthorsByQuery: map[string][]models.Author{
+				"Emilia Jae": {{
+					ForeignID:        "dnb:123456789",
+					Name:             "Emilia Jae",
+					SortName:         "Jae, Emilia",
+					Description:      "DNB author record.",
+					MetadataProvider: "dnb",
+				}},
+			},
+			getAuthorErr: errors.New("dnb does not support author lookup by ID"),
+		},
+	)
+
+	existing := fixture.createAuthor(t, &models.Author{
+		ForeignID:        "OL13200512A",
+		Name:             "Emilia Jae",
+		SortName:         "Jae, Emilia",
+		MetadataProvider: "openlibrary",
+		Monitored:        true,
+	})
+
+	rec := fixture.relinkToCandidate(t, existing.ID, "dnb:123456789", "Emilia Jae")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	got, err := fixture.authors.GetByID(fixture.ctx, existing.ID)
+	if err != nil || got == nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ForeignID != "dnb:123456789" || got.MetadataProvider != "dnb" || got.Description != "DNB author record." {
+		t.Fatalf("author = %+v, want DNB search candidate relink", got)
+	}
+}
+
+func TestRelinkUpstream_ManualCandidateRejectsUnverifiedFallback(t *testing.T) {
+	fixture := newRelinkUpstreamFixture(t,
+		&searchableAuthorProvider{stubMetaProvider: stubMetaProvider{name: "openlibrary"}},
+		&searchableAuthorProvider{
+			stubMetaProvider: stubMetaProvider{name: "dnb"},
+			searchAuthorsByQuery: map[string][]models.Author{
+				"Emilia Jae": {{ForeignID: "dnb:other", Name: "Emilia Jae", MetadataProvider: "dnb"}},
+			},
+			getAuthorErr: errors.New("dnb does not support author lookup by ID"),
+		},
+	)
+
+	existing := fixture.createAuthor(t, &models.Author{
+		ForeignID:        "OL13200512A",
+		Name:             "Emilia Jae",
+		SortName:         "Jae, Emilia",
+		MetadataProvider: "openlibrary",
+		Monitored:        true,
+	})
+
+	rec := fixture.relinkToCandidate(t, existing.ID, "dnb:missing", "Emilia Jae")
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	got, err := fixture.authors.GetByID(fixture.ctx, existing.ID)
+	if err != nil || got == nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ForeignID != existing.ForeignID || got.MetadataProvider != existing.MetadataProvider {
+		t.Fatalf("author mutated unexpectedly: %+v", got)
 	}
 }
 

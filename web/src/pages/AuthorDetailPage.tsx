@@ -137,10 +137,22 @@ export default function AuthorDetailPage() {
   }, [authorId, showExcluded])
 
   useEffect(() => {
-    if (author && new URLSearchParams(location.search).get('linkMetadata') === '1') {
-      setShowMetadataLink(true)
+    const params = new URLSearchParams(location.search)
+    if (params.get('linkMetadata') !== '1') {
+      return
     }
-  }, [author, location.search])
+    setShowMetadataLink(true)
+    params.delete('linkMetadata')
+    const search = params.toString()
+    navigate(
+      {
+        pathname: location.pathname,
+        search: search ? `?${search}` : '',
+        hash: location.hash,
+      },
+      { replace: true },
+    )
+  }, [location.hash, location.pathname, location.search, navigate])
 
   const handleRefresh = async () => {
     if (!author) return
