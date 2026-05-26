@@ -274,10 +274,10 @@ export const api = {
   refreshAuthor: (id: number) => request<void>(`/author/${id}/refresh`, { method: 'POST' }),
   searchAuthorLinkCandidates: (id: number, term: string) =>
     request<Author[]>(`/author/${id}/relink-upstream/candidates?term=${encodeURIComponent(term)}`),
-  relinkAuthorUpstream: (id: number, foreignAuthorId?: string) =>
+  relinkAuthorUpstream: (id: number, candidate?: RelinkAuthorCandidate) =>
     request<Author>(`/author/${id}/relink-upstream`, {
       method: 'POST',
-      body: foreignAuthorId ? JSON.stringify({ foreignAuthorId }) : undefined,
+      body: candidate ? JSON.stringify(candidate) : undefined,
     }),
   listAuthorAliases: (id: number) => request<AuthorAlias[]>(`/author/${id}/aliases`),
   // listAuthorSeries returns the series the author has books in. Backs the
@@ -605,6 +605,11 @@ export interface AuthorConflictBody {
   error?: string
   canonicalAuthorId?: number
   canonicalAuthor?: Author
+}
+
+export interface RelinkAuthorCandidate {
+  foreignAuthorId: string
+  authorName?: string
 }
 
 export interface MergeAuthorsResult {
