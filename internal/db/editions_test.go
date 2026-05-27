@@ -150,6 +150,7 @@ func TestEditionRepo_UpsertMetadataFillsMissingFields(t *testing.T) {
 	}
 	if got == nil {
 		t.Fatal("expected edition")
+		return
 	}
 	if got.ASIN == nil || *got.ASIN != asin || got.Publisher != "Tor" || got.NumPages == nil || *got.NumPages != pages || got.ImageURL == "" {
 		t.Fatalf("metadata fields were not inserted: %+v", got)
