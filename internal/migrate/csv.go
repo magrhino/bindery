@@ -98,7 +98,7 @@ func ImportCSVAuthors(
 		top := matches[0]
 
 		// Skip if already present.
-		existing, _ := authors.GetByForeignID(ctx, top.ForeignID)
+		existing, _ := authors.GetByAnyForeignID(ctx, top.ForeignID)
 		if existing != nil {
 			res.Skipped++
 			continue
@@ -113,6 +113,12 @@ func ImportCSVAuthors(
 		full.MetadataProvider = "openlibrary"
 
 		if err := authors.Create(ctx, full); err != nil {
+			if isAuthorCreateConflict(err) {
+				if existing, _ := authors.GetByAnyForeignID(ctx, full.ForeignID); existing != nil {
+					res.Skipped++
+					continue
+				}
+			}
 			res.fail(name, err.Error())
 			continue
 		}

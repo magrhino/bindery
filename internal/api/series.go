@@ -1324,7 +1324,7 @@ func (h *SeriesHandler) resolveHardcoverCatalogAuthor(ctx context.Context, serie
 		return nil, false, nil
 	}
 	if strings.TrimSpace(candidate.ForeignID) != "" {
-		author, err := h.authors.GetByForeignID(ctx, candidate.ForeignID)
+		author, err := h.authors.GetByAnyForeignID(ctx, candidate.ForeignID)
 		if err != nil || author != nil {
 			return author, false, err
 		}

@@ -323,7 +323,7 @@ func (h *AuthorHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// author list, which filters by owner_user_id. A global GetByForeignID
 	// would block re-creation of authors orphaned under a different user ID.
 	userID := auth.UserIDFromContext(r.Context())
-	existing, _ := h.authors.GetByForeignIDForUser(r.Context(), req.ForeignID, userID)
+	existing, _ := h.authors.GetByAnyForeignIDForUser(r.Context(), req.ForeignID, userID)
 	if existing != nil {
 		h.writeCanonicalAuthorConflict(w, existing, "author already exists")
 		return
@@ -335,7 +335,7 @@ func (h *AuthorHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if author.ForeignID != "" {
-		if existing, _ := h.authors.GetByForeignIDForUser(r.Context(), author.ForeignID, userID); existing != nil {
+		if existing, _ := h.authors.GetByAnyForeignIDForUser(r.Context(), author.ForeignID, userID); existing != nil {
 			h.writeCanonicalAuthorConflict(w, existing, "author already exists")
 			return
 		}
@@ -368,8 +368,12 @@ func (h *AuthorHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.authors.CreateForUser(r.Context(), author, auth.UserIDFromContext(r.Context())); err != nil {
 		slog.Error("create author failed", "foreign_id", req.ForeignID, "error", err)
-		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
-			if existing, _ := h.authors.GetByForeignIDForUser(r.Context(), req.ForeignID, userID); existing != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") || errors.Is(err, db.ErrAuthorIdentifierConflict) {
+			if existing, _ := h.authors.GetByAnyForeignIDForUser(r.Context(), req.ForeignID, userID); existing != nil {
+				h.writeCanonicalAuthorConflict(w, existing, "author already exists")
+				return
+			}
+			if existing, _ := h.authors.GetByAnyForeignIDForUser(r.Context(), author.ForeignID, userID); existing != nil {
 				h.writeCanonicalAuthorConflict(w, existing, "author already exists")
 				return
 			}
@@ -518,12 +522,7 @@ func (h *AuthorHandler) resolveDefaultAuthorMonitorLatestCount(ctx context.Conte
 }
 
 func canRelinkAuthorToUpstream(author *models.Author) bool {
-	if author == nil {
-		return false
-	}
-	provider := strings.TrimSpace(strings.ToLower(author.MetadataProvider))
-	foreignID := strings.TrimSpace(author.ForeignID)
-	return foreignID == "" || strings.HasPrefix(foreignID, "abs:") || strings.HasPrefix(foreignID, "calibre:") || provider == "audiobookshelf"
+	return models.CanReplaceAuthorIdentity(author)
 }
 
 func (h *AuthorHandler) relinkExistingAuthorToUpstream(ctx context.Context, author, upstream *models.Author, requestedName string, monitored bool, monitorMode string, monitorLatestCount int, qualityProfileID, metadataProfileID, rootFolderID, audiobookRootFolderID *int64) error {
@@ -564,6 +563,11 @@ func (h *AuthorHandler) relinkExistingAuthorToUpstream(ctx context.Context, auth
 		author.MetadataProvider = "openlibrary"
 	}
 	applyAuthorCreateOptions(author, monitored, monitorMode, monitorLatestCount, qualityProfileID, metadataProfileID, rootFolderID, audiobookRootFolderID)
+	if oldForeignID != "" {
+		if err := h.authors.UpsertAuthorIdentifier(ctx, author.ID, oldForeignID); err != nil {
+			return err
+		}
+	}
 	now := time.Now().UTC()
 	author.LastMetadataRefreshAt = &now
 	if err := h.authors.Update(ctx, author); err != nil {
@@ -997,7 +1001,7 @@ func (h *AuthorHandler) RelinkUpstream(w http.ResponseWriter, r *http.Request) {
 		h.writeCanonicalAuthorConflict(w, canonical, "author name already resolves to an existing author — confirm merge")
 		return
 	}
-	if existing, err := h.authors.GetByForeignID(r.Context(), upstream.ForeignID); err != nil {
+	if existing, err := h.authors.GetByAnyForeignID(r.Context(), upstream.ForeignID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	} else if existing != nil && existing.ID != author.ID {
@@ -1046,11 +1050,33 @@ func (h *AuthorHandler) RelinkCandidates(w http.ResponseWriter, r *http.Request)
 	if candidates == nil {
 		candidates = []models.Author{}
 	}
+	attachedIDs := map[string]struct{}{}
+	if foreignID := strings.TrimSpace(author.ForeignID); foreignID != "" {
+		attachedIDs[strings.ToLower(foreignID)] = struct{}{}
+	}
+	identifiers, err := h.authors.ListAuthorIdentifiers(r.Context(), author.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	for _, identifier := range identifiers {
+		if foreignID := strings.TrimSpace(identifier.ForeignID); foreignID != "" {
+			attachedIDs[strings.ToLower(foreignID)] = struct{}{}
+		}
+	}
+	filtered := candidates[:0]
 	for i := range candidates {
+		foreignID := strings.TrimSpace(candidates[i].ForeignID)
+		if foreignID != "" {
+			if _, ok := attachedIDs[strings.ToLower(foreignID)]; ok {
+				continue
+			}
+		}
 		proxyAuthorImages(&candidates[i])
 		cleanAuthorDescription(&candidates[i])
+		filtered = append(filtered, candidates[i])
 	}
-	writeJSON(w, http.StatusOK, candidates)
+	writeJSON(w, http.StatusOK, filtered)
 }
 
 func (h *AuthorHandler) Delete(w http.ResponseWriter, r *http.Request) {
@@ -1901,7 +1927,7 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. Find or create the author (unmonitored if new so we don't auto-want all books).
-	author, _ := h.authors.GetByForeignID(ctx, req.ForeignAuthorID)
+	author, _ := h.authors.GetByAnyForeignID(ctx, req.ForeignAuthorID)
 	if author == nil {
 		name := req.AuthorName
 		if name == "" {
@@ -1949,12 +1975,12 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 		// author row (issue #667).
 		if author == nil {
 			if err := h.authors.CreateForUser(ctx, fetched, auth.UserIDFromContext(ctx)); err != nil {
-				if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+				if !strings.Contains(err.Error(), "UNIQUE constraint failed") && !errors.Is(err, db.ErrAuthorIdentifierConflict) {
 					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 					return
 				}
 				// Race: another request created it between our check and insert.
-				author, _ = h.authors.GetByForeignID(ctx, req.ForeignAuthorID)
+				author, _ = h.authors.GetByAnyForeignID(ctx, req.ForeignAuthorID)
 			} else {
 				author = fetched
 				authorWasJustCreated = true
