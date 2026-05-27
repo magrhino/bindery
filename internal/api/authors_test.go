@@ -697,6 +697,7 @@ func TestFetchAuthorBooksHydratesOnlySupplementalHardcoverBooks(t *testing.T) {
 	}
 	if primaryBook == nil {
 		t.Fatal("expected primary book")
+		return
 	}
 	if primaryBook.ASIN != "" {
 		t.Fatalf("primary OpenLibrary book was unexpectedly hydrated: %+v", primaryBook)
@@ -793,6 +794,7 @@ func TestFetchAuthorBooksHydratesMatchedOpenLibraryHardcoverEditions(t *testing.
 	}
 	if book == nil {
 		t.Fatal("expected OpenLibrary book")
+		return
 	}
 	if book.ForeignID != "OL-MATCH-W" || book.MetadataProvider != "openlibrary" {
 		t.Fatalf("book identity was rebound unexpectedly: %+v", book)
@@ -884,6 +886,7 @@ func TestFetchAuthorBooksDoesNotHydrateMatchedHardcoverWhenEnhancedDisabled(t *t
 	}
 	if book == nil {
 		t.Fatal("expected OpenLibrary book")
+		return
 	}
 	if book.ASIN != "" {
 		t.Fatalf("matched book was hydrated while enhanced Hardcover was disabled: %+v", book)
