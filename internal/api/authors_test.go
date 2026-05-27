@@ -1129,6 +1129,7 @@ type searchableAuthorProvider struct {
 	searchAuthorsByQuery map[string][]models.Author
 	authors              map[string]*models.Author
 	getAuthorErr         error
+	getAuthorCalls       int
 }
 
 func (p *searchableAuthorProvider) SearchAuthors(_ context.Context, query string) ([]models.Author, error) {
@@ -1136,6 +1137,7 @@ func (p *searchableAuthorProvider) SearchAuthors(_ context.Context, query string
 }
 
 func (p *searchableAuthorProvider) GetAuthor(_ context.Context, foreignID string) (*models.Author, error) {
+	p.getAuthorCalls++
 	if p.getAuthorErr != nil {
 		return nil, p.getAuthorErr
 	}
@@ -2246,21 +2248,27 @@ func TestRelinkUpstream_ManualCandidateRejectsUnverifiedFallback(t *testing.T) {
 }
 
 func TestRelinkCandidates_SearchesPrimaryAndEnrichers(t *testing.T) {
-	fixture := newRelinkUpstreamFixture(t,
-		&searchableAuthorProvider{
-			stubMetaProvider: stubMetaProvider{name: "openlibrary"},
-			searchAuthorsByQuery: map[string][]models.Author{
-				"Emilia Jae": {{ForeignID: "OL13200512A", Name: "Emilia Jae", MetadataProvider: "openlibrary"}},
-			},
-			authors: map[string]*models.Author{
-				"OL13200512A": {
-					ForeignID:        "OL13200512A",
-					Name:             "Emilia Jae",
-					ImageURL:         "https://example.com/emilia.jpg",
-					MetadataProvider: "openlibrary",
-				},
+	primary := &searchableAuthorProvider{
+		stubMetaProvider: stubMetaProvider{name: "openlibrary"},
+		searchAuthorsByQuery: map[string][]models.Author{
+			"Emilia Jae": {{
+				ForeignID:        "OL13200512A",
+				Name:             "Emilia Jae",
+				ImageURL:         "https://example.com/search-emilia.jpg",
+				MetadataProvider: "openlibrary",
+			}},
+		},
+		authors: map[string]*models.Author{
+			"OL13200512A": {
+				ForeignID:        "OL13200512A",
+				Name:             "Emilia Jae",
+				ImageURL:         "https://example.com/full-emilia.jpg",
+				MetadataProvider: "openlibrary",
 			},
 		},
+	}
+	fixture := newRelinkUpstreamFixture(t,
+		primary,
 		&searchableAuthorProvider{
 			stubMetaProvider: stubMetaProvider{name: "hardcover"},
 			searchAuthorsByQuery: map[string][]models.Author{
@@ -2291,8 +2299,11 @@ func TestRelinkCandidates_SearchesPrimaryAndEnrichers(t *testing.T) {
 	if got[0].ForeignID != "OL13200512A" || got[1].ForeignID != "hc:emilia-jae" {
 		t.Fatalf("candidate ids = %+v", got)
 	}
-	if !strings.HasPrefix(got[0].ImageURL, "/api/v1/images?url=") || !strings.Contains(got[0].ImageURL, "emilia.jpg") {
-		t.Fatalf("openlibrary candidate image = %q, want proxied hydrated image", got[0].ImageURL)
+	if primary.getAuthorCalls != 0 {
+		t.Fatalf("GetAuthor calls = %d, want 0 for candidate image hydration", primary.getAuthorCalls)
+	}
+	if !strings.HasPrefix(got[0].ImageURL, "/api/v1/images?url=") || !strings.Contains(got[0].ImageURL, "search-emilia.jpg") {
+		t.Fatalf("openlibrary candidate image = %q, want proxied search-result image", got[0].ImageURL)
 	}
 	if got[1].ImageURL != "" {
 		t.Fatalf("hardcover candidate image = %q, want unchanged empty image", got[1].ImageURL)

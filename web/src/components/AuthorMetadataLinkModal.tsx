@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, ApiError, Author, AuthorConflictBody } from '../api/client'
 
@@ -40,44 +40,42 @@ export default function AuthorMetadataLinkModal({ author, onClose, onLinked }: P
   const [linking, setLinking] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [conflict, setConflict] = useState<AuthorConflictBody | null>(null)
+  const searchRequestId = useRef(0)
 
   const visibleResults = useMemo(
     () => results.filter(candidate => candidate.foreignAuthorId !== author.foreignAuthorId),
     [author.foreignAuthorId, results],
   )
 
-  useEffect(() => {
-    let cancelled = false
+  const runSearch = useCallback(async (term: string, resetConflict = false) => {
+    const query = term.trim()
+    if (!query) return
+    const requestId = searchRequestId.current + 1
+    searchRequestId.current = requestId
     setSearching(true)
     setError(null)
-    api.searchAuthorLinkCandidates(author.id, author.authorName)
-      .then(candidates => {
-        if (!cancelled) setResults(candidates)
-      })
-      .catch(err => {
-        if (!cancelled) setError(err instanceof Error ? err.message : t('authorMetadataLink.searchFailed', 'Search failed'))
-      })
-      .finally(() => {
-        if (!cancelled) setSearching(false)
-      })
-    return () => { cancelled = true }
-  }, [author.authorName, author.id, t])
-
-  const search = async (event?: FormEvent) => {
-    event?.preventDefault()
-    const term = query.trim()
-    if (!term) return
-    setSearching(true)
-    setError(null)
-    setConflict(null)
+    if (resetConflict) setConflict(null)
     try {
-      setResults(await api.searchAuthorLinkCandidates(author.id, term))
+      const candidates = await api.searchAuthorLinkCandidates(author.id, query)
+      if (searchRequestId.current !== requestId) return
+      setResults(candidates)
     } catch (err) {
+      if (searchRequestId.current !== requestId) return
       setResults([])
       setError(err instanceof Error ? err.message : t('authorMetadataLink.searchFailed', 'Search failed'))
     } finally {
-      setSearching(false)
+      if (searchRequestId.current === requestId) setSearching(false)
     }
+  }, [author.id, t])
+
+  useEffect(() => {
+    void runSearch(author.authorName)
+    return () => { searchRequestId.current += 1 }
+  }, [author.authorName, runSearch])
+
+  const search = async (event?: FormEvent) => {
+    event?.preventDefault()
+    await runSearch(query, true)
   }
 
   const link = async (candidate: Author) => {
