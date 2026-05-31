@@ -498,10 +498,7 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 					}
 				}
 				if err := i.rollbackAuthorIdentifiers(ctx, authors, author, before, after); err != nil {
-					action.Action = "skip"
-					action.Reason = err.Error()
-					result.Stats.Failed++
-					result.Actions = append(result.Actions, action)
+					rollbackErr = fmt.Errorf("rollback author %d identifiers: %w", entity.LocalID, err)
 					continue
 				}
 				if ownedByRun {
