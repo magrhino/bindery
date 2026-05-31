@@ -32,7 +32,7 @@ function mediaLabel(mediaType?: Book['mediaType']): string {
 function canLinkAuthorMetadata(author: Author): boolean {
   const foreignId = (author.foreignAuthorId || '').trim()
   const provider = (author.metadataProvider || '').trim().toLowerCase()
-  return foreignId === '' || foreignId.startsWith('abs:') || foreignId.startsWith('calibre:') || provider === 'audiobookshelf'
+  return foreignId === '' || foreignId.startsWith('abs:') || foreignId.startsWith('calibre:') || provider === 'audiobookshelf' || provider === 'calibre'
 }
 
 function hasSparseMetadata(author: Author): boolean {

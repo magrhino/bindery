@@ -123,6 +123,60 @@ func TestAuthorRepo_GetByAnyForeignIDMatchesAlternateIdentifier(t *testing.T) {
 	}
 }
 
+func TestAuthorRepo_GetByIDForUserScopesOwner(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	users := NewUserRepo(database)
+	alice, err := users.Create(ctx, "alice", "h1")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+	bob, err := users.Create(ctx, "bob", "h2")
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+	repo := NewAuthorRepo(database)
+	aliceAuthor := &models.Author{
+		ForeignID:        "OL-ALICE",
+		Name:             "Alice Author",
+		SortName:         "Author, Alice",
+		MetadataProvider: "openlibrary",
+	}
+	if err := repo.CreateForUser(ctx, aliceAuthor, alice.ID); err != nil {
+		t.Fatalf("seed alice author: %v", err)
+	}
+	unowned := &models.Author{
+		ForeignID:        "OL-UNOWNED",
+		Name:             "Unowned Author",
+		SortName:         "Author, Unowned",
+		MetadataProvider: "openlibrary",
+	}
+	if err := repo.Create(ctx, unowned); err != nil {
+		t.Fatalf("seed unowned author: %v", err)
+	}
+
+	got, err := repo.GetByIDForUser(ctx, aliceAuthor.ID, alice.ID)
+	if err != nil || got == nil {
+		t.Fatalf("alice lookup = %+v err=%v, want owned author", got, err)
+	}
+	got, err = repo.GetByIDForUser(ctx, aliceAuthor.ID, bob.ID)
+	if err != nil {
+		t.Fatalf("bob lookup: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("bob lookup = %+v, want nil for alice-owned author", got)
+	}
+	got, err = repo.GetByIDForUser(ctx, unowned.ID, bob.ID)
+	if err != nil || got == nil {
+		t.Fatalf("bob unowned lookup = %+v err=%v, want visible legacy row", got, err)
+	}
+}
+
 func TestAuthorRepo_UpsertAuthorIdentifierRejectsDifferentOwner(t *testing.T) {
 	database, err := OpenMemory()
 	if err != nil {
