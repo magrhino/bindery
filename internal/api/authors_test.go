@@ -1933,6 +1933,95 @@ func TestCreateAuthor_RelinksExistingABSAuthor(t *testing.T) {
 	}
 }
 
+func TestCreateAuthor_HiddenIdentifierConflictDoesNotLeakCanonicalAuthor(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	users := db.NewUserRepo(database)
+	alice, err := users.Create(ctx, "alice", "h1")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+	bob, err := users.Create(ctx, "bob", "h2")
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+	authorRepo := db.NewAuthorRepo(database)
+	aliasRepo := db.NewAuthorAliasRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+
+	aliceAuthor := &models.Author{
+		ForeignID:        "hc:emilia-jae",
+		Name:             "Canonical Emilia",
+		SortName:         "Emilia, Canonical",
+		MetadataProvider: "hardcover",
+		Monitored:        true,
+	}
+	if err := authorRepo.CreateForUser(ctx, aliceAuthor, alice.ID); err != nil {
+		t.Fatalf("seed alice author: %v", err)
+	}
+	if err := authorRepo.UpsertAuthorIdentifier(ctx, aliceAuthor.ID, "OL13200512A"); err != nil {
+		t.Fatalf("seed alice identifier: %v", err)
+	}
+	bobAuthor := &models.Author{
+		ForeignID:        "abs:author:bob:emilia-jae",
+		Name:             "Emilia Jae",
+		SortName:         "Jae, Emilia",
+		MetadataProvider: "audiobookshelf",
+		Monitored:        true,
+	}
+	if err := authorRepo.CreateForUser(ctx, bobAuthor, bob.ID); err != nil {
+		t.Fatalf("seed bob author: %v", err)
+	}
+
+	provider := &fixedAuthorProvider{
+		result: &models.Author{
+			ForeignID:        "OL13200512A",
+			Name:             "Emilia Jae",
+			SortName:         "Jae, Emilia",
+			MetadataProvider: "openlibrary",
+		},
+	}
+	h := NewAuthorHandler(authorRepo, aliasRepo, bookRepo, nil, metadata.NewAggregator(provider), nil, profileRepo, nil)
+	body, _ := json.Marshal(map[string]any{
+		"foreignAuthorId": "OL13200512A",
+		"authorName":      "Emilia Jae",
+		"monitored":       true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/author", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithUserID(req.Context(), bob.ID))
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := resp["canonicalAuthorId"]; ok {
+		t.Fatalf("response leaked canonicalAuthorId: %v", resp)
+	}
+	if _, ok := resp["canonicalAuthor"]; ok {
+		t.Fatalf("response leaked canonicalAuthor: %v", resp)
+	}
+	got, err := authorRepo.GetByID(ctx, bobAuthor.ID)
+	if err != nil || got == nil {
+		t.Fatalf("bob author lookup: %+v err=%v", got, err)
+	}
+	if got.ForeignID != bobAuthor.ForeignID || got.MetadataProvider != bobAuthor.MetadataProvider {
+		t.Fatalf("bob author mutated unexpectedly: %+v", got)
+	}
+}
+
 func TestCreateAuthor_RejectsNormalizedDuplicate(t *testing.T) {
 	database, err := db.OpenMemory()
 	if err != nil {

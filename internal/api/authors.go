@@ -275,6 +275,10 @@ func (h *AuthorHandler) Create(w http.ResponseWriter, r *http.Request) {
 	} else if canonical != nil {
 		if canRelinkAuthorToUpstream(canonical) {
 			if err := h.relinkExistingAuthorToUpstream(r.Context(), canonical, author, req.Name, req.Monitored, monitorMode, monitorLatestCount, req.QualityProfileID, req.MetadataProfileID, req.RootFolderID, req.AudiobookRootFolderID); err != nil {
+				if isAuthorIdentityConflict(err) {
+					writeJSON(w, http.StatusConflict, map[string]string{"error": "upstream author already exists locally"})
+					return
+				}
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
 			}
