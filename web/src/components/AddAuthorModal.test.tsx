@@ -233,7 +233,16 @@ describe('AddAuthorModal — search error handling', () => {
       body: {
         error: 'author already exists',
         canonicalAuthorId: 60,
-        canonicalAuthor: author({ id: 60, foreignAuthorId: 'OL13200512A', authorName: 'Emilia Jae' }),
+        canonicalAuthor: author({
+          id: 60,
+          foreignAuthorId: 'legacy-calibre-author',
+          authorName: 'Emilia Jae',
+          metadataProvider: 'calibre',
+          description: 'Imported from Calibre.',
+          imageUrl: 'https://example.com/emilia.jpg',
+          ratingsCount: 12,
+          averageRating: 4.1,
+        }),
       },
     })
     vi.mocked(api.addAuthor).mockRejectedValue(err)

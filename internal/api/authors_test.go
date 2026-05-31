@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/vavallee/bindery/internal/auth"
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
@@ -1212,6 +1213,12 @@ func (f *relinkUpstreamFixture) relinkTo(t *testing.T, authorID int64, foreignID
 func (f *relinkUpstreamFixture) relinkToCandidate(t *testing.T, authorID int64, foreignID, authorName string) *httptest.ResponseRecorder {
 	t.Helper()
 
+	return f.relinkToCandidateAs(t, 0, authorID, foreignID, authorName)
+}
+
+func (f *relinkUpstreamFixture) relinkToCandidateAs(t *testing.T, userID int64, authorID int64, foreignID, authorName string) *httptest.ResponseRecorder {
+	t.Helper()
+
 	payload := map[string]string{"foreignAuthorId": foreignID}
 	if authorName != "" {
 		payload["authorName"] = authorName
@@ -1221,7 +1228,11 @@ func (f *relinkUpstreamFixture) relinkToCandidate(t *testing.T, authorID int64, 
 	req.Header.Set("Content-Type", "application/json")
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("id", strconv.FormatInt(authorID, 10))
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	ctx := context.WithValue(req.Context(), chi.RouteCtxKey, rctx)
+	if userID != 0 {
+		ctx = auth.WithUserID(ctx, userID)
+	}
+	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	f.handler.RelinkUpstream(rec, req)
@@ -1231,10 +1242,20 @@ func (f *relinkUpstreamFixture) relinkToCandidate(t *testing.T, authorID int64, 
 func (f *relinkUpstreamFixture) candidates(t *testing.T, authorID int64, term string) *httptest.ResponseRecorder {
 	t.Helper()
 
+	return f.candidatesAs(t, 0, authorID, term)
+}
+
+func (f *relinkUpstreamFixture) candidatesAs(t *testing.T, userID int64, authorID int64, term string) *httptest.ResponseRecorder {
+	t.Helper()
+
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/author/"+strconv.FormatInt(authorID, 10)+"/relink-upstream/candidates?term="+term, nil)
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("id", strconv.FormatInt(authorID, 10))
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	ctx := context.WithValue(req.Context(), chi.RouteCtxKey, rctx)
+	if userID != 0 {
+		ctx = auth.WithUserID(ctx, userID)
+	}
+	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	f.handler.RelinkCandidates(rec, req)
@@ -2348,6 +2369,153 @@ func TestRelinkUpstream_ManualCandidateRejectsUnverifiedFallback(t *testing.T) {
 	}
 }
 
+func TestRelinkUpstream_RejectsOtherUsersAuthor(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	users := db.NewUserRepo(database)
+	alice, err := users.Create(ctx, "alice", "h1")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+	bob, err := users.Create(ctx, "bob", "h2")
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+	authorRepo := db.NewAuthorRepo(database)
+	aliasRepo := db.NewAuthorAliasRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+	handler := NewAuthorHandler(authorRepo, aliasRepo, bookRepo, nil, metadata.NewAggregator(&searchableAuthorProvider{
+		stubMetaProvider: stubMetaProvider{name: "hardcover"},
+		authors: map[string]*models.Author{
+			"hc:emilia-jae": {
+				ForeignID:        "hc:emilia-jae",
+				Name:             "Emilia Jae",
+				SortName:         "Jae, Emilia",
+				MetadataProvider: "hardcover",
+			},
+		},
+	}), nil, profileRepo, nil)
+	aliceAuthor := &models.Author{
+		ForeignID:        "abs:author:alice:emilia-jae",
+		Name:             "Emilia Jae",
+		SortName:         "Jae, Emilia",
+		MetadataProvider: "audiobookshelf",
+		Monitored:        true,
+	}
+	if err := authorRepo.CreateForUser(ctx, aliceAuthor, alice.ID); err != nil {
+		t.Fatalf("seed alice author: %v", err)
+	}
+
+	body, _ := json.Marshal(map[string]string{"foreignAuthorId": "hc:emilia-jae"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/author/"+strconv.FormatInt(aliceAuthor.ID, 10)+"/relink-upstream", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", strconv.FormatInt(aliceAuthor.ID, 10))
+	req = req.WithContext(auth.WithUserID(context.WithValue(req.Context(), chi.RouteCtxKey, rctx), bob.ID))
+	rec := httptest.NewRecorder()
+
+	handler.RelinkUpstream(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+	got, err := authorRepo.GetByID(ctx, aliceAuthor.ID)
+	if err != nil || got == nil {
+		t.Fatalf("alice author lookup: %+v err=%v", got, err)
+	}
+	if got.ForeignID != aliceAuthor.ForeignID || got.MetadataProvider != aliceAuthor.MetadataProvider {
+		t.Fatalf("alice author mutated: %+v", got)
+	}
+}
+
+func TestRelinkUpstream_HiddenIdentifierConflictDoesNotLeakCanonicalAuthor(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	users := db.NewUserRepo(database)
+	alice, err := users.Create(ctx, "alice", "h1")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+	bob, err := users.Create(ctx, "bob", "h2")
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+	authorRepo := db.NewAuthorRepo(database)
+	fixture := &relinkUpstreamFixture{
+		ctx:     ctx,
+		authors: authorRepo,
+		aliases: db.NewAuthorAliasRepo(database),
+		books:   db.NewBookRepo(database),
+		handler: NewAuthorHandler(authorRepo, db.NewAuthorAliasRepo(database), db.NewBookRepo(database), nil, metadata.NewAggregator(&searchableAuthorProvider{
+			authors: map[string]*models.Author{
+				"OL13200512A": {
+					ForeignID:        "OL13200512A",
+					Name:             "Emilia Jae",
+					SortName:         "Jae, Emilia",
+					MetadataProvider: "openlibrary",
+				},
+			},
+		}), nil, db.NewMetadataProfileRepo(database), nil),
+	}
+	aliceAuthor := &models.Author{
+		ForeignID:        "hc:emilia-jae",
+		Name:             "Canonical Emilia",
+		SortName:         "Emilia, Canonical",
+		MetadataProvider: "hardcover",
+		Monitored:        true,
+	}
+	if err := authorRepo.CreateForUser(ctx, aliceAuthor, alice.ID); err != nil {
+		t.Fatalf("seed alice author: %v", err)
+	}
+	if err := authorRepo.UpsertAuthorIdentifier(ctx, aliceAuthor.ID, "OL13200512A"); err != nil {
+		t.Fatalf("seed alice identifier: %v", err)
+	}
+	bobAuthor := &models.Author{
+		ForeignID:        "abs:author:bob:emilia-jae",
+		Name:             "Emilia Jae",
+		SortName:         "Jae, Emilia",
+		MetadataProvider: "audiobookshelf",
+		Monitored:        true,
+	}
+	if err := authorRepo.CreateForUser(ctx, bobAuthor, bob.ID); err != nil {
+		t.Fatalf("seed bob author: %v", err)
+	}
+
+	rec := fixture.relinkToCandidateAs(t, bob.ID, bobAuthor.ID, "OL13200512A", "")
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := resp["canonicalAuthorId"]; ok {
+		t.Fatalf("response leaked canonicalAuthorId: %v", resp)
+	}
+	if _, ok := resp["canonicalAuthor"]; ok {
+		t.Fatalf("response leaked canonicalAuthor: %v", resp)
+	}
+	got, err := authorRepo.GetByID(ctx, bobAuthor.ID)
+	if err != nil || got == nil {
+		t.Fatalf("bob author lookup: %+v err=%v", got, err)
+	}
+	if got.ForeignID != bobAuthor.ForeignID || got.MetadataProvider != bobAuthor.MetadataProvider {
+		t.Fatalf("bob author mutated unexpectedly: %+v", got)
+	}
+}
+
 func TestRelinkCandidates_SearchesPrimaryAndEnrichers(t *testing.T) {
 	primary := &searchableAuthorProvider{
 		stubMetaProvider: stubMetaProvider{name: "openlibrary"},
@@ -2812,6 +2980,73 @@ func TestCleanupOrphanIfNoBooks_NoopWhenBookCreated(t *testing.T) {
 
 	if got, _ := authorRepo.GetByID(ctx, author.ID); got == nil {
 		t.Fatal("author wrongly deleted despite bookCreated=true")
+	}
+}
+
+func TestAddBook_DoesNotResolveOtherUsersAlternateAuthorIdentifier(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	users := db.NewUserRepo(database)
+	alice, err := users.Create(ctx, "alice", "h1")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+	bob, err := users.Create(ctx, "bob", "h2")
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+	aliceAuthor := &models.Author{
+		ForeignID:        "OL-ALICE",
+		Name:             "Alice Author",
+		SortName:         "Author, Alice",
+		MetadataProvider: "openlibrary",
+		Monitored:        true,
+	}
+	if err := authorRepo.CreateForUser(ctx, aliceAuthor, alice.ID); err != nil {
+		t.Fatalf("seed alice author: %v", err)
+	}
+	if err := authorRepo.UpsertAuthorIdentifier(ctx, aliceAuthor.ID, "hc:alice-author"); err != nil {
+		t.Fatalf("seed alice identifier: %v", err)
+	}
+	provider := &searchableAuthorProvider{
+		stubMetaProvider: stubMetaProvider{name: "hardcover"},
+		authors: map[string]*models.Author{
+			"hc:alice-author": {
+				ForeignID:        "hc:alice-author",
+				Name:             "Alice Author",
+				SortName:         "Author, Alice",
+				MetadataProvider: "hardcover",
+			},
+		},
+	}
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, metadata.NewAggregator(provider), nil, profileRepo, nil)
+	body, _ := json.Marshal(map[string]any{
+		"foreignBookId":   "hc:book-one",
+		"foreignAuthorId": "hc:alice-author",
+		"authorName":      "Alice Author",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/author/book", bytes.NewReader(body)).
+		WithContext(auth.WithUserID(context.Background(), bob.ID))
+	rec := httptest.NewRecorder()
+
+	h.AddBook(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got, err := authorRepo.GetByForeignID(ctx, "hc:alice-author"); err != nil || got != nil {
+		t.Fatalf("hidden identifier created bob-visible author: %+v err=%v", got, err)
+	}
+	if got, err := authorRepo.GetByID(ctx, aliceAuthor.ID); err != nil || got == nil || got.ForeignID != "OL-ALICE" {
+		t.Fatalf("alice author after AddBook = %+v err=%v", got, err)
 	}
 }
 

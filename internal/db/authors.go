@@ -114,6 +114,27 @@ func (r *AuthorRepo) GetByID(ctx context.Context, id int64) (*models.Author, err
 	return &a, nil
 }
 
+// GetByIDForUser returns the author with id when it is visible to userID.
+// Unowned rows remain visible so pre-multiuser and import-created authors keep
+// their legacy behavior. userID 0 performs an unscoped lookup.
+func (r *AuthorRepo) GetByIDForUser(ctx context.Context, id, userID int64) (*models.Author, error) {
+	if userID == 0 {
+		return r.GetByID(ctx, id)
+	}
+	row := r.exec.QueryRowContext(ctx, `
+		SELECT `+authorSelectCols+`
+		FROM authors WHERE id = ? AND (owner_user_id = ? OR owner_user_id IS NULL)`, id, userID)
+
+	a, err := scanAuthorRow(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get author %d for user %d: %w", id, userID, err)
+	}
+	return &a, nil
+}
+
 func (r *AuthorRepo) GetByForeignID(ctx context.Context, foreignID string) (*models.Author, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT `+authorSelectCols+`

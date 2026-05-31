@@ -162,6 +162,21 @@ describe('AuthorDetailPage', () => {
     expect(await screen.findByRole('button', { name: 'Link metadata' })).toBeInTheDocument()
   })
 
+  it('shows link metadata for calibre-provider authors with legacy IDs', async () => {
+    renderAuthorDetailPage([], 'grid', {
+      foreignAuthorId: 'legacy-calibre-author',
+      authorName: 'Calibre Author',
+      sortName: 'Author, Calibre',
+      metadataProvider: 'calibre',
+      description: 'Imported from Calibre.',
+      imageUrl: 'https://example.com/calibre.jpg',
+      ratingsCount: 12,
+      averageRating: 4.1,
+    })
+
+    expect(await screen.findByRole('button', { name: 'Link metadata' })).toBeInTheDocument()
+  })
+
   it('shows find-better metadata for linked sparse authors and relinks a selected candidate', async () => {
     const sparseAuthor = {
       foreignAuthorId: 'OL13200512A',

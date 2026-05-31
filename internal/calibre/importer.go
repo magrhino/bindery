@@ -419,7 +419,9 @@ func (i *Importer) resolveAuthor(ctx context.Context, runID int64, ca CalibreAut
 	if existing, err := i.authors.GetByAnyForeignID(ctx, foreignID); err != nil {
 		return nil, false, err
 	} else if existing != nil {
+		i.recordAuthorBeforeSnapshot(ctx, runID, externalID, existing, outcomeLinked, map[string]any{"matchedBy": "identifier"})
 		i.upsertProvenance(ctx, runID, entityTypeAuthor, externalID, existing.ID)
+		i.recordAuthorAfterSnapshot(ctx, runID, externalID, existing.ID, outcomeLinked, map[string]any{"matchedBy": "identifier"})
 		return existing, false, nil
 	}
 
