@@ -925,7 +925,7 @@ func (s *Scanner) checkNZBGetDownloads(ctx context.Context, client *models.Downl
 // safe; the issue #903 file-list API addition does not apply here.
 func (s *Scanner) tryImportNZBGet(ctx context.Context, ng *nzbget.Client, dl *models.Download, nzbID int, downloadPath string) {
 	nzbIDStr := strconv.Itoa(nzbID)
-	s.tryImportInternal(ctx, dl, downloadPath, "nzbget", nzbIDStr, func() error {
+	s.tryImportInternal(ctx, dl, downloadPath, "nzbget", nzbIDStr, "", func() error {
 		return ng.RemoveHistory(ctx, nzbID)
 	}, nil)
 }
@@ -1177,7 +1177,7 @@ func (s *Scanner) checkQbittorrentDownloads(ctx context.Context, client *models.
 // history slot), so walking that path is safe; the issue #903 file-list
 // API addition does not apply here.
 func (s *Scanner) tryImportSABnzbd(ctx context.Context, sab *sabnzbd.Client, dl *models.Download, nzoID, downloadPath string) {
-	s.tryImportInternal(ctx, dl, downloadPath, "sabnzbd", nzoID, func() error {
+	s.tryImportInternal(ctx, dl, downloadPath, "sabnzbd", nzoID, "", func() error {
 		// Clean up SABnzbd history
 		return sab.DeleteHistory(ctx, nzoID, false)
 	}, nil)
@@ -1193,13 +1193,13 @@ func (s *Scanner) tryImportSABnzbd(ctx context.Context, sab *sabnzbd.Client, dl 
 // every unrelated sibling to be imported. Pass nil to fall back to the
 // directory walk.
 func (s *Scanner) tryImportTransmission(ctx context.Context, dl *models.Download, downloadPath string, explicitFiles []string) {
-	s.tryImportInternal(ctx, dl, downloadPath, "transmission", safeRemoteID(dl.TorrentID), nil, explicitFiles)
+	s.tryImportInternal(ctx, dl, downloadPath, "transmission", safeRemoteID(dl.TorrentID), "", nil, explicitFiles)
 }
 
 // tryImportQbittorrent attempts to import a completed qBittorrent download. See
 // tryImportTransmission for the semantics of explicitFiles.
 func (s *Scanner) tryImportQbittorrent(ctx context.Context, dl *models.Download, downloadPath string, explicitFiles []string) {
-	s.tryImportInternal(ctx, dl, downloadPath, "qbittorrent", safeRemoteID(dl.TorrentID), nil, explicitFiles)
+	s.tryImportInternal(ctx, dl, downloadPath, "qbittorrent", safeRemoteID(dl.TorrentID), "", nil, explicitFiles)
 }
 
 // torrentFile is the minimal shape resolveTorrentFiles consumes; it matches
@@ -1512,19 +1512,14 @@ func (s *Scanner) alreadyImportedPath(ctx context.Context, book *models.Book, de
 	return false
 }
 
-// tryImportInternal is the common import logic shared by SABnzbd, NZBGet,
-// Transmission and qBittorrent.
-//
-// explicitFiles, when non-nil and non-empty, is the authoritative list of
-// absolute Bindery-side file paths that belong to the download. Passing it
-// short-circuits the legacy filepath.Walk(downloadPath) discovery and is
-// the issue #903 fix: with a shared download root (Transmission's default)
-// a single-file torrent's downloadPath is the entire shared root and a
-// directory walk would import every unrelated sibling. The list is built
-// from the per-client Files() RPC by the caller; pass nil when no such
-// list is available (older client API, RPC error) and the legacy walk
-// runs as the fallback.
-func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, downloadPath, cleanupClientType, cleanupRemoteID string, cleanupFunc func() error, explicitFiles []string) {
+// ImportFromPath creates an import run for a file or folder already on disk,
+// bypassing the download-client polling path. formatHint overrides extension-
+// based format detection when non-empty ("ebook" or "audiobook").
+func (s *Scanner) ImportFromPath(ctx context.Context, dl *models.Download, path, formatHint string) {
+	s.tryImportInternal(ctx, dl, path, "", "", formatHint, nil, nil)
+}
+
+func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, downloadPath, cleanupClientType, cleanupRemoteID, formatHint string, cleanupFunc func() error, explicitFiles []string) {
 	if s.libraryDir == "" {
 		slog.Warn("no library directory configured, skipping import")
 		// Not writable/configured — needs user action before import can proceed.
@@ -1649,8 +1644,12 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 	// Detect the format of the downloaded files from their extensions.
 	// This is authoritative for dual-format books (media_type='both') and
 	// also fixes edge-cases where a mislabelled book would be routed to the
-	// wrong library directory.
+	// wrong library directory. formatHint overrides detection when the caller
+	// (e.g. manual import) knows the intended format explicitly.
 	detectedFormat := detectDownloadFormat(bookFiles)
+	if formatHint == models.MediaTypeAudiobook || formatHint == models.MediaTypeEbook {
+		detectedFormat = formatHint
+	}
 
 	// Audiobook path: place the entire download directory as a unit so
 	// multi-part m4b/mp3 files, cover art, and cue sheets stay together.

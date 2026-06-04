@@ -241,7 +241,7 @@ func TestImport_FallsBackToDirWalkWhenFilesUnavailable(t *testing.T) {
 	// explicitFiles=nil: the caller couldn't get a file list (e.g. RPC
 	// error), so tryImportInternal must walk downloadDir itself. With a
 	// valid book file present the import should succeed.
-	s.tryImportInternal(ctx, dl, downloadDir, "transmission", "42", nil, nil)
+	s.tryImportInternal(ctx, dl, downloadDir, "transmission", "42", "", nil, nil)
 
 	got, err := dlRepo.GetByGUID(ctx, dl.GUID)
 	if err != nil {

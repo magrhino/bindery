@@ -529,6 +529,8 @@ func main() {
 	queueHandler := api.NewQueueHandler(downloadRepo, dlClientRepo, bookRepo, historyRepo).
 		WithNotifier(notif).
 		WithStoragePaths(cfg.DownloadDir, cfg.AudiobookDownloadDir)
+	manualImportHandler := api.NewManualImportHandler(importScanner, downloadRepo, bookRepo).
+		WithRoots(libraryRoots)
 	pendingHandler := api.NewPendingHandler(pendingReleaseRepo, queueHandler, downloadRepo, bookRepo)
 	importScanner.WithSettings(settingsRepo)
 	importScanner.WithRootFolders(rootFolderRepo)
@@ -789,6 +791,13 @@ func main() {
 		r.Post("/queue/grab", queueHandler.Grab)
 		r.Post("/queue/{id}/retry-import", queueHandler.RetryImport)
 		r.Delete("/queue/{id}", queueHandler.Delete)
+
+		// Manual import (#766) — admin-only: can read/move arbitrary paths on the server filesystem.
+		r.Group(func(r chi.Router) {
+			r.Use(auth.RequireAdmin)
+			r.Get("/queue/manual-import/lookup", manualImportHandler.Lookup)
+			r.Post("/queue/manual-import", manualImportHandler.Import)
+		})
 		r.Get("/pending", pendingHandler.List)
 		r.Delete("/pending/{id}", pendingHandler.Delete)
 		r.Post("/pending/{id}/grab", pendingHandler.Grab)
