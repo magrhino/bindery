@@ -295,7 +295,13 @@ export const api = {
   deleteAuthor: (id: number, deleteFiles = false) =>
     request<void>(`/author/${id}${deleteFiles ? '?deleteFiles=true' : ''}`, { method: 'DELETE' }),
   refreshAuthor: (id: number) => request<void>(`/author/${id}/refresh`, { method: 'POST' }),
-  relinkAuthorUpstream: (id: number) => request<Author>(`/author/${id}/relink-upstream`, { method: 'POST' }),
+  searchAuthorLinkCandidates: (id: number, term: string) =>
+    request<Author[]>(`/author/${id}/relink-upstream/candidates?term=${encodeURIComponent(term)}`),
+  relinkAuthorUpstream: (id: number, candidate?: RelinkAuthorCandidate) =>
+    request<Author>(`/author/${id}/relink-upstream`, {
+      method: 'POST',
+      body: candidate ? JSON.stringify(candidate) : undefined,
+    }),
   listAuthorAliases: (id: number) => request<AuthorAlias[]>(`/author/${id}/aliases`),
   // listAuthorSeries returns the series the author has books in. Backs the
   // per-author monitor-by-series picker in EditAuthorModal (#810).
@@ -625,6 +631,7 @@ export interface Author {
   ratingsCount: number
   averageRating: number
   monitored: boolean
+  metadataProvider?: string
   monitorMode?: AuthorMonitorMode
   monitorLatestCount?: number
   qualityProfileId?: number | null
@@ -645,6 +652,17 @@ export interface AuthorAlias {
   name: string
   sourceOlId?: string
   createdAt: string
+}
+
+export interface AuthorConflictBody {
+  error?: string
+  canonicalAuthorId?: number
+  canonicalAuthor?: Author
+}
+
+export interface RelinkAuthorCandidate {
+  foreignAuthorId: string
+  authorName?: string
 }
 
 export interface MergeAuthorsResult {
