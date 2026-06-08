@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { api, BINDERY_BASE, Author, Book, BookBulkAction } from '../api/client'
+import { api, BINDERY_BASE, Author, AuthorAlias, Book, BookBulkAction } from '../api/client'
 import ViewToggle from '../components/ViewToggle'
 import { bookStatusBadge } from '../components/bookStatus'
 import MergeAuthorsModal from '../components/MergeAuthorsModal'
@@ -9,6 +9,7 @@ import EditAuthorModal from '../components/EditAuthorModal'
 import AuthorMetadataLinkModal from '../components/AuthorMetadataLinkModal'
 import BulkActionBar from '../components/BulkActionBar'
 import { useView } from '../components/useView'
+import MarkdownDescription from '../components/MarkdownDescription'
 
 type MediaFilter = '' | 'ebook' | 'audiobook'
 type StatusFilter = '' | 'wanted' | 'downloading' | 'downloaded' | 'imported' | 'skipped'
@@ -213,6 +214,23 @@ export default function AuthorDetailPage() {
     }
   }
 
+  const handleDeleteAlias = async (alias: AuthorAlias) => {
+    if (!author) return
+    if (!confirm(t('authorDetail.aliases.removeConfirm', { name: alias.name, author: author.authorName }))) return
+    setError(null)
+    try {
+      await api.deleteAuthorAlias(author.id, alias.id)
+      setAuthor(current => current ? {
+        ...current,
+        aliases: (current.aliases ?? []).filter(a => a.id !== alias.id),
+      } : current)
+    } catch (e) {
+      setError(t('authorDetail.aliases.removeFailed', {
+        error: e instanceof Error ? e.message : String(e),
+      }))
+    }
+  }
+
   const toggleSelect = (bookId: number) => {
     setSelected(prev => {
       const next = new Set(prev)
@@ -371,7 +389,12 @@ export default function AuthorDetailPage() {
             )}
           </div>
           {author.description && (
-            <p className="mt-3 text-sm text-slate-700 dark:text-zinc-300 leading-relaxed line-clamp-6">{author.description}</p>
+            <MarkdownDescription
+              text={author.description}
+              showMoreLabel={t('authorDetail.description.showMore', 'Show more')}
+              showLessLabel={t('authorDetail.description.showLess', 'Show less')}
+              className="mt-3"
+            />
           )}
           <div className="flex flex-wrap gap-2 mt-4">
             <button
@@ -434,10 +457,19 @@ export default function AuthorDetailPage() {
                 {author.aliases.map(a => (
                   <span
                     key={a.id}
-                    className="px-2 py-0.5 rounded bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300"
+                    className="group/alias inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300"
                     title={a.sourceOlId ? `From ${a.sourceOlId}` : undefined}
                   >
-                    {a.name}
+                    <span>{a.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteAlias(a)}
+                      className="ml-0.5 leading-none text-slate-500 hover:text-red-600 focus:text-red-600 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-red-500 dark:text-zinc-500 dark:hover:text-red-400 dark:focus:text-red-400 opacity-100 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/alias:opacity-100 [@media(hover:hover)]:focus:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100"
+                      aria-label={t('authorDetail.aliases.removeLabel', { name: a.name })}
+                      title={t('authorDetail.aliases.removeLabel', { name: a.name })}
+                    >
+                      ×
+                    </button>
                   </span>
                 ))}
               </div>
