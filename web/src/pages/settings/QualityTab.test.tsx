@@ -64,13 +64,12 @@ describe('QualityTab', () => {
     await waitFor(() => {
       expect(screen.getByText('Ebook Preferred')).toBeInTheDocument()
     })
-    // Each item is rendered as a numbered chip ("1. pdf", "2. mobi", …) so the
-    // preference order is visible. "epub" also appears as the cutoff value, so
-    // prefer getAllByText for that one.
+    // Each item is rendered as a worst→best ranked chip ("1. pdf"); "epub"
+    // also appears separately as the cutoff value, so match it loosely.
     expect(screen.getByText('1. pdf')).toBeInTheDocument()
     expect(screen.getByText('2. mobi')).toBeInTheDocument()
     expect(screen.getByText('3. epub')).toBeInTheDocument()
-    expect(screen.getAllByText('epub', { exact: false }).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('epub', { exact: false }).length).toBeGreaterThan(1)
     // Cutoff label rendered.
     expect(screen.getByText('settings.quality.cutoff', { exact: false })).toBeInTheDocument()
   })

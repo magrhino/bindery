@@ -148,7 +148,7 @@ describe('NamingTemplateField component', () => {
     expect(save.disabled).toBe(true)
   })
 
-  it('blocks save on an empty template and announces it', () => {
+  it('blocks save on an empty template and announces the blocking hint', () => {
     render(<Harness initial="" />)
     // The empty-template message is announced (role="alert") while Save stays
     // blocked, so screen-reader users hear why the button is disabled.

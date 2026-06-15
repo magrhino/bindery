@@ -219,7 +219,8 @@
       "calibre": "Calibre",
       "abs": "Audiobookshelf",
       "grimmory": "Grimmory",
-      "blocklist": "Blokkeerlijst"
+      "blocklist": "Blokkeerlijst",
+      "apiKeys": "API Keys"
     },
     "abs": {
       "review": {
@@ -314,7 +315,11 @@
       "free": "{{size}} vrij",
       "addPlaceholder": "/gegevens/boeken",
       "addButton": "Map toevoegen",
-      "addFail": "Map toevoegen mislukt"
+      "addFail": "Map toevoegen mislukt",
+      "defaultLabel": "Standaard hoofdmap",
+      "defaultHint": "Auteurs zonder expliciete hoofdmap komen hier terecht. Laat leeg om terug te vallen op het opstartpad BINDERY_LIBRARY_DIR.",
+      "defaultUnset": "Opstartstandaard gebruiken (BINDERY_LIBRARY_DIR)",
+      "defaultBadge": "Standaard"
     },
     "logs": {
       "heading": "Logboeken",
@@ -383,8 +388,11 @@
       "logRetentionLabel": "Keep log entries for",
       "logRetentionHint": "Log entries older than this are deleted by the daily trim job.",
       "days": "days",
+      "defaultLibraryLocation": "Standaard bibliotheeklocatie",
+      "defaultLibraryLocationHint": "Beheer hoofdmappen en de standaard bibliotheeklocatie op het tabblad Hoofdmappen.",
+      "defaultLibraryLocationLink": "Beheren in Hoofdmappen →",
       "naming": {
-        "hintEmpty": "Verplicht — voer minstens één token of padsegment in."
+        "hintEmpty": "Vereist — voer minstens één token of padsegment in."
       }
     },
     "import": {
@@ -400,7 +408,8 @@
       "resultAdded": "toegevoegd",
       "resultSkipped": "overgeslagen (bestaan al)",
       "resultFailed": "mislukt",
-      "showFailures": "{{count}} fout(en) tonen"
+      "showFailures": "{{count}} fout(en) tonen",
+      "configureHardcoverToken": "Configureer het Hardcover API-token in de API-sleutels-instellingen →"
     },
     "oidc": {
       "heading": "SSO / OIDC Providers",

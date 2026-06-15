@@ -131,7 +131,9 @@ export default function NamingTemplateField({
         </p>
       )}
 
-      {/* Validation feedback */}
+      {/* Validation feedback. The empty-template state still blocks Save, so it
+          carries role="alert" (announced to assistive tech) even though it is
+          styled as a muted hint rather than a hard error. */}
       {validation.empty && (
         // role="alert" so screen readers announce the still-blocking empty
         // state (Save stays disabled). Kept visually muted — it's a "required"
