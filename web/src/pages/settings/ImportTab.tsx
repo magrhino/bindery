@@ -20,7 +20,13 @@ interface ReadarrResult {
   blocklist?: MigrateResult
 }
 
-export default function ImportTab() {
+// onNavigate threads SettingsPage's soft (no-reload) tab switch into the
+// "Configure … in General settings →" link so it doesn't full-page-reload.
+export interface ImportTabProps {
+  onNavigate?: (tab: string) => void
+}
+
+export default function ImportTab({ onNavigate }: ImportTabProps = {}) {
   const { t } = useTranslation()
   const [csvResult, setCsvResult] = useState<MigrateResult | null>(null)
   const [readarrResult, setReadarrResult] = useState<ReadarrResult | null>(null)
@@ -113,7 +119,7 @@ export default function ImportTab() {
       </section>
       <ManualImportSection />
       <GoodreadsImportSection />
-      <HardcoverListsSection />
+      <HardcoverListsSection onNavigate={onNavigate} />
 
       {err && (
         <div className="px-3 py-2 bg-red-100 dark:bg-red-950/30 border border-red-300 dark:border-red-900 rounded text-sm text-red-800 dark:text-red-300">
@@ -269,7 +275,7 @@ interface HardcoverImportListRow {
   stale: boolean
 }
 
-function HardcoverListsSection() {
+function HardcoverListsSection({ onNavigate }: { onNavigate?: (tab: string) => void }) {
   const { t } = useTranslation()
   const [lists, setLists] = useState<ImportList[]>([])
   const [hcLists, setHcLists] = useState<HardcoverList[]>([])
@@ -553,7 +559,21 @@ function HardcoverListsSection() {
         })}
       </div>
 
-      {error && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
+      {error && (
+        <div className="mt-2 text-sm text-rose-600 dark:text-rose-400">
+          {error}
+          {(error.toLowerCase().includes('token') || error.toLowerCase().includes('not configured')) && (
+            <span className="block mt-1 text-xs">
+              <button
+                onClick={() => onNavigate ? onNavigate('general') : window.location.assign('/settings?tab=general')}
+                className="text-emerald-600 dark:text-emerald-400 hover:underline"
+              >
+                Configure the Hardcover API token in General settings →
+              </button>
+            </span>
+          )}
+        </div>
+      )}
     </section>
   )
 }

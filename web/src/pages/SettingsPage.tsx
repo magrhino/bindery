@@ -99,6 +99,15 @@ export default function SettingsPage() {
     } catch { /* ignore — tab state still updates */ }
   }, [])
 
+  // Soft cross-tab navigation passed to tabs (e.g. General's "Manage in Root
+  // Folders →", Import's "Configure … in General settings →") so those links
+  // switch tabs in place via setTab instead of window.location.assign, which
+  // would full-page-reload the SPA. Validates the incoming tab id against
+  // ALL_TABS so a bad caller can't desync the UI.
+  const navigateToTab = useCallback((next: string) => {
+    if ((ALL_TABS as string[]).includes(next)) setTab(next as Tab)
+  }, [setTab])
+
   // Eagerly fetched on page mount (cross-tab — see file header note).
   const [indexers, setIndexers] = useState<Indexer[]>([])
   const [clients, setClients] = useState<DownloadClient[]>([])
@@ -117,7 +126,7 @@ export default function SettingsPage() {
 
   const renderTab = () => {
     switch (tab) {
-      case 'general': return <GeneralTab />
+      case 'general': return <GeneralTab onNavigate={navigateToTab} />
       case 'indexers': return <IndexersTab indexers={indexers} setIndexers={setIndexers} prowlarrInstances={prowlarrInstances} setProwlarrInstances={setProwlarrInstances} />
       case 'clients': return <ClientsTab clients={clients} setClients={setClients} />
       case 'notifications': return <NotificationsTab />
@@ -127,7 +136,7 @@ export default function SettingsPage() {
       case 'calibre': return <CalibreTab />
       case 'abs': return <ABSTab />
       case 'grimmory': return <GrimmoryTab />
-      case 'import': return <ImportTab />
+      case 'import': return <ImportTab onNavigate={navigateToTab} />
       case 'blocklist': return <BlocklistTab />
       case 'logs': return <LogsTab />
     }
@@ -170,7 +179,19 @@ export default function SettingsPage() {
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-zinc-600 px-3 mb-1">Integrations</p>
                 <SettingsNavLink tab="calibre" active={tab} onSelect={setTab} label={t('settings.tabs.calibre')} />
                 <SettingsNavLink tab="abs" active={tab} onSelect={setTab} label={t('settings.tabs.abs')} />
-                <SettingsNavLink tab="grimmory" active={tab} onSelect={setTab} label={t('settings.tabs.grimmory')} />
+                <button
+                  onClick={() => setTab('grimmory')}
+                  className={`w-full text-left px-3 py-1.5 rounded-md text-sm transition-colors flex items-center gap-2 ${
+                    tab === 'grimmory'
+                      ? 'bg-slate-200 dark:bg-zinc-800 text-slate-900 dark:text-white font-medium'
+                      : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-zinc-800/50'
+                  }`}
+                >
+                  <span>{t('settings.tabs.grimmory')}</span>
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400 font-medium leading-none">
+                    Preview
+                  </span>
+                </button>
               </div>
 
               <div className="pt-3 pb-0.5">

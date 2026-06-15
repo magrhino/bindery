@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, BINDERY_BASE, AuthConfig, AuthStatus, AuthorMonitorMode, HardcoverTestResult, RootFolder, SystemStatus } from '../../api/client'
+import { api, BINDERY_BASE, AuthConfig, AuthStatus, AuthorMonitorMode, HardcoverTestResult, SystemStatus } from '../../api/client'
 import AuthSettings from '../../settings/AuthSettings'
 import ThemeToggle from '../../components/ThemeToggle'
 import LanguageSwitcher from '../../components/LanguageSwitcher'
@@ -10,6 +10,7 @@ import { useAuth } from '../../auth/AuthContext'
 import { inputCls } from './formStyles'
 import Toggle from './Toggle'
 import NamingTemplateField from './NamingTemplateField'
+import { useSaveResult } from './useSaveResult'
 
 function formatBackupSize(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 B'
@@ -36,7 +37,14 @@ function isAuthorMonitorMode(value: string): value is AuthorMonitorMode {
   return value === 'all' || value === 'future' || value === 'latest' || value === 'none'
 }
 
-export default function GeneralTab() {
+// Tab identifiers used by onNavigate for soft (no-reload) cross-tab links.
+// Kept loose (string) so GeneralTab doesn't need to import SettingsPage's Tab
+// union; SettingsPage validates the value.
+export interface GeneralTabProps {
+  onNavigate?: (tab: string) => void
+}
+
+export default function GeneralTab({ onNavigate }: GeneralTabProps = {}) {
   const { t } = useTranslation()
   const { isAdmin } = useAuth()
   const opdsClipboard = useClipboardCopy()
@@ -44,6 +52,8 @@ export default function GeneralTab() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState<string | null>(null)
   const [dropErr, setDropErr] = useState<string | null>(null)
+  const [langErr, setLangErr] = useState<string | null>(null)
+  const [logRetentionErr, setLogRetentionErr] = useState<string | null>(null)
   const [backups, setBackups] = useState<Array<{ name: string; size: number; modTime: string }>>([])
   const [creatingBackup, setCreatingBackup] = useState(false)
   const [deletingBackup, setDeletingBackup] = useState<string | null>(null)
@@ -67,10 +77,9 @@ export default function GeneralTab() {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
   const [hardcoverToken, setHardcoverToken] = useState('')
   const [hardcoverTestResult, setHardcoverTestResult] = useState<(HardcoverTestResult & { testing?: boolean }) | null>(null)
-  const [rootFolders, setRootFolders] = useState<RootFolder[]>([])
-  const [newDefaultFolderPath, setNewDefaultFolderPath] = useState('')
-  const [newDefaultFolderError, setNewDefaultFolderError] = useState('')
-  const [addingDefaultFolder, setAddingDefaultFolder] = useState(false)
+  const [langSaveResult, langSave] = useSaveResult()
+  const [logRetentionSaveResult, logRetentionSave] = useSaveResult()
+  const [dropSaveResult, dropSave] = useSaveResult()
 
   useEffect(() => {
     api.listSettings()
@@ -85,7 +94,6 @@ export default function GeneralTab() {
     api.libraryScanStatus().then(setLastScan).catch(() => {/* no prior scan — ignore 404 */})
     api.getStorage().then(setStorage).catch(console.error)
     api.status().then(setSystemStatus).catch(console.error)
-    api.listRootFolders().then(setRootFolders).catch(console.error)
   }, [])
 
   const refreshSystemStatus = async () => {
@@ -116,7 +124,42 @@ export default function GeneralTab() {
     try {
       await api.setSetting('import.drop_folder', settings['import.drop_folder'] ?? '')
     } catch (err) {
-      setDropErr(err instanceof Error ? err.message : 'Save failed')
+      const msg = err instanceof Error ? err.message : 'Save failed'
+      setDropErr(msg)
+      throw err
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  // savePreferredLanguage / saveLogRetention mirror saveDropFolder: they set
+  // and clear `saving` (so the disabled guard fires and "Saving…" shows) and
+  // throw on failure so useSaveResult flips to 'error' AND a visible message is
+  // surfaced inline — instead of routing api.setSetting straight into
+  // useSaveResult, which set neither `saving` nor any error text.
+  const savePreferredLanguage = async () => {
+    setSaving('search.preferredLanguage')
+    setLangErr(null)
+    try {
+      await api.setSetting('search.preferredLanguage', settings['search.preferredLanguage'] ?? '')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Save failed'
+      setLangErr(msg)
+      throw err
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  const saveLogRetention = async () => {
+    setSaving('log.retention_days')
+    setLogRetentionErr(null)
+    try {
+      await api.setSetting('log.retention_days', settings['log.retention_days'] ?? '')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Save failed'
+      setLogRetentionErr(msg)
+      throw err
     } finally {
       setSaving(null)
     }
@@ -363,11 +406,11 @@ export default function GeneralTab() {
                     className={inputCls + ' flex-1'}
                   />
                   <button
-                    onClick={saveDropFolder}
+                    onClick={() => dropSave(saveDropFolder)}
                     disabled={saving === 'import.drop_folder'}
-                    className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
+                    className={`px-3 py-2 rounded text-xs font-medium disabled:opacity-50 ${dropSaveResult === 'saved' ? 'bg-emerald-500' : dropSaveResult === 'error' ? 'bg-red-600' : 'bg-emerald-600 hover:bg-emerald-500'}`}
                   >
-                    {saving === 'import.drop_folder' ? t('common.saving') : t('common.save')}
+                    {dropSaveResult === 'saved' ? 'Saved ✓' : dropSaveResult === 'error' ? 'Error' : saving === 'import.drop_folder' ? t('common.saving') : t('common.save')}
                   </button>
                 </div>
                 {dropErr && <p className="text-xs text-red-600 dark:text-red-400 mt-1">{dropErr}</p>}
@@ -445,13 +488,14 @@ export default function GeneralTab() {
                 <option value="en">{t('settings.general.preferredLanguageEn')}</option>
               </select>
               <button
-                onClick={() => saveSetting('search.preferredLanguage')}
+                onClick={() => langSave(savePreferredLanguage)}
                 disabled={saving === 'search.preferredLanguage'}
-                className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
+                className={`px-3 py-2 rounded text-xs font-medium disabled:opacity-50 ${langSaveResult === 'saved' ? 'bg-emerald-500' : langSaveResult === 'error' ? 'bg-red-600' : 'bg-emerald-600 hover:bg-emerald-500'}`}
               >
-                {saving === 'search.preferredLanguage' ? t('common.saving') : t('common.save')}
+                {langSaveResult === 'saved' ? 'Saved ✓' : langSaveResult === 'error' ? 'Error' : saving === 'search.preferredLanguage' ? t('common.saving') : t('common.save')}
               </button>
             </div>
+            {langErr && <p className="text-xs text-red-600 dark:text-red-400 mt-1">{langErr}</p>}
           </div>
         </div>
       </section>
@@ -610,73 +654,16 @@ export default function GeneralTab() {
       {/* Default library location */}
       <section>
         <h3 className="text-base font-semibold mb-3 text-slate-800 dark:text-zinc-200">Default library location</h3>
-        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900 space-y-3">
-          <div>
-            <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200 mb-1">Default root folder</label>
-            <p className="text-xs text-slate-600 dark:text-zinc-500 mb-2">
-              When an author has no per-author root folder set, Bindery uses this location. Leave unset to fall back to <code className="font-mono bg-slate-200 dark:bg-zinc-800 px-1 rounded">BINDERY_LIBRARY_DIR</code>.
-            </p>
-            <select
-              value={settings['library.defaultRootFolderId'] ?? ''}
-              onChange={async e => {
-                const next = e.target.value
-                setSettings(s => ({ ...s, 'library.defaultRootFolderId': next }))
-                await api.setSetting('library.defaultRootFolderId', next).catch(console.error)
-              }}
-              className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
-            >
-              <option value="">— Unset (use BINDERY_LIBRARY_DIR) —</option>
-              {rootFolders.map(rf => (
-                <option key={rf.id} value={String(rf.id)}>{rf.path}</option>
-              ))}
-            </select>
-          </div>
-          {!addingDefaultFolder ? (
-            <button
-              onClick={() => { setAddingDefaultFolder(true); setNewDefaultFolderError('') }}
-              className="text-xs text-emerald-600 dark:text-emerald-400 hover:underline"
-            >
-              + Add root folder
-            </button>
-          ) : (
-            <div className="space-y-2">
-              <label className="block text-xs text-slate-600 dark:text-zinc-400">New root folder path</label>
-              <div className="flex gap-2">
-                <input
-                  value={newDefaultFolderPath}
-                  onChange={e => setNewDefaultFolderPath(e.target.value)}
-                  placeholder="/mnt/books"
-                  className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 font-mono"
-                />
-                <button
-                  onClick={async () => {
-                    if (!newDefaultFolderPath.trim()) return
-                    setNewDefaultFolderError('')
-                    try {
-                      const created = await api.addRootFolder(newDefaultFolderPath.trim())
-                      setRootFolders(prev => [...prev, created])
-                      setSettings(s => ({ ...s, 'library.defaultRootFolderId': String(created.id) }))
-                      await api.setSetting('library.defaultRootFolderId', String(created.id)).catch(console.error)
-                      setNewDefaultFolderPath('')
-                      setAddingDefaultFolder(false)
-                    } catch (err) {
-                      setNewDefaultFolderError(err instanceof Error ? err.message : 'Failed to add folder')
-                    }
-                  }}
-                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium"
-                >
-                  Add
-                </button>
-                <button
-                  onClick={() => { setAddingDefaultFolder(false); setNewDefaultFolderPath(''); setNewDefaultFolderError('') }}
-                  className="px-3 py-2 bg-slate-300 dark:bg-zinc-700 hover:bg-slate-400 dark:hover:bg-zinc-600 rounded text-xs font-medium"
-                >
-                  Cancel
-                </button>
-              </div>
-              {newDefaultFolderError && <p className="text-xs text-red-500">{newDefaultFolderError}</p>}
-            </div>
-          )}
+        <div className="p-4 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
+          <p className="text-xs text-slate-600 dark:text-zinc-500 mb-3">
+            Manage root folders and the default library location in the Root Folders tab.
+          </p>
+          <button
+            onClick={() => onNavigate ? onNavigate('rootfolders') : window.location.assign('/settings?tab=rootfolders')}
+            className="text-sm text-emerald-600 dark:text-emerald-400 hover:underline"
+          >
+            Manage in Root Folders →
+          </button>
         </div>
       </section>
 
@@ -982,14 +969,15 @@ export default function GeneralTab() {
               />
               <span className="text-sm text-slate-600 dark:text-zinc-400">{t('settings.general.days')}</span>
               <button
-                onClick={() => saveSetting('log.retention_days')}
+                onClick={() => logRetentionSave(saveLogRetention)}
                 disabled={saving === 'log.retention_days'}
-                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium disabled:opacity-50"
+                className={`px-3 py-1.5 rounded text-sm font-medium disabled:opacity-50 ${logRetentionSaveResult === 'saved' ? 'bg-emerald-500' : logRetentionSaveResult === 'error' ? 'bg-red-600' : 'bg-emerald-600 hover:bg-emerald-500'}`}
               >
-                {saving === 'log.retention_days' ? t('common.saving') : t('common.save')}
+                {logRetentionSaveResult === 'saved' ? 'Saved ✓' : logRetentionSaveResult === 'error' ? 'Error' : saving === 'log.retention_days' ? t('common.saving') : t('common.save')}
               </button>
             </div>
           </div>
+          {logRetentionErr && <p className="text-xs text-red-600 dark:text-red-400 mt-2">{logRetentionErr}</p>}
         </div>
       </section>
 
@@ -1134,9 +1122,6 @@ function SecuritySection() {
         {isAdmin && (<>
         <div>
           <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">Authentication Mode</label>
-          <p className="text-xs text-slate-600 dark:text-zinc-500 mb-2">
-            <strong>Enabled</strong>: always require login. <strong>Local only</strong>: skip login for requests from private IPs (home network). <strong>Disabled</strong>: no authentication — only safe behind a trusted reverse proxy.
-          </p>
           <select
             value={cfg.mode}
             onChange={e => setMode(e.target.value as AuthStatus['mode'])}
@@ -1147,6 +1132,9 @@ function SecuritySection() {
             <option value="local-only">Local only (bypass for private IPs)</option>
             <option value="disabled">Disabled (no auth)</option>
           </select>
+          {cfg.mode === 'enabled' && <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">Always requires login, regardless of network origin.</p>}
+          {cfg.mode === 'local-only' && <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">Login is bypassed for requests from private / LAN IP ranges. Still requires login from the internet.</p>}
+          {cfg.mode === 'disabled' && <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">No authentication — only safe when Bindery is behind a trusted reverse proxy that enforces access control.</p>}
         </div>
 
         <div className="border-t border-slate-200 dark:border-zinc-800 pt-4">
@@ -1170,6 +1158,11 @@ function SecuritySection() {
           </div>
           {apiKeyClipboard.status === 'manual' && (
             <ClipboardManualFallback text={apiKeyClipboard.manualText} className="mt-2" />
+          )}
+          {!showKey && (
+            <p className="text-[11px] text-slate-500 dark:text-zinc-500 mt-1">
+              Regenerating invalidates the current key — update all external integrations afterward.
+            </p>
           )}
         </div>
 
