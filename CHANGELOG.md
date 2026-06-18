@@ -6,6 +6,37 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [v1.21.0] — 2026-06-17
+
+### Added
+
+- **Configurable wanted-search interval** ([#1097](https://github.com/vavallee/bindery/issues/1097)) — the automatic wanted-books search interval is now a setting (Settings → General) instead of a fixed schedule. Lengthen it to ease load on your indexers / stay under daily API caps for large libraries, or shorten it to find releases sooner. Defaults to the previous behaviour; takes effect after the next Bindery restart.
+- **Storage path health in Settings** ([#1183](https://github.com/vavallee/bindery/issues/1183)) — Settings → General → Storage now shows each configured directory (download, library, audiobook, audiobook-download) as OK / Missing / Not writable with the failing reason, and warns when downloads and the library are on different filesystems ("imports will copy, not hardlink"). Surfaces the existence/writability checks Bindery already ran at startup but previously only logged, via a new admin-only `GET /api/v1/system/storage` health response.
+- **Choose format when adding from a series** ([#1124](https://github.com/vavallee/bindery/issues/1124)) — the series page "add" and "add all" actions now have an ebook / audiobook / both selector, so missing books are created (and searched) as the chosen format instead of always defaulting to ebook.
+- **Group an author's books by series** ([#1125](https://github.com/vavallee/bindery/issues/1125)) — the author page gains an opt-in "Group by series" toggle that organizes books under the series they belong to (ordered by position), with series-less books collected in a "Standalone" group. The flat grid/table list stays the default.
+- **Select all / deselect all on the author page** ([#1172](https://github.com/vavallee/bindery/issues/1172)) — the author page filter bar gains a single toggle that selects or deselects every currently displayed book for bulk actions. It respects the active filters, so it composes with the Wanted filter and only ever sweeps up visible books.
+- **Clickable un-added series rows** ([#1123](https://github.com/vavallee/bindery/issues/1123)) — on the series page, an un-added Hardcover book that already exists in your library now links straight to its book page, matching the added rows. Rows with no library match keep the "add" button.
+- **Link to the indexer's release page from search results** ([#1122](https://github.com/vavallee/bindery/issues/1122)) — each interactive search result (book page and Wanted page) now shows a small "↗ indexer" link, opening the indexer's human-readable detail/info page in a new tab so you can inspect a release before grabbing. The link appears only when the indexer supplies a usable URL.
+
+### Changed
+
+- **Download-client test now checks path visibility** ([#1182](https://github.com/vavallee/bindery/issues/1182)) — the Test button no longer just verifies the API connection. After connecting it resolves the client's completed-downloads path (qBittorrent category save path, NZBGet destination directory), applies your path remap (the per-client remap first, then the global `BINDERY_DOWNLOAD_PATH_REMAP` as a fallback, matching how the importer resolves paths), and confirms Bindery can actually read it. If it can't, Test now warns loudly with the resolved path and a fix instead of showing a misleading green check, catching the most common silent "test OK but nothing imports" misconfiguration at config time. Client types whose completed path can't be introspected stay connection-only.
+- **Manual Import is easier to find** ([#1184](https://github.com/vavallee/bindery/issues/1184)) — the empty Queue and Wanted pages now point you straight to Manual Import (for files already on disk) and Scan Library (for files already in your library folder), so "I have ebooks downloaded but nothing imports" no longer leaves you stuck.
+- **Document the single-mount (hardlink) storage layout** ([#1170](https://github.com/vavallee/bindery/issues/1170)) — `docs/DEPLOYMENT.md` now explains the TRaSH-style single-mount layout required for hardlink imports/seeding, and the Helm `values.yaml` flags that the stock `BINDERY_*_DIR` defaults are placeholders that must point inside a real mounted volume.
+
+### Fixed
+
+- **Book page updates live while a download imports** ([#1161](https://github.com/vavallee/bindery/issues/1161)) — the book detail page now polls while a book is downloading/importing, so the file and "Imported" status appear on their own instead of requiring a manual page reload.
+- **Wanted page updates live** ([#1161](https://github.com/vavallee/bindery/issues/1161)) — the Wanted list now refreshes on its own, so books grabbed in the background (auto-search) drop off without a manual reload. Polling pauses while you have a results panel open or a grab in progress so the list doesn't shift under you.
+- **"Wanted" filter no longer shows unmonitored books** ([#1173](https://github.com/vavallee/bindery/issues/1173)) — on the author page, the "Status: Wanted" filter now lists only genuinely wanted books (monitored and not yet imported). An unmonitored book carrying a stale `wanted` status is excluded, matching the status badge and the backend's wanted filter.
+- **Relevance filter keeps correct releases whose title has punctuation** ([#1179](https://github.com/vavallee/bindery/issues/1179)) — title-vs-release-name matching now treats all punctuation (e.g. a trailing `!`, `?`, `%`, `#`) as a word boundary, so a correct release whose name drops the punctuation is no longer rejected with "title/author keywords did not match release name".
+- **Add Book modal no longer crashes when a search returns no results** ([#1188](https://github.com/vavallee/bindery/issues/1188)) — an empty metadata book search now serializes as `[]` instead of `null` from `/api/v1/search/book`, and the modal defensively coerces a null body to an empty list, so an empty search shows "No results found." instead of throwing `Cannot read properties of null (reading 'map')`.
+- **Cover images load again when `BINDERY_OUTBOUND_PROXY` is set** ([#1177](https://github.com/vavallee/bindery/issues/1177)) — the cover-image proxy no longer applies its strict per-dial SSRF re-check to the outbound proxy itself, which had rejected a LAN/loopback proxy address and returned `502` for every cover (silently breaking the on-disk image cache). The DNS-rebind guard still applies on the direct, no-proxy path.
+
+### Security
+
+- **Metadata provider errors no longer leak the Google Books API key or internal infrastructure** ([#1144](https://github.com/vavallee/bindery/issues/1144)) — a transport failure while talking to a metadata provider used to echo the raw error back to the client, and that error embedded the full upstream request URL (including the Google Books `?key=` API key) plus the internal DNS resolver IP. The search/series endpoints now return a generic `metadata provider unavailable` message, logging the full detail server-side instead, and the provider clients redact secret query-string values from any error they construct.
+
 ## [v1.20.0] — 2026-06-16
 
 ### Added
