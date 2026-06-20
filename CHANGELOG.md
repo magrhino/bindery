@@ -6,6 +6,21 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [v1.22.0] — 2026-06-20
+
+### Added
+- **Add Book searches by Audible ASIN** (#1189) — entering a 10-character ASIN such as `B0DBJBFHGT` in **Authors → Add Book** now resolves the Audible edition directly (via the existing ASIN resolver) and returns one addable audiobook result with the ASIN preserved, instead of falling through to an unreliable title search. ISBN and title searches are unchanged.
+
+### Changed
+- **CI now gates on frontend unit tests** — the `vitest` suite (`npm test`) is wired into the `validate (frontend)` PR check and the `test` release/merge gate, so a failing frontend test now blocks merges and releases. Previously `vitest` only ran locally via `make check`; no workflow invoked it, leaving 352 frontend tests ungated.
+- **CI Go toolchain aligned with the shipped Docker image** — all GitHub Actions workflows now pin Go `1.26.4` (was `1.25.11`), matching the `golang:1.26.4-alpine` build stage in the Dockerfile, so CI tests on the same Go toolchain production ships. (The matching Node bump to `26` is deferred: Node 26 breaks the MSW-based frontend test harness; tracked separately.)
+
+### Fixed
+- **"Group by series" on the author page dumped every book into "Standalone"** (#1209) — the per-author series endpoint returned each series without its book membership (the `books` array was empty, and `omitempty` dropped it from the JSON entirely), so the frontend had nothing to group on and every book fell through to Standalone. `ListByAuthor` now joins through `series_books`/`books` and populates each series' book list (author-scoped, ordered by position-in-series), so books group under their series again.
+- **Un-added series-page books that already exist in your library are now clickable** (#1210) — "missing" rows from the Hardcover diff that correspond to a book already in your library now render as links to the existing book instead of an "add" button. The match is ownership-scoped, so only books in your own library are linked. Previously the backend never populated the local book id on these rows, leaving the link inert.
+- **Prolific authors capped at 100 books** (#1205) — adding or refreshing an author from OpenLibrary fetched only the first page of the `/authors/{id}/works` endpoint, silently truncating any catalogue larger than 100 works. The works endpoint is now paged through to completion (bounded at 2000 works to keep pathological responses in check), so authors with hundreds of titles import their full catalogue. This is unrelated to the frontend list pagination fixed in #1011.
+- **Spurious logout on a database blip** (#1200) — a transient database error while checking a session's epoch no longer silently invalidates a valid session cookie. The auth middleware now distinguishes a real "session revoked" epoch mismatch from a failed lookup and returns a server error (500) on the latter, instead of dropping the request to unauthenticated and logging the user out.
+
 ## [v1.21.0] — 2026-06-17
 
 ### Added
