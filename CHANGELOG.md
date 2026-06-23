@@ -6,6 +6,41 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [v1.22.1] — 2026-06-22
+
+Patch release: security hardening, bug fixes, documentation accuracy, and a
+large test-coverage backfill. No new features, no config or schema changes.
+
+### Security
+- **Outbound NZB/torrent fetches are now SSRF-guarded at dial time** (#1262) — the indexer-supplied `.torrent` / `.nzb` download URL is data chosen by the indexer's response, not an admin-typed value, so the download clients (`deluge`, `nzbget`, `qbittorrent`, `sabnzbd`, `transmission`) now dial through `httpsec`'s guarded transport. A malicious or compromised indexer can no longer point a download link at loopback, link-local, or cloud-metadata. Loopback remains opt-in via `BINDERY_DOWNLOAD_ALLOW_LOOPBACK`.
+- **Webhook notifications re-validate on redirect and guard the dial against DNS rebinding** (#1261) — `notifier` now revalidates the target after each redirect hop and pins the dialed IP, closing a TOCTOU window where a webhook URL that passed the initial SSRF check could be redirected (or re-resolved) to a private address.
+- **The SSRF guard now blocks the unspecified address** `0.0.0.0` / `::` (#1259) — previously these slipped past the loopback/private checks and could reach services bound to all interfaces on the host.
+- **`/migrate/*` import routes now require admin** (#1264) — the CSV / Readarr / Goodreads bulk-import endpoints were registered at the authenticated-route level, so any logged-in user could run them. They are now behind `RequireAdmin`, matching ABS import and Calibre rollback.
+- **Bulk book delete enforces per-row ownership** (#1242, #1243) — the bulk-delete handler now runs the same `auth.CheckOwnership` gate as single delete, so a non-owner can no longer delete another user's books by ID when tenancy is enforced.
+- **OIDC `allowed_groups` is enforced against the configured group claim** (#1244, #1245) — the login filter previously read a claim literally named `groups`, so deployments using `BINDERY_OIDC_GROUP_CLAIM=roles` (or similar) silently rejected every user. It now honors the configured claim, consistent with admin-group mapping.
+- **Indexer infoUrl links are scheme-allowlisted in the UI** (#1267) — provider-supplied `infoUrl` values are now rendered only when they are `http(s)`, blocking `javascript:` / `data:` injection on Book Detail and Wanted pages.
+- **Imported file discovery skips symlinks** (#1263) — the scanner no longer follows symlinked files when collecting books to import, preventing a crafted download payload from redirecting an import outside the intended tree.
+- **`sanitizePath` strips control characters and caps component length** (#1266) — path components built from metadata are hardened against control-byte injection and pathologically long names.
+- **Indexer and SABnzbd API keys are redacted from transport errors** (#1260, #1265) — newznab transport errors and SABnzbd `%w`-wrapped `url.Error`s no longer echo the API key into logs. The SABnzbd fix scrubs the URL in place so the typed-error chain (needed by `nethint`) is preserved.
+
+### Fixed
+- **Audiobook scans no longer misparse narrator / per-chapter tags as book titles** (#1239, #1240) — when the folder hierarchy already yields a real title, a per-track chapter tag (`"04 - Sinister Grey Mists…"`) no longer clobbers it, so multi-part audiobooks reconcile to one book instead of fragmenting.
+- **Hardcover list-sync reconciles against the library instead of duplicating** (#1223, #1241) — authors *and* books already present are matched and updated rather than re-created on each sync.
+- **Manual/interactive search propagates `IndexerPriority`** (#1246, #1247) — priority now affects ranking in interactive search, not just automatic grabs.
+- **History filters AND `BookID` and `EventType`** (#1248, #1249) — supplying both filters now intersects them instead of letting the later one replace the earlier.
+- **Plain `.azw` releases are ranked, not scored 0** (#1250, #1251) — `.azw` is treated as a valid ebook format in quality ranking.
+- **Calendar buckets releases by UTC date** (#1252, #1253) — release days no longer shift across a day boundary for users in non-UTC time zones.
+- **Auto import mode is decided against the real destination root** (#1254, #1255) — the hardlink-vs-copy choice for `AUTO` now evaluates the actual per-author / audiobook destination filesystem rather than the global library dir.
+- **Hardcover numeric slugs resolve by slug** (#1256, #1257) — an all-numeric author/book slug is looked up as a slug instead of being misinterpreted as a database id.
+- **OpenLibrary preserves the error chain** (#1279) — transport errors are wrapped with `%w` instead of flattened, so `errors.Is(context.Canceled)` and friends work again.
+
+### Docs
+- **Hardcover requires an API token for search** (#1258) — README and the Troubleshooting wiki now state that the live Hardcover GraphQL endpoint rejects unauthenticated queries (`Unable to verify token`), including search — not just user-specific queries.
+- **Freshened stale docs for this release** (#1280) — corrected the QUICKSTART "single-administrator" line (multi-user shipped), bumped `Go 1.25 → 1.26` in ARCHITECTURE/AGENTS to match the shipped build, documented `BINDERY_OIDC_GROUP_CLAIM` as feeding both admin mapping and `allowed_groups`, and added the missing `BINDERY_ALLOW_LAN_OIDC` env-var row to DEPLOYMENT.
+
+### Tests
+Coverage backfill with no production behavior change: indexer ranker scoring terms (#1268); importer path-traversal/containment (#1269), `MoveFileCtx` cross-fs copy/verify (#1270), and library-scan series reconcile (#1276); scheduler seed-ratio precedence (#1271); cross-tenant DB isolation (#1272); metadata/download client error paths (#1273); destructive API handlers (#1275); prowlarr + grimmory handlers (#1277); BooksPage states (#1274); and a grab→import→history integration test (#1278).
+
 ## [v1.22.0] — 2026-06-20
 
 ### Added
