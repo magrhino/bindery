@@ -6,6 +6,27 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [v1.22.3] — 2026-06-26
+
+A patch release of import, download, and multi-user fixes, plus a per-list
+media type for Hardcover import lists. The one schema change
+(`import_lists.media_type`) is additive and defaults to the previous behaviour.
+
+### Added
+- **Per-list media type for Hardcover import lists** (#1296, #1314) — a synced book took its format from Hardcover's edition availability, so separate "Audiobooks" and "Ebooks" lists produced identical media types (most works report both editions). Each import list now has an Auto / Ebook / Audiobook / Both selector that pins the format its books are created as. Applied on create only: the syncer skips books that already exist, so a book on two single-format lists is never auto-promoted to Both and a manually-set media type survives re-sync.
+
+### Fixed
+- **Authors list sorts A–Z / Z–A case-insensitively** (#1312) — `sort_name` is stored case-preserving, so the default BINARY collation sorted all uppercase ahead of all lowercase and pushed lowercase-article names ("de Balzac") past "Z", which read as a jumble. The sort now uses `COLLATE NOCASE`, backed by a matching index (migration 055). Sorting by "recent" was unaffected.
+- **Admins see all libraries in list and browse views** (#1310) — with multi-user / SSO enabled, an admin only saw rows they owned, so authors and books created by another account (or via API key) were invisible even though the global duplicate check still blocked re-creating them. List, browse, and OPDS now show everything to admins (and when tenancy is disabled), matching the existing per-item ownership checks.
+- **Downloads of books stored under configured root folders no longer return "access denied"** (#1308) — the download path allow-list was only the two static library/audiobook directories captured at startup, so a book written under a user-configured root folder 403'd. Root folders are now resolved at request time and included in the allow-list, failing closed on error.
+- **Cross-device imports fall back to copy instead of failing** (#1313) — when downloads and library are on separate mounts (e.g. distinct Docker bind mounts, or Unraid `/mnt/user` shares, which share a device id but reject cross-mount hardlinks), the import failed with "invalid cross-device link" and the storage panel falsely claimed they shared a filesystem. The hardlink-capability check now performs a real link probe (so the message and the auto import-mode are honest), and the hardlink path falls back to a seeding-safe copy on EXDEV.
+
+### Changed
+- **CI and tests run on Node 26** (#1201, #1230, #1315; thanks @magrhino) — the frontend test harness was updated for Node 26 (storage guards, MSW origin normalization, `act`-wrapped fake timers) and the CI/security workflows bumped 22 → 26. As part of this, `usePagination` now tolerates unavailable `localStorage` so a list never breaks on a storage error.
+
+### Internal
+- Path-safety test compares resolved file paths so macOS `/var` temp directories don't fail local runs (#1229; thanks @magrhino).
+
 ## [v1.22.2] — 2026-06-25
 
 Adds bulk folder import for migrating an existing library, plus a batch of
