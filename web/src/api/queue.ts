@@ -129,6 +129,16 @@ export const queueApi = {
   deleteFromQueue: (id: number, deleteFiles = false) =>
     request<void>(`/queue/${id}${deleteFiles ? '?deleteFiles=true' : ''}`, { method: 'DELETE' }),
 
+  // Remove many queue items at once. unmonitorBooks also stops monitoring each
+  // linked book so the scheduler doesn't immediately re-grab it — the recovery
+  // path for an accidental mass import that flooded the queue. Returns a per-id
+  // result map ({ "12": { ok: true }, "13": { ok: false, error: "..." } }).
+  bulkDeleteQueue: (ids: number[], opts?: { deleteFiles?: boolean; unmonitorBooks?: boolean }) =>
+    request<{ results: Record<string, { ok: boolean; error?: string }> }>('/queue/bulk-delete', {
+      method: 'POST',
+      body: JSON.stringify({ ids, deleteFiles: opts?.deleteFiles ?? false, unmonitorBooks: opts?.unmonitorBooks ?? false }),
+    }),
+
   // Manual import (#766)
   lookupManualImport: (path: string) =>
     request<ManualImportLookup>(`/queue/manual-import/lookup?path=${encodeURIComponent(path)}`),

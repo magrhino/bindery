@@ -846,6 +846,7 @@ func main() {
 		r.Get("/queue", queueHandler.List)
 		r.Post("/queue/grab", queueHandler.Grab)
 		r.Post("/queue/{id}/retry-import", queueHandler.RetryImport)
+		r.Post("/queue/bulk-delete", queueHandler.BulkDelete)
 		r.Delete("/queue/{id}", queueHandler.Delete)
 
 		// Manual import (#766) — admin-only: can read/move arbitrary paths on the server filesystem.

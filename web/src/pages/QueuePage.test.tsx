@@ -15,6 +15,7 @@ vi.mock('../api/client', async importOriginal => {
       listQueue: vi.fn(),
       listPending: vi.fn(),
       deleteFromQueue: vi.fn(),
+      bulkDeleteQueue: vi.fn(),
       retryImport: vi.fn(),
       dismissPending: vi.fn(),
       grabPending: vi.fn(),
@@ -40,6 +41,11 @@ vi.mock('react-i18next', () => ({
         'queue.errorDetails': 'Show full error',
         'queue.clearAllFailed': 'Clear all failed',
         'queue.retryAllFailed': 'Retry all failed',
+        'queue.selectAll': 'Select all',
+        'queue.removeSelected': 'Remove selected',
+        'queue.clearSelection': 'Clear selection',
+        'queue.alsoUnmonitor': 'Also stop monitoring these books',
+        'queue.deleteFilesLabel': 'Delete downloaded files',
         'importHints.heading': 'Already have files on disk?',
         'importHints.body': 'Bindery only auto-imports downloads it grabbed itself.',
         'importHints.manualImport': 'Import them',
@@ -120,6 +126,7 @@ beforeEach(() => {
   vi.mocked(api.listQueue).mockResolvedValue([])
   vi.mocked(api.listPending).mockResolvedValue([])
   vi.mocked(api.deleteFromQueue).mockResolvedValue(undefined)
+  vi.mocked(api.bulkDeleteQueue).mockResolvedValue({ results: {} })
   vi.mocked(api.retryImport).mockResolvedValue({ ok: true })
   vi.mocked(api.dismissPending).mockResolvedValue(undefined)
   vi.mocked(api.grabPending).mockResolvedValue(makeDownload())
@@ -262,6 +269,49 @@ describe('QueuePage', () => {
     confirmSpy.mockRestore()
   })
 
+  it('bulk-removes arbitrarily selected items and unmonitors their books by default', async () => {
+    vi.mocked(api.listQueue)
+      .mockResolvedValueOnce([
+        makeQueueItem({ id: 1, title: 'Flood A', status: 'downloading' }),
+        makeQueueItem({ id: 2, title: 'Flood B', status: 'downloading' }),
+        makeQueueItem({ id: 3, title: 'Keep', status: 'downloading' }),
+      ])
+      .mockResolvedValueOnce([])
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    renderQueuePage()
+
+    const a = await screen.findByText('Flood A')
+    fireEvent.click(within(a.closest('div')!.parentElement!).getByRole('checkbox'))
+    const b = screen.getByText('Flood B')
+    fireEvent.click(within(b.closest('div')!.parentElement!).getByRole('checkbox'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove selected' }))
+
+    // unmonitorBooks defaults ON (undo a mass import); deleteFiles defaults OFF.
+    // The unselected "Keep" item is not touched.
+    await waitFor(() => expect(api.bulkDeleteQueue).toHaveBeenCalledWith([1, 2], { deleteFiles: false, unmonitorBooks: true }))
+    confirmSpy.mockRestore()
+  })
+
+  it('select-all covers the whole queue and can also delete downloaded files', async () => {
+    vi.mocked(api.listQueue).mockResolvedValue([
+      makeQueueItem({ id: 1, title: 'A', status: 'downloading' }),
+      makeQueueItem({ id: 2, title: 'B', status: 'downloading' }),
+    ])
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    renderQueuePage()
+
+    await screen.findByText('A')
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select all' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Delete downloaded files' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove selected' }))
+
+    await waitFor(() => expect(api.bulkDeleteQueue).toHaveBeenCalledWith([1, 2], { deleteFiles: true, unmonitorBooks: true }))
+    confirmSpy.mockRestore()
+  })
+
   it('retries an import-failed queue item and reloads the queue', async () => {
     const retry = deferred<{ ok: boolean }>()
     vi.mocked(api.listQueue)
@@ -384,7 +434,11 @@ describe('QueuePage', () => {
     const card = item.closest('div')!.parentElement!
     fireEvent.click(within(card).getByRole('button', { name: 'Remove' }))
 
-    fireEvent.click(await screen.findByRole('checkbox'))
+    // The page now also renders per-row + select-all checkboxes, so target the
+    // modal's "delete files" checkbox specifically (it is rendered last).
+    await screen.findByRole('button', { name: 'queue.removeConfirm' })
+    const checkboxes = screen.getAllByRole('checkbox')
+    fireEvent.click(checkboxes[checkboxes.length - 1])
     fireEvent.click(screen.getByRole('button', { name: 'queue.removeConfirm' }))
 
     await waitFor(() => expect(api.deleteFromQueue).toHaveBeenCalledWith(7, true))

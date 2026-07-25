@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, Book, PendingRelease, QueueItem } from '../api/client'
 import BookAuthorLink from '../components/BookAuthorLink'
@@ -20,6 +20,15 @@ export default function QueuePage() {
   const [deleteTarget, setDeleteTarget] = useState<QueueItem | null>(null)
   const [deleteFiles, setDeleteFiles] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  // Bulk selection over arbitrary queue items (#1250-flood recovery). Selection
+  // is by id so it survives pagination — select-all covers the ENTIRE queue, not
+  // just the visible page. unmonitor defaults on so undoing a mass import
+  // actually stops the scheduler re-grabbing; delete-files defaults off.
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set())
+  const [bulkUnmonitor, setBulkUnmonitor] = useState(true)
+  const [bulkDeleteFiles, setBulkDeleteFiles] = useState(false)
+  const [bulkResult, setBulkResult] = useState<string | null>(null)
+  const selectAllRef = useRef<HTMLInputElement>(null)
 
   const load = () => {
     Promise.all([
@@ -60,6 +69,26 @@ export default function QueuePage() {
   // Paginate the queue client-side so a large queue (hundreds/thousands of
   // items) doesn't render every row at once and blow up the DOM.
   const { pageItems: queuePage, paginationProps: queuePaginationProps } = usePagination(queue, 50, 'queue')
+
+  // Select-all reflects the WHOLE queue, not just the visible page — the point
+  // is clearing a flood that spans many pages. Indeterminate when only some are
+  // selected, mirroring BooksPage.
+  const allSelected = queue.length > 0 && queue.every(q => selectedIds.has(q.id))
+  const someSelected = queue.some(q => selectedIds.has(q.id)) && !allSelected
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someSelected
+  }, [someSelected])
+
+  const toggleSelect = (id: number) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  const selectAll = () => setSelectedIds(new Set(queue.map(q => q.id)))
+  const clearSelection = () => setSelectedIds(new Set())
 
   // Open the remove dialog. The file-deletion choice always starts unchecked
   // so the default action keeps downloaded data (and torrent seeds) on disk.
@@ -223,6 +252,32 @@ export default function QueuePage() {
     }
   }
 
+  // Remove the arbitrarily-selected items in one call. unmonitorBooks (default
+  // on) also stops monitoring each linked book so the scheduler doesn't
+  // immediately re-grab them — the recovery path for an accidental mass import.
+  const removeSelected = async () => {
+    if (selectedIds.size === 0) return
+    if (!confirm(t('queue.removeSelectedConfirm', { count: selectedIds.size, defaultValue: 'Remove {{count}} item(s) from the queue?' }))) return
+    setBulkBusy(true)
+    setBulkResult(null)
+    try {
+      const { results } = await api.bulkDeleteQueue([...selectedIds], { deleteFiles: bulkDeleteFiles, unmonitorBooks: bulkUnmonitor })
+      const entries = Object.values(results ?? {})
+      const failed = entries.filter(r => !r.ok).length
+      const ok = entries.length - failed
+      if (failed > 0) {
+        setBulkResult(t('queue.bulkResult', { ok, failed, defaultValue: '{{ok}} removed, {{failed}} failed' }))
+      }
+      clearSelection()
+      load()
+    } catch (e) {
+      console.error(e)
+      setBulkResult(e instanceof Error ? e.message : 'Bulk remove failed')
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
   const formatSize = (bytes: number) => {
     if (bytes > 1073741824) return (bytes / 1073741824).toFixed(1) + ' GB'
     if (bytes > 1048576) return (bytes / 1048576).toFixed(1) + ' MB'
@@ -300,8 +355,73 @@ export default function QueuePage() {
                   </div>
                 </div>
               )}
+              <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-zinc-400 cursor-pointer select-none">
+                  <input
+                    ref={selectAllRef}
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={e => (e.target.checked ? selectAll() : clearSelection())}
+                    className="rounded-full border-slate-400 dark:border-zinc-600 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0"
+                  />
+                  {t('queue.selectAll', 'Select all')}
+                </label>
+              </div>
+              {selectedIds.size > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
+                  <span className="text-xs font-medium text-slate-700 dark:text-zinc-300">
+                    {t('queue.selectedCount', { count: selectedIds.size, defaultValue: '{{count}} selected' })}
+                  </span>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                    <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-zinc-400 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={bulkUnmonitor}
+                        onChange={e => setBulkUnmonitor(e.target.checked)}
+                        className="rounded border-slate-400 dark:border-zinc-600 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0"
+                      />
+                      {t('queue.alsoUnmonitor', 'Also stop monitoring these books')}
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-zinc-400 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={bulkDeleteFiles}
+                        onChange={e => setBulkDeleteFiles(e.target.checked)}
+                        className="rounded border-slate-400 dark:border-zinc-600 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0"
+                      />
+                      {t('queue.deleteFilesLabel', 'Delete downloaded files')}
+                    </label>
+                    <button
+                      onClick={removeSelected}
+                      disabled={bulkBusy}
+                      className="px-2.5 py-1 text-xs rounded border border-red-300 dark:border-red-900 text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-50 font-medium"
+                    >
+                      {t('queue.removeSelected', 'Remove selected')}
+                    </button>
+                    <button
+                      onClick={clearSelection}
+                      disabled={bulkBusy}
+                      className="px-2.5 py-1 text-xs rounded text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white disabled:opacity-50 font-medium"
+                    >
+                      {t('queue.clearSelection', 'Clear selection')}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {bulkResult && (
+                <div className="px-3 py-2 text-xs text-slate-700 dark:text-zinc-300 bg-amber-100 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/40 rounded-lg">
+                  {bulkResult}
+                </div>
+              )}
               {queuePage.map(item => (
-                <div key={item.id} className="flex items-center justify-between p-3 border border-slate-200 dark:border-zinc-800 rounded-lg bg-slate-100 dark:bg-zinc-900">
+                <div key={item.id} className={`flex items-center justify-between p-3 border rounded-lg bg-slate-100 dark:bg-zinc-900 ${selectedIds.has(item.id) ? 'border-emerald-500' : 'border-slate-200 dark:border-zinc-800'}`}>
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(item.id)}
+                    onChange={() => toggleSelect(item.id)}
+                    aria-label={t('queue.selectItem', { title: item.title, defaultValue: 'Select {{title}}' })}
+                    className="mr-3 shrink-0 rounded-full border-slate-400 dark:border-zinc-600 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0"
+                  />
                   <div className="min-w-0 flex-1">
                     <h3 className="font-medium text-sm truncate">{item.title}</h3>
                     <BookAuthorLink book={item.book} />
