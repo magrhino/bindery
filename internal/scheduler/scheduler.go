@@ -495,6 +495,24 @@ func (s *Scheduler) resolveSeedRatio(ctx context.Context, indexerID int64) *floa
 	return idx.SeedRatio
 }
 
+// freeleechOnlyIndexerIDs returns the set of indexer ids whose freeleech-only
+// policy is enabled. Returns nil when none are, so the caller can skip adding
+// the specification entirely and leave the decision path untouched for the
+// (overwhelmingly common) case where nobody uses a private tracker.
+func freeleechOnlyIndexerIDs(idxs []models.Indexer) map[int64]bool {
+	var out map[int64]bool
+	for _, idx := range idxs {
+		if !idx.FreeleechOnly {
+			continue
+		}
+		if out == nil {
+			out = make(map[int64]bool)
+		}
+		out[idx.ID] = true
+	}
+	return out
+}
+
 // searchAndGrabFormat searches for and grabs a specific format of a book.
 // mediaType must be MediaTypeEbook or MediaTypeAudiobook.
 func (s *Scheduler) searchAndGrabFormat(ctx context.Context, book models.Book, mediaType string) {
@@ -570,6 +588,15 @@ func (s *Scheduler) searchAndGrabFormat(ctx context.Context, book models.Book, m
 			specs = append(specs, decision.DelayProfileSpec{Profile: delayProfile})
 		}
 	}
+	// Per-indexer freeleech-only policy: releases that would cost download
+	// ratio on a flagged indexer are rejected here and parked in
+	// pending_releases below for manual approval. Applied only on this
+	// automatic path — interactive search (api/indexers.go) builds its own
+	// specification set deliberately without it, so a user can still see and
+	// hand-pick a ratio-costing release for a book they care about.
+	if freeleechOnly := freeleechOnlyIndexerIDs(idxs); len(freeleechOnly) > 0 {
+		specs = append(specs, decision.FreeleechOnlySpec{IndexerIDs: freeleechOnly})
+	}
 	dm := decision.New(specs...)
 	releases := make([]decision.Release, len(results))
 	for i, res := range results {
@@ -586,7 +613,14 @@ func (s *Scheduler) searchAndGrabFormat(ctx context.Context, book models.Book, m
 		// The sentinel "delay not met" matches both "usenet delay not met" and
 		// "torrent delay not met" produced by DelayProfileSpec. There is no typed
 		// flag on Decision today; left as-is per #707 (minor finding).
-		if s.pending != nil && strings.Contains(d.Rejection, "delay not met") {
+		// A freeleech hold is stored the same way, but for the opposite reason:
+		// a delayed release is expected to pass on a later sweep, whereas a
+		// ratio-costing one never will (the same spec runs in
+		// checkPendingReleases), so it waits in Pending until the user
+		// approves it by hand. Without this it would simply be discarded and
+		// the user would never learn the release existed.
+		if s.pending != nil && (strings.Contains(d.Rejection, "delay not met") ||
+			strings.Contains(d.Rejection, decision.RejectionFreeleechHold)) {
 			s.storePending(ctx, book.ID, mediaType, results[i], d.Rejection)
 		}
 	}
