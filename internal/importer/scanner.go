@@ -1376,12 +1376,26 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 func (s *Scanner) cleanupMovedSources(downloadPath string, importedSrcFiles []string) {
 	cleanDownloadPath := filepath.Clean(downloadPath)
 
-	// Refuse to prune if downloadPath is empty, relative, the filesystem root, or
+	// pruneRoot is the boundary directory the cleanup is allowed to remove up to
+	// (inclusive). It is normally the download path itself. But a single-file
+	// usenet job resolves downloadPath to the *file*, not its containing folder
+	// (SABnzbd/NZBGet report the storage path of the single file) — and every
+	// guard below is "at or under downloadPath", which a file's parent is not.
+	// The result was the now-empty job folder being left behind after an
+	// otherwise-clean ebook import (cleb's report; audiobooks escaped it because
+	// they move the whole directory via MoveDirCtx). When downloadPath is a
+	// file, prune from its parent folder instead.
+	pruneRoot := cleanDownloadPath
+	if downloadPathIsFile(cleanDownloadPath, importedSrcFiles) {
+		pruneRoot = filepath.Dir(cleanDownloadPath)
+	}
+
+	// Refuse to prune if pruneRoot is empty, relative, the filesystem root, or
 	// equal to / an ancestor of a configured library root. This is a
 	// belt-and-braces guard on top of the os.Remove non-empty-dir protection.
-	if cleanDownloadPath == "" || cleanDownloadPath == "." ||
-		cleanDownloadPath == string(filepath.Separator) ||
-		!filepath.IsAbs(cleanDownloadPath) {
+	if pruneRoot == "" || pruneRoot == "." ||
+		pruneRoot == string(filepath.Separator) ||
+		!filepath.IsAbs(pruneRoot) {
 		slog.Warn("move cleanup: refusing to prune unsafe download path", "path", downloadPath)
 		return
 	}
@@ -1390,33 +1404,33 @@ func (s *Scanner) cleanupMovedSources(downloadPath string, importedSrcFiles []st
 			continue
 		}
 		cleanRoot := filepath.Clean(root)
-		if cleanDownloadPath == cleanRoot || pathUnderDir(cleanRoot, cleanDownloadPath) {
+		if pruneRoot == cleanRoot || pathUnderDir(cleanRoot, pruneRoot) {
 			slog.Warn("move cleanup: download path equals or contains a library root — skipping cleanup",
-				"downloadPath", cleanDownloadPath, "libraryRoot", cleanRoot)
+				"downloadPath", cleanDownloadPath, "pruneRoot", pruneRoot, "libraryRoot", cleanRoot)
 			return
 		}
 	}
 
-	// dirsToPrune collects every directory at or below downloadPath that may now
+	// dirsToPrune collects every directory at or below pruneRoot that may now
 	// be empty, deepest-first so children are removed before parents.
 	prune := make(map[string]bool)
 	for _, src := range importedSrcFiles {
 		cleanSrc := filepath.Clean(src)
-		// Only touch files that actually live under downloadPath — never delete
+		// Only touch files that actually live under pruneRoot — never delete
 		// something outside the download we were asked to import.
-		if cleanSrc != cleanDownloadPath && !pathUnderDir(cleanSrc, cleanDownloadPath) {
+		if cleanSrc != pruneRoot && !pathUnderDir(cleanSrc, pruneRoot) {
 			slog.Warn("move cleanup: imported source outside download path, skipping",
-				"src", cleanSrc, "downloadPath", cleanDownloadPath)
+				"src", cleanSrc, "pruneRoot", pruneRoot)
 			continue
 		}
 		if err := os.Remove(cleanSrc); err != nil && !os.IsNotExist(err) {
 			slog.Warn("move cleanup: failed to remove imported source file", "src", cleanSrc, "error", err)
 		}
 		// Mark every ancestor directory from the file up to (and including)
-		// downloadPath as a pruning candidate.
+		// pruneRoot as a pruning candidate.
 		for dir := filepath.Dir(cleanSrc); ; dir = filepath.Dir(dir) {
 			prune[dir] = true
-			if dir == cleanDownloadPath || !pathUnderDir(dir, cleanDownloadPath) {
+			if dir == pruneRoot || !pathUnderDir(dir, pruneRoot) {
 				break
 			}
 		}
@@ -1432,8 +1446,8 @@ func (s *Scanner) cleanupMovedSources(downloadPath string, importedSrcFiles []st
 	// Deepest paths first: longer cleaned paths sort after shorter ancestors.
 	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
 	for _, dir := range dirs {
-		// Never prune above downloadPath.
-		if dir != cleanDownloadPath && !pathUnderDir(dir, cleanDownloadPath) {
+		// Never prune above pruneRoot.
+		if dir != pruneRoot && !pathUnderDir(dir, pruneRoot) {
 			continue
 		}
 		if err := os.Remove(dir); err != nil {
@@ -1447,6 +1461,23 @@ func (s *Scanner) cleanupMovedSources(downloadPath string, importedSrcFiles []st
 		}
 		slog.Debug("move cleanup: pruned empty directory", "dir", dir)
 	}
+}
+
+// downloadPathIsFile reports whether cleanDownloadPath refers to a single file
+// rather than a download folder. It stats the path first; in move mode the file
+// has usually already been renamed away by the time cleanup runs, so it falls
+// back to checking whether the path is exactly one of the imported source files
+// (a folder never appears in importedSrcFiles, only the files inside it do).
+func downloadPathIsFile(cleanDownloadPath string, importedSrcFiles []string) bool {
+	if info, err := os.Stat(cleanDownloadPath); err == nil {
+		return !info.IsDir()
+	}
+	for _, src := range importedSrcFiles {
+		if filepath.Clean(src) == cleanDownloadPath {
+			return true
+		}
+	}
+	return false
 }
 
 func safeRemoteID(id *string) string {
