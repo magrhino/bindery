@@ -4,6 +4,160 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
+## [v1.28.0] — 2026-07-25
+
+A feature release driven almost entirely by user reports. Getting an existing
+library in gets a **recursive bulk import** and a **manual import wizard**;
+private-tracker users get a **per-indexer freeleech policy** that holds
+ratio-costing releases for approval instead of hiding them; an accidental mass
+import can now be undone with **bulk queue removal**. Alongside those, a
+multi-user ownership leak in Hardcover list sync is closed, and a batch of
+durability fixes stop a failed database write from being reported as a
+successful import and stop background jobs racing the database on shutdown.
+
+### Added
+- **Bulk select and remove queue items** (#1622) — the queue could only "clear
+  all failed", so an accidental mass import (one report: a CSV author import
+  with monitoring left on, which queued ~1250 books) had no practical undo:
+  the Books and Wanted bulk actions select one page at a time, and removing a
+  queue item resets its book to wanted — so with the books still monitored the
+  scheduler simply grabbed them again on the next sweep. The queue page now has
+  per-row checkboxes and a **select-all that spans the entire queue, not just
+  the visible page**, plus a bulk **Remove selected** with two options: *Also
+  stop monitoring these books* (on by default — this is what stops the
+  re-grab) and *Delete downloaded files* (off by default, so data and torrent
+  seeds are kept). Backed by `POST /api/v1/queue/bulk-delete`, which removes
+  each item from its download client under a bounded fan-out and reports a
+  per-id result so one stale id can't fail the whole batch.
+- **Per-indexer freeleech policy: hold ratio-costing releases for approval**
+  (#1624) — a private-tracker user near a ratio floor previously had to
+  restrict the whole indexer to Freeleech/VIP upstream in Jackett, which also
+  hid normal releases from interactive search (where they'd happily pay the
+  ratio cost on a book they actually want) and did nothing for bulk
+  multi-book search, which has no picker and is pure fire-and-forget. Indexers
+  gain an opt-in **Only auto-grab freeleech releases**: automatic grabbing
+  takes only releases the tracker reports as freeleech (torznab
+  `downloadvolumefactor` of 0 — an attribute Bindery previously never read),
+  and anything that would cost ratio is parked in the existing **Pending**
+  queue for manual approval rather than hidden or grabbed blind. Interactive
+  search is deliberately untouched and still shows everything. Per-indexer
+  rather than global because ratio economics are per-tracker — public trackers
+  and Usenet are unaffected. A release whose ratio cost the indexer doesn't
+  report is held rather than grabbed, on the principle that a visible hold is
+  recoverable and an over-spent ratio isn't; half-leech (0.5) is held too.
+- **Recursive bulk folder import** (#1434, closes #1402) — the bulk scan
+  enumerated only immediate children and treated every subdirectory as a single
+  unit, so a `Author/Books/Title.epub` layout collapsed into one row and
+  dropped files, and any directory was labelled "audiobook" regardless of
+  contents. The scan now walks recursively, yields per-file units at any depth,
+  decides the directory-as-unit boundary by inspecting what's actually inside
+  (audio vs ebook), derives the author from the folder layout, and matches on
+  embedded EPUB metadata first, then folder author, then filename. A lone loose
+  single-title match with no author corroboration is demoted from *confident*
+  to *ambiguous*, which is the box-set mismatch reported in #1402.
+- **Manual import wizard** (#1236) — a new `/import` page scans a folder,
+  groups the results into *confident* / *ambiguous* / *unmatched*, and lets each
+  unit be resolved individually (accept the match, pick from candidates, or
+  search the existing catalogue) with a per-unit format override, then imports
+  the resolved set in one batch.
+- **Books view sorting and filtering** (#1349) — clickable sortable column
+  headers (author, type, status, title, date; ascending↔descending, whitelisted
+  server-side) and an all/monitored/unmonitored filter, mirroring the Authors
+  view. Additive — no migration.
+- **Per-file audiobook renaming** (#1126) — ebook imports have always renamed
+  per file, but audiobook folders were copied in verbatim, so a library with a
+  naming template still ended up with whatever track names the release shipped.
+  A new `naming.audiobook_file_template` (empty = off, unchanged behaviour)
+  flattens the audiobook folder on import and renames each track in resolved
+  playback order, with the `{Part}` token carrying the index. It shares one
+  deterministic track-ordering and sidecar-carry path with the existing
+  multi-disc flatten, and works across copy, hardlink, and move. A template
+  without `{Part}` is rejected when saved — and defensively fails the flatten
+  rather than collapsing every track onto one filename.
+- **Ebook + audiobook drop-folder pair gating** (closes #942) — completes the
+  drop-folder handoff started in #941. A new `import.drop_pair_gating` opts
+  `media_type=both` books into hold-until-paired handoff: the first format to
+  arrive is parked in a non-terminal held state (files left in place, and kept
+  out of the re-grab loop) until its sibling completes, then both are dropped
+  together so a paired-reader tool ingests them as one. If the sibling never
+  arrives, `import.drop_pair_gating_timeout_hours` (default 72) releases the
+  held format on its own.
+- **Ebook language detection at import** (#1160) — `dc:language` is now read
+  from the imported EPUB and canonicalised, along with provider-supplied codes,
+  to the ISO 639-2/B vocabulary the metadata-profile language filter already
+  uses (`en`/`en-US` → `eng`, `zh-Hans` → `chi`). At import the ebook branch
+  backfills a book's language when the catalogue left it empty, so the library
+  and the language filter reflect what the file actually is. Locked fields are
+  never overwritten.
+- **Strict media-type policy** (#1575) — a new `default.media_type_strict`
+  setting (off by default). Under a single-format default, a work available in
+  both formats is narrowed to the configured one, and a work available *only*
+  in the other format is skipped at add/refresh time instead of being created
+  as a row that can never be satisfied (Discussion #1572). Skips are counted
+  into the author-sync summary log, so the outcome is visible in the Logs tab
+  without a notification per book.
+
+### Security
+- **Hardcover list sync now stamps an owner on the books and authors it
+  creates** (#1621) — the follow-up to the v1.25.0 ownership work (#1457),
+  which covered every create path *except* this one. Because the list syncer
+  set no `owner_user_id`, everything it created was NULL-owned — and a NULL
+  owner reads as global, so books synced from one user's Hardcover list were
+  visible to **every** user, while manually added books stayed correctly
+  private. Import lists are admin-configured and sync on a background schedule
+  with no request identity to stamp from, so ownership now lives on the list
+  row: each import list gains an **Owner**, and the syncer stamps that owner
+  onto the books and authors it creates. An existing author reused by a sync
+  keeps whatever owner it already had, so a list can never reassign another
+  user's — or a shared — author. Leaving the owner unset means *Global*, which
+  is the previous behaviour and what every existing list gets, so nothing
+  changes until an owner is chosen. Only affects deployments with
+  `BINDERY_ENFORCE_TENANCY` enabled.
+
+### Fixed
+- **Usenet ebook imports no longer leave an empty job folder behind** (#1623) —
+  a single-file ebook grabbed via SABnzbd/NZBGet imported cleanly but left its
+  completed job folder sitting empty under `complete/`. Usenet clients report
+  the storage path of a single-file job as the *file*, not a directory, and the
+  move-mode cleanup only ever pruned directories at or below the download path
+  — which a file's parent is not, so the folder was never even a candidate for
+  removal. Cleanup now prunes from the parent directory when the download path
+  is the imported file itself. The existing protections are unchanged: a folder
+  still holding anything else is kept, and the category directory above the job
+  folder is never touched. (Torrent imports and audiobook folder imports were
+  never affected, which is why audiobooks looked fixed as of v1.26.0.)
+- **Audiobook import no longer reports success after a failed database write**
+  (#1459) — the audiobook branch moved or copied the folder, recorded the
+  format path on a best-effort basis, and then marked the download imported
+  regardless of whether that write landed. With the path unrecorded the book
+  still read as wanted, so the next sweep re-grabbed it into a `Title (2)`
+  duplicate — and in move mode the original source was already gone. The write
+  is now retried on transient SQLite lock/busy errors and, if it still fails,
+  the import is marked blocked rather than falsely completed.
+- **Background jobs are drained before the database closes on shutdown**
+  (#1458) — the ABS import, Grimmory sync, and manual library scan ran on
+  detached contexts and raced `database.Close()` on SIGTERM, producing
+  "database is closed" errors and making Grimmory re-upload everything after
+  each deploy, since the push is only recorded once it succeeds. Those jobs now
+  run on a shutdown-scoped context that is drained, within a bounded grace
+  window, after HTTP shutdown and before the database is closed.
+- **ABS import keeps its resume checkpoint across a shutdown** (#1472,
+  partial) — the enumerator flushed its resume checkpoint on the very context
+  that had just been cancelled, so the flush failed and the progress it existed
+  to preserve was discarded. It now writes on a detached context. Previously
+  unreachable, and made live by the shutdown work above.
+- **NZBGet queue removal honours "keep files"** (#1456) — removing a download
+  sent `DeleteFinal`, which isn't a valid editqueue command and ignored the
+  flag entirely. Keeping files now sends `GroupParkDelete` and deleting them
+  sends `GroupDelete`. Requires NZBGet 17 or newer.
+
+### Changed
+- **Shutdown grace defaults lowered** (part of #1458) — the HTTP shutdown grace
+  drops from 30s to 10s and the background-job drain window is 15s, so the two
+  serial waits total 25s and fit inside the chart's 30s
+  `terminationGracePeriodSeconds` instead of being cut short by it. Operators
+  who raised that value can raise these to match.
+
 ## [v1.27.0] — 2026-07-22
 
 A feature release built around library management. Two new tools for keeping an
