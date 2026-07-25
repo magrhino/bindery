@@ -609,7 +609,7 @@ func main() {
 		WithFinder(importScanner).
 		WithEditionHydration(editionRepo).
 		WithLifetimeCtx(appCtx)
-	importListHandler := api.NewImportListHandler(importListRepo, settingsRepo, hcSyncer)
+	importListHandler := api.NewImportListHandler(importListRepo, settingsRepo, hcSyncer, userRepo)
 	metadataProfileHandler := api.NewMetadataProfileHandler(metadataProfileRepo)
 	delayProfileHandler := api.NewDelayProfileHandler(delayProfileRepo)
 	customFormatHandler := api.NewCustomFormatHandler(customFormatRepo)
