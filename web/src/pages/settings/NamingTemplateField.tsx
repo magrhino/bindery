@@ -9,6 +9,8 @@
 import { useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { inputCls, labelCls } from './formStyles'
+import SaveButton from './SaveButton'
+import { SaveResult } from './useSaveResult'
 import {
   NAMING_TOKENS,
   TemplateKind,
@@ -25,6 +27,8 @@ export interface NamingTemplateFieldProps {
   onChange: (value: string) => void
   onSave: () => void
   saving: boolean
+  /** Save-confirmation state from useSaveResult. Defaults to 'idle'. */
+  saveResult?: SaveResult
 }
 
 export default function NamingTemplateField({
@@ -36,6 +40,7 @@ export default function NamingTemplateField({
   onChange,
   onSave,
   saving,
+  saveResult = 'idle',
 }: NamingTemplateFieldProps) {
   const { t } = useTranslation()
   const inputRef = useRef<HTMLInputElement>(null)
@@ -106,14 +111,13 @@ export default function NamingTemplateField({
           aria-invalid={hasErrors}
           className={inputCls + ' flex-1 font-mono'}
         />
-        <button
-          type="button"
+        <SaveButton
+          result={saveResult}
+          saving={saving}
+          disabled={hasErrors}
           onClick={onSave}
-          disabled={saving || hasErrors}
-          className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
-        >
-          {saving ? t('common.saving') : t('common.save')}
-        </button>
+          testId={`naming-save-${kind}`}
+        />
       </div>
 
       {/* Live preview */}

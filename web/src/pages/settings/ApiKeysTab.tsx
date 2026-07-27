@@ -3,7 +3,9 @@ import { useTranslation } from 'react-i18next'
 import { api, BINDERY_BASE, HardcoverTestResult, SystemStatus } from '../../api/client'
 import ClipboardManualFallback from '../../components/ClipboardManualFallback'
 import { useClipboardCopy } from '../../components/useClipboardCopy'
+import SaveButton from './SaveButton'
 import Toggle from './Toggle'
+import { useSaveResult } from './useSaveResult'
 
 export default function ApiKeysTab() {
   const { t } = useTranslation()
@@ -14,6 +16,8 @@ export default function ApiKeysTab() {
   const [hardcoverTestResult, setHardcoverTestResult] = useState<(HardcoverTestResult & { testing?: boolean }) | null>(null)
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
   const [saving, setSaving] = useState<string | null>(null)
+  const [googleKeyResult, googleKeySave] = useSaveResult()
+  const [hardcoverTokenResult, hardcoverTokenSave] = useSaveResult()
 
   useEffect(() => {
     api.listSettings()
@@ -35,12 +39,15 @@ export default function ApiKeysTab() {
     }
   }
 
+  // Rethrows so useSaveResult can show "Error" rather than a false
+  // "Saved ✓" on a failed request (#1668).
   const saveSetting = async (key: string) => {
     setSaving(key)
     try {
       await api.setSetting(key, settings[key] ?? '')
     } catch (err) {
       console.error(err)
+      throw err
     } finally {
       setSaving(null)
     }
@@ -141,13 +148,12 @@ export default function ApiKeysTab() {
                 type="password"
                 className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
               />
-              <button
-                onClick={() => saveSetting('googlebooks.apiKey')}
-                disabled={saving === 'googlebooks.apiKey'}
-                className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
-              >
-                {saving === 'googlebooks.apiKey' ? t('common.saving') : t('common.save')}
-              </button>
+              <SaveButton
+                result={googleKeyResult}
+                saving={saving === 'googlebooks.apiKey'}
+                onClick={() => googleKeySave(() => saveSetting('googlebooks.apiKey'))}
+                testId="save-googlebooks-key"
+              />
             </div>
           </div>
 
@@ -173,14 +179,14 @@ export default function ApiKeysTab() {
                   type="password"
                   className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
                 />
-                <button
-                  onClick={saveHardcoverToken}
-                  disabled={saving === 'hardcover.api_token' || !hardcoverToken.trim()}
-                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-medium disabled:opacity-50"
-                  aria-label={t('settings.general.hardcoverSaveToken', 'Save Hardcover API token')}
-                >
-                  {saving === 'hardcover.api_token' ? t('common.saving') : t('common.save')}
-                </button>
+                <SaveButton
+                  result={hardcoverTokenResult}
+                  saving={saving === 'hardcover.api_token'}
+                  disabled={!hardcoverToken.trim()}
+                  onClick={() => hardcoverTokenSave(saveHardcoverToken)}
+                  ariaLabel={t('settings.general.hardcoverSaveToken', 'Save Hardcover API token')}
+                  testId="save-hardcover-token"
+                />
                 {hardcoverTokenConfigured && (
                   <button
                     onClick={clearHardcoverToken}

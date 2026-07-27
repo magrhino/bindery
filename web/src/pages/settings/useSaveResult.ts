@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-type SaveResult = 'idle' | 'saved' | 'error'
+export type SaveResult = 'idle' | 'saved' | 'error'
 
 export function useSaveResult(): [SaveResult, (fn: () => Promise<unknown>) => Promise<void>] {
   const [result, setResult] = useState<SaveResult>('idle')

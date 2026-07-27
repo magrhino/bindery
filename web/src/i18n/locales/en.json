@@ -40,7 +40,9 @@
     "copy": "Copy",
     "copied": "Copied",
     "clipboardBlocked": "Clipboard access is blocked. Copy the selected text below.",
-    "clipboardTextLabel": "Text to copy"
+    "clipboardTextLabel": "Text to copy",
+    "saved": "Saved ✓",
+    "saveError": "Error"
   },
   "monitorMode": {
     "all": "All books",

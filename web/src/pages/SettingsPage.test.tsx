@@ -605,7 +605,10 @@ describe('SettingsPage', () => {
     fireEvent.change(fileNaming.getByPlaceholderText('{Author}/{Title} ({Year})/{Title} - {Author}.{ext}'), {
       target: { value: '{Author}/{Title}/{Title}.{ext}' },
     })
-    fireEvent.click(fileNaming.getAllByRole('button', { name: 'common.save' })[0])
+    // Selected by test id, not index: once the first save lands the button
+    // relabels to "Saved ✓" for two seconds, which shifts every index-based
+    // lookup after it (#1668).
+    fireEvent.click(fileNaming.getByTestId('naming-save-book'))
     await waitFor(() => {
       expect(api.setSetting).toHaveBeenCalledWith('naming.bookTemplate', '{Author}/{Title}/{Title}.{ext}')
     })
@@ -613,7 +616,7 @@ describe('SettingsPage', () => {
     fireEvent.change(fileNaming.getByPlaceholderText('{Author}/{Title} ({Year})'), {
       target: { value: '{Author}/{Title}' },
     })
-    fireEvent.click(fileNaming.getAllByRole('button', { name: 'common.save' })[1])
+    fireEvent.click(fileNaming.getByTestId('naming-save-audiobook'))
     await waitFor(() => {
       expect(api.setSetting).toHaveBeenCalledWith('naming_template_audiobook', '{Author}/{Title}')
     })

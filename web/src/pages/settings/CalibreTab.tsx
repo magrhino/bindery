@@ -8,6 +8,7 @@ import {
   CalibreSyncProgress,
 } from '../../api/client'
 import Toggle from './Toggle'
+import SaveButton from './SaveButton'
 import { useSaveResult } from './useSaveResult'
 
 export default function CalibreTab() {
@@ -233,13 +234,11 @@ function CalibreSection({
               placeholder="/data/calibre-library"
               className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
             />
-            <button
+            <SaveButton
+              result={libraryPathSaveResult}
+              saving={saving === 'calibre.library_path'}
               onClick={() => libraryPathSave(() => saveSettingWithErrorThrowing('calibre.library_path'))}
-              disabled={saving === 'calibre.library_path'}
-              className={`px-3 py-2 rounded text-xs font-medium disabled:opacity-50 ${libraryPathSaveResult === 'saved' ? 'bg-emerald-500' : libraryPathSaveResult === 'error' ? 'bg-red-600' : 'bg-emerald-600 hover:bg-emerald-500'}`}
-            >
-              {libraryPathSaveResult === 'saved' ? 'Saved ✓' : libraryPathSaveResult === 'error' ? 'Error' : saving === 'calibre.library_path' ? 'Saving...' : 'Save'}
-            </button>
+            />
           </div>
           {saveError?.key === 'calibre.library_path' && (
             <p className="text-xs text-red-600 dark:text-red-400 mt-1">{saveError.msg}</p>
@@ -283,13 +282,11 @@ function CalibreSection({
                 placeholder="/usr/bin/calibredb"
                 className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
               />
-              <button
+              <SaveButton
+                result={binaryPathSaveResult}
+                saving={saving === 'calibre.binary_path'}
                 onClick={() => binaryPathSave(() => saveSettingWithErrorThrowing('calibre.binary_path'))}
-                disabled={saving === 'calibre.binary_path'}
-                className={`px-3 py-2 rounded text-xs font-medium disabled:opacity-50 ${binaryPathSaveResult === 'saved' ? 'bg-emerald-500' : binaryPathSaveResult === 'error' ? 'bg-red-600' : 'bg-emerald-600 hover:bg-emerald-500'}`}
-              >
-                {binaryPathSaveResult === 'saved' ? 'Saved ✓' : binaryPathSaveResult === 'error' ? 'Error' : saving === 'calibre.binary_path' ? 'Saving...' : 'Save'}
-              </button>
+              />
             </div>
             {saveError?.key === 'calibre.binary_path' && (
               <p className="text-xs text-red-600 dark:text-red-400 mt-1">{saveError.msg}</p>
@@ -310,13 +307,11 @@ function CalibreSection({
                 placeholder="http://calibre.default.svc:8099"
                 className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
               />
-              <button
+              <SaveButton
+                result={pluginUrlSaveResult}
+                saving={saving === 'calibre.plugin_url'}
                 onClick={() => pluginUrlSave(() => saveSettingWithErrorThrowing('calibre.plugin_url'))}
-                disabled={saving === 'calibre.plugin_url'}
-                className={`px-3 py-2 rounded text-xs font-medium disabled:opacity-50 ${pluginUrlSaveResult === 'saved' ? 'bg-emerald-500' : pluginUrlSaveResult === 'error' ? 'bg-red-600' : 'bg-emerald-600 hover:bg-emerald-500'}`}
-              >
-                {pluginUrlSaveResult === 'saved' ? 'Saved ✓' : pluginUrlSaveResult === 'error' ? 'Error' : saving === 'calibre.plugin_url' ? 'Saving...' : 'Save'}
-              </button>
+              />
             </div>
             {saveError?.key === 'calibre.plugin_url' && (
               <p className="text-xs text-red-600 dark:text-red-400 mt-1">{saveError.msg}</p>
@@ -338,13 +333,11 @@ function CalibreSection({
                 placeholder="plugin api key"
                 className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
               />
-              <button
+              <SaveButton
+                result={pluginKeySaveResult}
+                saving={saving === 'calibre.plugin_api_key'}
                 onClick={() => pluginKeySave(() => saveSettingWithErrorThrowing('calibre.plugin_api_key'))}
-                disabled={saving === 'calibre.plugin_api_key'}
-                className={`px-3 py-2 rounded text-xs font-medium disabled:opacity-50 ${pluginKeySaveResult === 'saved' ? 'bg-emerald-500' : pluginKeySaveResult === 'error' ? 'bg-red-600' : 'bg-emerald-600 hover:bg-emerald-500'}`}
-              >
-                {pluginKeySaveResult === 'saved' ? 'Saved ✓' : pluginKeySaveResult === 'error' ? 'Error' : saving === 'calibre.plugin_api_key' ? 'Saving...' : 'Save'}
-              </button>
+              />
             </div>
             {saveError?.key === 'calibre.plugin_api_key' && (
               <p className="text-xs text-red-600 dark:text-red-400 mt-1">{saveError.msg}</p>
@@ -368,13 +361,11 @@ function CalibreSection({
                 placeholder="/books:/mnt/user/media/books"
                 className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
               />
-              <button
+              <SaveButton
+                result={pushRemapSaveResult}
+                saving={saving === 'calibre.push_path_remap'}
                 onClick={() => pushRemapSave(() => saveSettingWithErrorThrowing('calibre.push_path_remap'))}
-                disabled={saving === 'calibre.push_path_remap'}
-                className={`px-3 py-2 rounded text-xs font-medium disabled:opacity-50 ${pushRemapSaveResult === 'saved' ? 'bg-emerald-500' : pushRemapSaveResult === 'error' ? 'bg-red-600' : 'bg-emerald-600 hover:bg-emerald-500'}`}
-              >
-                {pushRemapSaveResult === 'saved' ? 'Saved ✓' : pushRemapSaveResult === 'error' ? 'Error' : saving === 'calibre.push_path_remap' ? 'Saving...' : 'Save'}
-              </button>
+              />
             </div>
             {saveError?.key === 'calibre.push_path_remap' && (
               <p className="text-xs text-red-600 dark:text-red-400 mt-1">{saveError.msg}</p>
@@ -550,13 +541,11 @@ function CalibreSection({
               placeholder="/cwa-book-ingest"
               className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
             />
-            <button
+            <SaveButton
+              result={cwaPathSaveResult}
+              saving={saving === 'cwa.ingest_path'}
               onClick={() => cwaPathSave(() => saveSettingWithErrorThrowing('cwa.ingest_path'))}
-              disabled={saving === 'cwa.ingest_path'}
-              className={`px-3 py-2 rounded text-xs font-medium disabled:opacity-50 ${cwaPathSaveResult === 'saved' ? 'bg-emerald-500' : cwaPathSaveResult === 'error' ? 'bg-red-600' : 'bg-emerald-600 hover:bg-emerald-500'}`}
-            >
-              {cwaPathSaveResult === 'saved' ? 'Saved ✓' : cwaPathSaveResult === 'error' ? 'Error' : saving === 'cwa.ingest_path' ? 'Saving...' : 'Save'}
-            </button>
+            />
           </div>
           {saveError?.key === 'cwa.ingest_path' && (
             <p className="text-xs text-red-600 dark:text-red-400 mt-1">{saveError.msg}</p>

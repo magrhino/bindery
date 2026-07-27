@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, LogEntry } from '../../api/client'
+import SaveButton from './SaveButton'
 import Toggle from './Toggle'
+import { useSaveResult } from './useSaveResult'
 
 function formatBackupSize(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 B'
@@ -39,6 +41,7 @@ export default function LogsTab() {
   const logBottomRef = useRef<HTMLDivElement>(null)
   const [settings, setSettings] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState<string | null>(null)
+  const [retentionResult, retentionSave] = useSaveResult()
   const [backups, setBackups] = useState<Array<{ name: string; size: number; modTime: string }>>([])
   const [creatingBackup, setCreatingBackup] = useState(false)
   const [deletingBackup, setDeletingBackup] = useState<string | null>(null)
@@ -58,12 +61,15 @@ export default function LogsTab() {
     }).catch(console.error)
   }
 
+  // Rethrows so useSaveResult can show "Error" rather than a false
+  // "Saved ✓" on a failed request (#1668).
   const saveSetting = async (key: string) => {
     setSaving(key)
     try {
       await api.setSetting(key, settings[key] ?? '')
     } catch (err) {
       console.error(err)
+      throw err
     } finally {
       setSaving(null)
     }
@@ -321,13 +327,13 @@ export default function LogsTab() {
                 className="w-20 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-2 py-1 text-sm text-right"
               />
               <span className="text-sm text-slate-600 dark:text-zinc-400">{t('settings.general.days')}</span>
-              <button
-                onClick={() => saveSetting('log.retention_days')}
-                disabled={saving === 'log.retention_days'}
-                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium disabled:opacity-50"
-              >
-                {saving === 'log.retention_days' ? t('common.saving') : t('common.save')}
-              </button>
+              <SaveButton
+                result={retentionResult}
+                saving={saving === 'log.retention_days'}
+                onClick={() => retentionSave(() => saveSetting('log.retention_days'))}
+                className="px-3 py-1.5 text-sm"
+                testId="save-log-retention"
+              />
             </div>
           </div>
         </div>

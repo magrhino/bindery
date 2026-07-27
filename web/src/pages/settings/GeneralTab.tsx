@@ -9,6 +9,7 @@ import { useClipboardCopy } from '../../components/useClipboardCopy'
 import { useAuth } from '../../auth/AuthContext'
 import { inputCls } from './formStyles'
 import NamingTemplateField from './NamingTemplateField'
+import SaveButton from './SaveButton'
 import { useSaveResult } from './useSaveResult'
 
 // Tab identifiers used by onNavigate for soft (no-reload) cross-tab links.
@@ -46,6 +47,9 @@ export default function GeneralTab({ onNavigate }: GeneralTabProps = {}) {
   const [storage, setStorage] = useState<StorageHealth | null>(null)
   const [langSaveResult, langSave] = useSaveResult()
   const [dropSaveResult, dropSave] = useSaveResult()
+  const [bookTemplateResult, bookTemplateSave] = useSaveResult()
+  const [audiobookTemplateResult, audiobookTemplateSave] = useSaveResult()
+  const [audiobookFileResult, audiobookFileSave] = useSaveResult()
 
   useEffect(() => {
     api.listSettings()
@@ -60,12 +64,15 @@ export default function GeneralTab({ onNavigate }: GeneralTabProps = {}) {
     api.getStorage().then(setStorage).catch(console.error)
   }, [])
 
+  // Rethrows: the caller wraps this in useSaveResult, which needs a rejected
+  // promise to show "Error" instead of a false "Saved ✓" (#1668).
   const saveSetting = async (key: string) => {
     setSaving(key)
     try {
       await api.setSetting(key, settings[key] ?? '')
     } catch (err) {
       console.error(err)
+      throw err
     } finally {
       setSaving(null)
     }
@@ -245,13 +252,11 @@ export default function GeneralTab({ onNavigate }: GeneralTabProps = {}) {
                     placeholder="/cwa-book-ingest"
                     className={inputCls + ' flex-1'}
                   />
-                  <button
+                  <SaveButton
+                    result={dropSaveResult}
+                    saving={saving === 'import.drop_folder'}
                     onClick={() => dropSave(saveDropFolder)}
-                    disabled={saving === 'import.drop_folder'}
-                    className={`px-3 py-2 rounded text-xs font-medium disabled:opacity-50 ${dropSaveResult === 'saved' ? 'bg-emerald-500' : dropSaveResult === 'error' ? 'bg-red-600' : 'bg-emerald-600 hover:bg-emerald-500'}`}
-                  >
-                    {dropSaveResult === 'saved' ? 'Saved ✓' : dropSaveResult === 'error' ? 'Error' : saving === 'import.drop_folder' ? t('common.saving') : t('common.save')}
-                  </button>
+                  />
                 </div>
                 {dropErr && <p className="text-xs text-red-600 dark:text-red-400 mt-1">{dropErr}</p>}
               </div>
@@ -295,8 +300,9 @@ export default function GeneralTab({ onNavigate }: GeneralTabProps = {}) {
             placeholder="{Author}/{Title} ({Year})/{Title} - {Author}.{ext}"
             value={settings['naming.bookTemplate'] ?? ''}
             onChange={v => setSettings(s => ({ ...s, 'naming.bookTemplate': v }))}
-            onSave={() => saveSetting('naming.bookTemplate')}
+            onSave={() => bookTemplateSave(() => saveSetting('naming.bookTemplate'))}
             saving={saving === 'naming.bookTemplate'}
+            saveResult={bookTemplateResult}
           />
           <NamingTemplateField
             label={t('settings.general.audiobookTemplate')}
@@ -305,8 +311,9 @@ export default function GeneralTab({ onNavigate }: GeneralTabProps = {}) {
             placeholder="{Author}/{Title} ({Year})"
             value={settings['naming_template_audiobook'] ?? ''}
             onChange={v => setSettings(s => ({ ...s, 'naming_template_audiobook': v }))}
-            onSave={() => saveSetting('naming_template_audiobook')}
+            onSave={() => audiobookTemplateSave(() => saveSetting('naming_template_audiobook'))}
             saving={saving === 'naming_template_audiobook'}
+            saveResult={audiobookTemplateResult}
           />
           <div>
             <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">
@@ -323,13 +330,12 @@ export default function GeneralTab({ onNavigate }: GeneralTabProps = {}) {
                 placeholder="{Title} - Part {Part:3}.{ext}"
                 className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600"
               />
-              <button
-                onClick={() => saveSetting('naming.audiobook_file_template')}
-                disabled={saving === 'naming.audiobook_file_template'}
-                className="px-3 py-2 rounded text-xs font-medium disabled:opacity-50 bg-emerald-600 hover:bg-emerald-500"
-              >
-                {saving === 'naming.audiobook_file_template' ? t('common.saving') : t('common.save')}
-              </button>
+              <SaveButton
+                result={audiobookFileResult}
+                saving={saving === 'naming.audiobook_file_template'}
+                onClick={() => audiobookFileSave(() => saveSetting('naming.audiobook_file_template'))}
+                testId="naming-save-audiobook-file"
+              />
             </div>
           </div>
         </div>
@@ -351,13 +357,11 @@ export default function GeneralTab({ onNavigate }: GeneralTabProps = {}) {
                 <option value="any">{t('settings.general.preferredLanguageAny')}</option>
                 <option value="en">{t('settings.general.preferredLanguageEn')}</option>
               </select>
-              <button
+              <SaveButton
+                result={langSaveResult}
+                saving={saving === 'search.preferredLanguage'}
                 onClick={() => langSave(savePreferredLanguage)}
-                disabled={saving === 'search.preferredLanguage'}
-                className={`px-3 py-2 rounded text-xs font-medium disabled:opacity-50 ${langSaveResult === 'saved' ? 'bg-emerald-500' : langSaveResult === 'error' ? 'bg-red-600' : 'bg-emerald-600 hover:bg-emerald-500'}`}
-              >
-                {langSaveResult === 'saved' ? 'Saved ✓' : langSaveResult === 'error' ? 'Error' : saving === 'search.preferredLanguage' ? t('common.saving') : t('common.save')}
-              </button>
+              />
             </div>
             {langErr && <p className="text-xs text-red-600 dark:text-red-400 mt-1">{langErr}</p>}
           </div>
