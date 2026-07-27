@@ -4,6 +4,189 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
+## [v1.28.1] — 2026-07-27
+
+A bug-fix release, and most of it is one bug wearing different hats: two sides
+of a string comparison were being reduced through different alphabets, so they
+could never match. That single shape made accented and non-Latin books
+unfindable, split authors into duplicate rows, stopped the library scan
+reconciling files it had already imported, and merged unrelated series
+together. Those folds now live in one place, with a test suite that fails the
+build when two of them disagree rather than waiting for the bug report.
+Alongside that: the install-wide **Default monitor mode** is finally honoured
+by the bulk importers that were ignoring it, the Search page stops offering
+movie rips and usenet fragments with a Grab button next to them, and every
+Settings field confirms when it saves.
+
+### Fixed
+- **Accented and non-Latin titles and authors return results again** (#1642) —
+  searches for a book whose title or author had a diacritic at the start or end
+  of a word ("Ölümün Sonu", "El mundo que Jones creó", "Édition collector"), or
+  that used a non-Latin script (Chinese, Cyrillic, Greek, Hebrew, Arabic),
+  matched nothing at all — even when an indexer returned a release named exactly
+  like the book. Measured against a real library, 110 of 382 books with a
+  non-ASCII title could never be found, and they stayed in the wanted list being
+  re-searched on every sweep. The matcher's word-boundary rule only understood
+  ASCII letters, so a keyword touching a non-ASCII character was impossible to
+  match; it now understands the full Unicode alphabet. Single-word titles by an
+  author with a non-Latin name (for example "Circle" by 刘慈欣) were affected
+  too, because those searches require the author to match. Accents *inside* a
+  word ("Miéville", "Stanisław") were never affected.
+- **Authors with dotted initials match releases again** (#1608) — a name like
+  "J.R.R. Tolkien" produced an author token ("j.r.r") that can never appear in a
+  normalized release name, so searches for single-keyword titles ("The Hobbit")
+  returned zero results even when indexers found dozens. Author names are now
+  normalized the same way release titles are before tokenizing; hyphenated first
+  names ("Mary-Kate") are fixed by the same change.
+- **Books with an apostrophe or umlaut in the title no longer waste indexer
+  queries** (#1643) — a search for a title like "Ender's Game", "The Handmaid's
+  Tale" or "Der Prozeß" threw away a perfectly good indexer response, misreading
+  it as an irrelevant category feed, and then re-queried the same indexer three
+  more times. This happened on every search for those books, and on a
+  rate-limited indexer it could turn into a hard failure that returned no
+  results at all despite the correct release having already been found. The
+  check now compares both sides of the match in the same form.
+- **"Default monitor mode" now applies to every way an author gets added, not
+  just the Add Author button** (#1666) — the setting says "Applied to newly
+  added authors", but only the manual Add Author form ever read it. Every import
+  created the author with no mode at all, which the database quietly turned into
+  "all books", so the one setting people reach for before a bulk import did
+  nothing on exactly the paths they were trying to protect. Two reports: a
+  Calibre library imported from scratch with the default set to None still
+  produced authors monitoring everything, and a CSV author import queued about
+  1250 books for download. Calibre, Audiobookshelf, CSV, Readarr and Goodreads
+  imports, the series backfill and the author created behind a manual Add Book
+  all honour the setting now, including the latest-book count. Anything that
+  already picks a mode on purpose keeps it, so Hardcover list sync still
+  monitors only the books on the list, and existing authors are untouched.
+- **The Search page no longer offers movies and usenet junk to grab** — the
+  video and non-book guards added for #1591, and later extended to the
+  search-details pipeline in #1644, were missing from the freeform search behind
+  the **Search** page. A query could return movie rips (`1080p`, `x265`,
+  `S01E02`, releases the indexer itself filed under Movies/TV) and raw
+  per-article usenet postings (`.part03.rar`, `[12/22]`, `yEnc`), each with a
+  Grab button next to it — and grabbing one imports the wrong file. The same two
+  content guards the book searches use now apply here. Relevance filtering is
+  deliberately not applied: a freeform query has no book to score against, so
+  which results are relevant stays the user's call.
+- **Interactive search no longer shows video releases the automatic grabber
+  rejects** (#1644) — the guard that keeps movie and TV releases out of book
+  results was applied to scheduled searches but was missing from the search you
+  run yourself, which is the one the UI uses. Releases tagged 1080p/x264/WEB-DL,
+  or filed by the indexer under Movies, TV or similar, could therefore appear in
+  manual search results and be grabbed by hand. The search details panel now
+  also reports how many results that stage removed.
+- **Library scan reconciles books whose author folder writes initials without
+  spaces** (#1646) — a folder named "J.R.R. Tolkien" never matched the
+  catalogue's "J. R. R. Tolkien", because the run-together form produced a token
+  no author name can contain. Audiobook releases write initials this way almost
+  universally, so those books stayed unmatched across every rescan. Manual
+  import was unaffected, which is why it looked like only the scan was broken.
+- **Library scan matches accented names and titles regardless of how they are
+  encoded** (#1646) — macOS reports filenames with accents stored separately
+  from the letter they sit on, while every metadata provider returns them
+  combined. Nothing in the scanner reconciled the two, so "Björn Andersen" on
+  disk never met "Björn Andersen" in the catalogue. Titles had a worse version
+  of the same bug: "Die Höhle" was being reduced to "die hle" before comparison.
+- **Library scan matches German titles spelled either way** (#1646) — "Die
+  Hoehle" on disk now matches "Die Höhle" in the catalogue, and "Der Prozess"
+  matches "Der Prozeß", the same way the indexer already matched them.
+  Apostrophes too, so an "Enders Game" file finds "Ender's Game".
+- **Bulk folder import matches transliterated author names** (#1646) — "Boell,
+  Heinrich" now resolves to "Heinrich Böll" instead of scoring far too low to be
+  considered a match.
+- **Calibre import stops creating duplicate authors** (#1647) — Calibre compared
+  author names byte for byte, so an author already in your library from
+  Audiobookshelf or OpenLibrary got a second row whenever Calibre spelled the
+  name differently ("J.R.R. Tolkien" against "J. R. R. Tolkien", or an accented
+  name written in a different Unicode encoding, which Calibre on macOS
+  produces). The books then showed up split across two author pages, and every
+  later import recreated the split.
+- **Missing descriptions, covers, ratings and genres get backfilled again**
+  (#1647) — the enrichment step matched candidate books by comparing raw author
+  and title strings from two different providers, so any book whose providers
+  disagreed about initial spacing or accent encoding was never enriched. Because
+  the comparison always failed the same way, it never recovered on retry.
+- **A German author from DNB no longer ends up alongside a duplicate from
+  OpenLibrary** (#1647) — the check that exists to merge those two rows compared
+  "Tolkien, J. R. R." against "Tolkien, J.R.R." and found no match, so it
+  created exactly the duplicate it was meant to prevent. Case handling for
+  non-English letters was broken in the same query.
+- **German and Scandinavian authors no longer end up duplicated or stuck in the
+  review queue** (#1647) — author matching stripped accents ("Müller" →
+  "muller") while every title matcher expands them ("Müller" → "mueller"), so a
+  name spelled with accents in one place and ASCII-ised in another ("Jörg
+  Müller" vs "Joerg Mueller") scored just under the auto-accept threshold. The
+  same gap affected "Nesbø"/"Nesbo" and "Łukasz"/"Lukasz". Both spellings now
+  resolve to one author.
+- **Non-Latin series no longer collapse into one shared series** (#1645) — a
+  series whose title had no Latin letters (Japanese, Chinese, Russian, Greek,
+  Hebrew, Arabic) produced an empty identity, so the first such series imported
+  claimed a shared row and every unrelated non-Latin series afterwards was filed
+  under it. Accented Latin could collide the same way ("Ödland" and "Ådland"
+  were treated as the same series). Series identities are now built from the
+  full Unicode alphabet, with accents folded to their base letters, and a title
+  with no letters or digits at all is skipped instead of being given a
+  placeholder identity. Creating a series with an empty identity is now rejected
+  outright, so no future import can reintroduce the same merge.
+- **Japanese, Hindi and Greek series no longer merge into each other**
+  (follow-up to #1645) — the fix above folded accents by stripping every
+  combining mark, which is only correct for Latin. In Japanese those marks are
+  part of the letter, so "ハード" (hard) and "ハート" (heart) both became
+  "ハート" and shared one series row. Hindi vowel signs are spacing marks, so a
+  Devanagari title was chopped into fragments instead of being kept whole. And a
+  Greek title in all-caps keyed differently from the same title in mixed case,
+  splitting one series in two. Accents now fold for Latin and Greek only — the
+  two scripts where they really are accents — and every other script keeps its
+  letters intact. Latin letters that carry no accent to strip (ß, ø, ł, æ, œ, þ,
+  ð) now fold in slugs too, so a series is no longer split by spelling
+  ("Straße-Serie" and "Strasse-Serie" are one series). Existing ASCII series
+  identities are unchanged.
+- **Accented titles no longer produce two different indexer searches** (#1648) —
+  the same title could be sent to indexers in two different encodings depending
+  on where it came from, which also gave it two different deduplication keys.
+  Found by the new consistency test, not by a bug report.
+- **Books stored with a format tag in the title stop getting a duplicate row**
+  (#1648) — a book saved as "Title [Unabridged]" was not recognised as the same
+  work as OpenLibrary's "Title", so an author sync created a second row for it.
+- **Series named "... Series" or tagged "[Audiobook]" can be upgraded to full
+  Hardcover data** (#1648) — the lookup and the upgrade check disagreed about
+  what counts as the same series name, so some series matched one and failed the
+  other.
+- **Every settings field now confirms when it saves** (#1668) — the little green
+  "Saved ✓" only appeared on some fields. Saving the book naming template, the
+  audiobook folder template, the per-track audiobook template, either API key,
+  or the log retention days gave no feedback at all, so there was no way to tell
+  a save had gone through short of reloading the page. All of them confirm now,
+  and there is one shared button behind them rather than a copy per field, so
+  the next one can't quietly go missing. Failed saves show "Error" instead —
+  three of those fields were swallowing the failure entirely, which would have
+  shown a green tick on a save that never happened.
+- **OIDC callback URLs behind trusted proxies** — redirect auto-detection now
+  retains the original trusted proxy identity after real-client-IP resolution,
+  preventing HTTPS callbacks from incorrectly falling back to HTTP.
+
+### Changed
+- **A non-Latin word now breaks phrase matching the same way an English one
+  does** (#1642) — previously a "contiguous" title phrase would silently skip
+  over an intervening Cyrillic or CJK word, because the matcher treated every
+  non-ASCII letter as punctuation. Such titles are now handled by the same
+  gap-tolerant path that already handled their English equivalents, so nothing
+  is lost.
+- **Normalization rules are defined in one place** (#1648) — the character
+  folding used to compare titles and release names was copy-pasted into three
+  packages and had started to drift, which is what caused #1643 and made #1642
+  possible. It now lives in a single shared helper, with the four
+  legitimately-different comparison alphabets (title matching, author identity,
+  sort keys, slugs) documented alongside it. No change to how releases match.
+- **Author name handling is defined in one place** (#1648) — several helpers
+  that build author search queries and sort names existed as identical copies in
+  four packages. They now live in one, and a new test suite compares every
+  normalization rule in the codebase against a corpus of awkward names and
+  titles (dotted initials, possessives, umlauts, Nordic and Polish letters, CJK,
+  Cyrillic, Greek, Hebrew) so that two of them disagreeing is a build failure
+  rather than a bug report months later.
+
 ## [v1.28.0] — 2026-07-25
 
 A feature release driven almost entirely by user reports. Getting an existing
