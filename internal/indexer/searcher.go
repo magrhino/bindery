@@ -202,6 +202,18 @@ func (s *Searcher) SearchBook(ctx context.Context, indexers []models.Indexer, c 
 }
 
 // SearchQuery performs a generic text search across all enabled indexers.
+//
+// The content guards SearchBook applies are applied here too: some indexers
+// ignore category filters on q= searches and return movies and raw per-article
+// usenet postings alongside books, and this endpoint backs the /search page,
+// whose results each carry a Grab button. Without them the #1591 video guard
+// was reachable by hand from the UI even after it was added to both book-search
+// pipelines.
+//
+// filterRelevant is deliberately NOT applied. It scores a result against a
+// known book's title and author, and a freeform query has neither — the user
+// typed the search themselves, so relevance is their call, not ours. Only the
+// query-independent content filters belong here.
 func (s *Searcher) SearchQuery(ctx context.Context, indexers []models.Indexer, query string) []newznab.SearchResult {
 	var (
 		mu      sync.Mutex
@@ -241,6 +253,8 @@ func (s *Searcher) SearchQuery(ctx context.Context, indexers []models.Indexer, q
 	wg.Wait()
 
 	results = dedupe(results)
+	results = filterUsenetJunk(results)
+	results = filterNonBookContent(results)
 	rankResults(results, MatchCriteria{Title: query})
 	return results
 }
