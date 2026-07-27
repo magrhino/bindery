@@ -18,8 +18,6 @@ import (
 	"time"
 	"unicode"
 
-	"golang.org/x/text/unicode/norm"
-
 	"github.com/vavallee/bindery/internal/httpsec"
 	"github.com/vavallee/bindery/internal/models"
 	"github.com/vavallee/bindery/internal/textutil"
@@ -918,13 +916,17 @@ func parseSeriesRef(raw string) (models.SeriesRef, bool) {
 func seriesSlug(title string) string {
 	var b strings.Builder
 	prevDash := false
-	for _, r := range norm.NFD.String(strings.TrimSpace(title)) {
+	// textutil.FoldForSlug has already NFC-composed, lowercased, and stripped
+	// diacritics from Latin and Greek. Marks that survive it belong to scripts
+	// where they are letters rather than accents (kana dakuten, Devanagari
+	// vowel signs, Hebrew niqqud), so they count as word characters here —
+	// treating them as separators shatters one title into fragments and lets
+	// unrelated titles collide, which is what this slug exists to prevent.
+	for _, r := range textutil.FoldForSlug(title) {
 		switch {
-		case unicode.Is(unicode.Mn, r):
-			// Combining mark from NFD decomposition — drop it, keep the base letter.
-			continue
-		case unicode.IsLetter(r) || unicode.IsNumber(r):
-			b.WriteRune(unicode.ToLower(r))
+		case unicode.IsLetter(r) || unicode.IsNumber(r) ||
+			unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Mc, r):
+			b.WriteRune(r)
 			prevDash = false
 		default:
 			if !prevDash && b.Len() > 0 {

@@ -40,10 +40,13 @@ import (
 //     expected A–Z place instead of after "Z". Lossy and ORDERING-ONLY; never
 //     compare identities with it.
 //
-//  4. SLUGS / FOREIGN IDs — e.g. openlibrary.seriesSlug.
+//  4. SLUGS / FOREIGN IDs — FoldForSlug, used by openlibrary.seriesSlug.
 //     Must be stable and collision-free, not lenient. Different scripts must
 //     produce different slugs (#1645), so this one deliberately does NOT
-//     transliterate to ASCII.
+//     transliterate to ASCII — and, unlike (2) and (3), it strips diacritics
+//     only where they ARE diacritics. Latin and Greek fold; every other script
+//     keeps its marks, because in kana, Devanagari, Hebrew and Arabic the mark
+//     is part of the letter and dropping it merges distinct works.
 //
 // If you are about to write a `strings.ToLower` next to a comparison, one of
 // the four above is what you actually want.
@@ -118,6 +121,80 @@ var apostropheStripper = strings.NewReplacer("'", "", "’", "")
 func FoldNonDecomposableLatin(s string) string {
 	return nonDecomposableFolder.Replace(s)
 }
+
+// FoldForSlug reduces s to alphabet (4): a stable, collision-free identity for
+// a foreign ID. It NFC-composes, lowercases, folds the non-decomposable Latin
+// letters, and strips diacritics FROM LATIN AND GREEK ONLY.
+//
+// That script restriction is the whole point, and it is what separates this
+// fold from (2) and (3). A blanket NFD-plus-strip-Mn is correct for Latin,
+// where a combining mark is a diacritic, and wrong for the scripts where the
+// mark is part of the letter:
+//
+//   - Japanese: ズ is ス + U+3099 under NFD. Dropping the mark turns "ハード"
+//     (hard) into "ハート" (heart) and puts two unrelated series on one row —
+//     the exact collapse #1645 was filed to remove, reintroduced for kana.
+//   - Devanagari/Tamil/Thai: vowel signs are SPACING marks (Mc). They are
+//     neither letters nor Mn, so they also hit the separator branch and
+//     shatter one title into fragments ("गोदान" → "ग-द-न").
+//   - Hebrew niqqud and Arabic harakat are Mn and meaning-bearing.
+//
+// Greek DOES fold: ά/ή/ώ are accented forms of the same letter, and Greek
+// convention drops the tonos entirely in all-caps, so "ΝΙΚΟΣ" and "Νίκος" must
+// reach one key. Word-final sigma is normalised for the same reason —
+// strings.ToLower maps Σ to σ but leaves an existing ς alone, which would
+// otherwise split a title by case alone.
+//
+// Cyrillic deliberately does NOT fold even though NFD decomposes й into и plus
+// a breve: those are separate letters of the alphabet, so folding would merge
+// distinct names.
+//
+// Marks that survive are returned as-is; callers building a slug must treat
+// them as word characters rather than separators.
+func FoldForSlug(s string) string {
+	s = norm.NFC.String(strings.TrimSpace(s))
+	if s == "" {
+		return ""
+	}
+	s = strings.ToLower(s)
+	s = greekFinalSigma.Replace(s)
+	s = FoldNonDecomposableLatin(s)
+
+	var b strings.Builder
+	b.Grow(len(s))
+	prevFoldable := false
+	for _, r := range s {
+		switch {
+		case foldsDiacritics(r):
+			// Composed accented letter: decompose and keep only the base.
+			for _, dr := range norm.NFD.String(string(r)) {
+				if !unicode.Is(unicode.Mn, dr) {
+					b.WriteRune(dr)
+				}
+			}
+			prevFoldable = true
+		case unicode.Is(unicode.Mn, r) && prevFoldable:
+			// A mark on a Latin/Greek base that did not compose under NFC.
+			// Still a diacritic, so drop it.
+			continue
+		default:
+			b.WriteRune(r)
+			prevFoldable = false
+		}
+	}
+	return b.String()
+}
+
+// foldsDiacritics reports whether r belongs to a script whose combining marks
+// are diacritics rather than letters. See FoldForSlug for why the set is
+// exactly Latin and Greek.
+func foldsDiacritics(r rune) bool {
+	return unicode.Is(unicode.Latin, r) || unicode.Is(unicode.Greek, r)
+}
+
+// greekFinalSigma normalises word-final sigma to the medial form. Applied after
+// lowercasing, so only the lowercase pair needs handling.
+var greekFinalSigma = strings.NewReplacer("ς", "σ")
 
 var nonDecomposableFolder = strings.NewReplacer(
 	"ø", "o",
