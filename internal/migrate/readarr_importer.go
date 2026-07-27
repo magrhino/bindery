@@ -36,6 +36,7 @@ type ReadarrImporter struct {
 	indexers    *db.IndexerRepo
 	clients     *db.DownloadClientRepo
 	blocklist   *db.BlocklistRepo
+	settings    *db.SettingsRepo
 	meta        *metadata.Aggregator
 	onNewAuthor func(*models.Author)
 
@@ -54,6 +55,7 @@ func NewReadarrImporter(
 	indexers *db.IndexerRepo,
 	clients *db.DownloadClientRepo,
 	blocklist *db.BlocklistRepo,
+	settings *db.SettingsRepo,
 	meta *metadata.Aggregator,
 	onNewAuthor func(*models.Author),
 ) *ReadarrImporter {
@@ -62,6 +64,7 @@ func NewReadarrImporter(
 		indexers:    indexers,
 		clients:     clients,
 		blocklist:   blocklist,
+		settings:    settings,
 		meta:        meta,
 		onNewAuthor: onNewAuthor,
 	}
@@ -108,7 +111,7 @@ func (imp *ReadarrImporter) Start(ctx context.Context, tmpPath string) error {
 		}
 		slog.Info("readarr import: starting", "tmpPath", tmpPath)
 		res, err := ImportReadarr(ctx, tmpPath,
-			imp.authors, imp.indexers, imp.clients, imp.blocklist, imp.meta, imp.onNewAuthor)
+			imp.authors, imp.indexers, imp.clients, imp.blocklist, imp.settings, imp.meta, imp.onNewAuthor)
 
 		now := time.Now()
 		imp.mu.Lock()

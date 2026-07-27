@@ -36,11 +36,16 @@ const SettingDefaultMediaTypeStrict = "default.media_type_strict"
 
 // SettingAuthorDefaultMonitorMode controls which newly discovered books are
 // monitored for authors created without an explicit monitorMode.
-const SettingAuthorDefaultMonitorMode = "author.default_monitor_mode"
-
+//
 // SettingAuthorDefaultMonitorLatestCount stores the N for monitor_mode=latest
 // when authors are created without an explicit monitorLatestCount.
-const SettingAuthorDefaultMonitorLatestCount = "author.default_monitor_latest_count"
+//
+// Both are defined in internal/db so the importers can honour them too (#1666);
+// re-exported here because the settings surface is this package's.
+const (
+	SettingAuthorDefaultMonitorMode        = db.SettingAuthorDefaultMonitorMode
+	SettingAuthorDefaultMonitorLatestCount = db.SettingAuthorDefaultMonitorLatestCount
+)
 
 // SettingDefaultLibraryRootFolderID is the KV key that stores the ID of the
 // root folder used as the fallback library path when an author has no

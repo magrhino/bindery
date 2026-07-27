@@ -57,6 +57,7 @@ type MigrateHandler struct {
 	clients   *db.DownloadClientRepo
 	blocklist *db.BlocklistRepo
 	books     *db.BookRepo
+	settings  *db.SettingsRepo
 	meta      *metadata.Aggregator
 
 	// onNewAuthor fires in a goroutine for each newly-imported author so
@@ -79,17 +80,18 @@ func NewMigrateHandler(
 	clients *db.DownloadClientRepo,
 	blocklist *db.BlocklistRepo,
 	books *db.BookRepo,
+	settings *db.SettingsRepo,
 	meta *metadata.Aggregator,
 	onNewAuthor func(author *models.Author),
 ) *MigrateHandler {
 	return &MigrateHandler{
 		authors: authors, indexers: indexers, clients: clients,
-		blocklist: blocklist, books: books, meta: meta,
+		blocklist: blocklist, books: books, settings: settings, meta: meta,
 		onNewAuthor: onNewAuthor,
 		readarrImporter: migrate.NewReadarrImporter(
-			authors, indexers, clients, blocklist, meta, onNewAuthor,
+			authors, indexers, clients, blocklist, settings, meta, onNewAuthor,
 		),
-		goodreadsImporter: migrate.NewGoodreadsImporter(authors, books, meta),
+		goodreadsImporter: migrate.NewGoodreadsImporter(authors, settings, books, meta),
 	}
 }
 
@@ -105,7 +107,7 @@ func (h *MigrateHandler) ImportCSV(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	result, err := migrate.ImportCSVAuthors(r.Context(), file, h.authors, h.meta, h.onNewAuthor)
+	result, err := migrate.ImportCSVAuthors(r.Context(), file, h.authors, h.settings, h.meta, h.onNewAuthor)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

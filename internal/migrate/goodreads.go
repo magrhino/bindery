@@ -279,6 +279,7 @@ func CommitGoodreadsImport(
 	ctx context.Context,
 	resolvedRows []GoodreadsResolvedRow,
 	authors *db.AuthorRepo,
+	settings *db.SettingsRepo,
 	books *db.BookRepo,
 ) GoodreadsCommitResult {
 	result := GoodreadsCommitResult{Failures: map[string]string{}}
@@ -297,7 +298,7 @@ func CommitGoodreadsImport(
 			}
 		}
 
-		authorID, err := ensureGoodreadsAuthor(ctx, authors, book)
+		authorID, err := ensureGoodreadsAuthor(ctx, authors, settings, book)
 		if err != nil {
 			result.Failed++
 			result.Failures[book.Title] = "author: " + err.Error()
@@ -330,7 +331,7 @@ func CommitGoodreadsImport(
 // ensureGoodreadsAuthor resolves the book's author to a Bindery author ID,
 // creating a minimal record (canonicalised by OpenLibrary foreign ID) when
 // the author is not yet known. Returns the author's database ID.
-func ensureGoodreadsAuthor(ctx context.Context, authors *db.AuthorRepo, book *models.Book) (int64, error) {
+func ensureGoodreadsAuthor(ctx context.Context, authors *db.AuthorRepo, settings *db.SettingsRepo, book *models.Book) (int64, error) {
 	if book.Author == nil || strings.TrimSpace(book.Author.ForeignID) == "" {
 		return 0, fmt.Errorf("book %q has no resolvable author", book.Title)
 	}
@@ -350,6 +351,9 @@ func ensureGoodreadsAuthor(ctx context.Context, authors *db.AuthorRepo, book *mo
 	if strings.TrimSpace(author.SortName) == "" {
 		author.SortName = goodreadsSortName(author.Name)
 	}
+	// Created as a side effect of importing a book, so there is no per-author
+	// monitor choice — take the install-wide default (#1666).
+	db.ApplyAuthorMonitorDefaults(ctx, settings, author)
 	if err := authors.Create(ctx, author); err != nil {
 		if isAuthorCreateConflict(err) {
 			existing, _ = authors.GetByAnyForeignID(ctx, author.ForeignID)

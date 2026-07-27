@@ -66,7 +66,7 @@ func newReadarrDB(t *testing.T) string {
 }
 
 func TestImportReadarr_EmptyDBPath(t *testing.T) {
-	_, err := ImportReadarr(context.Background(), "", nil, nil, nil, nil, nil, nil)
+	_, err := ImportReadarr(context.Background(), "", nil, nil, nil, nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for empty path")
 	}
@@ -75,7 +75,7 @@ func TestImportReadarr_EmptyDBPath(t *testing.T) {
 func TestImportReadarr_BadPath(t *testing.T) {
 	// modernc sqlite opens lazily; ping() is where it fails.
 	_, err := ImportReadarr(context.Background(), "/nonexistent/does/not/exist.db",
-		nil, nil, nil, nil, nil, nil)
+		nil, nil, nil, nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error opening missing db")
 	}
@@ -170,7 +170,7 @@ func TestImportReadarr_HappyPath(t *testing.T) {
 	}
 	agg := metadata.NewAggregator(provider)
 
-	res, err := ImportReadarr(ctx, path, authorRepo, indexerRepo, clientRepo, blocklistRepo, agg, nil)
+	res, err := ImportReadarr(ctx, path, authorRepo, indexerRepo, clientRepo, blocklistRepo, nil, agg, nil)
 	if err != nil {
 		t.Fatalf("ImportReadarr: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestImportReadarr_SkipsDuplicateAlternateIdentifier(t *testing.T) {
 		},
 	})
 
-	res, err := ImportReadarr(ctx, path, authorRepo, db.NewIndexerRepo(database), db.NewDownloadClientRepo(database), db.NewBlocklistRepo(database), agg, nil)
+	res, err := ImportReadarr(ctx, path, authorRepo, db.NewIndexerRepo(database), db.NewDownloadClientRepo(database), db.NewBlocklistRepo(database), nil, agg, nil)
 	if err != nil {
 		t.Fatalf("ImportReadarr: %v", err)
 	}
@@ -352,6 +352,7 @@ func TestImportReadarr_BlacklistFallback(t *testing.T) {
 		db.NewIndexerRepo(database),
 		db.NewDownloadClientRepo(database),
 		db.NewBlocklistRepo(database),
+		nil,
 		metadata.NewAggregator(&stubProvider{}),
 		nil,
 	)

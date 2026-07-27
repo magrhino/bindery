@@ -293,7 +293,7 @@ func main() {
 	// Runs the import and exits; does not start the HTTP server. Useful
 	// for bulk first-time imports from a shell.
 	if len(os.Args) > 1 && os.Args[1] == "migrate" {
-		runMigrate(cfg, authorRepo, indexerRepo, dlClientRepo, blocklistRepo, metaAgg)
+		runMigrate(cfg, authorRepo, indexerRepo, dlClientRepo, blocklistRepo, settingsRepo, metaAgg)
 		return
 	}
 
@@ -667,7 +667,7 @@ func main() {
 	// subpath deploy (BINDERY_URL_BASE). No-op when URLBase is empty.
 	api.SetImageProxyBase(cfg.URLBase)
 	migrateHandler := api.NewMigrateHandler(
-		authorRepo, indexerRepo, dlClientRepo, blocklistRepo, bookRepo, metaAgg,
+		authorRepo, indexerRepo, dlClientRepo, blocklistRepo, bookRepo, settingsRepo, metaAgg,
 		// Bulk imports always populate the catalogue but never auto-grab.
 		// Pass an empty media type so the handler falls back to the global
 		// default.media_type setting for each newly-created book.

@@ -31,6 +31,7 @@ func migrateFixture(t *testing.T, primary metadata.Provider) *MigrateHandler {
 		db.NewDownloadClientRepo(database),
 		db.NewBlocklistRepo(database),
 		db.NewBookRepo(database),
+		db.NewSettingsRepo(database),
 		metadata.NewAggregator(primary),
 		nil,
 	)

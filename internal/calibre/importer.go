@@ -545,6 +545,9 @@ func (i *Importer) resolveAuthor(ctx context.Context, runID int64, ca CalibreAut
 		MonitorNewItems:  models.AuthorMonitorNewItemsNone,
 		MetadataProvider: "calibre",
 	}
+	// An import carries no per-author monitor choice, so honour the install-wide
+	// default rather than letting the column default stamp "all" (#1666).
+	db.ApplyAuthorMonitorDefaults(ctx, i.settings, author)
 	if err := i.authors.Create(ctx, author); err != nil {
 		return nil, false, err
 	}

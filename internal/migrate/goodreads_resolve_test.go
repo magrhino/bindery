@@ -266,7 +266,7 @@ func TestCommitGoodreadsImport_AddsBooksAndAuthors(t *testing.T) {
 		},
 	}
 
-	result := CommitGoodreadsImport(ctx, resolved, authors, books)
+	result := CommitGoodreadsImport(ctx, resolved, authors, nil, books)
 	if result.Added != 2 {
 		t.Fatalf("added = %d, want 2; failures=%v", result.Added, result.Failures)
 	}
@@ -329,7 +329,7 @@ func TestCommitGoodreadsImport_ReusesAuthorByAlternateIdentifier(t *testing.T) {
 		book:    bookWithAuthor("OL-W1", "Book One", "OL-A1", "Author One"),
 	}}
 
-	result := CommitGoodreadsImport(ctx, resolved, authors, books)
+	result := CommitGoodreadsImport(ctx, resolved, authors, nil, books)
 	if result.Failed != 0 || result.Added != 1 {
 		t.Fatalf("result = %+v, want imported book under existing alternate author", result)
 	}
@@ -371,7 +371,7 @@ func TestCommitGoodreadsImport_SkipsExistingAtCommit(t *testing.T) {
 		Outcome: outcomeResolved,
 		book:    bookWithAuthor("OL-W-RACE", "Raced", "OL-A-RACE", "Race Author"),
 	}}
-	result := CommitGoodreadsImport(ctx, resolved, authors, books)
+	result := CommitGoodreadsImport(ctx, resolved, authors, nil, books)
 	if result.Added != 0 || result.Skipped != 1 {
 		t.Fatalf("want added=0 skipped=1, got added=%d skipped=%d", result.Added, result.Skipped)
 	}
@@ -383,7 +383,7 @@ func TestGoodreadsImporter_PreviewAndCommit(t *testing.T) {
 	books := db.NewBookRepo(database)
 	ctx := context.Background()
 
-	imp := NewGoodreadsImporter(authors, books, nil).WithPacing(0)
+	imp := NewGoodreadsImporter(authors, nil, books, nil).WithPacing(0)
 	// Inject a deterministic resolution function — no live providers.
 	imp.withResolveFn(func(_ context.Context, rows []GoodreadsRow, _ GoodreadsImportOptions, _ time.Duration) []GoodreadsResolvedRow {
 		out := make([]GoodreadsResolvedRow, 0, len(rows))

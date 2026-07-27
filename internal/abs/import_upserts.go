@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/models"
 	"github.com/vavallee/bindery/internal/textutil"
 )
@@ -198,6 +199,9 @@ func (i *Importer) resolveAuthor(ctx context.Context, cfg ImportConfig, runID in
 		MonitorNewItems:  models.AuthorMonitorNewItemsNone,
 		MetadataProvider: providerAudiobookshelf,
 	}
+	// An import carries no per-author monitor choice, so honour the install-wide
+	// default rather than letting the column default stamp "all" (#1666).
+	db.ApplyAuthorMonitorDefaults(ctx, i.settings, author)
 	if err := i.authors.Create(ctx, author); err != nil {
 		return nil, false, "", metadataMergeResult{}, err
 	}
@@ -339,6 +343,9 @@ func (i *Importer) resolveManualAuthor(ctx context.Context, cfg ImportConfig, ru
 		_ = i.recordRunEntity(ctx, runID, cfg, item.LibraryID, item.ItemID, entityTypeAuthor, absExternalID, 0, itemOutcomeCreated, map[string]string{"matchedBy": "manual_author"})
 		return author, true, "manual_author", metadataMergeResult{}, nil
 	}
+	// An import carries no per-author monitor choice, so honour the install-wide
+	// default rather than letting the column default stamp "all" (#1666).
+	db.ApplyAuthorMonitorDefaults(ctx, i.settings, author)
 	if err := i.authors.Create(ctx, author); err != nil {
 		return nil, false, "", metadataMergeResult{}, err
 	}

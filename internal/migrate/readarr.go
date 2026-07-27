@@ -40,6 +40,7 @@ func ImportReadarr(
 	indexerRepo *db.IndexerRepo,
 	clientRepo *db.DownloadClientRepo,
 	blocklistRepo *db.BlocklistRepo,
+	settingsRepo *db.SettingsRepo,
 	agg *metadata.Aggregator,
 	onSearchOnAdd func(author *models.Author),
 ) (*ReadarrResult, error) {
@@ -62,7 +63,7 @@ func ImportReadarr(
 		Blocklist:       *newResult(),
 	}
 
-	if err := importReadarrAuthors(ctx, src, authorRepo, agg, onSearchOnAdd, &res.Authors); err != nil {
+	if err := importReadarrAuthors(ctx, src, authorRepo, settingsRepo, agg, onSearchOnAdd, &res.Authors); err != nil {
 		slog.Warn("readarr import: authors failed", "error", err)
 	}
 	if err := importReadarrIndexers(ctx, src, indexerRepo, &res.Indexers); err != nil {
@@ -82,7 +83,7 @@ func ImportReadarr(
 // Goodreads IDs are trusted. Authors.Name does not exist in the Readarr
 // schema — the human-readable name lives in AuthorMetadata joined via
 // Authors.AuthorMetadataId.
-func importReadarrAuthors(ctx context.Context, src *sql.DB, repo *db.AuthorRepo, agg *metadata.Aggregator, onSearchOnAdd func(*models.Author), res *Result) error {
+func importReadarrAuthors(ctx context.Context, src *sql.DB, repo *db.AuthorRepo, settings *db.SettingsRepo, agg *metadata.Aggregator, onSearchOnAdd func(*models.Author), res *Result) error {
 	rows, err := src.QueryContext(ctx, `
 		SELECT am.Name, a.Monitored
 		FROM Authors a
@@ -127,6 +128,9 @@ func importReadarrAuthors(ctx context.Context, src *sql.DB, repo *db.AuthorRepo,
 		}
 		full.Monitored = monitored
 		full.MetadataProvider = "openlibrary"
+		// Readarr hands over a monitored flag but no monitor mode, so take the
+		// install-wide default rather than the column default "all" (#1666).
+		db.ApplyAuthorMonitorDefaults(ctx, settings, full)
 
 		if cerr := repo.Create(ctx, full); cerr != nil {
 			if isAuthorCreateConflict(cerr) {

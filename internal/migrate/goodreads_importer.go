@@ -43,9 +43,10 @@ type goodreadsPreviewEntry struct {
 // A single instance is shared across HTTP handlers; the mutex guards the
 // preview cache and the single-resolution guard.
 type GoodreadsImporter struct {
-	authors *db.AuthorRepo
-	books   *db.BookRepo
-	meta    *metadata.Aggregator
+	authors  *db.AuthorRepo
+	settings *db.SettingsRepo
+	books    *db.BookRepo
+	meta     *metadata.Aggregator
 
 	mu        sync.Mutex
 	resolving bool
@@ -62,9 +63,10 @@ type GoodreadsImporter struct {
 
 // NewGoodreadsImporter wires the repos and metadata aggregator the import
 // needs. meta may be nil only in tests that inject resolveFn.
-func NewGoodreadsImporter(authors *db.AuthorRepo, books *db.BookRepo, meta *metadata.Aggregator) *GoodreadsImporter {
+func NewGoodreadsImporter(authors *db.AuthorRepo, settings *db.SettingsRepo, books *db.BookRepo, meta *metadata.Aggregator) *GoodreadsImporter {
 	imp := &GoodreadsImporter{
 		authors:  authors,
+		settings: settings,
 		books:    books,
 		meta:     meta,
 		previews: map[string]goodreadsPreviewEntry{},
@@ -145,7 +147,7 @@ func (imp *GoodreadsImporter) Commit(ctx context.Context, token string) (*Goodre
 		return nil, ErrGoodreadsPreviewNotFound
 	}
 
-	result := CommitGoodreadsImport(ctx, entry.preview.Rows, imp.authors, imp.books)
+	result := CommitGoodreadsImport(ctx, entry.preview.Rows, imp.authors, imp.settings, imp.books)
 	return &result, nil
 }
 

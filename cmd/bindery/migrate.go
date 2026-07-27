@@ -21,6 +21,7 @@ func runMigrate(
 	indexers *db.IndexerRepo,
 	clients *db.DownloadClientRepo,
 	blocklist *db.BlocklistRepo,
+	settings *db.SettingsRepo,
 	agg *metadata.Aggregator,
 ) {
 	if len(os.Args) < 4 {
@@ -38,7 +39,7 @@ func runMigrate(
 			os.Exit(1)
 		}
 		defer f.Close()
-		res, err := migrate.ImportCSVAuthors(ctx, f, authors, agg, nil)
+		res, err := migrate.ImportCSVAuthors(ctx, f, authors, settings, agg, nil)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "csv import:", err)
 			os.Exit(1)
@@ -46,7 +47,7 @@ func runMigrate(
 		printJSON(res)
 
 	case "readarr":
-		res, err := migrate.ImportReadarr(ctx, path, authors, indexers, clients, blocklist, agg, nil)
+		res, err := migrate.ImportReadarr(ctx, path, authors, indexers, clients, blocklist, settings, agg, nil)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "readarr import:", err)
 			os.Exit(1)

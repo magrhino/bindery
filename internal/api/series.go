@@ -1356,6 +1356,9 @@ func (h *SeriesHandler) ensureHardcoverCatalogBook(ctx context.Context, series *
 		return nil, nil
 	}
 	if storedAuthor == nil {
+		// Backfilled from a series catalogue, so there is no user monitor
+		// choice to carry — take the install-wide default (#1666).
+		db.ApplyAuthorMonitorDefaults(ctx, h.settings, author)
 		if err := h.authors.Create(ctx, author); err != nil {
 			return nil, err
 		}

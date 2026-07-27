@@ -530,29 +530,13 @@ func (h *AuthorHandler) resolveCreateMonitorOptions(ctx context.Context, request
 }
 
 func (h *AuthorHandler) resolveDefaultAuthorMonitorMode(ctx context.Context) string {
-	if h.settings == nil {
-		return models.DefaultAuthorMonitorMode
-	}
-	s, _ := h.settings.Get(ctx, SettingAuthorDefaultMonitorMode)
-	if s == nil || s.Value == "" || !models.IsAuthorMonitorModeValid(s.Value) {
-		return models.DefaultAuthorMonitorMode
-	}
-	return s.Value
+	mode, _ := db.ResolveAuthorMonitorDefaults(ctx, h.settings)
+	return mode
 }
 
 func (h *AuthorHandler) resolveDefaultAuthorMonitorLatestCount(ctx context.Context) int {
-	if h.settings == nil {
-		return models.DefaultAuthorMonitorLatestCount
-	}
-	s, _ := h.settings.Get(ctx, SettingAuthorDefaultMonitorLatestCount)
-	if s == nil || s.Value == "" {
-		return models.DefaultAuthorMonitorLatestCount
-	}
-	n, err := strconv.Atoi(s.Value)
-	if err != nil || n <= 0 {
-		return models.DefaultAuthorMonitorLatestCount
-	}
-	return n
+	_, latestCount := db.ResolveAuthorMonitorDefaults(ctx, h.settings)
+	return latestCount
 }
 
 func canRelinkAuthorToUpstream(author *models.Author) bool {
@@ -2269,6 +2253,9 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 		// path so the orphan-cleanup defer never rolls back somebody else's
 		// author row (issue #667).
 		if author == nil {
+			// Add-book creates the author as a side effect, so it never carries
+			// an explicit monitor choice — take the install-wide default (#1666).
+			db.ApplyAuthorMonitorDefaults(ctx, h.settings, fetched)
 			if err := h.authors.CreateForUser(ctx, fetched, userID); err != nil {
 				if !strings.Contains(err.Error(), "UNIQUE constraint failed") && !errors.Is(err, db.ErrAuthorIdentifierConflict) {
 					writeServerError(w, r, err)

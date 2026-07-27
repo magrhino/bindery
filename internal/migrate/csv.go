@@ -60,10 +60,16 @@ func (r *Result) fail(name, reason string) {
 // catalogue but never auto-grabs, so populating on every row is safe — an
 // empty catalogue otherwise leaves the library scan with no book rows to match
 // files against, and the user's library looks empty after import.
+// settings supplies the install-wide author monitor defaults (#1666). A CSV row
+// carries a monitored flag but never a monitor *mode*, and this is the path
+// that queued ~1250 books for one user: without the default the author lands in
+// mode "all", the catalogue fetch below monitors every work, and the scheduler
+// grabs the lot.
 func ImportCSVAuthors(
 	ctx context.Context,
 	reader io.Reader,
 	authors *db.AuthorRepo,
+	settings *db.SettingsRepo,
 	agg *metadata.Aggregator,
 	onCatalogueFetch func(author *models.Author),
 ) (*Result, error) {
@@ -111,6 +117,7 @@ func ImportCSVAuthors(
 		}
 		full.Monitored = row.monitored
 		full.MetadataProvider = "openlibrary"
+		db.ApplyAuthorMonitorDefaults(ctx, settings, full)
 
 		if err := authors.Create(ctx, full); err != nil {
 			if isAuthorCreateConflict(err) {

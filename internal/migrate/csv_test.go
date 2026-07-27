@@ -186,7 +186,7 @@ func TestImportCSVAuthors_NilReader(t *testing.T) {
 	database := newTestDB(t)
 	repo := db.NewAuthorRepo(database)
 	agg := metadata.NewAggregator(&stubProvider{})
-	res, err := ImportCSVAuthors(context.Background(), nil, repo, agg, nil)
+	res, err := ImportCSVAuthors(context.Background(), nil, repo, nil, agg, nil)
 	if err == nil {
 		t.Fatal("expected error for nil reader")
 	}
@@ -231,7 +231,7 @@ func TestImportCSVAuthors_HappyPath(t *testing.T) {
 	}
 
 	input := "Andy Weir,true,true\nIsaac Asimov,false,false\n"
-	res, err := ImportCSVAuthors(context.Background(), strings.NewReader(input), repo, agg, onSearch)
+	res, err := ImportCSVAuthors(context.Background(), strings.NewReader(input), repo, nil, agg, onSearch)
 	if err != nil {
 		t.Fatalf("ImportCSVAuthors: %v", err)
 	}
@@ -300,7 +300,7 @@ func TestImportCSVAuthors_PlainNamePopulatesCatalogue(t *testing.T) {
 	}
 
 	// Plain-name input (no comma -> plain list path).
-	res, err := ImportCSVAuthors(context.Background(), strings.NewReader("Andy Weir\n"), repo, agg, onSearch)
+	res, err := ImportCSVAuthors(context.Background(), strings.NewReader("Andy Weir\n"), repo, nil, agg, onSearch)
 	if err != nil {
 		t.Fatalf("ImportCSVAuthors: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestImportCSVAuthors_LegacyColumnFormats(t *testing.T) {
 			repo := db.NewAuthorRepo(database)
 			agg := metadata.NewAggregator(provider)
 
-			res, err := ImportCSVAuthors(context.Background(), strings.NewReader(tc.input), repo, agg, nil)
+			res, err := ImportCSVAuthors(context.Background(), strings.NewReader(tc.input), repo, nil, agg, nil)
 			if err != nil {
 				t.Fatalf("ImportCSVAuthors: %v", err)
 			}
@@ -373,7 +373,7 @@ func TestImportCSVAuthors_NoMatch(t *testing.T) {
 		},
 	})
 
-	res, err := ImportCSVAuthors(context.Background(), strings.NewReader("Nobody\n"), repo, agg, nil)
+	res, err := ImportCSVAuthors(context.Background(), strings.NewReader("Nobody\n"), repo, nil, agg, nil)
 	if err != nil {
 		t.Fatalf("ImportCSVAuthors: %v", err)
 	}
@@ -394,7 +394,7 @@ func TestImportCSVAuthors_SearchError(t *testing.T) {
 		},
 	})
 
-	res, _ := ImportCSVAuthors(context.Background(), strings.NewReader("Somebody\n"), repo, agg, nil)
+	res, _ := ImportCSVAuthors(context.Background(), strings.NewReader("Somebody\n"), repo, nil, agg, nil)
 	if res.Errors != 1 {
 		t.Errorf("Errors=%d want 1", res.Errors)
 	}
@@ -422,7 +422,7 @@ func TestImportCSVAuthors_SkipDuplicate(t *testing.T) {
 			return []models.Author{{Name: q, SortName: q, ForeignID: "OL-" + q}}, nil
 		},
 	})
-	res, err := ImportCSVAuthors(ctx, strings.NewReader("Dup Author\n"), repo, agg, nil)
+	res, err := ImportCSVAuthors(ctx, strings.NewReader("Dup Author\n"), repo, nil, agg, nil)
 	if err != nil {
 		t.Fatalf("ImportCSVAuthors: %v", err)
 	}
@@ -457,7 +457,7 @@ func TestImportCSVAuthors_SkipDuplicateAlternateIdentifier(t *testing.T) {
 		},
 	})
 
-	res, err := ImportCSVAuthors(ctx, strings.NewReader("Dup Author\n"), repo, agg, nil)
+	res, err := ImportCSVAuthors(ctx, strings.NewReader("Dup Author\n"), repo, nil, agg, nil)
 	if err != nil {
 		t.Fatalf("ImportCSVAuthors: %v", err)
 	}
@@ -485,7 +485,7 @@ func TestImportCSVAuthors_GetAuthorFallback(t *testing.T) {
 			return nil, errors.New("details fetch failed")
 		},
 	})
-	res, err := ImportCSVAuthors(context.Background(), strings.NewReader("Fallback Person\n"), repo, agg, nil)
+	res, err := ImportCSVAuthors(context.Background(), strings.NewReader("Fallback Person\n"), repo, nil, agg, nil)
 	if err != nil {
 		t.Fatalf("ImportCSVAuthors: %v", err)
 	}

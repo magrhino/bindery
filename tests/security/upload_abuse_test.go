@@ -30,6 +30,7 @@ func newMigrateHandler(t *testing.T) *api.MigrateHandler {
 		db.NewDownloadClientRepo(database),
 		db.NewBlocklistRepo(database),
 		db.NewBookRepo(database),
+		db.NewSettingsRepo(database),
 		metadata.NewAggregator(openlibrary.New()),
 		nil,
 	)
