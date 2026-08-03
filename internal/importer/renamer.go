@@ -64,6 +64,25 @@ var templateGroupRe = regexp.MustCompile(`\{([^{}]*)\}`)
 // with an optional ":modifier" (default text or zero-pad width).
 var simpleGroupRe = regexp.MustCompile(`^(\w+)(?::([^{}]*))?$`)
 
+// widthThenLiteralRe recognises a modifier that is a zero-pad width followed
+// by literal text — "3 - " in "{SeriesNumber:3 - }" (#1690). simpleGroupRe's
+// modifier capture is greedy, so such a group used to parse as one token with
+// the whole "3 - " as its modifier: parseWidth rejected it for length, and
+// because the value was non-empty the default-text branch never ran either, so
+// BOTH the padding and the trailing literal were silently dropped. With an
+// empty value it was worse — the modifier text itself was substituted as the
+// default, putting a literal "3 -" in the filename of every non-series book.
+//
+// Groups matching this are handed to the conditional branch instead, where
+// groupWordRe's ":\d{1,2}" capture is already bounded correctly and the
+// trailing text is treated as conditional literal text. That also makes the
+// single-token form agree with the multi-token one, which always took the
+// conditional path and therefore always worked ("{Series SeriesNumber:3 - }").
+//
+// The trailing \D is what keeps "{Year:2024}" out: a modifier of all digits
+// stays default text, per parseWidth's 1-2 digit rule.
+var widthThenLiteralRe = regexp.MustCompile(`^\d{1,2}\D`)
+
 // groupWordRe finds keyword candidates inside a conditional group: a word
 // run with an optional ":N" width. Non-keyword word runs stay literal.
 var groupWordRe = regexp.MustCompile(`(\w+)(:\d{1,2})?`)
@@ -285,8 +304,12 @@ func renderSegment(seg string, values map[string]string) string {
 //     least one token in the group has a value; when every token is empty
 //     the whole group collapses to "". Widths are allowed after a token
 //     (":N"); text defaults are not supported in conditional groups.
+//
+// A single token carrying BOTH a width and a trailing literal
+// ("{SeriesNumber:3 - }") is conditional, not simple — see widthThenLiteralRe
+// for why the simple form cannot express it (#1690).
 func renderGroup(content string, values map[string]string) (rendered string, known bool) {
-	if m := simpleGroupRe.FindStringSubmatch(content); m != nil {
+	if m := simpleGroupRe.FindStringSubmatch(content); m != nil && !widthThenLiteralRe.MatchString(m[2]) {
 		v, ok := values[m[1]]
 		if !ok {
 			return "", false

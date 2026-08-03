@@ -139,6 +139,13 @@ const SEGMENT_GROUP_RE = /\{([^{}]*)\}/g
 const SIMPLE_GROUP_RE = /^(\w+)(?::([^{}]*))?$/
 const GROUP_WORD_RE = /(\w+)(:\d{1,2})?/g
 
+// WIDTH_THEN_LITERAL_RE mirrors widthThenLiteralRe in renamer.go: a modifier
+// that is a zero-pad width followed by literal text ("3 - " in
+// "{SeriesNumber:3 - }") belongs to the conditional branch, not the simple one
+// (#1690). The trailing \D keeps an all-digit modifier like "{Year:2024}" on
+// the simple path, where it stays default text.
+const WIDTH_THEN_LITERAL_RE = /^\d{1,2}\D/
+
 // sanitizeInline mirrors renamer.go sanitizeInline: neutralise path
 // separators in a conditional-group literal without trimming — its
 // whitespace is meaningful glue ("{ - Series}").
@@ -184,7 +191,7 @@ function zeroPad(v: string, width: number): string {
 // references no known token (caller keeps it verbatim).
 function renderGroup(content: string, values: Record<string, string>): string | null {
   const simple = SIMPLE_GROUP_RE.exec(content)
-  if (simple) {
+  if (simple && !WIDTH_THEN_LITERAL_RE.test(simple[2] ?? '')) {
     let v = values[simple[1]]
     if (v === undefined) return null
     const mod = simple[2]
@@ -277,7 +284,10 @@ const TRAVERSAL_RE = /(^|\/)\.\.?($|\/)/
 // keyword. Mirrors renderGroup's known/verbatim decision.
 function groupIsKnown(content: string): boolean {
   const simple = SIMPLE_GROUP_RE.exec(content)
-  if (simple) return SUPPORTED.has(`{${simple[1]}}`)
+  // Same width-then-literal exclusion as renderGroup (#1690), so a group like
+  // "{Foo:3 - Series}" is scanned for its known token instead of being judged
+  // solely on the leading word and flagged as unknown.
+  if (simple && !WIDTH_THEN_LITERAL_RE.test(simple[2] ?? '')) return SUPPORTED.has(`{${simple[1]}}`)
   GROUP_WORD_RE.lastIndex = 0
   let m: RegExpExecArray | null
   while ((m = GROUP_WORD_RE.exec(content)) !== null) {

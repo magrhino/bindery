@@ -110,10 +110,39 @@ describe('namingTemplate renderer (renamer.go mirror)', () => {
     expect(renderTemplate('{Year:20}', 'book', noYear)).toBe('')
   })
 
+  // #1690 — a single token carrying BOTH a width and trailing literal text.
+  // SIMPLE_GROUP_RE's modifier capture is greedy, so '{SeriesNumber:3 - }' used
+  // to parse as one token with the modifier '3 - ': parseWidth rejected it for
+  // length and, the value being non-empty, the default branch never ran, so the
+  // padding and the literal were both dropped. With an empty series it was
+  // worse — the modifier text itself rendered as the default, putting a literal
+  // '3 -' in every standalone book's name. Mirrors TestRenamerWidthThenLiteral.
+  it('renders both the width and the trailing literal in one group', () => {
+    expect(renderTemplate('{SeriesNumber:3 - }{Title}', 'book')).toBe('002 - Sample Book')
+    // The multi-token spelling always worked; the single-token one now agrees.
+    expect(renderTemplate('{Series SeriesNumber:3 - }{Title}', 'book')).toBe('Demo Series 002 - Sample Book')
+    expect(renderTemplate('{SeriesNumber - }{Title}', 'book')).toBe('2 - Sample Book')
+    expect(renderTemplate('{Title}{ - SeriesNumber:3}', 'book')).toBe('Sample Book - 002')
+    expect(renderTemplate('{SeriesNumber:3}-{Title}', 'book')).toBe('002-Sample Book')
+
+    // Empty value collapses the whole group — no modifier text leaks through.
+    const noSeries = { ...SAMPLE_BOOK, series: '', seriesNumber: '' }
+    expect(renderTemplate('{SeriesNumber:3 - }{Title}', 'book', noSeries)).toBe('Sample Book')
+    expect(renderTemplate('{SeriesNumber:12 vol }{Title}', 'book', noSeries)).toBe('Sample Book')
+
+    // The boundary the fix must not cross: an all-digit modifier stays default
+    // text, so '{Year:2024}' is not re-read as width 20 plus the literal '24'.
+    const noYear = { ...SAMPLE_BOOK, year: '' }
+    expect(renderTemplate('{Year:2024}', 'book', noYear)).toBe('2024')
+  })
+
   it('accepts conditional groups and widths in validation', () => {
     expect(validateTemplate('{Title}{ - Series}.{ext}').unknownTokens).toEqual([])
     expect(validateTemplate('{SeriesNumber:2} - {Title}').unknownTokens).toEqual([])
     expect(validateTemplate('{ - Titel}').unknownTokens).toEqual(['{ - Titel}'])
+    // #1690: a width-then-literal group is scanned for its token rather than
+    // judged on the leading word alone.
+    expect(validateTemplate('{SeriesNumber:3 - }{Title}').unknownTokens).toEqual([])
   })
 
   it('renders the {Genre} token and {Token:default} fallback', () => {

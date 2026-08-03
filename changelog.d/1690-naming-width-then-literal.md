@@ -1,0 +1,2 @@
+### Fixed
+- **Naming templates: literal text after a zero-pad width now renders** (#1690) — `{SeriesNumber:3 - }{Title}` dropped both the padding and the trailing text, giving `2Sample Book` instead of `002 - Sample Book`, and on a book with no series it leaked the modifier itself into the filename as `3 -`. The single-token spelling now behaves like the multi-token one (`{Series SeriesNumber:3 - }`), which was always correct. All-digit modifiers such as `{Year:2024}` keep their existing meaning as default text.

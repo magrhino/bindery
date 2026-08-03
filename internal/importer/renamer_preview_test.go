@@ -139,6 +139,67 @@ func TestRenamerConditionalGroupCollapse(t *testing.T) {
 	}
 }
 
+// TestRenamerWidthThenLiteral is the #1690 regression test: a single token
+// carrying BOTH a zero-pad width and trailing literal text.
+//
+// simpleGroupRe's modifier capture is greedy, so "{SeriesNumber:3 - }" used to
+// parse as one token with the modifier "3 - ". parseWidth rejected that for
+// length and, because the value was non-empty, the default-text branch never
+// ran either — so the padding AND the literal were both dropped ("2Sample
+// Book"). With an empty series it was worse: the modifier text itself was
+// substituted as the default, putting a literal "3 -" into the filename of
+// every standalone book.
+//
+// The multi-token spelling always worked because it took the conditional
+// branch, whose ":\d{1,2}" capture is bounded; these cases pin that the
+// single-token spelling now agrees with it. Mirrored in namingTemplate.test.ts.
+func TestRenamerWidthThenLiteral(t *testing.T) {
+	author := &models.Author{Name: "Jane Doe"}
+	book := &models.Book{Title: "Sample Book"}
+	r := NewRenamer("")
+
+	cases := []struct {
+		name                 string
+		template             string
+		series, seriesNumber string
+		want                 string
+	}{
+		{"width then literal renders both", "{SeriesNumber:3 - }{Title}", "Demo Series", "2", "002 - Sample Book"},
+		{"literal without width still works", "{SeriesNumber - }{Title}", "Demo Series", "2", "2 - Sample Book"},
+		{"agrees with the multi-token spelling", "{Series SeriesNumber:3 - }{Title}", "Demo Series", "2", "Demo Series 002 - Sample Book"},
+		{"leading literal form is unchanged", "{Title}{ - SeriesNumber:3}", "Demo Series", "2", "Sample Book - 002"},
+		{"bare width is unchanged", "{SeriesNumber:3}-{Title}", "Demo Series", "2", "002-Sample Book"},
+		// The empty-value case: the whole group collapses. It must NOT leak
+		// the modifier text ("3 -") as though it were default text.
+		{"collapses whole group when empty", "{SeriesNumber:3 - }{Title}", "", "", "Sample Book"},
+		{"no modifier text leaks when empty", "{SeriesNumber:12 vol }{Title}", "", "", "Sample Book"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := r.apply(tc.template, author, book, tc.series, tc.seriesNumber, "epub")
+			if got != tc.want {
+				t.Errorf("apply(%q) = %q, want %q (TS preview mirror must match)", tc.template, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRenamerWidthThenLiteralKeepsDefaultText guards the boundary the fix must
+// not cross: an all-digit modifier keeps its historical default-text meaning,
+// so "{Year:2024}" is not re-read as width 20 plus the literal "24".
+func TestRenamerWidthThenLiteralKeepsDefaultText(t *testing.T) {
+	r := NewRenamer("")
+	author := &models.Author{Name: "Jane Doe"}
+	for _, tc := range []struct{ template, want string }{
+		{"{Year:2024}", "2024"},          // empty year → 4-digit modifier is default text
+		{"{Genre:Unsorted}", "Unsorted"}, // non-digit modifier is default text
+	} {
+		if got := r.apply(tc.template, author, &models.Book{Title: "T"}, "", "", "epub"); got != tc.want {
+			t.Errorf("apply(%q) = %q, want %q", tc.template, got, tc.want)
+		}
+	}
+}
+
 // TestSanitizePathPreviewDriftGuard pins sanitizePath for the characters the TS
 // mirror handles, so a change to the Go replacer set is caught here.
 func TestSanitizePathPreviewDriftGuard(t *testing.T) {
