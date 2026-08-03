@@ -84,3 +84,82 @@ func TestTitleScore(t *testing.T) {
 		t.Fatalf("unrelated title score = %d, want below 70", got)
 	}
 }
+
+// TestVolumeNumber covers the extractor added for #1682.
+func TestVolumeNumber(t *testing.T) {
+	for _, tc := range []struct {
+		title string
+		want  string
+		ok    bool
+	}{
+		{"The Mimosa Confessions Vol. 1", "1", true},
+		{"The Mimosa Confessions, Vol. 12", "12", true},
+		{"Trapped in a Dating Sim Volume 3", "3", true},
+		{"Overlord vol 9", "9", true},
+		{"Some Series Book 2", "2", true},
+		{"Some Series Part 4", "4", true},
+		{"Some Series #7", "7", true},
+		{"Half-Step Volume 2.5", "2.5", true},
+		// No explicit marker: a bare number in a title is a title, not a
+		// volume. Getting this wrong would make every numeric title collide.
+		{"Fahrenheit 451", "", false},
+		{"Catch 22", "", false},
+		{"1984", "", false},
+		{"The Hobbit", "", false},
+	} {
+		got, ok := VolumeNumber(tc.title)
+		if ok != tc.ok || got != tc.want {
+			t.Errorf("VolumeNumber(%q) = (%q, %v), want (%q, %v)", tc.title, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// TestDifferentVolumes is the #1682 regression guard.
+//
+// Every pair in the "different" group scores 93-100 on TitleScore, well above
+// the >=92 threshold internal/api/series.go uses to decide "this is the same
+// book". Without this veto, an entire light novel series collapses onto its
+// first volume: volume 1 is created, then every later volume matches it and is
+// linked to volume 1's row at its own position instead of creating a row.
+func TestDifferentVolumes(t *testing.T) {
+	// Real titles from the report. The precondition assertion is the point:
+	// if a future TitleScore change drops these below 92 the veto is no longer
+	// load-bearing for them, and this test should say so rather than pass
+	// vacuously.
+	scoringAbove := [][2]string{
+		{"The Mimosa Confessions Vol. 1", "The Mimosa Confessions Vol. 2"},
+		{"Trapped in a Dating Sim Vol. 1", "Trapped in a Dating Sim Vol. 13"},
+		{"Overlord, Vol. 1", "Overlord, Vol. 9"},
+	}
+	for _, p := range scoringAbove {
+		if score := TitleScore(p[0], p[1]); score < 92 {
+			t.Errorf("precondition: %q vs %q scores %d — below the threshold, so this pair no longer demonstrates the bug", p[0], p[1], score)
+		}
+		if !DifferentVolumes(p[0], p[1]) {
+			t.Errorf("DifferentVolumes(%q, %q) = false, want true", p[0], p[1])
+		}
+	}
+
+	// Extraction must survive the marker being spelled differently on each
+	// side. This pair happens to score below the threshold anyway, so it is
+	// not asserted against it.
+	if !DifferentVolumes("Some Series Volume 1", "Some Series Vol. 2") {
+		t.Error("DifferentVolumes should see through differing volume-marker spellings")
+	}
+
+	same := [][2]string{
+		{"The Mimosa Confessions Vol. 2", "The Mimosa Confessions, Vol. 2"},
+		{"Overlord Volume 9", "Overlord, Vol. 9"},
+		// Only one side carries a number: says nothing, so fall through to the
+		// similarity score exactly as before. An omnibus or a re-issue with
+		// sloppy metadata must still be able to match.
+		{"The Mimosa Confessions", "The Mimosa Confessions Vol. 1"},
+		{"The Hobbit", "The Hobbit"},
+		{"Fahrenheit 451", "Fahrenheit 451"},
+	}
+	for _, p := range same {
+		if DifferentVolumes(p[0], p[1]) {
+			t.Errorf("DifferentVolumes(%q, %q) = true, want false", p[0], p[1])
+		}
+	}
+}

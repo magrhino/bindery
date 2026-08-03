@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -2203,5 +2204,183 @@ func TestSeriesHandler_LifetimeCtxFallsBackToBackground(t *testing.T) {
 	h.WithLifetimeCtx(nil) //nolint:staticcheck // SA1012 testing nil-tolerance contract
 	if h.bgCtx() != ctx {
 		t.Error("WithLifetimeCtx(nil) must not clobber a previously installed ctx")
+	}
+}
+
+// lightNovelCatalog builds a Hardcover series catalog whose volume titles
+// differ only by their number — the shape that broke in #1682.
+func lightNovelCatalog() *metadata.SeriesCatalog {
+	author := &models.Author{
+		ForeignID:        "hc:mei-hachimoku",
+		Name:             "Mei Hachimoku",
+		SortName:         "Hachimoku, Mei",
+		MetadataProvider: "hardcover",
+	}
+	var books []metadata.SeriesCatalogBook
+	for i := 1; i <= 5; i++ {
+		title := fmt.Sprintf("The Mimosa Confessions, Vol. %d", i)
+		books = append(books, metadata.SeriesCatalogBook{
+			ForeignID:  fmt.Sprintf("hc:mimosa-confessions-%d", i),
+			ProviderID: strconv.Itoa(100 + i),
+			Title:      title,
+			Position:   strconv.Itoa(i),
+			Book: models.Book{
+				ForeignID:        fmt.Sprintf("hc:mimosa-confessions-%d", i),
+				Title:            title,
+				SortTitle:        title,
+				MetadataProvider: "hardcover",
+				Author:           author,
+			},
+		})
+	}
+	return &metadata.SeriesCatalog{
+		ForeignID:  "hc-series:mimosa",
+		ProviderID: "900",
+		Title:      "The Mimosa Confessions",
+		AuthorName: "Mei Hachimoku",
+		BookCount:  len(books),
+		Books:      books,
+	}
+}
+
+// TestSeriesFillCreatesEveryVolumeOfALightNovelSeries is the #1682 regression
+// test.
+//
+// ensureHardcoverCatalogBook treats a >=92 fuzzy title score against one of the
+// author's existing books as "this is the same book" and links that row at the
+// new position instead of creating one. Light novel volume titles differ by a
+// single number, so they score 93-100 against each other: volume 1 was created,
+// then volumes 2-5 each "matched" volume 1 and were linked to its row. "Add
+// all" on a 5-volume series produced exactly one book, and on the reporter's
+// 13-volume series, exactly one book.
+func TestSeriesFillCreatesEveryVolumeOfALightNovelSeries(t *testing.T) {
+	catalog := lightNovelCatalog()
+	searcher := newMockBookSearcher()
+	h, seriesRepo, _, bookRepo := seriesFixtureWithProvider(t, &stubSeriesProvider{
+		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+	}, searcher)
+
+	ctx := context.Background()
+	series := &models.Series{ForeignID: "ol-series:mimosa", Title: "The Mimosa Confessions"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+	if err := seriesRepo.UpsertHardcoverLink(ctx, &models.SeriesHardcoverLink{
+		SeriesID: series.ID, HardcoverSeriesID: catalog.ForeignID,
+		HardcoverProviderID: catalog.ProviderID, HardcoverTitle: catalog.Title,
+		HardcoverAuthorName: catalog.AuthorName, HardcoverBookCount: catalog.BookCount,
+		Confidence: 1, LinkedBy: "manual",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Fill(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/fill", nil), "id", "1"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Every volume must exist as its own row, with its own foreign ID.
+	for i := 1; i <= 5; i++ {
+		fid := fmt.Sprintf("hc:mimosa-confessions-%d", i)
+		created, err := bookRepo.GetByForeignID(ctx, fid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if created == nil {
+			t.Errorf("volume %d (%s) was not created", i, fid)
+			continue
+		}
+		if want := fmt.Sprintf("The Mimosa Confessions, Vol. %d", i); created.Title != want {
+			t.Errorf("volume %d title = %q, want %q", i, created.Title, want)
+		}
+	}
+
+	inSeries, err := seriesRepo.ListBooksInSeries(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inSeries) != 5 {
+		t.Fatalf("expected 5 distinct books linked to the series, got %d: %+v", len(inSeries), inSeries)
+	}
+	// Distinct rows, not one row linked five times at five positions.
+	ids := map[int64]bool{}
+	for _, b := range inSeries {
+		if ids[b.ID] {
+			t.Errorf("book id %d is linked to the series more than once — volumes collapsed onto one row", b.ID)
+		}
+		ids[b.ID] = true
+	}
+}
+
+// TestSeriesFillContinuesPastASkippedVolume pins that a volume the catalog
+// loop declines to create does not stop the volumes after it. Volume 3 already
+// exists as an EXCLUDED row, so ensureHardcoverCatalogBook returns early for
+// it; volumes 4 and 5 must still be created.
+//
+// NOTE ON SCOPE: this covers the SKIP path, which returns (nil, nil) and was
+// already handled correctly. It does NOT exercise the neighbouring change in
+// createMissingHardcoverBooks that turned a per-book `return err` into
+// log-and-continue — every way that function can actually error is a database
+// failure (ListByAuthorIncludingExcluded, books.Create, LinkBookIfMissing), and
+// reaching one needs a deliberately broken *db.BookRepo, which the project's
+// testing guidance rules out. That change is defensive and unverified; it is
+// called out as such rather than dressed up in a test that passes either way.
+func TestSeriesFillContinuesPastASkippedVolume(t *testing.T) {
+	catalog := lightNovelCatalog()
+	searcher := newMockBookSearcher()
+	h, seriesRepo, authorRepo, bookRepo := seriesFixtureWithProvider(t, &stubSeriesProvider{
+		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+	}, searcher)
+
+	ctx := context.Background()
+	author := &models.Author{
+		ForeignID: "hc:mei-hachimoku", Name: "Mei Hachimoku",
+		SortName: "Hachimoku, Mei", MetadataProvider: "hardcover",
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	excluded := &models.Book{
+		ForeignID: "hc:mimosa-confessions-3", AuthorID: author.ID,
+		Title: "The Mimosa Confessions, Vol. 3", SortTitle: "the mimosa confessions, vol. 3",
+		Status: models.BookStatusWanted, Genres: []string{}, MetadataProvider: "hardcover",
+	}
+	if err := bookRepo.Create(ctx, excluded); err != nil {
+		t.Fatal(err)
+	}
+	if err := bookRepo.SetExcluded(ctx, excluded.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	series := &models.Series{ForeignID: "ol-series:mimosa", Title: "The Mimosa Confessions"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+	if err := seriesRepo.UpsertHardcoverLink(ctx, &models.SeriesHardcoverLink{
+		SeriesID: series.ID, HardcoverSeriesID: catalog.ForeignID,
+		HardcoverProviderID: catalog.ProviderID, HardcoverTitle: catalog.Title,
+		HardcoverAuthorName: catalog.AuthorName, HardcoverBookCount: catalog.BookCount,
+		Confidence: 1, LinkedBy: "manual",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Fill(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/fill", nil), "id", "1"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// The volumes AFTER the skipped one are what this test is really about.
+	for _, i := range []int{4, 5} {
+		fid := fmt.Sprintf("hc:mimosa-confessions-%d", i)
+		created, err := bookRepo.GetByForeignID(ctx, fid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if created == nil {
+			t.Errorf("volume %d was not created — the loop stopped at the skipped volume", i)
+		}
 	}
 }

@@ -1248,7 +1248,20 @@ func (h *SeriesHandler) createMissingHardcoverBooks(ctx context.Context, seriesI
 			continue
 		}
 		if _, err := h.ensureHardcoverCatalogBook(ctx, series, catalog.AuthorName, catalogBook, mediaType); err != nil {
-			return err
+			// One bad volume must not truncate the rest of the series
+			// (#1682). This used to return, so a single failure part-way
+			// through silently abandoned every remaining volume and the user
+			// saw a partial fill with no indication anything went wrong.
+			// Matches the log-and-continue the queue loop in Fill already
+			// uses. An upstream metadata failure still propagates, since that
+			// is a whole-catalog problem rather than one book's.
+			if errors.Is(err, errSeriesMetadataProvider) {
+				return err
+			}
+			slog.Warn("series fill: failed to create catalog book; continuing",
+				"seriesID", seriesID, "foreignBookID", missing.ForeignBookID,
+				"position", missing.Position, "error", err)
+			continue
 		}
 	}
 	return nil
@@ -1370,8 +1383,20 @@ func (h *SeriesHandler) ensureHardcoverCatalogBook(ctx context.Context, series *
 		return nil, err
 	}
 	blockedByExcludedTitle := false
+	incomingTitle := firstNonEmpty(book.Title, catalogBook.Title)
 	for _, existing := range existingByTitle {
-		if seriesmatch.TitleScore(existing.Title, firstNonEmpty(book.Title, catalogBook.Title)) >= 92 {
+		// Volume numbers veto the similarity score (#1682). Fuzzy title
+		// matching cannot separate the volumes of a light novel or manga
+		// series — they differ by one number in an otherwise identical string,
+		// so every pair scores 93-100 and sails past this threshold. Without
+		// this check, volume 1 gets created and every later volume "matches"
+		// it, getting linked to volume 1's row at its own position instead of
+		// creating a row: "Add all" on a 13-volume series yielded exactly one
+		// book. Titles without an explicit volume marker are unaffected.
+		if seriesmatch.DifferentVolumes(existing.Title, incomingTitle) {
+			continue
+		}
+		if seriesmatch.TitleScore(existing.Title, incomingTitle) >= 92 {
 			if existing.Excluded {
 				blockedByExcludedTitle = true
 				continue

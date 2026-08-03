@@ -243,7 +243,10 @@ export default function SeriesPage() {
           <p className="text-sm">Series are populated automatically from your monitored authors' books</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 items-start">
+          {/* items-start (#1682): CSS Grid defaults to align-items:stretch, so
+              expanding one series card stretched every other card in the same
+              row to match, making it hard to tell which one was actually open. */}
           {seriesList.map(series => {
             const books = series.books ?? []
             const bookCount = books.length

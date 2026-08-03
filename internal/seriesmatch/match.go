@@ -4,6 +4,7 @@ package seriesmatch
 
 import (
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -118,4 +119,52 @@ func CleanTitle(title string) string {
 		out = append(out, word)
 	}
 	return strings.Join(out, " ")
+}
+
+// volumeNumberRe matches an EXPLICIT volume marker followed by a number:
+// "Vol. 3", "Volume 3", "Book 3", "Part 3", "#3". A bare trailing number is
+// deliberately not matched — "Fahrenheit 451" and "Catch 22" are titles, not
+// volume three hundred and something.
+var volumeNumberRe = regexp.MustCompile(`(?i)(?:\b(?:vol|volume|bk|book|part|pt)\b\.?\s*|#\s*)(\d+(?:\.\d+)?)`)
+
+// VolumeNumber returns the explicit volume number carried by a title, if any.
+// The bool reports whether one was found; a title with several markers yields
+// the first.
+func VolumeNumber(title string) (string, bool) {
+	m := volumeNumberRe.FindStringSubmatch(title)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
+
+// DifferentVolumes reports whether two titles carry explicit volume numbers
+// that disagree — i.e. they are provably different books, however similar the
+// strings look.
+//
+// This exists because fuzzy title similarity cannot separate the volumes of a
+// light novel or manga series: they differ by one number in an otherwise
+// identical string, so every pair scores far above any workable threshold.
+// Measured with TitleScore: "Trapped in a Dating Sim Vol. 1" against "Vol. 13"
+// scores 100 (PartialRatio sees "vol 1" as a substring of "vol 13"), "…Vol. 1"
+// against "…Vol. 2" scores 98, "The Mimosa Confessions Vol. 1" against "Vol. 2"
+// scores 96, "Overlord, Vol. 1" against "Vol. 9" scores 93.
+//
+// A caller using TitleScore to decide "is this the same book?" must consult
+// this first, or an entire series collapses onto its first volume.
+//
+// Deliberately conservative: it returns true ONLY when BOTH titles carry an
+// explicit number and the two disagree. A title with no volume marker tells us
+// nothing — an omnibus, a re-issue, or just sloppy metadata — so those keep
+// falling through to the similarity score exactly as before.
+func DifferentVolumes(a, b string) bool {
+	av, aok := VolumeNumber(a)
+	if !aok {
+		return false
+	}
+	bv, bok := VolumeNumber(b)
+	if !bok {
+		return false
+	}
+	return !SamePosition(av, bv)
 }
