@@ -654,6 +654,9 @@ func (h *BookHandler) Delete(w http.ResponseWriter, r *http.Request) {
 // deletion to one format; omitting it deletes all files for the book.
 // Files are enumerated from book_files; the legacy single-path columns are
 // checked as a fallback for books imported before the migration.
+//
+// `?path=<tracked path>` switches to DEREGISTER mode: it drops that one
+// book_files row and touches nothing on disk. See deregisterBookFile (#1692).
 func (h *BookHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(w, r)
 	if !ok {
@@ -667,6 +670,11 @@ func (h *BookHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if existing == nil || !auth.CheckOwnership(r.Context(), existing.OwnerUserID) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
+		return
+	}
+
+	if path := r.URL.Query().Get("path"); path != "" {
+		h.deregisterBookFile(w, r, id, path)
 		return
 	}
 
@@ -759,6 +767,83 @@ func (h *BookHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 			Data:        string(data),
 		}); err != nil {
 			slog.Warn("failed to create deleted paths history event", "book_id", id, "error", err)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, book)
+}
+
+// deregisterBookFile removes ONE book_files row by its tracked path and does
+// not touch the filesystem (#1692).
+//
+// It exists because there was no way to prune a stale row from a book that
+// still has a valid file. When a book's files move — an ABS library
+// reorganisation, a genre folder rename — the importer records the new path via
+// SetFormatFilePath, which is an append (BookRepo.AddBookFile); the row for the
+// old location survives, and the book's derived ebookFilePath can end up
+// pointing at a file that is gone. A filesystem scan will not clean it either:
+// isReconcileCandidate skips any book that still resolves at least one path.
+//
+// The existing format-scoped delete is the wrong tool for this — it runs the
+// on-disk delete for EVERY path of that format (plus the stem-sibling sweep),
+// which would destroy the file the user just moved into place. Hence a mode
+// that is explicitly DB-only.
+//
+// The path must already be tracked against this book. That is what keeps the
+// endpoint from becoming a way to detach another user's rows: ownership is
+// checked by the caller, and membership is checked here, so a caller can only
+// ever deregister a row on a book they already own.
+func (h *BookHandler) deregisterBookFile(w http.ResponseWriter, r *http.Request, id int64, path string) {
+	files, err := h.books.ListFiles(r.Context(), id)
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	// Compare cleaned: book_files stores cleaned paths, but a caller copying a
+	// path out of a JSON dump may send a trailing slash on an audiobook dir.
+	want := filepath.Clean(path)
+	tracked := false
+	for _, f := range files {
+		if filepath.Clean(f.Path) == want {
+			tracked = true
+			path = f.Path // delete by the exact stored spelling
+			break
+		}
+	}
+	if !tracked {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": "path is not tracked against this book",
+		})
+		return
+	}
+
+	if _, err := h.books.RemoveBookFile(r.Context(), path); err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+
+	book, err := h.books.GetByID(r.Context(), id)
+	if err != nil || book == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
+		return
+	}
+	h.attachBookFiles(r.Context(), book)
+	cleanBookDescription(book)
+
+	slog.Info("deregistered book file (no on-disk delete)", "book_id", id, "path", path)
+	if h.history != nil {
+		// Same event type as a real delete, flagged so the two are
+		// distinguishable in history: nothing was removed from disk here.
+		data, err := json.Marshal(map[string]any{"paths": []string{path}, "deregistered": true})
+		if err != nil {
+			slog.Warn("failed to marshal deregistered path history event", "book_id", id, "error", err)
+		} else if err := h.history.Create(r.Context(), &models.HistoryEvent{
+			BookID:      &book.ID,
+			EventType:   models.HistoryEventBookFileDeleted,
+			SourceTitle: book.Title,
+			Data:        string(data),
+		}); err != nil {
+			slog.Warn("failed to create deregistered path history event", "book_id", id, "error", err)
 		}
 	}
 

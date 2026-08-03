@@ -102,7 +102,55 @@ func (i *Importer) reconcileFormatPath(ctx context.Context, cfg ImportConfig, au
 		slog.Warn("abs import: file reconciliation failed", "bookID", book.ID, "format", format, "path", cleanPath, "error", err)
 		return false, false, fmt.Sprintf("%s path %q could not be registered in Bindery; imported metadata only", format, cleanPath)
 	}
+	i.pruneVanishedFormatPaths(ctx, book.ID, format, cleanPath)
 	return true, !alreadyTracked, ""
+}
+
+// pruneVanishedFormatPaths drops this book's other book_files rows OF THE SAME
+// FORMAT whose files no longer exist on disk, after a new path has been
+// registered for that format (#1692).
+//
+// SetFormatFilePath is BookRepo.AddBookFile — it appends. So re-filing a book
+// in ABS (a genre folder rename, a move to another library) and re-importing
+// left the book owning both the new row and the old, dead one, and the book's
+// derived ebookFilePath could surface the dead path. A library scan never
+// cleaned it up either: isReconcileCandidate skips any book that still resolves
+// at least one file.
+//
+// Deliberately narrow, because "the file is missing" is not always "the file is
+// gone" — an unmounted NFS share makes every path vanish at once:
+//
+//   - Only the book just reconciled, only the format just written, and only
+//     after a NEW path for that format was successfully stat'd and stored. A
+//     book nothing replaced keeps all its rows, however stale.
+//   - The freshly written path is never a candidate.
+//   - A stat error that is not "does not exist" (permission, I/O, a stalled
+//     mount) leaves the row alone. Only a definite ENOENT prunes.
+//
+// Best-effort: a failure here must not fail an import that has already
+// succeeded, so every error is logged and swallowed.
+func (i *Importer) pruneVanishedFormatPaths(ctx context.Context, bookID int64, format, keepPath string) {
+	files, err := i.books.ListFiles(ctx, bookID)
+	if err != nil {
+		slog.Warn("abs import: could not list book files to prune stale paths", "bookID", bookID, "error", err)
+		return
+	}
+	keep := filepath.Clean(keepPath)
+	for _, f := range files {
+		if f.Format != format || filepath.Clean(f.Path) == keep {
+			continue
+		}
+		if _, statErr := os.Stat(f.Path); !os.IsNotExist(statErr) {
+			continue // still there, or we cannot prove it isn't
+		}
+		if _, err := i.books.RemoveBookFile(ctx, f.Path); err != nil {
+			slog.Warn("abs import: could not prune stale book file row",
+				"bookID", bookID, "format", format, "path", f.Path, "error", err)
+			continue
+		}
+		slog.Info("abs import: pruned stale book file row after path change",
+			"bookID", bookID, "format", format, "stale", f.Path, "current", keep)
+	}
 }
 
 func (i *Importer) inspectFormatPath(ctx context.Context, cfg ImportConfig, format, candidatePath string) (bool, string) {
