@@ -4,6 +4,87 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
+## [v1.28.2] — 2026-08-03
+
+A bug-fix release about things that looked like they worked. Three of these
+were features you could see in the UI, configure, and get no behaviour from:
+the quality profile's **Allowed formats** checkboxes were never wired into the
+search pipeline at all, a naming template couldn't actually express the
+combination its own help text described, and the Audiobookshelf importer kept
+appending file rows it never cleaned up. None of them failed loudly — they just
+quietly didn't do the thing. The fourth is housekeeping on a security gate that
+had been red long enough for everyone to stop reading it.
+
+### Fixed
+- **Quality profile "Allowed formats" is now actually enforced** (#1693) — the
+  checkboxes read as a hard allow-list in the UI, but the rule implementing them
+  was never constructed anywhere in the codebase, so nothing stopped a
+  disallowed format being grabbed. What was running instead is a fixed 1–10
+  format ranking, which orders candidates but never rejects one. The clearest
+  symptom: `azw3` outranks `epub`, so an EPUB-only profile would still pick the
+  AZW3 even when a perfectly good EPUB was sitting in the same result set.
+  Automatic grabs now reject formats the author's profile disallows, and because
+  the rule runs on the same evaluator that re-checks parked releases, a rejected
+  release keeps failing instead of slipping through on a later sweep.
+  Interactive search deliberately only *labels* — every result is still shown,
+  with the reason — so you can knowingly take a disallowed format for one book
+  rather than having it silently hidden. Three cases are untouched by design: a
+  release whose format can't be read from its title (many Usenet names carry no
+  format token, and rejecting those would turn one ticked box into a near-total
+  grab blackout), authors with no quality profile, and profiles with no format
+  list, which already meant "allow all".
+
+  **If you have a configured quality profile, check it after upgrading.** The
+  profile editor offers eight formats (`pdf`, `mobi`, `epub`, `azw3`, `mp3`,
+  `m4a`, `m4b`, `flac`), but release parsing recognises nine more — `azw`,
+  `djvu`, `cbr`, `cbz`, `fb2`, `lit`, `rtf`, `txt`, `ogg`. Those nine cannot be
+  put on an allow-list that has no checkbox for them, so with a configured
+  profile they are now rejected where previously they were grabbable. Plain
+  `.azw` is the one most likely to bite: it is a real Kindle format that Bindery
+  ranks alongside `mobi`. Profiles left with no format list are unaffected —
+  that still means "allow all" — so this only applies if you actively ticked
+  boxes. Widening the editor's vocabulary is tracked in #1700.
+- **Naming templates: literal text after a zero-pad width now renders** (#1690)
+  — `{SeriesNumber:3 - }{Title}` dropped both the padding and the trailing text,
+  producing `2Sample Book` where the help text promises `002 - Sample Book`. On
+  a book with no series it was worse and silent: the modifier text itself leaked
+  into the filename, so every standalone book came out named `3 -Sample Book`.
+  The multi-token spelling (`{Series SeriesNumber:3 - }`) always worked, because
+  it took a different parsing path; the single-token form now agrees with it.
+  All-digit modifiers such as `{Year:2024}` keep their existing meaning as
+  default text. The live preview in Settings had the identical defect — it
+  re-implements the same engine — so what you see there and what the importer
+  writes now match again.
+- **Stale file rows after an Audiobookshelf re-import** (#1692) — re-filing
+  books into a different folder or ABS library and re-importing added a row for
+  the new path but kept the old, dead one, so a book's reported file path could
+  point at a file that no longer existed. Nothing cleaned it up afterwards
+  either: a library scan skips any book that still resolves at least one file.
+  There was also no safe way to fix it by hand, because the existing per-format
+  delete removes *every* file of that format from disk — including the good one
+  you just moved into place. The importer now prunes a book's other rows for the
+  same format when their files are confirmed gone, and
+  `DELETE /api/v1/book/{id}/file?path=…` deregisters a single tracked path
+  without touching the disk, for instances that already accumulated dead rows.
+  Pruning is deliberately narrow: only after a replacement path was verified,
+  only for that book and format, and only on a definite "file does not exist" —
+  a permission error or an unmounted share leaves every row alone, because
+  "missing" and "gone" are not the same thing.
+
+### Security
+- **Frontend dependency audit is clean again** (#1639) — `npm audit` reported
+  three high advisories, so the SAST job had been failing on `main` itself for
+  weeks. A security gate that is permanently red trains everyone to ignore it,
+  which is worse than not having the gate. `react-router-dom` 7.x is replaced by
+  `react-router` 8.3.0: v8 folded the DOM package into the core one, and 8.3.0
+  is the first release outside the advisory range for GHSA-qwww-vcr4-c8h2 (7.18.2
+  is still inside it, and the automatic fix offers only a downgrade to a stale
+  7.11.0). In v7 `react-router-dom` was already a re-export of `react-router`, so
+  the change across the frontend is the import path and nothing else. Stated
+  plainly: the advisory covers RSC mode, which Bindery does not use, so this was
+  a failing gate rather than an exploitable path. The transitive
+  `brace-expansion` advisory in the lint tooling clears with a lockfile bump.
+
 ## [v1.28.1] — 2026-07-27
 
 A bug-fix release, and most of it is one bug wearing different hats: two sides
