@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react'
-import { Navigate, useNavigate } from 'react-router-dom'
+import { Navigate, useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { api, BINDERY_BASE, OidcProvider } from '../api/client'
 import { useAuth } from '../auth/AuthContext'

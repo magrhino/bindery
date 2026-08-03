@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import QueuePage, { MatchBookControl } from './QueuePage'
 import { summarizeError, ERROR_SUMMARY_LEN } from './queueError'
 import { api } from '../api/client'

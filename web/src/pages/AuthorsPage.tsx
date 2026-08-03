@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { api, Author, AuthorBulkMonitorMode, MediaType, AuthorRefreshStatus } from '../api/client'
 import AddAuthorModal from '../components/AddAuthorModal'

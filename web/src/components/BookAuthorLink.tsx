@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { BookRef } from '../api/client'
 
 // BookAuthorLink renders a compact secondary line — linked book title · linked

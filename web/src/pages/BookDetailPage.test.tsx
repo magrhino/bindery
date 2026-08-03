@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router'
 import BookDetailPage, { SearchResultsSection } from './BookDetailPage'
 import { api } from '../api/client'
 import type { Author, Book, Download, HistoryEvent, Indexer, SearchResult } from '../api/client'

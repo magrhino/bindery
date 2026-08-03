@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import BooksPage from './BooksPage'
 import { apiUrl, server } from '../test/msw'
 import type { Book } from '../api/client'

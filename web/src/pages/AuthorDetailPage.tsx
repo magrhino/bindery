@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { api, BINDERY_BASE, Author, AuthorAlias, Book, BookBulkAction, Series } from '../api/client'
 import ViewToggle from '../components/ViewToggle'

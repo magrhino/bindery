@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import HistoryPage from './HistoryPage'
 import { api } from '../api/client'
 import type { BlocklistEntry, HistoryEvent } from '../api/client'

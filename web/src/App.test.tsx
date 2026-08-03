@@ -24,7 +24,7 @@ vi.mock('./pages/CalendarPage', () => ({ default: () => <div data-testid="page-c
 vi.mock('./pages/DiscoverPage', () => ({ default: () => <div data-testid="page-discover" /> }))
 vi.mock('./pages/SettingsPage', () => ({ default: () => <div data-testid="page-settings" /> }))
 vi.mock('./pages/LoginPage', async () => {
-  const { Navigate } = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
+  const { Navigate } = await vi.importActual<typeof import('react-router')>('react-router')
   return {
     default: () => {
       const status = authState.value.status

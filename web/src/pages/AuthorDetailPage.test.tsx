@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import AuthorDetailPage from './AuthorDetailPage'
 import { api } from '../api/client'
 import type { Author, Book } from '../api/client'

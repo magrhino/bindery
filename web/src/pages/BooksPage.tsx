@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import ViewToggle from '../components/ViewToggle'
 import { bookStatusBadge } from '../components/bookStatus'

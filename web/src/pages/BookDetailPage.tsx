@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { api, BINDERY_BASE, Book, HistoryEvent, MediaType, SearchResult, SearchDebug } from '../api/client'
 import SearchDebugPanel from '../components/SearchDebugPanel'

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { api, Book, SearchResult } from '../api/client'
 import BulkActionBar from '../components/BulkActionBar'

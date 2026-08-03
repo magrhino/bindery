@@ -1,5 +1,5 @@
 import { render } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import type { ReactElement, ReactNode } from 'react'
 import type { RenderOptions } from '@testing-library/react'
 import type { AuthStatus } from './api/client'

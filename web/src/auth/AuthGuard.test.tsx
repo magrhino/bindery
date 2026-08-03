@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { Route, Routes } from 'react-router-dom'
+import { Route, Routes } from 'react-router'
 import { screen } from '@testing-library/react'
 import AuthGuard from './AuthGuard'
 import { makeAuthStatus, renderWithRouter } from '../test-utils'
