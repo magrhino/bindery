@@ -142,6 +142,7 @@ type Scheduler struct {
 	pending              *db.PendingReleaseRepo
 	aliases              *db.AuthorAliasRepo     // optional; used for non-latin author matching
 	profiles             *db.MetadataProfileRepo // optional; applies profile language filters to auto-grab
+	qualityProfiles      *db.QualityProfileRepo  // optional; enforces the profile's allowed formats on auto-grab (#1693)
 	calibreSyncer        CalibreSyncer           // optional; nil if Calibre is not configured
 	recommender          RecommendationEngine    // optional; generates recommendations
 	hcSyncer             HCListSyncer            // optional; syncs Hardcover import lists
@@ -206,6 +207,14 @@ func New(
 // Must be called before Start.
 func (s *Scheduler) WithDelayProfiles(dp *db.DelayProfileRepo) {
 	s.delayProfiles = dp
+}
+
+// WithQualityProfiles attaches the quality profile repo so an author's
+// "allowed formats" list is enforced on automatic grabs (#1693). Must be
+// called before Start. Leaving it unset keeps the pre-#1693 behaviour of no
+// format filtering.
+func (s *Scheduler) WithQualityProfiles(qp *db.QualityProfileRepo) {
+	s.qualityProfiles = qp
 }
 
 // WithPendingReleases attaches the pending releases repo so delay-rejected
@@ -538,12 +547,14 @@ func (s *Scheduler) searchAndGrabFormat(ctx context.Context, book models.Book, m
 	authorName := ""
 	var authorAliases []string
 	var allowedLangs []string
+	var qualityProfile *models.QualityProfile
 	if s.authors != nil {
 		if a, err := s.authors.GetByID(ctx, book.AuthorID); err != nil {
 			slog.Warn("failed to load author for search", "author_id", book.AuthorID, "error", err)
 		} else if a != nil {
 			authorName = a.Name
 			allowedLangs = s.resolveAllowedLanguages(ctx, a)
+			qualityProfile = db.ResolveAuthorQualityProfile(ctx, s.qualityProfiles, a)
 			if s.aliases != nil {
 				if aliases, err := s.aliases.ListByAuthor(ctx, a.ID); err == nil {
 					for _, al := range aliases {
@@ -580,6 +591,18 @@ func (s *Scheduler) searchAndGrabFormat(ctx context.Context, book models.Book, m
 		if entries, err := s.blocklist.List(ctx); err == nil {
 			specs = append(specs, decision.NewBlocklistedSpec(entries))
 		}
+	}
+	// The author's quality profile "allowed formats" list (#1693). The UI has
+	// always presented these checkboxes as a hard allow-list, but the spec that
+	// implements them was never constructed anywhere, so nothing stopped a
+	// disallowed format being auto-grabbed as the best-scoring candidate.
+	// Scoring by models.QualityRank is a preference, not a filter.
+	//
+	// This runs on the same DecisionMaker that checkPendingReleases re-uses, so
+	// a release rejected here keeps failing re-evaluation instead of being
+	// grabbed on a later sweep.
+	if qualityProfile != nil {
+		specs = append(specs, decision.QualityAllowed{Profile: qualityProfile})
 	}
 	var delayProfile *models.DelayProfile
 	if s.delayProfiles != nil {

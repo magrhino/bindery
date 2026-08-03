@@ -1,6 +1,7 @@
 package decision_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -523,5 +524,66 @@ func TestPubDateToAge_FutureReturnsZero(t *testing.T) {
 	future := time.Now().Add(time.Hour).Format(time.RFC1123Z)
 	if decision.PubDateToAge(future) != 0 {
 		t.Fatal("future date should return 0")
+	}
+}
+
+// TestQualityAllowed_UnparseableFormatPasses pins the deliberate fail-open case
+// added when the spec was finally wired in (#1693).
+//
+// ParseRelease only sets Format when it finds a known token in the release
+// title, and plenty of legitimate releases carry none — Usenet titles in
+// particular are often just "Author - Title (Year)". Rejecting those would turn
+// this filter into a near-total grab blackout the moment a user ticked any box,
+// which is the opposite of what the UI promises. The filter can only speak to
+// formats it can actually see.
+func TestQualityAllowed_UnparseableFormatPasses(t *testing.T) {
+	s := decision.QualityAllowed{Profile: &models.QualityProfile{
+		Name: "EPUB only",
+		Items: []models.QualityItem{
+			{Quality: "pdf", Allowed: false},
+			{Quality: "epub", Allowed: true},
+		},
+	}}
+	ok, reason := s.IsSatisfiedBy(release(withFormat("")), emptyBook())
+	if !ok {
+		t.Fatalf("a release with no parseable format must pass, got rejected: %q", reason)
+	}
+}
+
+// TestQualityAllowed_RejectionNamesFormatAndProfile pins the rejection string.
+// Interactive search surfaces it verbatim, so it has to say which format was
+// refused and which profile refused it — otherwise the user cannot tell whether
+// to change the profile or pick a different release.
+func TestQualityAllowed_RejectionNamesFormatAndProfile(t *testing.T) {
+	s := decision.QualityAllowed{Profile: &models.QualityProfile{
+		Name:  "EPUB only",
+		Items: []models.QualityItem{{Quality: "epub", Allowed: true}},
+	}}
+	ok, reason := s.IsSatisfiedBy(release(withFormat("pdf")), emptyBook())
+	if ok {
+		t.Fatal("pdf should be rejected by an EPUB-only profile")
+	}
+	for _, want := range []string{"pdf", "EPUB only"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("rejection %q should mention %q", reason, want)
+		}
+	}
+}
+
+// TestQualityAllowed_ListedButNotAllowed guards the difference between "absent
+// from the list" and "present and unticked" — both must reject.
+func TestQualityAllowed_ListedButNotAllowed(t *testing.T) {
+	s := decision.QualityAllowed{Profile: &models.QualityProfile{
+		Name: "EPUB only",
+		Items: []models.QualityItem{
+			{Quality: "pdf", Allowed: false},
+			{Quality: "epub", Allowed: true},
+		},
+	}}
+	if ok, _ := s.IsSatisfiedBy(release(withFormat("pdf")), emptyBook()); ok {
+		t.Error("a listed-but-unticked format must be rejected")
+	}
+	if ok, _ := s.IsSatisfiedBy(release(withFormat("mobi")), emptyBook()); ok {
+		t.Error("a format absent from the list must be rejected")
 	}
 }

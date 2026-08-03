@@ -12,12 +12,23 @@ import (
 
 // QualityAllowed rejects releases whose format is not in the quality profile's
 // allowed format list. An empty allowed list means "allow all".
+//
+// A release whose format could not be determined from its title always passes.
+// ParseRelease only sets Format when it finds a known token in the release
+// name, and plenty of legitimate releases carry none — Usenet titles in
+// particular are often just "Author - Title (Year)". Rejecting those would turn
+// this filter into a near-total grab blackout the moment a user ticked any box,
+// which is the opposite of what the UI promises. The filter can only speak to
+// formats it can actually see.
 type QualityAllowed struct {
 	Profile *models.QualityProfile
 }
 
 func (s QualityAllowed) IsSatisfiedBy(r Release, _ models.Book) (bool, string) {
 	if s.Profile == nil || len(s.Profile.Items) == 0 {
+		return true, ""
+	}
+	if r.Format == "" {
 		return true, ""
 	}
 	for _, item := range s.Profile.Items {

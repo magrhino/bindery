@@ -430,3 +430,105 @@ func TestSearchBook_DualFormat_ParallelDispatch(t *testing.T) {
 		t.Errorf("dual-format search ran sequentially: peak concurrent calls = %d, want ≥ 2", slow.peakFlight)
 	}
 }
+
+// TestSearchBook_QualityProfileAnnotatesDisallowedFormat covers the
+// interactive half of #1693.
+//
+// decision.QualityAllowed was never constructed anywhere, so a profile's
+// "Allowed formats" checkboxes had no effect. Interactive search deliberately
+// ANNOTATES rather than filters: the user is in the loop and may want a
+// disallowed format for one specific book, so every result is still returned
+// carrying approved=false plus the reason. The scheduler enforces the same spec
+// for real, because auto-grab has nobody to ask.
+func TestSearchBook_QualityProfileAnnotatesDisallowedFormat(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	ctx := context.Background()
+	qualityRepo := db.NewQualityProfileRepo(database)
+	profile := &models.QualityProfile{Name: "EPUB only", Cutoff: "epub", Items: []models.QualityItem{
+		{Quality: "pdf", Allowed: false},
+		{Quality: "epub", Allowed: true},
+	}}
+	if err := qualityRepo.Create(ctx, profile); err != nil {
+		t.Fatal(err)
+	}
+
+	authorRepo := db.NewAuthorRepo(database)
+	author := &models.Author{
+		ForeignID: "OL9A", Name: "Jane Doe", SortName: "Doe, Jane",
+		MetadataProvider: "openlibrary", Monitored: true, QualityProfileID: &profile.ID,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+
+	bookRepo := db.NewBookRepo(database)
+	book := &models.Book{
+		Title: "Test Book", ForeignID: "OL9M", AuthorID: author.ID,
+		MediaType: models.MediaTypeEbook, Monitored: true,
+	}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &mockIndexerSearcher{ebookResults: []newznab.SearchResult{
+		{GUID: "pdf1", Title: "Jane Doe - Test Book.pdf"},
+		{GUID: "epub1", Title: "Jane Doe - Test Book.epub"},
+		{GUID: "plain1", Title: "Jane Doe - Test Book (2024)"},
+	}}
+
+	h := NewIndexerHandler(
+		db.NewIndexerRepo(database), bookRepo, authorRepo,
+		db.NewMetadataProfileRepo(database), mock,
+		db.NewSettingsRepo(database), db.NewBlocklistRepo(database),
+	).WithQualityProfiles(qualityRepo)
+
+	rec := httptest.NewRecorder()
+	h.SearchBook(rec, withURLParam(
+		httptest.NewRequest(http.MethodGet, "/indexer/book/1/search", nil),
+		"id", strconv.FormatInt(book.ID, 10),
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Results []struct {
+			GUID      string `json:"guid"`
+			Approved  bool   `json:"approved"`
+			Rejection string `json:"rejection"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, r := range resp.Results {
+		got[r.GUID] = r.Approved
+	}
+	// All three are still returned — annotation, not filtering.
+	if len(resp.Results) != 3 {
+		t.Fatalf("expected all 3 results returned, got %d: %+v", len(resp.Results), resp.Results)
+	}
+	if approved, ok := got["pdf1"]; !ok || approved {
+		t.Errorf("pdf release should be present but not approved under an EPUB-only profile, got approved=%v present=%v", approved, ok)
+	}
+	if approved, ok := got["epub1"]; !ok || !approved {
+		t.Errorf("epub release should be approved, got approved=%v present=%v", approved, ok)
+	}
+	// A title with no parseable format token must not be blocked (see
+	// QualityAllowed's fail-open comment).
+	if approved, ok := got["plain1"]; !ok || !approved {
+		t.Errorf("release with no format token should be approved, got approved=%v present=%v", approved, ok)
+	}
+	for _, r := range resp.Results {
+		if r.GUID == "pdf1" && r.Rejection == "" {
+			t.Error("a disallowed format must carry a rejection reason the UI can show")
+		}
+	}
+}

@@ -54,7 +54,10 @@ type IndexerHandler struct {
 	searcher  indexerSearcher
 	settings  *db.SettingsRepo
 	blocklist *db.BlocklistRepo
-	lastDebug *lastDebugStore
+	// qualityProfiles is optional; when set, the author's allowed-formats list
+	// annotates interactive search results (#1693).
+	qualityProfiles *db.QualityProfileRepo
+	lastDebug       *lastDebugStore
 }
 
 func NewIndexerHandler(indexers *db.IndexerRepo, books *db.BookRepo, authors *db.AuthorRepo, profiles *db.MetadataProfileRepo, searcher indexerSearcher, settings *db.SettingsRepo, blocklist *db.BlocklistRepo) *IndexerHandler {
@@ -68,6 +71,19 @@ func NewIndexerHandler(indexers *db.IndexerRepo, books *db.BookRepo, authors *db
 // WithAliases attaches the author alias repo used to populate AuthorAliases in MatchCriteria.
 func (h *IndexerHandler) WithAliases(aliases *db.AuthorAliasRepo) *IndexerHandler {
 	h.aliases = aliases
+	return h
+}
+
+// WithQualityProfiles attaches the quality profile repo so interactive search
+// annotates releases the author's profile disallows (#1693).
+//
+// Unlike the scheduler, this path only LABELS: every result is still returned,
+// carrying approved=false and the rejection reason, so the user can see why a
+// release is out of policy and still grab it deliberately. Silently hiding it
+// would be worse than the bug being fixed. The scheduler enforces the same
+// spec for real, because auto-grab has no human in the loop.
+func (h *IndexerHandler) WithQualityProfiles(qp *db.QualityProfileRepo) *IndexerHandler {
+	h.qualityProfiles = qp
 	return h
 }
 
@@ -309,9 +325,11 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 	authorName := ""
 	var allowedLangs []string
 	var authorAliases []string
+	var qualityProfile *models.QualityProfile
 	if author, err := h.authors.GetByID(r.Context(), book.AuthorID); err == nil && author != nil {
 		authorName = author.Name
 		allowedLangs = h.resolveAllowedLanguages(r.Context(), author)
+		qualityProfile = db.ResolveAuthorQualityProfile(r.Context(), h.qualityProfiles, author)
 		if h.aliases != nil {
 			if aliases, err := h.aliases.ListByAuthor(r.Context(), author.ID); err == nil {
 				for _, a := range aliases {
@@ -418,6 +436,11 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 
 	// Already-imported spec.
 	specs = append(specs, decision.AlreadyImportedSpec{})
+
+	// Allowed-formats spec (#1693). Annotates only — see WithQualityProfiles.
+	if qualityProfile != nil {
+		specs = append(specs, decision.QualityAllowed{Profile: qualityProfile})
+	}
 
 	dm := decision.New(specs...)
 	releases := make([]decision.Release, len(results))
