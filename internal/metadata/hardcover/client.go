@@ -97,7 +97,11 @@ func (c *Client) WithTokenSource(source func(context.Context) string) *Client {
 // for authenticated queries (e.g. reading user lists).
 func NewAuthenticated(token string) *Client {
 	return &Client{
-		http:  &http.Client{Timeout: 15 * time.Second},
+		// Honor BINDERY_OUTBOUND_PROXY like New(); without the proxy transport,
+		// the Hardcover list syncer and import-list browse (the callers of
+		// NewAuthenticated) dial hardcover.app directly while every other
+		// Hardcover call is proxied (#proxy-bypass).
+		http:  &http.Client{Timeout: 15 * time.Second, Transport: httpsec.DefaultProxyTransport()},
 		token: token,
 	}
 }

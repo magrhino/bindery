@@ -1,0 +1,2 @@
+### Fixed
+- **Hardcover list sync and Prowlarr sync now honor `BINDERY_OUTBOUND_PROXY`** — `hardcover.NewAuthenticated` (used by the import-list syncer and import-list browse) and the Prowlarr client were built without the proxy transport, so they dialed `hardcover.app` / the Prowlarr host directly while every sibling code path was proxied. On a locked-down egress they failed outright; on a VPN-only setup they leaked traffic outside the configured proxy. Both now use the shared proxy transport like the other clients.

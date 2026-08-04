@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vavallee/bindery/internal/httpsec"
 	"github.com/vavallee/bindery/internal/useragent"
 )
 
@@ -32,7 +33,11 @@ func NewWithTimeout(baseURL, apiKey string, timeout time.Duration) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
-		http:    &http.Client{Timeout: timeout},
+		// Honor BINDERY_OUTBOUND_PROXY like the newznab search client that talks
+		// to the same Prowlarr/Jackett hosts. Without the proxy transport, a
+		// Prowlarr reachable only through the configured egress proxy fails on
+		// the sync/test path while indexer searches succeed (#proxy-bypass).
+		http: &http.Client{Timeout: timeout, Transport: httpsec.DefaultProxyTransport()},
 	}
 }
 
