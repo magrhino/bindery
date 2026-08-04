@@ -2203,10 +2203,8 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 	// 1. Find or create the author (unmonitored if new so we don't auto-want all books).
 	userID := auth.UserIDFromContext(ctx)
 	author, _ := h.authors.GetByForeignIDForUser(ctx, req.ForeignAuthorID, userID)
-	authorMatchedByAlternateID := false
 	if author == nil {
 		author, _ = h.authors.GetByAnyForeignIDForUser(ctx, req.ForeignAuthorID, userID)
-		authorMatchedByAlternateID = author != nil
 	}
 	if author == nil {
 		name := req.AuthorName
@@ -2307,40 +2305,70 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 	// cleanup defer sees a non-empty book list (so it keeps the author).
 	// The async sync still runs as a backfill for the rest of the catalogue;
 	// any UNIQUE collision against this row is silently tolerated.
-	directInsertNeeded := authorWasJustCreated || authorMatchedByAlternateID || strings.HasPrefix(req.ForeignBookID, "dnb:") || resolvedByName
-	if directInsertNeeded {
-		if existing, _ := h.books.GetByForeignID(ctx, req.ForeignBookID); existing == nil {
-			primary, err := h.meta.GetBook(ctx, req.ForeignBookID)
-			if err != nil {
-				slog.Warn("AddBook: direct fetch failed",
-					"foreignBookId", req.ForeignBookID, "error", err)
-			} else if primary != nil {
-				primary.AuthorID = author.ID
-				// Tenancy (#1457): inherit the author's owner (stamped from the
-				// requesting user when this request created the author).
-				primary.OwnerUserID = author.OwnerUserID
-				primary.Monitored = author.Monitored
-				if primary.Status == "" {
-					primary.Status = models.BookStatusWanted
+	//
+	// #1612 made the direct insert unconditional. When the author already
+	// EXISTED, AddBook used to skip it and rely entirely on a catalogue sync
+	// having created the row — but the sync can deterministically refuse a
+	// specific work (e.g. the work-level language sampled from the first few
+	// OpenLibrary editions falls outside the profile's allowed set, which is
+	// how heavily-translated works ended up permanently un-addable). Every
+	// attempt then polled 15 s for a row nothing would ever create and
+	// returned 404 "try again shortly" forever. An explicit add of one
+	// specific work is the strongest possible user signal and must not be
+	// vetoed by catalogue-sync heuristics; those heuristics still govern
+	// everything the user did NOT explicitly pick.
+	if existing, _ := h.books.GetByForeignID(ctx, req.ForeignBookID); existing == nil {
+		primary, err := h.meta.GetBook(ctx, req.ForeignBookID)
+		if err != nil {
+			slog.Warn("AddBook: direct fetch failed",
+				"foreignBookId", req.ForeignBookID, "error", err)
+		} else if primary != nil && h.directInsertTitleUsable(primary.Title, author.Name) {
+			primary.AuthorID = author.ID
+			// Tenancy (#1457): inherit the author's owner. Read off the author
+			// row rather than the request, because that row usually pre-exists
+			// this request (#1612) — the scoped lookup above is what makes it
+			// the correct owner either way.
+			primary.OwnerUserID = author.OwnerUserID
+			primary.Monitored = author.Monitored
+			if primary.Status == "" {
+				primary.Status = models.BookStatusWanted
+			}
+			// An explicit request choice wins over the provider's media type
+			// (#1397). Otherwise some providers (notably Google Books) don't
+			// set one; fall back to the global default so the row isn't
+			// created with an empty format (which would mis-route its
+			// indexer search).
+			if req.MediaType != "" {
+				primary.MediaType = req.MediaType
+			} else if primary.MediaType == "" {
+				primary.MediaType = h.resolveDefaultMediaType(ctx)
+			}
+			// Reuse a title-equivalent row under the same author instead of
+			// inserting a second one. The catalogue sync runs this same dedup
+			// (see the FindByAuthorAndDedupKey switch above), and skipping it
+			// here produced real duplicates: a Calibre-imported library holds
+			// the work under a `calibre:` foreign id, and OpenLibrary splits
+			// some works into separate ebook and audiobook Works that the sync
+			// merges into one media_type=both row — in both cases the
+			// requested foreign id has no row of its own, which is exactly the
+			// state that brings a user here.
+			if match, ferr := h.books.FindByAuthorAndDedupKey(ctx, author.ID, primary.Title); ferr == nil && match != nil {
+				h.adoptDirectInsertMatch(ctx, match, primary, req.ForeignBookID)
+			} else if err := h.books.Create(ctx, primary); err != nil {
+				if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+					slog.Warn("AddBook: direct insert failed",
+						"foreignBookId", req.ForeignBookID, "error", err)
 				}
-				// An explicit request choice wins over the provider's media type
-				// (#1397). Otherwise some providers (notably Google Books) don't
-				// set one; fall back to the global default so the row isn't
-				// created with an empty format (which would mis-route its
-				// indexer search).
-				if req.MediaType != "" {
-					primary.MediaType = req.MediaType
-				} else if primary.MediaType == "" {
-					primary.MediaType = h.resolveDefaultMediaType(ctx)
-				}
-				if err := h.books.Create(ctx, primary); err != nil {
-					if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
-						slog.Warn("AddBook: direct insert failed",
-							"foreignBookId", req.ForeignBookID, "error", err)
-					}
-				} else {
-					h.hydrateHardcoverEditions(ctx, primary)
-				}
+			} else {
+				h.hydrateHardcoverEditions(ctx, primary)
+				// Same post-create work every other creation path does
+				// (recommendations.go, series.go): check the library for a
+				// file we already have and link the book into its series.
+				// Without this the row is wanted-but-unchecked, so with
+				// searchOnAdd enabled Bindery re-downloads a book already on
+				// disk — the regression #940 and migration 026 exist to stop.
+				created := *primary
+				handleNewWantedBook(ctx, h.books, h.series, h.finder, created, author.Name)
 			}
 		}
 	}
@@ -2505,6 +2533,50 @@ func isAllASCII(s string) bool {
 // one side is "ebook" and the other is "audiobook" — the two formats are
 // complementary, so the already-tracked row should become "both" rather than
 // a second row being created (issue #442).
+// directInsertTitleUsable rejects provider records that would create a
+// nameless row. The catalogue sync blocks the same two shapes before insert;
+// without the guard an empty title persists and renders destination folders
+// like "Jared M. Diamond/Jared M. Diamond ()".
+func (h *AuthorHandler) directInsertTitleUsable(title, authorName string) bool {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return false
+	}
+	return !strings.EqualFold(title, strings.TrimSpace(authorName))
+}
+
+// adoptDirectInsertMatch points an existing title-equivalent row at the
+// requested foreign id instead of inserting a duplicate, mirroring the
+// catalogue sync's dedup arms: a Calibre stub is upgraded to the real
+// provider id so the caller's poll finds it, and an ebook/audiobook pair
+// collapses into one dual-format row.
+func (h *AuthorHandler) adoptDirectInsertMatch(ctx context.Context, match, primary *models.Book, foreignID string) {
+	changed := false
+	if strings.HasPrefix(match.ForeignID, "calibre:") {
+		match.ForeignID = foreignID
+		changed = true
+	}
+	if canUpgradeToBoth(match.MediaType, primary.MediaType) {
+		match.MediaType = models.MediaTypeBoth
+		changed = true
+	}
+	if match.Language == "" && primary.Language != "" {
+		match.Language = primary.Language
+		changed = true
+	}
+	if !changed {
+		slog.Debug("AddBook: direct insert deduped against existing row",
+			"foreignBookId", foreignID, "bookId", match.ID, "title", match.Title)
+		return
+	}
+	if err := h.books.Update(ctx, match); err != nil {
+		slog.Warn("AddBook: failed to adopt existing row during direct insert",
+			"foreignBookId", foreignID, "bookId", match.ID, "error", err)
+		return
+	}
+	h.hydrateHardcoverEditions(ctx, match)
+}
+
 func canUpgradeToBoth(existingMediaType, incomingMediaType string) bool {
 	switch {
 	case existingMediaType == models.MediaTypeEbook && incomingMediaType == models.MediaTypeAudiobook:
