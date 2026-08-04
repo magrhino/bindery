@@ -4,6 +4,149 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
+## [v1.29.0] — 2026-08-04
+
+A release about failures that never said anything. Almost every fix here was a
+bug you could only find by noticing an absence: an author's catalogue arriving
+50 books short with zero skip counters and no log line, `ON DELETE CASCADE`
+quietly switching itself off partway through a process's life, a language
+filter dropping books at a log level nobody runs, dismissed recommendations
+returning because two code paths were writing to two different users. None of
+them errored. Several had been reported as "it just doesn't work" precisely
+because there was nothing to quote.
+
+Most of this came from the Discord bug reports, several with source-level
+diagnoses attached. Credit is on the individual entries.
+
+### Added
+- **User guide** (#1721) — a concepts guide for new users covering the five
+  things that account for most support traffic: catalogue first and files
+  second, status versus monitored, how monitor modes decide what gets grabbed,
+  what the importer will and won't do with an existing folder, and where
+  metadata actually comes from. Written against a sweep of real issues and
+  Discord threads rather than from the code.
+
+### Fixed
+- **Audible catalogue no longer truncates prolific authors** (#1751) — the
+  Audible author lookup issued a single request capped at 50 products and never
+  paged, so any author with a larger audiobook catalogue silently lost the
+  remainder. There was nothing to notice: no error, no log line, and the sync's
+  `skipped_language` / `skipped_junk` / `skipped_media_type` counters all read
+  zero, because the missing books were never enumerated in the first place. One
+  reported author with 105 titles imported 56. The reason it went unspotted for
+  so long is that the endpoint's `page` parameter is 0-indexed, so an unpaged
+  request and `page=1` return *disjoint* windows rather than the same one — an
+  entire 50-item window was going unrequested, which looks nothing like a
+  normal off-by-one. Pages are now walked to completion and deduplicated by
+  ASIN. Reported by .v.e.g.a.
+- **Foreign-key cascades no longer stop working on long-running instances**
+  (#1727, #1728) — `foreign_keys` and `busy_timeout` were applied once at
+  startup, but they are per-connection settings in SQLite. Whenever the pool
+  replaced its connection, the replacement came up with foreign keys switched
+  off, silently disabling every `ON DELETE CASCADE` in the schema for the rest
+  of the process. They now travel in the connection string, so each new
+  connection gets them. The visible symptom this fixes: deleting an author left
+  its identifier rows behind, and re-adding that author then failed forever with
+  "author already exists" even though the author was gone. Author deletes now
+  remove those rows explicitly, so correctness no longer depends on pragma state
+  at all, and an upgrade sweeps away any orphans an affected install is already
+  carrying.
+- **Adding a specific book to an author you already track no longer fails
+  forever** (#1612, #1735) — the add only polled for a row the catalogue sync
+  had already refused to create, so it returned "book not found after author
+  sync — try again shortly" on every retry and no amount of waiting helped. The
+  requested book is now fetched and saved directly, and if you already own it
+  under another source (a Calibre import, or one half of a split
+  ebook/audiobook record) the existing entry is reused instead of a duplicate
+  being created. Diagnosed and originally fixed by helios57.
+- **Dismissed recommendations no longer come back** (#1725) — requests that
+  authenticate as the install itself, from a trusted local network or with an
+  API key, were treated as an admin but carried no user identity, so a refresh
+  triggered that way saved its recommendations against a user that does not
+  exist while the nightly job saved them against a real one. Dismissals
+  recorded on one batch never applied to the other. Both now resolve to the
+  same operator account, and an upgrade hands any stranded recommendations and
+  dismissals back to it.
+- **Discover no longer recommends books you already have** (#1726) — ownership
+  was matched on provider-specific IDs, so a book owned via OpenLibrary or
+  Audiobookshelf still came back as a Hardcover recommendation (one reported
+  batch was 15 of 22 owned books). The recommender now also matches by work
+  identity (canonical title key plus author), and books on your wanted list
+  count as owned too instead of being recommended back.
+- **A profile allowing "eng" no longer rejects books that arrive as "en" or
+  "en-US"** (#1729) — the allowed-languages filter compared provider codes raw,
+  but providers speak different vocabularies: Google Books returns ISO 639-1
+  (`en`, `en-US`) while profiles are written in ISO 639-2/B (`eng`), so those
+  books were silently skipped at the default log level. The filter now runs both
+  the incoming code and the profile's list through the same canonicaliser the
+  EPUB importer already used, so any spelling of a language matches any other.
+  Books previously skipped will appear on the next metadata refresh.
+- **"Add all" on a light novel or manga series now adds every volume** (#1682)
+  — filling a Hardcover-linked series created only the first volume and silently
+  linked that same book to every other position, so a 5-volume series produced
+  one book and a 13-volume series produced one book. The duplicate check
+  compared titles by fuzzy similarity, and volume titles differ by a single
+  number: `Trapped in a Dating Sim Vol. 1` scores **100** against `Vol. 13`,
+  `The Mimosa Confessions Vol. 1` scores 96 against `Vol. 2`. An explicit volume
+  number now vetoes a title match, so those are recognised as different books.
+  Titles with no volume marker are unaffected, and a bare number in a title
+  (`Fahrenheit 451`) is still not treated as one. The same cause made an author
+  page show a single volume until you refreshed their metadata, which was the
+  workaround people found.
+- **Author metadata candidates are now ranked, and you can check one before
+  linking** (#1754) — "Link metadata" listed candidates in whatever order the
+  provider returned them. OpenLibrary emits a composite author record per
+  anthology, one row naming every contributor and holding a single work, so
+  those led the list while the record carrying the author's actual catalogue sat
+  below them and the picker looked like it couldn't find the author at all.
+  Candidates are now ranked by name match then catalogue size, reusing the
+  ranking the normal author search already had. Records from different providers
+  are still never merged, so picking one specific provider's record still works.
+  Each candidate also gained a **View on OpenLibrary** link, since several can
+  share a name and there was previously no way to tell them apart without
+  leaving the app; it is omitted for providers whose IDs have no public page.
+  Reported by nzvengeance.
+- **Ebook-pinned Hardcover lists no longer create books as "both"** (#1732) —
+  edition hydration ran right after a list-synced book was created and widened a
+  pinned `ebook` media type to `both` whenever the work had any audio-shaped
+  edition on Hardcover (true for most popular titles). Hydration now knows when
+  the media type was deliberately pinned by the list and leaves it alone; books
+  with no media type at all still promote to `audiobook` when an audio edition
+  exists.
+- **A series genre override can now be seen, edited, and removed** (#1709) — the
+  override applied to books added later was stored but never sent to the
+  browser, so the "Set genre" prompt always opened blank and there was no way to
+  tell an override existed or to undo one. The series list now carries it, the
+  prompt opens pre-filled, the button reads **Genre ✓** while an override is
+  active, and submitting an empty box removes it. Clearing drops the rule for
+  future books and leaves the genres already written onto existing books locked,
+  since those were a deliberate edit. The override can also now be set *before*
+  adding a series' books, and applies to the books created by that add.
+- **Expanding one series card no longer stretches its neighbours** (#1682) — the
+  series grid used the CSS default of stretching every card in a row to the
+  tallest, so opening one made all three grow and it was hard to see which was
+  actually open.
+- **Stopped the qBittorrent poll logging a Debug line for every already-imported
+  download** (#1730) — the 15-second poll walked all download rows and logged
+  "download not found in torrent list" for long-imported downloads whose torrent
+  had been removed after import, one line per download per poll forever (96% of
+  debug output on a 53-download library). Terminal downloads are now skipped
+  before the log, matching the no-hash branch; failed-import rows still log and
+  still feed stale-source detection unchanged.
+
+### Upgrade notes
+- Two data migrations run on first start. `068` removes author-identifier rows
+  orphaned by the cascade bug above. `069` re-parents recommendations and
+  dismissals stranded under a non-existent user to the operator account. Both
+  are one-way; the affected rows were unreachable before, so nothing you could
+  see is changed.
+- Audible author lookups now make one request per 50 titles instead of always
+  exactly one. For a large library the first refresh after upgrading will do
+  noticeably more outbound requests, and will find books it previously missed.
+  A lookup that fails partway now reports an error rather than returning a short
+  list, so an Audible outage degrades to "no audiobook supplement this run"
+  instead of a silently truncated catalogue.
+
 ## [v1.28.2] — 2026-08-03
 
 A bug-fix release about things that looked like they worked. Three of these

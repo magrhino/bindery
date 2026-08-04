@@ -1,2 +1,0 @@
-### Fixed
-- **Discover no longer recommends books you already have** (#1726) — ownership was matched on provider-specific IDs, so a book owned via OpenLibrary or Audiobookshelf still came back as a Hardcover recommendation (one reported batch was 15 of 22 owned books). The recommender now also matches by work identity (canonical title key plus author), and books on your wanted list count as owned too instead of being recommended back.

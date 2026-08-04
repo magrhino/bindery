@@ -1,2 +1,0 @@
-### Fixed
-- **Adding a specific book to an author you already track no longer fails forever** (#1612, #1735) — the add only polled for a row the catalogue sync had already refused to create, so it returned "book not found after author sync — try again shortly" on every retry and no amount of waiting helped. The requested book is now fetched and saved directly, and if you already own it under another source (a Calibre import, or one half of a split ebook/audiobook record) the existing entry is reused instead of a duplicate being created.
