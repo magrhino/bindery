@@ -14,11 +14,21 @@ type SeriesState struct {
 
 // UserProfile captures the user's reading taste, built from their library.
 type UserProfile struct {
-	GenreWeights        map[string]float64
-	MonitoredAuthors    map[int64]bool
-	AuthorBookCounts    map[int64]int
-	SeriesState         map[int64]SeriesState
-	OwnedForeignIDs     map[string]bool
+	GenreWeights     map[string]float64
+	MonitoredAuthors map[int64]bool
+	AuthorBookCounts map[int64]int
+	SeriesState      map[int64]SeriesState
+	OwnedForeignIDs  map[string]bool
+	// OwnedWorkKeys keys ownership by work identity — indexer.CanonicalDedupKey
+	// of the title crossed with a normalized author-name variant (see
+	// ownedWorkKeys). ForeignIDs are provider-specific (hc:… vs OL… vs
+	// audible:…), so OwnedForeignIDs alone never matches the same work owned
+	// via a different metadata provider (#1726).
+	OwnedWorkKeys map[string]bool
+	// AuthorNames maps local author ID to display name so candidate
+	// generators can pass an author name to IsOwned for books that only carry
+	// an AuthorID. Populated by BuildProfile from the authors it already loads.
+	AuthorNames         map[int64]string
 	DismissedForeignIDs map[string]bool
 	ExcludedAuthors     map[string]bool
 	PreferredLanguage   string

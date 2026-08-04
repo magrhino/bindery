@@ -155,7 +155,7 @@ func hardFilter(candidates []models.RecommendationCandidate, p *UserProfile) []m
 	var filtered []models.RecommendationCandidate
 	seen := make(map[string]bool)
 	for _, c := range candidates {
-		if p.OwnedForeignIDs[c.ForeignID] {
+		if p.IsOwned(c.ForeignID, c.Title, c.AuthorName) {
 			continue
 		}
 		if p.DismissedForeignIDs[c.ForeignID] {

@@ -451,8 +451,25 @@ func TestEngine_Run_WithMonitoredAuthorProducesCandidate(t *testing.T) {
 	}
 
 	a := seedAuthor(t, f, "Mon", "OLA_M", true)
-	// Wanted book from monitored author, not owned.
+	// Wanted book from monitored author: since #1726 wanted counts as owned,
+	// so it must NOT come back as a recommendation.
 	seedBook(t, f, a.ID, "OLW", "Wanted", []string{"fantasy"})
+	// Skipped book from the same author: still recommendable.
+	skipped := &models.Book{
+		ForeignID:        "OLS",
+		AuthorID:         a.ID,
+		Title:            "Skipped",
+		SortTitle:        "Skipped",
+		Genres:           []string{"fantasy"},
+		Status:           models.BookStatusSkipped,
+		MetadataProvider: "openlibrary",
+		Monitored:        true,
+		RatingsCount:     100,
+		AverageRating:    4.0,
+	}
+	if err := f.books.Create(ctx, skipped); err != nil {
+		t.Fatal(err)
+	}
 
 	e := New(f.books, f.authors, f.series, f.recs, f.settings)
 	if err := e.Run(ctx, f.userID); err != nil {
@@ -463,14 +480,20 @@ func TestEngine_Run_WithMonitoredAuthorProducesCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	found := false
+	foundSkipped, foundWanted := false, false
 	for _, r := range recs {
+		if r.ForeignID == "OLS" {
+			foundSkipped = true
+		}
 		if r.ForeignID == "OLW" {
-			found = true
+			foundWanted = true
 		}
 	}
-	if !found {
-		t.Errorf("wanted book from monitored author should appear as a recommendation")
+	if !foundSkipped {
+		t.Errorf("skipped book from monitored author should appear as a recommendation")
+	}
+	if foundWanted {
+		t.Errorf("wanted book counts as owned (#1726) and must not be recommended back")
 	}
 }
 

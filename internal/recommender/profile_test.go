@@ -149,7 +149,8 @@ func TestBuildProfile_OwnedAndAuthorCounts(t *testing.T) {
 	f := newProfileFixtures(t)
 	a := seedAuthor(t, f, "Prolific", "OL_PROLIFIC", true)
 	b := seedAuthor(t, f, "One Hit", "OL_ONEHIT", false)
-	// Imported books should be "owned"; wanted books should not be.
+	// Imported AND wanted books both count as owned for suppression (#1726):
+	// re-recommending a book the user already decided they want is useless.
 	seedImportedBook(t, f, a.ID, "OL1I", "B1 imported", []string{"fantasy"})
 	seedImportedBook(t, f, a.ID, "OL2I", "B2 imported", []string{"fantasy"})
 	seedBook(t, f, a.ID, "OL3W", "B3 wanted", []string{"fantasy"})
@@ -162,8 +163,8 @@ func TestBuildProfile_OwnedAndAuthorCounts(t *testing.T) {
 	if !p.OwnedForeignIDs["OL1I"] || !p.OwnedForeignIDs["OL2I"] {
 		t.Errorf("imported books missing from OwnedForeignIDs: %v", p.OwnedForeignIDs)
 	}
-	if p.OwnedForeignIDs["OL3W"] || p.OwnedForeignIDs["OL4W"] {
-		t.Errorf("wanted books should not be in OwnedForeignIDs: %v", p.OwnedForeignIDs)
+	if !p.OwnedForeignIDs["OL3W"] || !p.OwnedForeignIDs["OL4W"] {
+		t.Errorf("wanted books should be in OwnedForeignIDs (#1726): %v", p.OwnedForeignIDs)
 	}
 	if p.AuthorBookCounts[a.ID] != 3 {
 		t.Errorf("Prolific book count: want 3, got %d", p.AuthorBookCounts[a.ID])
@@ -233,6 +234,105 @@ func TestBuildProfile_DismissedAndExclusions(t *testing.T) {
 	// Excluded authors are stored lowercased.
 	if !p.ExcludedAuthors["bad author"] {
 		t.Errorf("excluded authors should include 'bad author', got %v", p.ExcludedAuthors)
+	}
+}
+
+// TestIsOwned_CrossProvider is the #1726 regression: a work owned under one
+// provider's ForeignID must suppress the same work surfaced by another
+// provider, matched by title dedup key + author — and the author dimension
+// must keep same-titled books by different authors recommendable.
+func TestIsOwned_CrossProvider(t *testing.T) {
+	f := newProfileFixtures(t)
+	a := seedAuthor(t, f, "Orson Scott Card", "OL_CARD", false)
+	seedImportedBook(t, f, a.ID, "OL49485W", "Ender in Exile", []string{"science fiction"})
+
+	p, err := BuildProfile(context.Background(), f.userID, f.books, f.authors, f.series, f.recs, f.settings)
+	if err != nil {
+		t.Fatalf("BuildProfile: %v", err)
+	}
+
+	// Same work from Hardcover: different ForeignID, same title and author.
+	if !p.IsOwned("hc:ender-in-exile", "Ender in Exile", "Orson Scott Card") {
+		t.Error("same title+author from another provider should be owned")
+	}
+	// Provider spells the author last-first: still the same person.
+	if !p.IsOwned("hc:ender-in-exile", "Ender in Exile", "Card, Orson Scott") {
+		t.Error("last-first author spelling should still match")
+	}
+	// Same title, different author: a distinct work, must NOT be suppressed.
+	if p.IsOwned("hc:other", "Ender in Exile", "Jane Doe") {
+		t.Error("same title by a different author must not be owned")
+	}
+	// Exact ForeignID still matches regardless of title/author strings.
+	if !p.IsOwned("OL49485W", "", "") {
+		t.Error("exact ForeignID match should be owned")
+	}
+	// Missing author name must not fall back to title-only matching.
+	if p.IsOwned("hc:ender-in-exile", "Ender in Exile", "") {
+		t.Error("empty author name must not match on title alone")
+	}
+}
+
+// TestHardFilter_CrossProviderOwned drives the same scenario through the real
+// filter path candidates take.
+func TestHardFilter_CrossProviderOwned(t *testing.T) {
+	f := newProfileFixtures(t)
+	a := seedAuthor(t, f, "Orson Scott Card", "OL_CARD", false)
+	seedImportedBook(t, f, a.ID, "OL49485W", "Ender in Exile", []string{"science fiction"})
+
+	p, err := BuildProfile(context.Background(), f.userID, f.books, f.authors, f.series, f.recs, f.settings)
+	if err != nil {
+		t.Fatalf("BuildProfile: %v", err)
+	}
+
+	owned := models.RecommendationCandidate{
+		ForeignID:    "hc:ender-in-exile",
+		RecType:      models.RecTypeListCross,
+		Title:        "Ender in Exile",
+		AuthorName:   "Orson Scott Card",
+		Rating:       4.2,
+		RatingsCount: 500,
+	}
+	otherAuthor := models.RecommendationCandidate{
+		ForeignID:    "hc:other-exile",
+		RecType:      models.RecTypeListCross,
+		Title:        "Ender in Exile",
+		AuthorName:   "Jane Doe",
+		Rating:       4.2,
+		RatingsCount: 500,
+	}
+
+	got := hardFilter([]models.RecommendationCandidate{owned, otherAuthor}, p)
+	if len(got) != 1 {
+		t.Fatalf("hardFilter: want 1 survivor, got %d: %+v", len(got), got)
+	}
+	if got[0].ForeignID != "hc:other-exile" {
+		t.Errorf("wrong survivor: %q", got[0].ForeignID)
+	}
+}
+
+// TestHardFilter_WantedIsOwned pins the second #1726 fix: a wanted-status
+// library book must suppress the matching candidate.
+func TestHardFilter_WantedIsOwned(t *testing.T) {
+	f := newProfileFixtures(t)
+	a := seedAuthor(t, f, "Author A", "OL_A", false)
+	seedBook(t, f, a.ID, "OL_WANTED", "Red God", []string{"fantasy"}) // status=wanted via helper
+
+	p, err := BuildProfile(context.Background(), f.userID, f.books, f.authors, f.series, f.recs, f.settings)
+	if err != nil {
+		t.Fatalf("BuildProfile: %v", err)
+	}
+
+	cand := models.RecommendationCandidate{
+		ForeignID:    "OL_WANTED",
+		RecType:      models.RecTypeListCross,
+		Title:        "Red God",
+		AuthorName:   "Author A",
+		Rating:       4.0,
+		RatingsCount: 500,
+	}
+	if got := hardFilter([]models.RecommendationCandidate{cand}, p); len(got) != 0 {
+		t.Errorf("wanted book should be suppressed, got %+v", got)
 	}
 }
 

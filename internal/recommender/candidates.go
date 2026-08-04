@@ -47,7 +47,7 @@ func GenerateSeries(
 			if !floatEqual(pos, nextPos) || sb.Book == nil {
 				continue
 			}
-			if profile.OwnedForeignIDs[sb.Book.ForeignID] {
+			if profile.IsOwned(sb.Book.ForeignID, sb.Book.Title, profile.AuthorNames[sb.Book.AuthorID]) {
 				continue
 			}
 
@@ -67,7 +67,7 @@ func GenerateSeries(
 				if !floatEqual(pos, missingPos) || sb.Book == nil {
 					continue
 				}
-				if profile.OwnedForeignIDs[sb.Book.ForeignID] {
+				if profile.IsOwned(sb.Book.ForeignID, sb.Book.Title, profile.AuthorNames[sb.Book.AuthorID]) {
 					continue
 				}
 
@@ -110,7 +110,7 @@ func GenerateAuthorNew(
 
 		for i := range authorBooks {
 			b := &authorBooks[i]
-			if profile.OwnedForeignIDs[b.ForeignID] {
+			if profile.IsOwned(b.ForeignID, b.Title, author.Name) {
 				continue
 			}
 			// Only recommend books with wanted or skipped status (they're in
@@ -157,7 +157,7 @@ func GenerateGenreSimilar(
 		}
 
 		for _, sb := range full.Books {
-			if sb.Book == nil || profile.OwnedForeignIDs[sb.Book.ForeignID] {
+			if sb.Book == nil || profile.IsOwned(sb.Book.ForeignID, sb.Book.Title, profile.AuthorNames[sb.Book.AuthorID]) {
 				continue
 			}
 			// Skip books already covered by series candidates.
@@ -204,7 +204,7 @@ func GenerateSerendipity(
 		}
 
 		for _, sb := range full.Books {
-			if sb.Book == nil || profile.OwnedForeignIDs[sb.Book.ForeignID] {
+			if sb.Book == nil || profile.IsOwned(sb.Book.ForeignID, sb.Book.Title, profile.AuthorNames[sb.Book.AuthorID]) {
 				continue
 			}
 
@@ -284,7 +284,7 @@ func GenerateListCross(
 
 	var candidates []models.RecommendationCandidate
 	for i := range books {
-		if profile.OwnedForeignIDs[books[i].ForeignID] {
+		if profile.IsOwned(books[i].ForeignID, books[i].Title, books[i].AuthorName) {
 			continue
 		}
 		books[i].RecType = models.RecTypeListCross

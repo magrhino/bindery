@@ -8,7 +8,9 @@ import (
 	"strings"
 
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/models"
+	"github.com/vavallee/bindery/internal/textutil"
 )
 
 // junkGenres are OpenLibrary subjects that add noise, not signal.
@@ -37,6 +39,8 @@ func BuildProfile(
 		AuthorBookCounts:    make(map[int64]int),
 		SeriesState:         make(map[int64]SeriesState),
 		OwnedForeignIDs:     make(map[string]bool),
+		OwnedWorkKeys:       make(map[string]bool),
+		AuthorNames:         make(map[int64]string),
 		DismissedForeignIDs: make(map[string]bool),
 		ExcludedAuthors:     make(map[string]bool),
 		PreferredLanguage:   "en",
@@ -46,6 +50,19 @@ func BuildProfile(
 	if settings != nil {
 		if s, _ := settings.Get(ctx, "search.preferredLanguage"); s != nil && s.Value != "" {
 			p.PreferredLanguage = s.Value
+		}
+	}
+
+	// Load authors before the book loop: the owned-work keys need each book's
+	// author name, and the monitored set comes from the same list.
+	allAuthors, err := authors.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range allAuthors {
+		p.AuthorNames[a.ID] = a.Name
+		if a.Monitored {
+			p.MonitoredAuthors[a.ID] = true
 		}
 	}
 
@@ -61,8 +78,13 @@ func BuildProfile(
 	genreDocCount := make(map[string]int)
 
 	for _, b := range allBooks {
-		if b.Status == models.BookStatusDownloaded || b.Status == models.BookStatusImported {
+		// Wanted counts as owned for suppression: recommending a book the
+		// user has already decided they want is never useful (#1726).
+		if b.Status == models.BookStatusDownloaded || b.Status == models.BookStatusImported || b.Status == models.BookStatusWanted {
 			p.OwnedForeignIDs[b.ForeignID] = true
+			for _, key := range ownedWorkKeys(b.Title, p.AuthorNames[b.AuthorID]) {
+				p.OwnedWorkKeys[key] = true
+			}
 		}
 		p.AuthorBookCounts[b.AuthorID]++
 
@@ -86,17 +108,6 @@ func BuildProfile(
 			tf := float64(docCount) / float64(p.TotalBooks)
 			idf := math.Log(float64(totalUniqueGenres) / float64(docCount))
 			p.GenreWeights[genre] = tf * idf
-		}
-	}
-
-	// Build monitored authors set.
-	allAuthors, err := authors.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, a := range allAuthors {
-		if a.Monitored {
-			p.MonitoredAuthors[a.ID] = true
 		}
 	}
 
@@ -163,6 +174,47 @@ func BuildProfile(
 	}
 
 	return p, nil
+}
+
+// ownedWorkKeys returns the work-identity keys a book is owned under: the
+// canonical title dedup key (#940) crossed with every normalized variant of
+// the author name. Variants — not a single fold — because candidate author
+// names are provider strings ("Card, Orson Scott", ASCII-ised umlauts) that
+// need not equal the local author row; NormalizeAuthorNameWithVariants is the
+// shared post-#1647 author comparison, and hand-rolling a different fold here
+// is the drift class #1648 exists to prevent. Returns nil when either the
+// title or the author name folds to nothing — the author dimension is
+// mandatory, so such books are only matchable by ForeignID.
+func ownedWorkKeys(title, authorName string) []string {
+	dedup := indexer.CanonicalDedupKey(title)
+	if dedup == "" {
+		return nil
+	}
+	variants := textutil.NormalizeAuthorNameWithVariants(authorName)
+	keys := make([]string, 0, len(variants))
+	for _, v := range variants {
+		keys = append(keys, dedup+"\x00"+v)
+	}
+	return keys
+}
+
+// IsOwned reports whether the user already has this work: first by exact
+// ForeignID, then by work identity (title dedup key + author name). The
+// second check is what catches the same work owned via a different provider
+// (candidate "hc:ender-in-exile" vs owned "OL49485W", #1726). The key
+// deliberately includes the author: a title-only match would silently
+// suppress same-titled books by different authors, and a missing
+// recommendation is harder to notice than a duplicate one.
+func (p *UserProfile) IsOwned(foreignID, title, authorName string) bool {
+	if p.OwnedForeignIDs[foreignID] {
+		return true
+	}
+	for _, key := range ownedWorkKeys(title, authorName) {
+		if p.OwnedWorkKeys[key] {
+			return true
+		}
+	}
+	return false
 }
 
 // medianReleaseYear returns the median publication year across all books that
