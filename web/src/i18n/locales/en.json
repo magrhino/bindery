@@ -894,6 +894,7 @@
   "authorMetadataLink": {
     "actionLink": "Link metadata",
     "actionFindBetter": "Find better metadata",
+    "verify": "View on {{source}}",
     "title": "Link metadata",
     "searchPlaceholder": "Search by author name...",
     "search": "Search",

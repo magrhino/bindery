@@ -54,6 +54,20 @@ func (a *Aggregator) SearchAuthorCandidates(ctx context.Context, query string) (
 		}
 	}
 	if len(out) > 0 {
+		// Rank before returning. Provider order is not relevance order, and
+		// OpenLibrary in particular emits a composite author record per
+		// anthology ("Dan Abnett, David Annandale, John French, ...", one
+		// work each) that otherwise outranks the real record carrying the
+		// author's whole catalogue (#1754). rerankAuthorsByRelevance scores
+		// the name against the query and tie-breaks on book count then
+		// ratings count, which is precisely the signal separating the two.
+		//
+		// Ranking only — the records are still NOT merged. Collapsing
+		// same-person records is what SearchAuthors does, and doing it here
+		// would defeat the modal's purpose of picking one specific provider
+		// record. "Don't merge" and "don't sort" were independent; only the
+		// first was intended.
+		rerankAuthorsByRelevance(out, query)
 		return out, nil
 	}
 	if len(errs) > 0 {

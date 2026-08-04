@@ -17,7 +17,9 @@ const tMock = vi.hoisted(() => (key: string, options?: string | Record<string, u
   }
   if (typeof options === 'string') return options
   if (options?.defaultValue && typeof options.defaultValue === 'string') {
-    return options.defaultValue.replace('{{count}}', String(options.count ?? ''))
+    return options.defaultValue
+      .replace('{{count}}', String(options.count ?? ''))
+      .replace('{{source}}', String(options.source ?? ''))
   }
   return strings[key] ?? key
 })
@@ -126,5 +128,48 @@ describe('AuthorMetadataLinkModal', () => {
 
     expect(screen.getByText('Manual Result')).toBeInTheDocument()
     expect(screen.queryByText('Initial Result')).not.toBeInTheDocument()
+  })
+
+  // #1754: several candidates can carry the same name, and linking is
+  // disruptive enough to be worth checking first. Before this the modal
+  // showed a name, a provider badge and counts, with no way to confirm which
+  // record you were about to attach.
+  it('links each candidate to its upstream record so it can be verified before linking', async () => {
+    vi.mocked(api.searchAuthorLinkCandidates).mockResolvedValue([
+      author({ id: 0, foreignAuthorId: 'OL1529996A', authorName: 'David Annandale' }),
+    ])
+
+    render(
+      <AuthorMetadataLinkModal
+        author={author({ foreignAuthorId: 'calibre:author:9', authorName: 'David Annandale' })}
+        onClose={vi.fn()}
+        onLinked={vi.fn()}
+      />,
+    )
+
+    const link = await screen.findByRole('link', { name: 'View on OpenLibrary' })
+    expect(link).toHaveAttribute('href', 'https://openlibrary.org/authors/OL1529996A')
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+  })
+
+  // Hardcover/DNB/Calibre/ABS foreign IDs have no stable public page, so the
+  // shared helper returns null for them. Rendering a link anyway would send
+  // the user to a dead URL, which is worse than showing nothing.
+  it('omits the verify link for providers with no public page', async () => {
+    vi.mocked(api.searchAuthorLinkCandidates).mockResolvedValue([
+      author({ id: 0, foreignAuthorId: 'dnb:118540238', authorName: 'David Annandale', metadataProvider: 'dnb' }),
+    ])
+
+    render(
+      <AuthorMetadataLinkModal
+        author={author({ foreignAuthorId: 'calibre:author:9', authorName: 'David Annandale' })}
+        onClose={vi.fn()}
+        onLinked={vi.fn()}
+      />,
+    )
+
+    await screen.findByRole('button', { name: 'Link' })
+    expect(screen.queryByRole('link', { name: /View on/ })).toBeNull()
   })
 })

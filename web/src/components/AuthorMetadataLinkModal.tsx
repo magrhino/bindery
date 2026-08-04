@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, ApiError, Author, AuthorConflictBody } from '../api/client'
+import { metadataSourceLink } from '../util/metadataSource'
 
 interface Props {
   author: Author
@@ -162,6 +163,27 @@ export default function AuthorMetadataLinkModal({ author, onClose, onLinked }: P
                       {candidate.disambiguation && <span>{candidate.disambiguation}</span>}
                       {candidate.statistics?.bookCount ? <span>{t('authorMetadataLink.books', { count: candidate.statistics.bookCount, defaultValue: '{{count}} books' })}</span> : null}
                       {candidate.ratingsCount ? <span>{t('authorMetadataLink.ratings', { count: candidate.ratingsCount, defaultValue: '{{count}} ratings' })}</span> : null}
+                      {/*
+                        Linking is irreversible enough to be worth checking first, and
+                        several candidates can share a name (#1754). Reuses the shared
+                        helper, which returns null for providers whose stored IDs have
+                        no stable public page, so this never renders a dead link.
+                      */}
+                      {(() => {
+                        const source = metadataSourceLink(candidate.foreignAuthorId, 'author')
+                        if (!source) return null // provider has no stable public page
+                        return (
+                          <a
+                            href={source.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={event => event.stopPropagation()}
+                            className="underline hover:text-slate-900 dark:hover:text-zinc-300"
+                          >
+                            {t('authorMetadataLink.verify', { source: source.label, defaultValue: 'View on {{source}}' })}
+                          </a>
+                        )
+                      })()}
                     </div>
                   </div>
                 </div>
