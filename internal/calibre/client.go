@@ -26,13 +26,20 @@ var ErrDisabled = errors.New("calibre integration disabled")
 // fresh from the settings repo at the start of each import so toggling the
 // flag in the UI takes effect without a restart.
 type Config struct {
-	Enabled       bool
-	BinaryPath    string // path to `calibredb`; empty means resolve via $PATH
-	LibraryPath   string // target Calibre library directory
-	SyncOnStartup bool   // run a library import when Bindery starts
-	PluginURL     string // base URL of the Bindery Bridge Calibre plugin (mode=plugin)
-	PluginAPIKey  string // bearer token for the plugin's HTTP API (mode=plugin)
-	PushPathRemap string // pathmap "from:to" pairs translating Bindery paths to the plugin container's mounts (#1346)
+	Enabled     bool
+	BinaryPath  string // path to `calibredb`; empty means resolve via $PATH
+	LibraryPath string // target Calibre library directory
+	// LibraryImportEnabled gates every library-import (Calibre → Bindery)
+	// operation: startup import, the 24h scheduled sync, and the manual
+	// "Import library" endpoint. Opt-in: false means no import runs regardless
+	// of LibraryPath/SyncOnStartup. Existing installs with a library path are
+	// backfilled to true by migration 070 so the gate never disables a working
+	// import.
+	LibraryImportEnabled bool
+	SyncOnStartup        bool   // run a library import when Bindery starts
+	PluginURL            string // base URL of the Bindery Bridge Calibre plugin (mode=plugin)
+	PluginAPIKey         string // bearer token for the plugin's HTTP API (mode=plugin)
+	PushPathRemap        string // pathmap "from:to" pairs translating Bindery paths to the plugin container's mounts (#1346)
 }
 
 // runner is the shape of exec.CommandContext, abstracted for tests.

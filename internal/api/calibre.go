@@ -20,8 +20,12 @@ const (
 	SettingCalibreBinaryPath    = "calibre.binary_path"
 	SettingCalibreMode          = "calibre.mode"
 	SettingCalibreSyncOnStartup = "calibre.sync_on_startup"
-	SettingCalibrePluginURL     = "calibre.plugin_url"
-	SettingCalibrePluginAPIKey  = "calibre.plugin_api_key"
+	// SettingCalibreLibraryImportEnabled is the opt-in master switch for
+	// importing a Calibre library into Bindery. Off by default; when off, no
+	// startup / scheduled / manual library import runs.
+	SettingCalibreLibraryImportEnabled = "calibre.library_import_enabled"
+	SettingCalibrePluginURL            = "calibre.plugin_url"
+	SettingCalibrePluginAPIKey         = "calibre.plugin_api_key"
 	// SettingCalibrePushPathRemap translates Bindery library paths to the
 	// prefix the Calibre (Bridge plugin) container sees before a push, in
 	// pathmap "from:to[,from:to]" form — e.g. "/books:/mnt/user/media/books".
@@ -98,13 +102,14 @@ func LoadCalibreConfig(ctx context.Context, settings *db.SettingsRepo) calibre.C
 		enabled = true
 	}
 	return calibre.Config{
-		Enabled:       enabled,
-		LibraryPath:   get(SettingCalibreLibraryPath),
-		BinaryPath:    get(SettingCalibreBinaryPath),
-		SyncOnStartup: strings.EqualFold(get(SettingCalibreSyncOnStartup), "true"),
-		PluginURL:     get(SettingCalibrePluginURL),
-		PluginAPIKey:  get(SettingCalibrePluginAPIKey),
-		PushPathRemap: get(SettingCalibrePushPathRemap),
+		Enabled:              enabled,
+		LibraryPath:          get(SettingCalibreLibraryPath),
+		BinaryPath:           get(SettingCalibreBinaryPath),
+		LibraryImportEnabled: strings.EqualFold(get(SettingCalibreLibraryImportEnabled), "true"),
+		SyncOnStartup:        strings.EqualFold(get(SettingCalibreSyncOnStartup), "true"),
+		PluginURL:            get(SettingCalibrePluginURL),
+		PluginAPIKey:         get(SettingCalibrePluginAPIKey),
+		PushPathRemap:        get(SettingCalibrePushPathRemap),
 	}
 }
 

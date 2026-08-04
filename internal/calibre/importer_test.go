@@ -494,3 +494,29 @@ func TestImporter_SkipsSeriesWhenRepoUnset(t *testing.T) {
 		t.Errorf("series stats with no repo: linked=%d failures=%d, want 0/0", stats.SeriesLinked, stats.SeriesFailures)
 	}
 }
+
+// RunSync must not import when calibre.library_import_enabled is off, even with
+// a library path set, and must import when it is on (#calibre-import-opt-in).
+func TestRunSync_GatedOnLibraryImportEnabled(t *testing.T) {
+	imp, fr, _, bookRepo, _, _, settingsRepo := newImporterFixture(t)
+	ctx := context.Background()
+	fr.books = []CalibreBook{sampleCalibreBook(1, "Gated Book", "Some Author")}
+	if err := settingsRepo.Set(ctx, "calibre.library_path", "/lib"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Disabled (setting absent): no import.
+	imp.RunSync(ctx)
+	if books, _ := bookRepo.List(ctx); len(books) != 0 {
+		t.Fatalf("RunSync imported %d books while library import disabled; want 0", len(books))
+	}
+
+	// Enabled: import proceeds.
+	if err := settingsRepo.Set(ctx, "calibre.library_import_enabled", "true"); err != nil {
+		t.Fatal(err)
+	}
+	imp.RunSync(ctx)
+	if books, _ := bookRepo.List(ctx); len(books) == 0 {
+		t.Fatal("RunSync imported nothing after enabling library import; want the fake book")
+	}
+}

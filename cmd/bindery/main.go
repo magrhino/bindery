@@ -408,7 +408,10 @@ func main() {
 	}
 	if syncOnStartup(settingsRepo) {
 		cfg := api.LoadCalibreConfig(ctxBoot, settingsRepo)
-		if cfg.Enabled && cfg.LibraryPath != "" {
+		switch {
+		case !cfg.LibraryImportEnabled:
+			slog.Info("calibre sync_on_startup is on but library import is disabled — skipping")
+		case cfg.Enabled && cfg.LibraryPath != "":
 			slog.Info("calibre sync_on_startup enabled — kicking off library import")
 			libPath := cfg.LibraryPath
 			bgJobs.Go("calibre-startup-import", func(ctx context.Context) {
@@ -416,7 +419,7 @@ func main() {
 					slog.Warn("calibre startup import failed", "error", err)
 				}
 			})
-		} else {
+		default:
 			slog.Info("calibre sync_on_startup is on but integration is not configured — skipping")
 		}
 	}

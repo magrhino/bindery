@@ -828,6 +828,15 @@ func (i *Importer) upsertEdition(ctx context.Context, runID int64, book *models.
 // if Calibre is unconfigured or already running, it logs and returns without
 // blocking the job loop.
 func (i *Importer) RunSync(ctx context.Context) {
+	// Opt-in gate (calibre.library_import_enabled): the scheduled sync must not
+	// run when the operator has library import turned off, even if a library
+	// path is still configured. Existing installs are backfilled to enabled by
+	// migration 070 so this never disables a working import.
+	if s, _ := i.settings.Get(ctx, "calibre.library_import_enabled"); s == nil || !strings.EqualFold(s.Value, "true") {
+		slog.Debug("calibre scheduler sync: library import disabled — skipping")
+		return
+	}
+
 	libraryPath := ""
 	if s, _ := i.settings.Get(ctx, "calibre.library_path"); s != nil {
 		libraryPath = s.Value

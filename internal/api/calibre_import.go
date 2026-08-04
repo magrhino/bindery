@@ -39,6 +39,10 @@ func NewCalibreImportHandler(imp importerAPI, loadCfg func() calibre.Config) *Ca
 // on response-send would routinely leave the settings row stale.
 func (h *CalibreImportHandler) Start(w http.ResponseWriter, r *http.Request) {
 	cfg := h.loadCfg()
+	if !cfg.LibraryImportEnabled {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "calibre library import is disabled"})
+		return
+	}
 	if cfg.LibraryPath == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "calibre library_path is empty"})
 		return

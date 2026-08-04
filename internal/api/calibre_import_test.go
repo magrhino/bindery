@@ -44,9 +44,25 @@ func TestCalibreImport_Start_RejectsDisabled(t *testing.T) {
 	}
 }
 
+// The opt-in gate: even with a library path configured, the manual import must
+// not run when calibre.library_import_enabled is off (#calibre-import-opt-in).
+func TestCalibreImport_Start_RejectsWhenImportDisabled(t *testing.T) {
+	s := &stubImporter{}
+	h := NewCalibreImportHandler(s, loader(calibre.Config{Enabled: true, LibraryImportEnabled: false, LibraryPath: "/lib"}))
+
+	rec := httptest.NewRecorder()
+	h.Start(rec, httptest.NewRequest(http.MethodPost, "/api/v1/calibre/import", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("code = %d, want 400", rec.Code)
+	}
+	if s.lastCalls != 0 {
+		t.Error("importer must not be invoked when library import is disabled")
+	}
+}
+
 func TestCalibreImport_Start_RejectsMissingLibraryPath(t *testing.T) {
 	s := &stubImporter{}
-	h := NewCalibreImportHandler(s, loader(calibre.Config{Enabled: true, LibraryPath: ""}))
+	h := NewCalibreImportHandler(s, loader(calibre.Config{Enabled: true, LibraryImportEnabled: true, LibraryPath: ""}))
 
 	rec := httptest.NewRecorder()
 	h.Start(rec, httptest.NewRequest(http.MethodPost, "/api/v1/calibre/import", nil))
@@ -57,7 +73,7 @@ func TestCalibreImport_Start_RejectsMissingLibraryPath(t *testing.T) {
 
 func TestCalibreImport_Start_Accepted(t *testing.T) {
 	s := &stubImporter{progress: calibre.ImportProgress{Running: true, Message: "kickoff"}}
-	h := NewCalibreImportHandler(s, loader(calibre.Config{Enabled: true, LibraryPath: "/lib"}))
+	h := NewCalibreImportHandler(s, loader(calibre.Config{Enabled: true, LibraryImportEnabled: true, LibraryPath: "/lib"}))
 
 	rec := httptest.NewRecorder()
 	h.Start(rec, httptest.NewRequest(http.MethodPost, "/api/v1/calibre/import", nil))
@@ -80,7 +96,7 @@ func TestCalibreImport_Start_Accepted(t *testing.T) {
 
 func TestCalibreImport_Start_Conflict(t *testing.T) {
 	s := &stubImporter{startErr: calibre.ErrAlreadyRunning}
-	h := NewCalibreImportHandler(s, loader(calibre.Config{Enabled: true, LibraryPath: "/lib"}))
+	h := NewCalibreImportHandler(s, loader(calibre.Config{Enabled: true, LibraryImportEnabled: true, LibraryPath: "/lib"}))
 
 	rec := httptest.NewRecorder()
 	h.Start(rec, httptest.NewRequest(http.MethodPost, "/api/v1/calibre/import", nil))
@@ -91,7 +107,7 @@ func TestCalibreImport_Start_Conflict(t *testing.T) {
 
 func TestCalibreImport_Start_UnknownError(t *testing.T) {
 	s := &stubImporter{startErr: errors.New("boom")}
-	h := NewCalibreImportHandler(s, loader(calibre.Config{Enabled: true, LibraryPath: "/lib"}))
+	h := NewCalibreImportHandler(s, loader(calibre.Config{Enabled: true, LibraryImportEnabled: true, LibraryPath: "/lib"}))
 
 	rec := httptest.NewRecorder()
 	h.Start(rec, httptest.NewRequest(http.MethodPost, "/api/v1/calibre/import", nil))
@@ -102,7 +118,7 @@ func TestCalibreImport_Start_UnknownError(t *testing.T) {
 
 func TestCalibreImport_Status_ReturnsProgress(t *testing.T) {
 	s := &stubImporter{progress: calibre.ImportProgress{Total: 5, Processed: 3}}
-	h := NewCalibreImportHandler(s, loader(calibre.Config{Enabled: true, LibraryPath: "/lib"}))
+	h := NewCalibreImportHandler(s, loader(calibre.Config{Enabled: true, LibraryImportEnabled: true, LibraryPath: "/lib"}))
 
 	rec := httptest.NewRecorder()
 	h.Status(rec, httptest.NewRequest(http.MethodGet, "/api/v1/calibre/import/status", nil))
