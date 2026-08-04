@@ -131,6 +131,8 @@ Clean-room Go rewrite, modern React UI, MIT-licensed, actively developed.
 - Naming tokens — `{Author}`, `{SortAuthor}`, `{Title}`, `{Year}`, `{Series}`, `{SeriesNumber}`, `{Genre}`, `{Lang}`, `{ext}` — collapse cleanly for non-series books, with conditional literals (`{Title}{ - Series}` emits the dash only when a series exists) and zero-pad widths (`{SeriesNumber:2}` → `02`).
 - Cross-filesystem-safe moves: atomic rename when possible, copy + verify + delete for NFS / separate volumes. Full grab / import / failure history per book.
 - Calibre integration in three modes: `calibredb` CLI hook on import, [Bindery Bridge plugin](https://github.com/vavallee/bindery-plugins) (cross-container), or direct read of an existing Calibre library's `metadata.db` as Bindery's catalogue.
+- **Audiobookshelf import** — pull an existing ABS server's book libraries in as Bindery's catalogue (metadata-first, dry-run, review queue for ambiguous matches, rollback), with an ABS library-scan trigger after every audiobook import. See [docs/ABS-Import-Wiki.md](docs/ABS-Import-Wiki.md).
+- **Grimmory push** (preview) — imported ebooks are sent to a self-hosted [Grimmory](https://grimmory.org) library via its BookDrop inbox, with a bulk **Push all** for existing files.
 
 **Metadata sources** — all stable, documented, public APIs. No Goodreads scraping.
 
@@ -153,14 +155,14 @@ Cover images are fetched and cached server-side under `<dataDir>/image-cache/` (
 - **Authentication** — first-run setup creates an admin account (argon2id, signed session cookies). Four modes: **Enabled** / **Local only** (bypass for private IPs) / **Disabled** / **Proxy** (trust upstream `X-Forwarded-User` from a configured trusted proxy — drop-in for Authelia / Authentik / oauth2-proxy). Per-account API key, per-IP login rate limiting, CSRF double-submit (API-key clients exempt).
 - **OIDC** — native Authorization Code + PKCE with multi-provider support. Pre-configured for Google, GitHub (via Dex), Authelia, and Keycloak; identifies users by stable `(issuer, sub)` so email/username changes don't break logins.
 - **Multi-user mode** — per-user libraries, monitored authors, profiles, and downloads. Admin role manages indexers / download clients / users; standard users see only their own catalogue. Local, OIDC-provisioned, or forward-auth-mapped.
-- **Webhook notifications** for grab / import / failure (pipe to Apprise, ntfy, Home Assistant, Discord, Slack via proxies). **Tags** scope indexers / profiles / notifications to specific authors. **On-demand SQLite backups.** **Persistent log viewer** in Settings → Logs with runtime DEBUG toggle.
+- **Webhook notifications** for grab / import / failure (pipe to Apprise, ntfy, Home Assistant, Discord, Slack via proxies). **On-demand SQLite backups.** **Persistent log viewer** in Settings → Logs with runtime DEBUG toggle.
 - **Arr-compatible queue** at `GET /api/queue` for [Harpoon](https://github.com/harpoon-io/harpoon) and other *arr-aware tools — pagination, sort, live size, status, client, remote ID, protocol.
 
 **UI**
 - Modern React 19 + TypeScript + Tailwind CSS SPA with search-first author acquisition and deep-linkable routed `/book/:id` and `/author/:id` pages.
 - Light / dark themes (respecting `prefers-color-scheme` first paint), grid / table view toggles, mobile-friendly responsive layout, hamburger nav, agenda-style mobile Calendar.
 - Full pagination, search, filter, and sort on every list page; preferences persist to `localStorage`.
-- 7 languages — English, French, German, Dutch, Spanish, Filipino (Tagalog), Indonesian — auto-detected from the browser, override in Settings.
+- 8 languages — English, French, German, Dutch, Spanish, Filipino (Tagalog), Indonesian, Korean — auto-detected from the browser, override in Settings.
 - **OPDS 1.2 catalogue** at `/opds/` for KOReader, Moon+ Reader, and other reading apps. HTTP Basic auth with the API key as the password.
 
 **Packaging** — single Go binary with the React frontend embedded via `go:embed`. Distroless container (non-root, read-only rootfs, all caps dropped, RuntimeDefault seccomp). Helm chart for ArgoCD / Flux. Pure-Go SQLite via `modernc.org/sqlite` — no CGO, no external database.
@@ -279,6 +281,7 @@ The full endpoint catalogue, authentication rules (API key, session cookie, loca
 |-------|-------|
 | **Quickstart** — zero to first download, end to end | [docs/QUICKSTART.md](docs/QUICKSTART.md) |
 | **Quickstart (wiki)** — first author to first grab in 10 minutes | [Wiki](https://github.com/vavallee/bindery/wiki/Quickstart) |
+| **User guide** — how the app thinks: catalogue-first flow, wanted vs monitored, imports | [docs/User-Guide-Wiki.md](docs/User-Guide-Wiki.md) |
 | **Deployment** — Docker, Compose, k8s/Helm, binary, UID/GID, env vars, upgrades | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
 | **Architecture** — components, data flow, dependencies | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | **API** — REST endpoints, auth, integration patterns | [docs/API.md](docs/API.md) |
@@ -293,6 +296,7 @@ The full endpoint catalogue, authentication rules (API key, session cookie, loca
 | **Enhanced Hardcover series** — token setup, series linking, catalog diffs, missing-book fill | [docs/Hardcover-Series-Wiki.md](docs/Hardcover-Series-Wiki.md) |
 | **Storage & hardlinks** — single-mount layout, import modes, per-author audiobook root | [docs/Storage-And-Hardlinks-Wiki.md](docs/Storage-And-Hardlinks-Wiki.md) |
 | **Migrating from Readarr** — `readarr.db` import, Goodreads CSV import, library scan | [docs/Migrating-From-Readarr-Wiki.md](docs/Migrating-From-Readarr-Wiki.md) |
+| **Metadata editing** — manual edits, field locking, bulk genre overrides | [docs/Metadata-Editing-Wiki.md](docs/Metadata-Editing-Wiki.md) |
 | **Troubleshooting** — permission-denied, path-remap, import failures | [docs/Troubleshooting-Wiki.md](docs/Troubleshooting-Wiki.md) |
 | **Contributing & CI checks** — dev setup, full quality/security matrix, local check suite | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | **Changelog** — release notes | [CHANGELOG.md](CHANGELOG.md) |

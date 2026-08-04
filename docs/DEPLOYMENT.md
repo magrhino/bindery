@@ -412,7 +412,7 @@ Use your actual LAN subnet. If the target services sit on a different subnet tha
 On first launch Bindery bootstraps itself — **no environment variables are required for auth.**
 
 1. A random API key and session-signing secret are generated and stored in the SQLite database. Both are idempotent: generated once, reused on every subsequent boot.
-2. The first page load redirects to `/setup`. Create the administrator account (username + password, 8-character minimum). Bindery is single-administrator; there is no "register" flow once this account exists.
+2. The first page load redirects to `/setup`. Create the administrator account (username + password, 8-character minimum). There is no public self-registration once this account exists; additional users are created by an admin on the **Users** page or auto-provisioned via OIDC — see [docs/multi-user.md](multi-user.md).
 3. After setup you're signed in automatically. Later visits redirect to `/login` if the session cookie has expired.
 
 **Default auth mode is `enabled`.** Change it in **Settings → General → Security** if you want:

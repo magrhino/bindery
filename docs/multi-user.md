@@ -21,9 +21,9 @@ For upgrade instructions and migration steps, see [docs/upgrade-v1.md](upgrade-v
 Two roles exist: `admin` and `user`.
 
 - The **first account** created through the `/setup` wizard is always `admin`.
-- Users created by an admin via Settings → Users default to the `user` role.
+- Users created by an admin via the **Users** page (the people icon in the header) default to the `user` role.
 - OIDC auto-provisioned users get the `user` role by default. To make the IdP authoritative for the admin role, set `BINDERY_OIDC_ADMIN_GROUP` so users in that IdP group are promoted automatically; see [OIDC role mapping](auth-oidc.md#oidc-role-mapping) in [docs/auth-oidc.md](auth-oidc.md).
-- An admin can change any user's role at any time: **Settings → Users → Edit**, or `PUT /api/v1/auth/users/{id}/role` with `{"role": "admin"}`.
+- An admin can change any user's role at any time: **Make admin / Make user** on the Users page, or `PUT /api/v1/auth/users/{id}/role` with `{"role": "admin"}`.
 
 ### Capability matrix
 
@@ -48,7 +48,7 @@ Two roles exist: `admin` and `user`.
 
 ### Creating a user
 
-**Settings → Users → Add user** (admin only), or via API:
+**Users → Add User** (admin only, via the people icon in the header), or via API:
 
 ```bash
 curl -X POST http://bindery:8787/api/v1/auth/users \
@@ -87,16 +87,20 @@ curl -X DELETE http://bindery:8787/api/v1/auth/users/2 \
 
 Deleting a user does **not** delete their library data. Authors, books, and downloads owned by that user remain in the database but become inaccessible through the normal UI. Reassign or remove the user's data before deleting:
 
-1. Go to **Settings → Users → [user] → Library** to view their content.
-2. Delete or reassign authors and books as needed.
+1. While signed in as an admin, review the account's content from the regular **Authors** and **Books** pages — admin list views are never ownership-filtered, so every user's rows are visible there.
+2. Delete anything that should not be kept.
 3. Then delete the user.
 
 ## Settings UI layout
 
-Settings is split into two tabs post-v1.0:
+Everyone sees the **General** tab (appearance, downloads, file naming, storage, backup, security — including their own API key and password change) and **About**. The remaining tabs are admin-only, in four groups:
 
-- **My Account** — API key, password change, notification preferences. Visible to all users.
-- **Admin** — Indexers, download clients, quality profiles, metadata profiles, users list, system settings. Visible to `admin` role only. Non-admins who navigate to an admin URL receive a 403.
+- **Sources** — Indexers, Download Clients, Notifications
+- **Library** — Quality Profiles, Metadata Profiles, Root Folders
+- **Integrations** — Calibre, Audiobookshelf, Grimmory, API Keys
+- **System** — Import, Blocklist, Logs
+
+Non-admins who open an admin tab are redirected back to General; admin API routes return 403. Users are managed on the dedicated **Users** page (the people icon in the header), not inside Settings.
 
 ## CSRF tokens
 
