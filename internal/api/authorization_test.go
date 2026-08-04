@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -422,6 +424,95 @@ func TestQualityProfile_Get_GateOffAllowsCrossUser(t *testing.T) {
 	h.Get(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("gate off must preserve cross-user access; got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestMetadataProfile_Create_StampsOwnerClosesIDOR drives the real Create
+// handler (not setOwner) to prove the owner-stamp fix: before it, Create never
+// wrote owner_user_id, so every API-created profile was owner-0 and
+// CheckOwnership let any authenticated user read/modify/delete it. After the
+// fix a second user's Get on the creator's profile is blocked.
+func TestMetadataProfile_Create_StampsOwnerClosesIDOR(t *testing.T) {
+	auth.SetEnforceTenancyForTests(t, true)
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	users := db.NewUserRepo(database)
+	repo := db.NewMetadataProfileRepo(database)
+	ctx := context.Background()
+	alice, _ := users.Create(ctx, "alice", "h1")
+	bob, _ := users.Create(ctx, "bob", "h2")
+
+	h := NewMetadataProfileHandler(repo)
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/metadataprofile",
+		strings.NewReader(`{"name":"Alice Profile","allowedLanguages":"eng"}`)).
+		WithContext(withAuthCtx(context.Background(), alice.ID, "user"))
+	createRec := httptest.NewRecorder()
+	h.Create(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create: got %d body=%s", createRec.Code, createRec.Body.String())
+	}
+	var created models.MetadataProfile
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil || created.ID == 0 {
+		t.Fatalf("decode created: err=%v id=%d", err, created.ID)
+	}
+
+	bobRec := httptest.NewRecorder()
+	h.Get(bobRec, newRequestForID(http.MethodGet, "/x", created.ID, withAuthCtx(context.Background(), bob.ID, "user")))
+	if bobRec.Code != http.StatusNotFound {
+		t.Fatalf("cross-user Get must 404 after owner stamp; got %d", bobRec.Code)
+	}
+
+	aliceRec := httptest.NewRecorder()
+	h.Get(aliceRec, newRequestForID(http.MethodGet, "/x", created.ID, withAuthCtx(context.Background(), alice.ID, "user")))
+	if aliceRec.Code != http.StatusOK {
+		t.Fatalf("owner Get must 200; got %d body=%s", aliceRec.Code, aliceRec.Body.String())
+	}
+}
+
+// TestQualityProfile_Create_StampsOwnerClosesIDOR is the quality-profile
+// counterpart — same owner-stamp gap, same fix.
+func TestQualityProfile_Create_StampsOwnerClosesIDOR(t *testing.T) {
+	auth.SetEnforceTenancyForTests(t, true)
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	users := db.NewUserRepo(database)
+	repo := db.NewQualityProfileRepo(database)
+	ctx := context.Background()
+	alice, _ := users.Create(ctx, "alice", "h1")
+	bob, _ := users.Create(ctx, "bob", "h2")
+
+	h := NewQualityProfileHandler(repo)
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/qualityprofile",
+		strings.NewReader(`{"name":"Alice QP","cutoff":"epub","items":[{"quality":"epub","allowed":true}]}`)).
+		WithContext(withAuthCtx(context.Background(), alice.ID, "user"))
+	createRec := httptest.NewRecorder()
+	h.Create(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create: got %d body=%s", createRec.Code, createRec.Body.String())
+	}
+	var created models.QualityProfile
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil || created.ID == 0 {
+		t.Fatalf("decode created: err=%v id=%d", err, created.ID)
+	}
+
+	bobRec := httptest.NewRecorder()
+	h.Get(bobRec, newRequestForID(http.MethodGet, "/x", created.ID, withAuthCtx(context.Background(), bob.ID, "user")))
+	if bobRec.Code != http.StatusNotFound {
+		t.Fatalf("cross-user Get must 404 after owner stamp; got %d", bobRec.Code)
+	}
+
+	aliceRec := httptest.NewRecorder()
+	h.Get(aliceRec, newRequestForID(http.MethodGet, "/x", created.ID, withAuthCtx(context.Background(), alice.ID, "user")))
+	if aliceRec.Code != http.StatusOK {
+		t.Fatalf("owner Get must 200; got %d body=%s", aliceRec.Code, aliceRec.Body.String())
 	}
 }
 

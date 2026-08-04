@@ -62,18 +62,39 @@ func (r *MetadataProfileRepo) GetByID(ctx context.Context, id int64) (*models.Me
 	return &p, rows.Err()
 }
 
+// Create inserts a system-owned metadata profile (owner_user_id NULL). Use it
+// for non-user-driven writers (seeding, migrations). User-driven creates from
+// the API MUST use CreateForUser so the row is scoped to its creator —
+// otherwise it lands owner-less and CheckOwnership treats it as shared, letting
+// any authenticated user read/modify/delete it.
 func (r *MetadataProfileRepo) Create(ctx context.Context, p *models.MetadataProfile) error {
+	return r.create(ctx, p, 0)
+}
+
+// CreateForUser inserts a metadata profile owned by ownerUserID. A zero id
+// (API-key / local-only / disabled-auth requests that carry no user identity)
+// is written as NULL, matching AuthorRepo.CreateForUser and the "0 ⇒ shared /
+// admin-equivalent" convention CheckOwnership relies on.
+func (r *MetadataProfileRepo) CreateForUser(ctx context.Context, p *models.MetadataProfile, ownerUserID int64) error {
+	return r.create(ctx, p, ownerUserID)
+}
+
+func (r *MetadataProfileRepo) create(ctx context.Context, p *models.MetadataProfile, ownerUserID int64) error {
 	if p.UnknownLanguageBehavior == "" {
 		p.UnknownLanguageBehavior = models.UnknownLanguagePass
+	}
+	var ownerArg any
+	if ownerUserID != 0 {
+		ownerArg = ownerUserID
 	}
 	result, err := r.db.ExecContext(ctx, `
 		INSERT INTO metadata_profiles (name, min_popularity, min_pages, skip_missing_date,
 		                               skip_missing_isbn, skip_part_books, allowed_languages,
-		                               unknown_language_behavior)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		                               unknown_language_behavior, owner_user_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.Name, p.MinPopularity, p.MinPages,
 		p.SkipMissingDate, p.SkipMissingISBN, p.SkipPartBooks, p.AllowedLanguages,
-		p.UnknownLanguageBehavior)
+		p.UnknownLanguageBehavior, ownerArg)
 	if err != nil {
 		return fmt.Errorf("create metadata profile: %w", err)
 	}
@@ -82,6 +103,7 @@ func (r *MetadataProfileRepo) Create(ctx context.Context, p *models.MetadataProf
 		return fmt.Errorf("get metadata profile id: %w", err)
 	}
 	p.ID = id
+	p.OwnerUserID = ownerUserID
 	return nil
 }
 

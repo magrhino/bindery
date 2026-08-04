@@ -79,7 +79,7 @@ func (h *QualityProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "a quality profile with that name already exists"})
 		return
 	}
-	if err := h.profiles.Create(r.Context(), &p); err != nil {
+	if err := h.profiles.CreateForUser(r.Context(), &p, auth.UserIDFromContext(r.Context())); err != nil {
 		writeServerError(w, r, err)
 		return
 	}

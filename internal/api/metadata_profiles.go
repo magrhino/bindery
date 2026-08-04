@@ -71,7 +71,7 @@ func (h *MetadataProfileHandler) Create(w http.ResponseWriter, r *http.Request) 
 	if p.UnknownLanguageBehavior != models.UnknownLanguageFail {
 		p.UnknownLanguageBehavior = models.UnknownLanguagePass
 	}
-	if err := h.repo.Create(r.Context(), &p); err != nil {
+	if err := h.repo.CreateForUser(r.Context(), &p, auth.UserIDFromContext(r.Context())); err != nil {
 		writeServerError(w, r, err)
 		return
 	}

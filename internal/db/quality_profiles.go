@@ -72,7 +72,24 @@ func (r *QualityProfileRepo) GetByID(ctx context.Context, id int64) (*models.Qua
 // Create inserts a new quality profile. The items slice is serialised to JSON
 // in a single column — items are inherently ordered (preference) and small
 // enough that a separate join table buys nothing.
+// Create inserts a system-owned quality profile (owner_user_id NULL). Use it
+// for non-user-driven writers (seeding, migrations). User-driven creates from
+// the API MUST use CreateForUser so the row is scoped to its creator —
+// otherwise it lands owner-less and CheckOwnership treats it as shared, letting
+// any authenticated user read/modify/delete it.
 func (r *QualityProfileRepo) Create(ctx context.Context, p *models.QualityProfile) error {
+	return r.create(ctx, p, 0)
+}
+
+// CreateForUser inserts a quality profile owned by ownerUserID. A zero id
+// (API-key / local-only / disabled-auth requests that carry no user identity)
+// is written as NULL, matching AuthorRepo.CreateForUser and the "0 ⇒ shared /
+// admin-equivalent" convention CheckOwnership relies on.
+func (r *QualityProfileRepo) CreateForUser(ctx context.Context, p *models.QualityProfile, ownerUserID int64) error {
+	return r.create(ctx, p, ownerUserID)
+}
+
+func (r *QualityProfileRepo) create(ctx context.Context, p *models.QualityProfile, ownerUserID int64) error {
 	itemsJSON, err := marshalItems(p.Items)
 	if err != nil {
 		return err
@@ -81,10 +98,14 @@ func (r *QualityProfileRepo) Create(ctx context.Context, p *models.QualityProfil
 	if p.UpgradeAllowed {
 		upgrade = 1
 	}
+	var ownerArg any
+	if ownerUserID != 0 {
+		ownerArg = ownerUserID
+	}
 	result, err := r.db.ExecContext(ctx, `
-		INSERT INTO quality_profiles (name, upgrade_allowed, cutoff, items)
-		VALUES (?, ?, ?, ?)`,
-		p.Name, upgrade, p.Cutoff, itemsJSON)
+		INSERT INTO quality_profiles (name, upgrade_allowed, cutoff, items, owner_user_id)
+		VALUES (?, ?, ?, ?, ?)`,
+		p.Name, upgrade, p.Cutoff, itemsJSON, ownerArg)
 	if err != nil {
 		return fmt.Errorf("create quality profile: %w", err)
 	}
@@ -93,6 +114,7 @@ func (r *QualityProfileRepo) Create(ctx context.Context, p *models.QualityProfil
 		return fmt.Errorf("get quality profile id: %w", err)
 	}
 	p.ID = id
+	p.OwnerUserID = ownerUserID
 	return nil
 }
 
