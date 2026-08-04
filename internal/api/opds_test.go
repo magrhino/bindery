@@ -137,6 +137,10 @@ func (p *testProvider) ProxyAutoProvision() bool                   { return fals
 func (p *testProvider) TrustedProxyCIDRs() []*net.IPNet            { return nil }
 func (p *testProvider) UserRole(_ context.Context, _ int64) string { return "admin" }
 
+// OperatorUserID: these OPDS tests assert unauthenticated/api-key behaviour and
+// have no users table, so there is no admin to resolve (#1725).
+func (p *testProvider) OperatorUserID(context.Context) int64 { return 0 }
+
 // UserSessionEpoch returns 0 here; the OPDS tests in this file mint session
 // cookies via SignSession (legacy v2/v1 wrapper) which decode as epoch=0, so
 // returning 0 keeps every existing cookie test passing. The dedicated

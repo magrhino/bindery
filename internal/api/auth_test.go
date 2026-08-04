@@ -636,6 +636,14 @@ func (p *epochProvider) ProxyAuthHeader() string               { return "" }
 func (p *epochProvider) ProxyAutoProvision() bool              { return false }
 func (p *epochProvider) TrustedProxyCIDRs() []*net.IPNet       { return nil }
 func (p *epochProvider) UserProvisioner() auth.UserProvisioner { return nil }
+
+// operatorUserID lets a test pin the identity install-authenticated
+// requests resolve to; zero means "no admin exists" (#1725).
+func (p *epochProvider) OperatorUserID(ctx context.Context) int64 {
+	id, _ := p.users.FirstAdminID(ctx)
+	return id
+}
+
 func (p *epochProvider) UserRole(ctx context.Context, id int64) string {
 	u, _ := p.users.GetByID(ctx, id)
 	if u == nil {

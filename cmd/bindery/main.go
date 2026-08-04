@@ -721,6 +721,13 @@ func main() {
 		proxyCIDRs:     trustedCIDRs,
 	}
 
+	// Keep the nightly recommendation batch and manual refreshes on one
+	// identity: the auth layer stamps this same operator on trusted-local and
+	// API-key requests, and a mismatch is why dismissals stopped applying
+	// (#1725). Registered here rather than at WithRecommender because the
+	// provider does not exist yet at that point.
+	sched.WithOperatorUserID(authProvider.OperatorUserID)
+
 	r.Route("/api", func(r chi.Router) {
 		r.Use(auth.Middleware(authProvider))
 		r.Use(auth.RequireXRequestedWith)
@@ -1382,6 +1389,20 @@ func (p *dbAuthProvider) SetupRequired() bool {
 func (p *dbAuthProvider) ProxyAuthHeader() string         { return p.proxyHeader }
 func (p *dbAuthProvider) ProxyAutoProvision() bool        { return p.proxyProvision }
 func (p *dbAuthProvider) TrustedProxyCIDRs() []*net.IPNet { return p.proxyCIDRs }
+
+// OperatorUserID resolves the install's operator to the lowest-id admin, the
+// identity trusted-local and API-key requests act as (#1725). Cheap indexed
+// lookup on a tiny table, and it must stay live rather than cached at startup
+// because the first admin is created during first-run setup.
+func (p *dbAuthProvider) OperatorUserID(ctx context.Context) int64 {
+	id, err := p.users.FirstAdminID(ctx)
+	if err != nil {
+		slog.Warn("auth: failed to resolve operator user id", "error", err)
+		return 0
+	}
+	return id
+}
+
 func (p *dbAuthProvider) UserRole(ctx context.Context, userID int64) string {
 	u, err := p.users.GetByID(ctx, userID)
 	if err != nil || u == nil {

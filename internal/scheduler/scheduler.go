@@ -130,26 +130,29 @@ type Scheduler struct {
 	searcher bookSearcher
 	meta     *metadata.Aggregator
 
-	authors              *db.AuthorRepo
-	books                *db.BookRepo
-	indexers             *db.IndexerRepo
-	downloads            *db.DownloadRepo
-	clients              *db.DownloadClientRepo
-	history              *db.HistoryRepo
-	settings             *db.SettingsRepo
-	blocklist            *db.BlocklistRepo
-	delayProfiles        *db.DelayProfileRepo
-	pending              *db.PendingReleaseRepo
-	aliases              *db.AuthorAliasRepo     // optional; used for non-latin author matching
-	profiles             *db.MetadataProfileRepo // optional; applies profile language filters to auto-grab
-	qualityProfiles      *db.QualityProfileRepo  // optional; enforces the profile's allowed formats on auto-grab (#1693)
-	calibreSyncer        CalibreSyncer           // optional; nil if Calibre is not configured
-	recommender          RecommendationEngine    // optional; generates recommendations
-	hcSyncer             HCListSyncer            // optional; syncs Hardcover import lists
-	telemetry            TelemetryPinger         // optional; sends daily anonymous install ping
-	logs                 *db.LogRepo             // optional; enables periodic log retention trim
-	notif                eventNotifier           // optional; fires EventGrabbed on auto-grab success (#849)
-	logRetainDays        int                     // 0 = use default (14)
+	authors         *db.AuthorRepo
+	books           *db.BookRepo
+	indexers        *db.IndexerRepo
+	downloads       *db.DownloadRepo
+	clients         *db.DownloadClientRepo
+	history         *db.HistoryRepo
+	settings        *db.SettingsRepo
+	blocklist       *db.BlocklistRepo
+	delayProfiles   *db.DelayProfileRepo
+	pending         *db.PendingReleaseRepo
+	aliases         *db.AuthorAliasRepo     // optional; used for non-latin author matching
+	profiles        *db.MetadataProfileRepo // optional; applies profile language filters to auto-grab
+	qualityProfiles *db.QualityProfileRepo  // optional; enforces the profile's allowed formats on auto-grab (#1693)
+	calibreSyncer   CalibreSyncer           // optional; nil if Calibre is not configured
+	recommender     RecommendationEngine    // optional; generates recommendations
+	// operatorUserID resolves the user the recommendation job writes under.
+	// Optional; nil falls back to the historical hardcoded admin id (#1725).
+	operatorUserID       func(context.Context) int64
+	hcSyncer             HCListSyncer    // optional; syncs Hardcover import lists
+	telemetry            TelemetryPinger // optional; sends daily anonymous install ping
+	logs                 *db.LogRepo     // optional; enables periodic log retention trim
+	notif                eventNotifier   // optional; fires EventGrabbed on auto-grab success (#849)
+	logRetainDays        int             // 0 = use default (14)
 	downloadDir          string
 	audiobookDownloadDir string
 }
@@ -260,6 +263,14 @@ func (s *Scheduler) WithCalibreSyncer(syncer CalibreSyncer) {
 // Must be called before Start.
 func (s *Scheduler) WithRecommender(engine RecommendationEngine) {
 	s.recommender = engine
+}
+
+// WithOperatorUserID supplies the identity the recommendation job attributes
+// its batch to. It must agree with the id the auth layer stamps on
+// install-authenticated requests, or a manual refresh and the nightly job
+// write to different users and dismissals never suppress anything (#1725).
+func (s *Scheduler) WithOperatorUserID(fn func(context.Context) int64) {
+	s.operatorUserID = fn
 }
 
 // WithHardcoverSyncer registers a Hardcover list syncer that runs every 24
@@ -385,7 +396,18 @@ func (s *Scheduler) Start() {
 					return
 				}
 			}
-			if err := s.recommender.Run(s.ctx(), 1); err != nil {
+			// Attribute the batch to the same operator the auth layer
+			// resolves for install-authenticated requests. Hardcoding 1 here
+			// meant the nightly job and a manual refresh could write under
+			// different users, so dismissals never applied (#1725).
+			ctx := s.ctx()
+			uid := int64(1)
+			if s.operatorUserID != nil {
+				if resolved := s.operatorUserID(ctx); resolved != 0 {
+					uid = resolved
+				}
+			}
+			if err := s.recommender.Run(ctx, uid); err != nil {
 				slog.Error("recommendation engine failed", "error", err)
 			}
 		}))

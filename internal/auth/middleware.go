@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -162,6 +163,34 @@ func WithAPIKeyAuth(ctx context.Context) context.Context {
 	return context.WithValue(ctx, viaAPIKeyCtxKey, true)
 }
 
+// operatorWarnOnce keeps a missing-operator install from logging on every
+// request; the condition is process-lifetime, not per-request.
+var operatorWarnOnce sync.Once
+
+// withOperatorUserID stamps the install's operator identity on a request that
+// authenticated as the install rather than as a person.
+//
+// Without it UserIDFromContext returns 0 for these requests, so every handler
+// that persists per-user rows wrote them under a user that does not exist —
+// invisible to the same operator reading through a session, and never matched
+// by dismissals or scoping queries (#1725). An existing identity is never
+// overwritten: the proxy-auth branch above may already have resolved a real
+// user, and that is the more specific answer.
+func withOperatorUserID(ctx context.Context, p Provider) context.Context {
+	if UserIDFromContext(ctx) != 0 {
+		return ctx
+	}
+	id := p.OperatorUserID(ctx)
+	if id == 0 {
+		operatorWarnOnce.Do(func() {
+			slog.Warn("auth: no admin user to attribute install-authenticated requests to; " +
+				"per-user data from local-only and API-key requests stays unattributed")
+		})
+		return ctx
+	}
+	return context.WithValue(ctx, userIDCtxKey, id)
+}
+
 // UserIDFromContext returns the authenticated user ID (0 if unauthenticated).
 func UserIDFromContext(ctx context.Context) int64 {
 	v, _ := ctx.Value(userIDCtxKey).(int64)
@@ -239,6 +268,14 @@ type Provider interface {
 	// UserRole returns the role string ("admin" or "user") for the given user
 	// id. Returns "" if the user is not found or an error occurs.
 	UserRole(ctx context.Context, userID int64) string
+	// OperatorUserID returns the user id that requests authenticating as the
+	// install itself — trusted local-only requests and API-key requests — act
+	// as. Both are already treated as admin; without an id they were also
+	// anonymous, so anything persisting per-user data wrote it under user 0
+	// while the scheduler wrote under a different id (#1725). Returns 0 when
+	// no admin exists, which callers treat as "unknown" and leave the context
+	// unstamped rather than inventing an identity.
+	OperatorUserID(ctx context.Context) int64
 	// UserSessionEpoch returns the user's current session epoch, the value
 	// the cookie's epoch field must match for the cookie to authenticate.
 	// Bumped on password change so old cookies stop verifying.
@@ -374,6 +411,7 @@ func Middleware(p Provider) func(http.Handler) http.Handler {
 				// even though the whole point of local-only mode is to grant
 				// frictionless access from a trusted private network (#799).
 				ctx := context.WithValue(r.Context(), userRoleCtxKey, "admin")
+				ctx = withOperatorUserID(ctx, p)
 				r = r.WithContext(ctx)
 				next.ServeHTTP(w, r)
 				return
@@ -389,6 +427,7 @@ func Middleware(p Provider) func(http.Handler) http.Handler {
 				// (#708 finding 3). A request reaches this branch only after
 				// subtle.ConstantTimeCompare confirmed the key.
 				ctx = context.WithValue(ctx, viaAPIKeyCtxKey, true)
+				ctx = withOperatorUserID(ctx, p)
 				r = r.WithContext(ctx)
 				next.ServeHTTP(w, r)
 				return

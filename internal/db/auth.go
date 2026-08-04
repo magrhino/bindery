@@ -165,6 +165,22 @@ func (r *UserRepo) GetOrCreateByOIDC(ctx context.Context, issuer, sub, preferred
 	return r.GetByID(ctx, id)
 }
 
+// FirstAdminID returns the lowest-id admin user — "the operator" for requests
+// that authenticate as the install rather than as a person (local-only trust,
+// API key). Returns 0 when no admin exists, which callers must treat as
+// "identity unknown" rather than as a valid user id (#1725).
+func (r *UserRepo) FirstAdminID(ctx context.Context) (int64, error) {
+	var id sql.NullInt64
+	if err := r.db.QueryRowContext(ctx,
+		"SELECT MIN(id) FROM users WHERE role='admin'").Scan(&id); err != nil {
+		return 0, fmt.Errorf("first admin id: %w", err)
+	}
+	if !id.Valid {
+		return 0, nil
+	}
+	return id.Int64, nil
+}
+
 // CountAdmins returns the number of users with role "admin". Used by the OIDC
 // callback to detect the lockout trap (zero admins) at provision time.
 func (r *UserRepo) CountAdmins(ctx context.Context) (int, error) {

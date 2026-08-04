@@ -243,6 +243,9 @@ type fakeProvider struct {
 	proxyProvision bool
 	proxyCIDRs     []*net.IPNet
 	provisioner    UserProvisioner
+	// operatorUserID is what OperatorUserID returns: the identity
+	// install-authenticated requests resolve to (#1725). 0 = no admin exists.
+	operatorUserID int64
 	// wantEpoch is what UserSessionEpoch returns. Defaults to 0, which lets
 	// legacy v1/v2 test cookies (which decode as epoch=0) authenticate
 	// without every test having to mint v3 cookies.
@@ -268,7 +271,11 @@ func (f *fakeProvider) ProxyAuthHeader() string                    { return f.pr
 func (f *fakeProvider) ProxyAutoProvision() bool                   { return f.proxyProvision }
 func (f *fakeProvider) TrustedProxyCIDRs() []*net.IPNet            { return f.proxyCIDRs }
 func (f *fakeProvider) UserRole(_ context.Context, _ int64) string { return "admin" }
-func (f *fakeProvider) UserProvisioner() UserProvisioner           { return f.provisioner }
+
+// OperatorUserID returns the identity install-authenticated requests resolve
+// to; 0 (the zero value) means "no admin exists" (#1725).
+func (f *fakeProvider) OperatorUserID(context.Context) int64 { return f.operatorUserID }
+func (f *fakeProvider) UserProvisioner() UserProvisioner     { return f.provisioner }
 
 // UserSessionEpoch defaults to 0 so legacy v1/v2 test cookies (which decode
 // as epoch=0) continue to authenticate. Tests that exercise the password-
@@ -1584,5 +1591,71 @@ func TestSession_VerifyMultiRejectsWhenNoSecretUsable(t *testing.T) {
 	cookie, _ := SignSession(testSecret32, 1, time.Now().Add(time.Hour))
 	if _, err := VerifySessionMulti([][]byte{[]byte("short"), nil}, cookie); !errors.Is(err, ErrSessionInvalid) {
 		t.Fatal("VerifySessionMulti must fail closed when no secret meets minSecretLen")
+	}
+}
+
+// TestInstallAuthenticatedRequestsCarryOperatorIdentity is the #1725
+// regression. Local-only and API-key requests are already treated as admin;
+// without a user id they were also anonymous, so every handler persisting
+// per-user rows wrote them under a user that does not exist.
+func TestInstallAuthenticatedRequestsCarryOperatorIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		provider *fakeProvider
+		request  func() *http.Request
+		wantID   int64
+	}{
+		{
+			name:     "local-only trusted request",
+			provider: &fakeProvider{mode: ModeLocalOnly, secret: testSecret32, operatorUserID: 7},
+			request: func() *http.Request {
+				req := httptest.NewRequest(http.MethodGet, "/api/v1/recommendations", nil)
+				req.RemoteAddr = "127.0.0.1:5555"
+				return req
+			},
+			wantID: 7,
+		},
+		{
+			name:     "api-key request",
+			provider: &fakeProvider{mode: ModeEnabled, apiKey: "secret-key", secret: testSecret32, operatorUserID: 7},
+			request: func() *http.Request {
+				req := httptest.NewRequest(http.MethodGet, "/api/v1/recommendations", nil)
+				req.Header.Set("X-Api-Key", "secret-key")
+				return req
+			},
+			wantID: 7,
+		},
+		{
+			name:     "no admin exists leaves the request unattributed",
+			provider: &fakeProvider{mode: ModeLocalOnly, secret: testSecret32, operatorUserID: 0},
+			request: func() *http.Request {
+				req := httptest.NewRequest(http.MethodGet, "/api/v1/recommendations", nil)
+				req.RemoteAddr = "127.0.0.1:5555"
+				return req
+			},
+			wantID: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotID int64
+			var gotRole string
+			h := Middleware(tc.provider)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				gotID = UserIDFromContext(r.Context())
+				gotRole = UserRoleFromContext(r.Context())
+			}))
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, tc.request())
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+			if gotID != tc.wantID {
+				t.Errorf("UserIDFromContext = %d, want %d — per-user writes land under this id (#1725)", gotID, tc.wantID)
+			}
+			// The admin role these branches already granted must be untouched.
+			if gotRole != "admin" {
+				t.Errorf("role = %q, want admin", gotRole)
+			}
+		})
 	}
 }

@@ -1,0 +1,2 @@
+### Fixed
+- **Dismissed recommendations no longer come back** (#1725) — requests that authenticate as the install itself, from a trusted local network or with an API key, were treated as an admin but carried no user identity, so a refresh triggered that way saved its recommendations against a user that does not exist while the nightly job saved them against a real one. Dismissals recorded on one batch never applied to the other. Both now resolve to the same operator account, and an upgrade hands any stranded recommendations and dismissals back to it.
