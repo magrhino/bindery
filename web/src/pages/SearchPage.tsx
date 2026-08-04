@@ -57,6 +57,7 @@ export default function SearchPage() {
         title: r.title,
         nzbUrl: r.nzbUrl,
         size: r.size,
+        indexerId: r.indexerId,
         protocol: r.protocol,
       })
       setGrabbed(prev => new Set(prev).add(r.guid))

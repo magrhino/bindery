@@ -457,8 +457,14 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]searchDecision, len(decisions))
 	for i, d := range decisions {
+		res := results[i]
+		// Strip the indexer apikey the search path signs into the download URL
+		// before it reaches the client. Interactive search is available to
+		// non-admin users, so returning the signed URL leaks the shared indexer
+		// credential; the grab handler re-signs from the indexer id server-side.
+		res.NZBURL = newznab.RedactDownloadURL(res.NZBURL)
 		out[i] = searchDecision{
-			SearchResult: results[i],
+			SearchResult: res,
 			Approved:     d.Approved,
 			Rejection:    d.Rejection,
 		}
@@ -530,5 +536,10 @@ func (h *IndexerHandler) SearchQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := h.searcher.SearchQuery(r.Context(), idxs, query)
+	// Strip the indexer apikey from each download URL before returning to the
+	// client; the grab handler re-signs server-side (see SearchBook).
+	for i := range results {
+		results[i].NZBURL = newznab.RedactDownloadURL(results[i].NZBURL)
+	}
 	writeJSON(w, http.StatusOK, results)
 }

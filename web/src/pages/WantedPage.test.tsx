@@ -126,6 +126,7 @@ function makeResult({ guid, title, ...rest }: Partial<SearchResult> & { guid: st
   return {
     guid,
     title,
+    indexerId: 9,
     indexerName: 'Wanted Indexer',
     size: 1572864,
     nzbUrl: 'https://indexer.example.com/release.nzb',
@@ -353,6 +354,7 @@ describe('WantedPage', () => {
       nzbUrl: 'https://indexer.example.com/dune.nzb',
       size: 1572864,
       bookId: 1,
+      indexerId: 9,
       protocol: 'usenet',
       mediaType: 'ebook',
     })

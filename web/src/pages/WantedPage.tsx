@@ -122,6 +122,7 @@ export default function WantedPage() {
         nzbUrl: result.nzbUrl,
         size: result.size,
         bookId: book.id,
+        indexerId: result.indexerId,
         protocol: result.protocol,
         mediaType: book.mediaType,
       })

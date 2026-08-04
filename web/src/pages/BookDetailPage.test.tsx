@@ -66,6 +66,7 @@ vi.mock('../components/MediaBadge', () => ({
 function makeResult({ guid, title, ...rest }: Partial<SearchResult> & { guid: string }): SearchResult {
   return {
     guid,
+    indexerId: 3,
     indexerName: 'TestIndexer',
     title: title ?? guid,
     size: 1048576,
@@ -434,6 +435,7 @@ describe('BookDetailPage — search', () => {
       nzbUrl: 'https://indexer.example.com/grab-guid.nzb',
       size: 2147483648,
       bookId: 42,
+      indexerId: 3,
       protocol: 'torrent',
       mediaType: 'ebook',
     })

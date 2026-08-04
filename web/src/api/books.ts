@@ -43,6 +43,7 @@ export interface Book {
 
 export interface SearchResult {
   guid: string
+  indexerId: number
   indexerName: string
   title: string
   size: number

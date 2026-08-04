@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -328,6 +329,64 @@ func TestSearchBook_DualFormat_MediaTypeTagging(t *testing.T) {
 	}
 	if byGUID["au1"] != "audiobook" {
 		t.Errorf("audiobook result: got mediaType=%q, want %q", byGUID["au1"], "audiobook")
+	}
+}
+
+// SearchBook must not return the indexer apikey the search path signs into the
+// download URL: interactive search is available to non-admin users, so leaking
+// the shared indexer credential in nzbUrl is a cross-user secret disclosure. The
+// grab handler re-signs from the indexer id server-side.
+func TestSearchBook_RedactsIndexerAPIKey(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	ctx := context.Background()
+	authorRepo := db.NewAuthorRepo(database)
+	author := &models.Author{ForeignID: "OL1A", Name: "Jane Doe", SortName: "Doe, Jane", MetadataProvider: "openlibrary", Monitored: true}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	bookRepo := db.NewBookRepo(database)
+	book := &models.Book{Title: "Test Book", ForeignID: "OL1M", AuthorID: author.ID, MediaType: models.MediaTypeEbook, Monitored: true}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &mockIndexerSearcher{
+		ebookResults: []newznab.SearchResult{{
+			GUID:   "eb1",
+			Title:  "Test Book epub",
+			NZBURL: "https://idx.example.com/dl?apikey=SUPERSECRET&id=eb1",
+		}},
+	}
+	h := NewIndexerHandler(
+		db.NewIndexerRepo(database), bookRepo, authorRepo,
+		db.NewMetadataProfileRepo(database), mock,
+		db.NewSettingsRepo(database), db.NewBlocklistRepo(database),
+	)
+
+	rec := httptest.NewRecorder()
+	req := withURLParam(httptest.NewRequest(http.MethodGet, "/indexer/book/1/search", nil), "id", strconv.FormatInt(book.ID, 10))
+	h.SearchBook(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "SUPERSECRET") {
+		t.Fatalf("search response leaked the indexer apikey: %s", rec.Body.String())
+	}
+	var resp struct {
+		Results []struct {
+			NZBURL string `json:"nzbUrl"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Results) != 1 || resp.Results[0].NZBURL != "https://idx.example.com/dl?id=eb1" {
+		t.Fatalf("nzbUrl not redacted as expected: %+v", resp.Results)
 	}
 }
 

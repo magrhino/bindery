@@ -19,6 +19,7 @@ import (
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/downloader"
 	"github.com/vavallee/bindery/internal/indexer"
+	"github.com/vavallee/bindery/internal/indexer/newznab"
 	"github.com/vavallee/bindery/internal/models"
 	"github.com/vavallee/bindery/internal/notifier"
 )
@@ -305,6 +306,11 @@ func (h *QueueHandler) List(w http.ResponseWriter, r *http.Request) {
 	bookIDs := make([]int64, 0, len(enriched))
 	for i, item := range enriched {
 		items[i] = QueueItem{Download: item.Download}
+		// Strip the indexer apikey from the stored download URL before it
+		// reaches the client. The queue is per-user but the apikey is the shared
+		// indexer credential, so exposing it in any user's queue leaks it (same
+		// reason SearchBook redacts). Retries re-sign server-side in grab().
+		items[i].NZBURL = newznab.RedactDownloadURL(items[i].NZBURL)
 		if item.HasLive {
 			items[i].Percentage = item.Live.Percentage
 			items[i].TimeLeft = item.Live.TimeLeft
@@ -789,6 +795,17 @@ func (h *QueueHandler) grab(ctx context.Context, req grabRequest) (*models.Downl
 			grabOwner = b.OwnerUserID
 		}
 	}
+	// Re-attach the indexer apikey the search/queue responses strip out
+	// (SEC: the shared credential must not reach non-admin clients). The client
+	// hands back an apikey-less download URL plus the indexer id; sign it
+	// server-side here. No-op when the URL already carries a key (scheduler /
+	// retry paths) or its host does not match the indexer.
+	nzbURL := req.NZBURL
+	if indexerID != nil && h.indexers != nil {
+		if idx, err := h.indexers.GetByID(ctx, *indexerID); err == nil && idx != nil {
+			nzbURL = newznab.SignDownloadURLFor(req.NZBURL, idx.URL, idx.APIKey)
+		}
+	}
 	dl := &models.Download{
 		GUID:             req.GUID,
 		BookID:           bookID,
@@ -797,7 +814,7 @@ func (h *QueueHandler) grab(ctx context.Context, req grabRequest) (*models.Downl
 		DownloadClientID: &client.ID,
 		OwnerUserID:      grabOwner,
 		Title:            req.Title,
-		NZBURL:           req.NZBURL,
+		NZBURL:           nzbURL,
 		Size:             req.Size,
 		Status:           models.StateGrabbed,
 		Protocol:         protocol,
@@ -817,7 +834,7 @@ func (h *QueueHandler) grab(ctx context.Context, req grabRequest) (*models.Downl
 		return nil, err
 	}
 
-	sendRes, err := downloader.SendDownload(ctx, client, req.NZBURL, req.Title, downloader.SendOptions{
+	sendRes, err := downloader.SendDownload(ctx, client, nzbURL, req.Title, downloader.SendOptions{
 		MediaType:            req.MediaType,
 		DownloadDir:          h.downloadDir,
 		AudiobookDownloadDir: h.audiobookDownloadDir,

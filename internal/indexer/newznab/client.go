@@ -135,21 +135,67 @@ func newHTTPClient() *http.Client {
 // by NZBGet as empty content) without leaking the apikey to third-party
 // direct-from-uploader links an indexer might return.
 func (c *Client) signDownloadURL(raw string) string {
-	if raw == "" || c.apiKey == "" {
+	return signDownloadURL(raw, c.baseHost, c.apiKey)
+}
+
+// signDownloadURL appends apiKey to raw when, and only when, raw targets
+// baseHost and carries no apikey yet. Shared by the search path (via *Client)
+// and the grab re-sign helper (SignDownloadURLFor).
+func signDownloadURL(raw, baseHost, apiKey string) string {
+	apiKey = strings.TrimSpace(apiKey)
+	if raw == "" || apiKey == "" || baseHost == "" {
 		return raw
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return raw
 	}
-	if !strings.EqualFold(u.Host, c.baseHost) {
+	if !strings.EqualFold(u.Host, baseHost) {
 		return raw
 	}
 	q := u.Query()
 	if q.Get("apikey") != "" {
 		return raw
 	}
-	q.Set("apikey", c.apiKey)
+	q.Set("apikey", apiKey)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// SignDownloadURLFor re-appends an indexer's apikey to a download URL
+// server-side, using the same host-match rule as the search path. It exists so
+// search and queue responses can be returned to clients with the apikey
+// stripped (RedactDownloadURL) — keeping the shared indexer credential off
+// multi-user clients — while the grab handler restores it just before dialing
+// the indexer. indexerURL is the configured indexer base URL; its host is
+// derived exactly as New() derives baseHost, so a URL whose host does not match
+// the indexer is returned untouched (never signed with a foreign host). Passing
+// an already-signed URL is a no-op.
+func SignDownloadURLFor(rawURL, indexerURL, apiKey string) string {
+	baseHost := ""
+	if u, err := url.Parse(normalizeEndpointURL(indexerURL)); err == nil {
+		baseHost = strings.ToLower(u.Host)
+	}
+	return signDownloadURL(rawURL, baseHost, apiKey)
+}
+
+// RedactDownloadURL removes the apikey query parameter from a download URL so it
+// can be returned to API clients without leaking the indexer credential. The
+// grab handler restores it server-side via SignDownloadURLFor before dialing the
+// indexer. A URL with no apikey is returned unchanged.
+func RedactDownloadURL(raw string) string {
+	if raw == "" {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	q := u.Query()
+	if q.Get("apikey") == "" {
+		return raw
+	}
+	q.Del("apikey")
 	u.RawQuery = q.Encode()
 	return u.String()
 }

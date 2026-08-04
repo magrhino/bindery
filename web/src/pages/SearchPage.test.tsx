@@ -50,6 +50,7 @@ vi.mock('../api/client', async importOriginal => {
 
 function makeResult(overrides: Partial<SearchResult> & { guid: string; title: string }): SearchResult {
   return {
+    indexerId: 7,
     indexerName: 'Test Indexer',
     size: 1572864,
     nzbUrl: 'https://indexer.example.com/release.nzb',

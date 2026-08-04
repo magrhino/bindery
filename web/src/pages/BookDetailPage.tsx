@@ -278,6 +278,7 @@ export default function BookDetailPage() {
         nzbUrl: r.nzbUrl,
         size: r.size,
         bookId: book.id,
+        indexerId: r.indexerId,
         protocol: r.protocol,
         mediaType: book.mediaType,
       })
