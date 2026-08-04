@@ -1659,6 +1659,16 @@ func (h *AuthorHandler) fetchAuthorBooks(author *models.Author, autoSearch bool,
 				existing.AverageRating = b.AverageRating
 				changed = true
 			}
+			// Backfill a missing cover. Before #1748 this branch updated only
+			// ratings and genres, never image_url, so a row created with a blank
+			// cover stayed blank on every Refresh Metadata even once the cover
+			// became available upstream (or once edition-cover sampling could
+			// find one). Fill-empty, never clobber: a cover the user set or an
+			// earlier fetch already resolved is left untouched.
+			if existing.ImageURL == "" && b.ImageURL != "" {
+				existing.ImageURL = b.ImageURL
+				changed = true
+			}
 			// Backfill Hardcover genres onto rows imported before genre
 			// sourcing existed. Gated to Hardcover provenance (a HardcoverForeignID
 			// means HC matched this work this fetch) so a refresh while HC is

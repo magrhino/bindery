@@ -43,6 +43,15 @@ const (
 // the round-trip cheap (limit=N) rather than paging the full edition list.
 const editionLangSampleCap = 5
 
+// editionCoverSampleCap bounds how many editions we fetch per work when
+// backfilling a missing cover from the edition list. OpenLibrary attaches
+// covers to editions far more consistently than to works (#1748), so a work
+// whose own record has no cover often has editions that do. Bounded like the
+// language sampler above: the first handful of editions is where the
+// most-held printing (and its cover) sits, and the endpoint is throttled
+// per-UA, so we take limit=N rather than paging the whole list.
+const editionCoverSampleCap = 5
+
 // authorWorksPageSize is the per-request limit for the /authors/{id}/works
 // endpoint, and authorWorksMaxFetch bounds total pagination so an author with
 // an enormous (or maliciously inflated) catalogue can't trigger unbounded
@@ -62,13 +71,21 @@ type Client struct {
 	// yielded no language so we don't retry it within the process lifetime.
 	workLangMu    sync.Mutex
 	workLangCache map[string]string
+
+	// workCoverCache memoizes edition-sampled cover URLs keyed on work ID, so a
+	// refresh pass (or a second author sharing the work) doesn't re-hit the
+	// editions endpoint. An entry with value "" records a sample that yielded no
+	// cover so we don't retry it within the process lifetime.
+	workCoverMu    sync.Mutex
+	workCoverCache map[string]string
 }
 
 // New creates a new OpenLibrary client.
 func New() *Client {
 	return &Client{
-		http:          &http.Client{Timeout: 15 * time.Second, Transport: httpsec.DefaultProxyTransport()},
-		workLangCache: map[string]string{},
+		http:           &http.Client{Timeout: 15 * time.Second, Transport: httpsec.DefaultProxyTransport()},
+		workLangCache:  map[string]string{},
+		workCoverCache: map[string]string{},
 	}
 }
 
@@ -703,6 +720,89 @@ func (c *Client) setCachedWorkLang(workID, lang string) {
 	c.workLangMu.Lock()
 	defer c.workLangMu.Unlock()
 	c.workLangCache[workID] = lang
+}
+
+// FillMissingWorkCovers backfills a cover for any book that arrived with an
+// empty ImageURL by sampling its OpenLibrary editions. Work records frequently
+// carry no cover even when their editions do (#1748); the /search.json and
+// /works enrichers only ever read the work-level cover, so those books reach
+// the UI with image_url="". For each such book it fetches
+// /works/{id}/editions.json?limit=N (N capped by editionCoverSampleCap) and
+// takes the first edition that has a cover. Results are memoized per work ID
+// (including misses) so refresh passes don't re-fetch. The mutation is in place.
+//
+// Only OpenLibrary works are sampled: a book merged in from another provider
+// (Hardcover "hc:", DNB "dnb:", Audible "audible:") has no OL editions endpoint
+// and would 404, so it is skipped. It returns the number of books whose cover
+// was populated.
+func (c *Client) FillMissingWorkCovers(ctx context.Context, books []models.Book) int {
+	filled := 0
+	for i := range books {
+		if books[i].ImageURL != "" || books[i].ForeignID == "" {
+			continue
+		}
+		if p := books[i].MetadataProvider; p != "" && p != "openlibrary" {
+			continue
+		}
+		if cover := c.sampleWorkCover(ctx, books[i].ForeignID); cover != "" {
+			books[i].ImageURL = cover
+			filled++
+		}
+	}
+	return filled
+}
+
+// sampleWorkCover returns the first edition cover URL for a work, or "" when
+// the editions can't be sampled or none carry a cover. Results (including the
+// empty result) are cached per work ID.
+func (c *Client) sampleWorkCover(ctx context.Context, workID string) string {
+	if cover, ok := c.cachedWorkCover(workID); ok {
+		return cover
+	}
+
+	u := fmt.Sprintf("%s/works/%s/editions.json?limit=%d", baseURL, workID, editionCoverSampleCap)
+	var resp editionsResponse
+	if err := c.getJSON(ctx, u, &resp); err != nil {
+		slog.Debug("openlibrary: edition cover sampling failed", "work", workID, "error", err)
+		// Cache the miss so we don't retry a flaky/expensive call this run.
+		c.setCachedWorkCover(workID, "")
+		return ""
+	}
+
+	cover := firstEditionCover(resp.Entries)
+	c.setCachedWorkCover(workID, cover)
+	return cover
+}
+
+// firstEditionCover returns the cover URL of the first edition that has one, in
+// the order OpenLibrary returns them (most-held printings first), or "" when no
+// sampled edition carries a cover.
+func firstEditionCover(entries []editionEntry) string {
+	for _, e := range entries {
+		if len(e.Covers) > 0 && e.Covers[0] > 0 {
+			return fmt.Sprintf("%s/b/id/%d-L.jpg", coverURL, e.Covers[0])
+		}
+	}
+	return ""
+}
+
+func (c *Client) cachedWorkCover(workID string) (string, bool) {
+	if c.workCoverCache == nil {
+		return "", false
+	}
+	c.workCoverMu.Lock()
+	defer c.workCoverMu.Unlock()
+	cover, ok := c.workCoverCache[workID]
+	return cover, ok
+}
+
+func (c *Client) setCachedWorkCover(workID, cover string) {
+	if c.workCoverCache == nil {
+		return
+	}
+	c.workCoverMu.Lock()
+	defer c.workCoverMu.Unlock()
+	c.workCoverCache[workID] = cover
 }
 
 // GetSubjectBooks fetches the top books for an OpenLibrary subject.

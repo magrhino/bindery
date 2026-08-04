@@ -528,6 +528,59 @@ func TestAggregator_FillMissingAuthorWorkLanguages_DelegatesToPrimary(t *testing
 	}
 }
 
+// mockCoverFillerProvider is a primary works provider that can backfill a
+// cover-less work from its editions (the OpenLibrary capability behind #1748).
+type mockCoverFillerProvider struct {
+	mockWorksProvider
+	byForeignID map[string]string // foreignID -> edition cover URL
+	fillCalls   int
+}
+
+func (m *mockCoverFillerProvider) FillMissingWorkCovers(_ context.Context, books []models.Book) int {
+	m.fillCalls++
+	filled := 0
+	for i := range books {
+		if books[i].ImageURL != "" {
+			continue
+		}
+		if url, ok := m.byForeignID[books[i].ForeignID]; ok && url != "" {
+			books[i].ImageURL = url
+			filled++
+		}
+	}
+	return filled
+}
+
+// GetAuthorWorks runs cover enrichment, so a cover-less work whose editions
+// carry a cover comes back with its ImageURL backfilled by the primary's
+// edition sampler.
+func TestAggregator_GetAuthorWorks_FillsMissingCoversFromPrimary(t *testing.T) {
+	primary := &mockCoverFillerProvider{
+		mockWorksProvider: mockWorksProvider{
+			mockProvider: mockProvider{name: "ol", authorWorks: []models.Book{
+				{ForeignID: "OLHASCOVERW", Title: "Has Cover", ImageURL: "http://x/y.jpg"},
+				{ForeignID: "OLNOCOVERW", Title: "No Cover"},
+			}},
+		},
+		byForeignID: map[string]string{"OLNOCOVERW": "https://covers.openlibrary.org/b/id/42-L.jpg"},
+	}
+	agg := &Aggregator{primary: primary, cache: newTTLCache(time.Minute)}
+
+	got, err := agg.GetAuthorWorks(context.Background(), "OL123A")
+	if err != nil {
+		t.Fatalf("GetAuthorWorks: %v", err)
+	}
+	if primary.fillCalls != 1 {
+		t.Errorf("expected primary FillMissingWorkCovers to be called once, got %d", primary.fillCalls)
+	}
+	if got[0].ImageURL != "http://x/y.jpg" {
+		t.Errorf("existing cover should be untouched, got %q", got[0].ImageURL)
+	}
+	if want := "https://covers.openlibrary.org/b/id/42-L.jpg"; got[1].ImageURL != want {
+		t.Errorf("cover-less work: want %q, got %q", want, got[1].ImageURL)
+	}
+}
+
 func TestAggregator_FillMissingAuthorWorkLanguages_NoOpWhenUnsupported(t *testing.T) {
 	// A primary that lacks the capability must be a safe no-op.
 	primary := &mockProvider{name: "plain"}

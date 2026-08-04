@@ -505,6 +505,77 @@ func TestFetchAuthorBooks_RefreshesAuthorProfile(t *testing.T) {
 	}
 }
 
+// Refresh Metadata backfills a missing cover on an existing book row and never
+// clobbers a cover that is already present (#1748). Before the fix the
+// existing-row branch updated ratings and genres only, so a row created with a
+// blank image_url stayed blank on every refresh even once the provider carried
+// a cover.
+func TestFetchAuthorBooks_BackfillsMissingBookCover(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+
+	ctx := context.Background()
+	author := &models.Author{
+		ForeignID: "OL6094856A", Name: "Paul Cornell", SortName: "Cornell, Paul",
+		MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+
+	// One row imported with no cover, one row that already has a cover.
+	blank := &models.Book{
+		ForeignID: "OL700W", Title: "London Falling", SortTitle: "london falling",
+		AuthorID: author.ID, Language: "eng", Status: models.BookStatusWanted,
+		MediaType: models.MediaTypeEbook, MetadataProvider: "openlibrary",
+	}
+	kept := &models.Book{
+		ForeignID: "OL701W", Title: "The Severed Streets", SortTitle: "the severed streets",
+		AuthorID: author.ID, Language: "eng", Status: models.BookStatusWanted,
+		MediaType: models.MediaTypeEbook, MetadataProvider: "openlibrary",
+		ImageURL: "https://covers.openlibrary.org/b/id/1111-L.jpg",
+	}
+	if err := bookRepo.Create(ctx, blank); err != nil {
+		t.Fatal(err)
+	}
+	if err := bookRepo.Create(ctx, kept); err != nil {
+		t.Fatal(err)
+	}
+
+	stub := &stubMetaProvider{
+		works: []models.Book{
+			{ForeignID: "OL700W", Title: "London Falling", SortTitle: "london falling", Language: "eng", Status: models.BookStatusWanted, Genres: []string{}, MetadataProvider: "openlibrary", ImageURL: "https://covers.openlibrary.org/b/id/2222-L.jpg"},
+			{ForeignID: "OL701W", Title: "The Severed Streets", SortTitle: "the severed streets", Language: "eng", Status: models.BookStatusWanted, Genres: []string{}, MetadataProvider: "openlibrary", ImageURL: "https://covers.openlibrary.org/b/id/9999-L.jpg"},
+		},
+	}
+	agg := metadata.NewAggregator(stub)
+
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, agg, nil, profileRepo, nil)
+	h.FetchAuthorBooks(author, false, "")
+
+	filled, err := bookRepo.GetByForeignID(ctx, "OL700W")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filled.ImageURL != "https://covers.openlibrary.org/b/id/2222-L.jpg" {
+		t.Errorf("blank cover not backfilled: got %q", filled.ImageURL)
+	}
+	unchanged, err := bookRepo.GetByForeignID(ctx, "OL701W")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.ImageURL != "https://covers.openlibrary.org/b/id/1111-L.jpg" {
+		t.Errorf("existing cover clobbered: got %q, want the original", unchanged.ImageURL)
+	}
+}
+
 func TestFetchAuthorBooks_AutoSearchUsesBoundedConcurrency(t *testing.T) {
 	// This test asserts the concurrency cap; disable search pacing so launches
 	// aren't spaced out (pacing is covered in the concurrency package).

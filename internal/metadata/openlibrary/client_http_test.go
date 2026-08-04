@@ -1206,6 +1206,137 @@ func TestMajorityEditionLanguage_PrefersEngOnTie(t *testing.T) {
 	}
 }
 
+// --- FillMissingWorkCovers (edition sampling, #1748) ---
+
+// coverEntries builds edition entries with the given cover IDs; a 0 means "no
+// cover on this edition" so the first-with-cover selection can be exercised.
+func coverEntries(ids ...int) []editionEntry {
+	entries := make([]editionEntry, 0, len(ids))
+	for _, id := range ids {
+		e := editionEntry{Key: "/books/OLxM"}
+		if id > 0 {
+			e.Covers = []int{id}
+		}
+		entries = append(entries, e)
+	}
+	return entries
+}
+
+// A cover-less work whose editions carry a cover gets that cover backfilled,
+// skipping leading editions that have none and taking the first that does.
+func TestFillMissingWorkCovers_DerivesFromEditions(t *testing.T) {
+	c := newClientWithPaths(t, map[string]interface{}{
+		"/works/OLNOCOVERW/editions.json": jsonStr(editionsResponse{
+			Entries: coverEntries(0, 8675309, 42),
+		}),
+	})
+	c.workCoverCache = map[string]string{}
+
+	books := []models.Book{{ForeignID: "OLNOCOVERW", Title: "Cover-less Work", MetadataProvider: "openlibrary"}}
+	filled := c.FillMissingWorkCovers(context.Background(), books)
+	if filled != 1 {
+		t.Fatalf("expected 1 book filled, got %d", filled)
+	}
+	if want := "https://covers.openlibrary.org/b/id/8675309-L.jpg"; books[0].ImageURL != want {
+		t.Errorf("ImageURL: want %q (first edition with a cover), got %q", want, books[0].ImageURL)
+	}
+}
+
+// A work whose sampled editions all lack a cover stays blank, and the miss is
+// cached so the endpoint isn't re-hit.
+func TestFillMissingWorkCovers_NoCoverStaysBlank(t *testing.T) {
+	var calls int32
+	c := newClientWithPaths(t, map[string]interface{}{
+		"/works/OLNONEW/editions.json": func(r *http.Request) string {
+			atomic.AddInt32(&calls, 1)
+			return jsonStr(editionsResponse{Entries: coverEntries(0, 0)})
+		},
+	})
+	c.workCoverCache = map[string]string{}
+
+	books := []models.Book{{ForeignID: "OLNONEW", Title: "No Cover Anywhere", MetadataProvider: "openlibrary"}}
+	if filled := c.FillMissingWorkCovers(context.Background(), books); filled != 0 {
+		t.Fatalf("expected 0 books filled, got %d", filled)
+	}
+	if books[0].ImageURL != "" {
+		t.Errorf("ImageURL: want '' (no edition cover), got %q", books[0].ImageURL)
+	}
+	c.FillMissingWorkCovers(context.Background(), books)
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("a cover-less sample should be cached, not retried; hit %d times", got)
+	}
+}
+
+// A book merged from another provider (Hardcover) is never sampled — it has no
+// OpenLibrary editions endpoint — and a book that already has a cover is left
+// alone. The endpoint is bounded (limit=5) and cached after the first hit.
+func TestFillMissingWorkCovers_SkipsNonOLAndCovered(t *testing.T) {
+	var calls int32
+	var gotURL string
+	c := newClientWithPaths(t, map[string]interface{}{
+		"/works/OLSAMPLEW/editions.json": func(r *http.Request) string {
+			atomic.AddInt32(&calls, 1)
+			gotURL = r.URL.String()
+			return jsonStr(editionsResponse{Entries: coverEntries(555)})
+		},
+		"/works/hc:99/editions.json": func(r *http.Request) string {
+			t.Error("should not sample a non-OpenLibrary book")
+			return "{}"
+		},
+	})
+	c.workCoverCache = map[string]string{}
+
+	books := []models.Book{
+		{ForeignID: "OLHASCOVERW", Title: "Already Has Cover", ImageURL: "http://x/y.jpg", MetadataProvider: "openlibrary"},
+		{ForeignID: "hc:99", Title: "Hardcover Merge", MetadataProvider: "hardcover"},
+		{ForeignID: "OLSAMPLEW", Title: "Needs Sampling", MetadataProvider: "openlibrary"},
+		{ForeignID: "", Title: "No Foreign ID"},
+	}
+
+	if filled := c.FillMissingWorkCovers(context.Background(), books); filled != 1 {
+		t.Fatalf("first pass: expected 1 filled, got %d", filled)
+	}
+	books[2].ImageURL = "" // reset to force a re-derive attempt
+	c.FillMissingWorkCovers(context.Background(), books)
+
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("editions endpoint should be hit once (cached after), hit %d times", got)
+	}
+	if !strings.Contains(gotURL, "limit=5") {
+		t.Errorf("sampling should bound editions with limit=5, got URL %q", gotURL)
+	}
+	if want := "https://covers.openlibrary.org/b/id/555-L.jpg"; books[2].ImageURL != want {
+		t.Errorf("ImageURL: want %q, got %q", want, books[2].ImageURL)
+	}
+}
+
+// A failure fetching editions leaves the cover blank and caches the miss so a
+// flaky/expensive endpoint isn't retried this run.
+func TestFillMissingWorkCovers_FetchErrorCachesMiss(t *testing.T) {
+	var calls int32
+	c := newClientWithStatus(t,
+		map[string]interface{}{
+			"/works/OLERRW/editions.json": func(r *http.Request) string {
+				atomic.AddInt32(&calls, 1)
+				return "boom"
+			},
+		},
+		map[string]int{"/works/OLERRW/editions.json": http.StatusInternalServerError},
+	)
+	c.workCoverCache = map[string]string{}
+
+	books := []models.Book{{ForeignID: "OLERRW", Title: "Flaky Work", MetadataProvider: "openlibrary"}}
+	c.FillMissingWorkCovers(context.Background(), books)
+	c.FillMissingWorkCovers(context.Background(), books)
+
+	if books[0].ImageURL != "" {
+		t.Errorf("ImageURL should stay empty on fetch error, got %q", books[0].ImageURL)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("a failed sample should be cached, not retried; hit %d times", got)
+	}
+}
+
 // --- GetSubjectBooks ---
 
 func TestGetSubjectBooks_HTTP(t *testing.T) {

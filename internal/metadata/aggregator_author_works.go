@@ -36,6 +36,13 @@ func (a *Aggregator) FillMissingAuthorWorkLanguages(ctx context.Context, books [
 	return 0
 }
 
+// workCoverFiller is the optional capability a provider implements when it can
+// backfill a missing cover for a work by sampling its editions (OpenLibrary,
+// whose work records often lack a cover their editions carry; #1748).
+type workCoverFiller interface {
+	FillMissingWorkCovers(ctx context.Context, books []models.Book) int
+}
+
 type authorWorksByNameProvider interface {
 	Name() string
 	GetAuthorWorksByName(ctx context.Context, authorName string) ([]models.Book, error)
@@ -260,6 +267,16 @@ func (a *Aggregator) enrichMissingAuthorWorkCovers(ctx context.Context, books []
 		if books[i].ImageURL == "" {
 			a.enrichBook(ctx, &books[i])
 		}
+	}
+	// Edition-cover fallback for the still-empty ones. enrichBook only consults
+	// work-level covers (enricher title search, cover-by-ISBN providers); a work
+	// whose cover lives only on an edition stays blank after it. When the primary
+	// provider can sample editions, give those books one more chance from the
+	// edition list (#1748). Bounded and memoized per work inside the provider.
+	// Runs on both add and refresh — both reach here through GetAuthorWorks /
+	// GetAuthorWorksForAuthor.
+	if filler, ok := a.primary.(workCoverFiller); ok {
+		filler.FillMissingWorkCovers(ctx, books)
 	}
 }
 
