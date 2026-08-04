@@ -155,6 +155,9 @@ export default function ApiKeysTab() {
                 testId="save-googlebooks-key"
               />
             </div>
+            <p className="text-xs text-slate-500 dark:text-zinc-600 mt-1">
+              {t('settings.general.restartRequired')}
+            </p>
           </div>
 
           <div className="border-t border-slate-200 dark:border-zinc-800 pt-4 space-y-3">

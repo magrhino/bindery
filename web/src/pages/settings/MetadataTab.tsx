@@ -80,6 +80,9 @@ export default function MetadataTab() {
             <option value="openlibrary">{t('settings.general.metadataProviderOpenlibrary', 'OpenLibrary (default)')}</option>
             <option value="dnb">{t('settings.general.metadataProviderDnb', 'DNB — Deutsche Nationalbibliothek (German/DACH)')}</option>
           </select>
+          <p className="text-xs text-slate-500 dark:text-zinc-600 mt-1">
+            {t('settings.general.restartRequired')}
+          </p>
         </div>
 
         {/* Author defaults */}
