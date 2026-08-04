@@ -1,0 +1,3 @@
+### Fixed
+
+- **Audible catalogue no longer truncates prolific authors.** The Audible author lookup issued a single request capped at 50 products and never paged, so any author with a larger audiobook catalogue silently lost the remainder — no error, no log line, and the sync's skip counters all read zero because the books were never enumerated. The endpoint's `page` parameter is 0-indexed, so an unpaged request and `page=1` return *disjoint* windows rather than the same one; an entire 50-item window was going unrequested. Pages are now walked to completion and deduplicated by ASIN. ([#1751](https://github.com/vavallee/bindery/issues/1751), reported by .v.e.g.a.)

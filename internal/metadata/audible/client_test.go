@@ -3,8 +3,11 @@ package audible
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/vavallee/bindery/internal/models"
@@ -227,5 +230,105 @@ func TestPickLargestCover(t *testing.T) {
 	})
 	if got != "big.jpg" {
 		t.Errorf("pickLargestCover = %q, want big.jpg", got)
+	}
+}
+
+// TestSearchBooksByAuthor_Paginates verifies that an author whose catalogue
+// exceeds the 50-item per-request cap is enumerated in full.
+//
+// The endpoint's page parameter is 0-indexed, so omitting it returns window 0
+// and page=1 returns a DISJOINT second window. The client previously issued
+// one unpaged request, which silently dropped every product past the first 50
+// with no error and no log line (#1751). The fake below reproduces that exact
+// shape: three windows of 50/50/5 over an advertised total_results of 105.
+func TestSearchBooksByAuthor_Paginates(t *testing.T) {
+	const total = 105
+	var pagesSeen []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/1.0/catalog/products", func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		pagesSeen = append(pagesSeen, page)
+		start, err := strconv.Atoi(page)
+		if err != nil {
+			t.Errorf("page parameter missing or non-numeric: %q", page)
+			start = 0
+		}
+		w.Header().Set("Content-Type", "application/json")
+		var products []string
+		for i := start * maxResults; i < (start+1)*maxResults && i < total; i++ {
+			products = append(products, fmt.Sprintf(`{"asin":"B%04d","title":"Title %d"}`, i, i))
+		}
+		fmt.Fprintf(w, `{"total_results":%d,"products":[%s]}`, total, strings.Join(products, ","))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New()
+	c.baseURL = srv.URL
+
+	books, err := c.SearchBooksByAuthor(context.Background(), "Prolific Author")
+	if err != nil {
+		t.Fatalf("SearchBooksByAuthor: %v", err)
+	}
+	if len(books) != total {
+		t.Fatalf("got %d books, want %d (catalogue truncated)", len(books), total)
+	}
+	// Every window must be distinct: a book from the second and third windows
+	// proves the client did not simply repeat window 0.
+	seen := make(map[string]bool, len(books))
+	for _, b := range books {
+		if seen[b.ASIN] {
+			t.Errorf("duplicate ASIN %q in result set", b.ASIN)
+		}
+		seen[b.ASIN] = true
+	}
+	for _, want := range []string{"B0000", "B0050", "B0104"} {
+		if !seen[want] {
+			t.Errorf("ASIN %q missing — window containing it was never requested", want)
+		}
+	}
+	// 105 products over a 50-item page size is exactly three pages; the
+	// total_results short-circuit must stop there rather than probing further.
+	if len(pagesSeen) != 3 {
+		t.Errorf("requested pages %v, want exactly 3", pagesSeen)
+	}
+}
+
+// TestSearchBooksByAuthor_StopsWithoutTotalResults verifies the fallback stop
+// condition: a catalogue response that omits total_results must still
+// terminate, on the first short page.
+func TestSearchBooksByAuthor_StopsWithoutTotalResults(t *testing.T) {
+	var calls int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/1.0/catalog/products", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		w.Header().Set("Content-Type", "application/json")
+		if page > 0 {
+			// Short page: catalogue exhausted.
+			fmt.Fprint(w, `{"products":[{"asin":"BLAST","title":"Last"}]}`)
+			return
+		}
+		var products []string
+		for i := 0; i < maxResults; i++ {
+			products = append(products, fmt.Sprintf(`{"asin":"B%04d","title":"Title %d"}`, i, i))
+		}
+		fmt.Fprintf(w, `{"products":[%s]}`, strings.Join(products, ","))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New()
+	c.baseURL = srv.URL
+
+	books, err := c.SearchBooksByAuthor(context.Background(), "Someone")
+	if err != nil {
+		t.Fatalf("SearchBooksByAuthor: %v", err)
+	}
+	if len(books) != maxResults+1 {
+		t.Fatalf("got %d books, want %d", len(books), maxResults+1)
+	}
+	if calls != 2 {
+		t.Errorf("made %d requests, want 2 (stop on the first short page)", calls)
 	}
 }

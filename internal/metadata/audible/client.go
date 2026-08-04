@@ -38,6 +38,12 @@ const (
 	IDPrefix = "audible:"
 	// maxResults is the per-request page size. Audible caps this at 50.
 	maxResults = 50
+	// maxCataloguePages bounds pagination so an author name that matches an
+	// enormous (or maliciously inflated) result set can't trigger unbounded
+	// requests. 40 pages × 50 = 2000 products, which mirrors the equivalent
+	// OpenLibrary bound (authorWorksMaxFetch) and clears the most prolific
+	// real authors by a wide margin.
+	maxCataloguePages = 40
 )
 
 // Client talks to the Audible catalogue API. Zero value is NOT usable; use
@@ -85,6 +91,11 @@ type contributorName struct {
 
 type catalogueResponse struct {
 	Products []catalogueProduct `json:"products"`
+	// TotalResults is the catalogue's own count of matches for the query,
+	// independent of the page window. Used to stop paging as soon as every
+	// advertised product has been seen, rather than always spending one
+	// extra round-trip to observe an empty page.
+	TotalResults int `json:"total_results"`
 }
 
 // SearchBooksByAuthor queries the catalogue by author name and returns
@@ -96,14 +107,70 @@ type catalogueResponse struct {
 // Empty queries return nil, nil rather than hitting the endpoint — the
 // catalogue API treats a missing author parameter as an unfiltered browse
 // and would return unrelated results.
+//
+// The catalogue endpoint is paginated and num_results is capped at 50, so a
+// single request truncates any author with a larger catalogue. Crucially,
+// OMITTING page is not equivalent to page=1: page is 0-indexed, so an
+// unpaged request returns window 0 and page=1 returns a DISJOINT second
+// window. Requesting only the unpaged response therefore dropped every book
+// past the first 50 with no error and no log line (#1751). Pages are walked
+// from 0 and accumulated, deduplicated by ASIN so an overlap or a shifting
+// sort between requests can't produce duplicate rows.
 func (c *Client) SearchBooksByAuthor(ctx context.Context, author string) ([]models.Book, error) {
 	author = strings.TrimSpace(author)
 	if author == "" {
 		return nil, nil
 	}
+
+	books := make([]models.Book, 0, maxResults)
+	seen := make(map[string]struct{}, maxResults)
+
+	for page := 0; page < maxCataloguePages; page++ {
+		parsed, err := c.fetchCataloguePage(ctx, author, page)
+		if err != nil {
+			// A failure partway through leaves a truncated catalogue, which is
+			// exactly the bug this loop exists to fix — surface it rather than
+			// returning a silently short list. The first page is the only one
+			// with no partial results to lose.
+			return nil, err
+		}
+		if len(parsed.Products) == 0 {
+			break
+		}
+		for _, p := range parsed.Products {
+			b := productToBook(p)
+			if b == nil {
+				continue
+			}
+			if _, dup := seen[b.ASIN]; dup {
+				continue
+			}
+			seen[b.ASIN] = struct{}{}
+			books = append(books, *b)
+		}
+		// Stop as soon as the advertised total has been enumerated. Counting
+		// raw products (not accepted books) keeps the comparison against
+		// total_results honest when productToBook rejects an entry.
+		if parsed.TotalResults > 0 && (page+1)*maxResults >= parsed.TotalResults {
+			break
+		}
+		// A short page means the catalogue is exhausted even if total_results
+		// was absent or wrong.
+		if len(parsed.Products) < maxResults {
+			break
+		}
+	}
+	return books, nil
+}
+
+// fetchCataloguePage requests a single page of the author's catalogue. page is
+// 0-indexed, matching the API: page=0 and an omitted page parameter return the
+// same first window.
+func (c *Client) fetchCataloguePage(ctx context.Context, author string, page int) (catalogueResponse, error) {
 	params := url.Values{
 		"author":           {author},
 		"num_results":      {strconv.Itoa(maxResults)},
+		"page":             {strconv.Itoa(page)},
 		"response_groups":  {"product_desc,product_attrs,media,contributors"},
 		"products_sort_by": {"-ReleaseDate"},
 	}
@@ -111,36 +178,27 @@ func (c *Client) SearchBooksByAuthor(ctx context.Context, author string) ([]mode
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, err
+		return catalogueResponse{}, err
 	}
 	req.Header.Set("User-Agent", useragent.Get())
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("audible search by author %q: %w", author, err)
+		return catalogueResponse{}, fmt.Errorf("audible search by author %q page %d: %w", author, page, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("audible HTTP %d: %s", resp.StatusCode, string(body))
+		return catalogueResponse{}, fmt.Errorf("audible HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	var parsed catalogueResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, fmt.Errorf("decode audible response: %w", err)
+		return catalogueResponse{}, fmt.Errorf("decode audible response: %w", err)
 	}
-
-	books := make([]models.Book, 0, len(parsed.Products))
-	for _, p := range parsed.Products {
-		b := productToBook(p)
-		if b == nil {
-			continue
-		}
-		books = append(books, *b)
-	}
-	return books, nil
+	return parsed, nil
 }
 
 // productToBook converts a catalogue entry to a Book. Returns nil when the
