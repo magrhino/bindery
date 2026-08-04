@@ -107,3 +107,15 @@ If you need these sources, point a [Jackett](https://github.com/Jackett/Jackett)
 - **Maintenance burden** — IRC bots rotate, channel rules change, trigger syntax drifts. Absorbing that churn into the release pipeline isn't in scope for a single-maintainer project.
 
 Run OpenBooks alongside Bindery for one-off lookups — it's a different tool with a different shape, and pretending otherwise degrades both.
+
+### Magazines / periodicals
+
+Bindery manages books. Magazines look adjacent but break the data model at every layer:
+
+- **No metadata source** — every provider Bindery uses (Hardcover, OpenLibrary, Google Books, Audible, Audnexus, DNB) is a *book* identity system, keyed on works, editions, and ISBNs. Periodicals carry ISSNs and issue numbers, and none of these publish issue-level catalogues. There is nothing to monitor an author's catalogue *against*.
+- **Identity mismatch** — Bindery's spine is Author → Book → Edition. A magazine has no author; the unit is a recurring title with dated issues, and the series machinery models reading order within a finite work, not an open-ended publication schedule.
+- **Unbounded monitoring** — an author's catalogue is finite and can be refreshed to completion. A periodical never completes, so "monitor" would need a different scheduler contract, a different wanted-list semantic, and a different definition of "done".
+
+Supporting this properly means a second identity model living alongside the first, not a new format flag. That's a fork's worth of work for a single-maintainer project.
+
+Note that this is about *periodicals*, not *file formats* — `cbr` and `cbz` are already recognised release formats, so a graphic novel released as a normal book is handled like any other book.
