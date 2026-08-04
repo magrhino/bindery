@@ -650,9 +650,41 @@ func (r *AuthorRepo) update(ctx context.Context, exec dbExecutor, a *models.Auth
 	return nil
 }
 
+// Delete removes the author and its author_identifiers rows.
+//
+// The identifier rows are deleted explicitly rather than left to the
+// ON DELETE CASCADE declared in migration 052 (#1728). The cascade only fires
+// while PRAGMA foreign_keys is on, which is connection state — see #1727 — so
+// relying on it made recreating a deleted author fail forever: foreign_id is
+// NOT NULL UNIQUE, and the surviving orphan row collides with the new author's
+// identifier, surfacing as a misleading 409 "author already exists" for an
+// author that no longer exists in `authors`. Deleting both here keeps the
+// invariant true regardless of pragma state; the cascade is now redundancy.
 func (r *AuthorRepo) Delete(ctx context.Context, id int64) error {
-	_, err := r.exec.ExecContext(ctx, "DELETE FROM authors WHERE id=?", id)
+	if _, ok := r.exec.(*sql.Tx); ok {
+		return r.deleteWithIdentifiers(ctx, r.exec, id)
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
+		return fmt.Errorf("begin delete author %d: %w", id, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := r.deleteWithIdentifiers(ctx, tx, id); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete author %d: %w", id, err)
+	}
+	return nil
+}
+
+func (r *AuthorRepo) deleteWithIdentifiers(ctx context.Context, exec dbExecutor, id int64) error {
+	if _, err := exec.ExecContext(ctx, "DELETE FROM author_identifiers WHERE author_id=?", id); err != nil {
+		return fmt.Errorf("delete author %d identifiers: %w", id, err)
+	}
+	if _, err := exec.ExecContext(ctx, "DELETE FROM authors WHERE id=?", id); err != nil {
 		return fmt.Errorf("delete author %d: %w", id, err)
 	}
 	return nil

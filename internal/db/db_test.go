@@ -2244,3 +2244,49 @@ func versionSetForTest(t *testing.T, database *sql.DB) map[int]bool {
 	}
 	return set
 }
+
+// TestConnectionPragmasSurviveConnectionReplacement is the #1727 regression.
+//
+// foreign_keys and busy_timeout are per-connection state. Applying them once
+// through db.Exec only reaches the connection serving that call; database/sql
+// replaces connections freely, and a replacement starts from SQLite's defaults
+// (foreign_keys OFF), silently disabling every ON DELETE CASCADE in the schema
+// for the rest of the process. Carrying them as DSN _pragma parameters is what
+// makes the driver re-apply them on each new connection.
+//
+// SetConnMaxLifetime forces the replacement that would otherwise happen only
+// after a driver-level error.
+func TestConnectionPragmasSurviveConnectionReplacement(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "pragma.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	read := func(pragma string) int {
+		t.Helper()
+		var v int
+		if err := database.QueryRow("PRAGMA " + pragma).Scan(&v); err != nil {
+			t.Fatalf("read %s: %v", pragma, err)
+		}
+		return v
+	}
+
+	if got := read("foreign_keys"); got != 1 {
+		t.Fatalf("foreign_keys on the startup connection = %d, want 1", got)
+	}
+	if got := read("busy_timeout"); got != 5000 {
+		t.Fatalf("busy_timeout on the startup connection = %d, want 5000", got)
+	}
+
+	database.SetConnMaxLifetime(time.Nanosecond)
+	time.Sleep(50 * time.Millisecond)
+
+	if got := read("foreign_keys"); got != 1 {
+		t.Fatalf("foreign_keys after connection replacement = %d, want 1 — "+
+			"every ON DELETE CASCADE in the schema is unenforced in this state (#1727)", got)
+	}
+	if got := read("busy_timeout"); got != 5000 {
+		t.Fatalf("busy_timeout after connection replacement = %d, want 5000", got)
+	}
+}

@@ -621,3 +621,50 @@ func TestAuthorRepo_GetByDNBSyntheticName_NonASCIICase(t *testing.T) {
 		t.Errorf("a shared surname alone should not match, got %+v", got)
 	}
 }
+
+// TestAuthorDeleteCleansIdentifiersWithoutCascade is the #1728 regression: the
+// author's identifier rows must go even when the foreign-key cascade is not
+// enforcing, because foreign_keys is connection state that can be lost (#1727).
+// The pragma is turned OFF deliberately here to simulate a replaced connection.
+func TestAuthorDeleteCleansIdentifiersWithoutCascade(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	ctx := context.Background()
+	if _, err := database.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewAuthorRepo(database)
+
+	a := &models.Author{ForeignID: "OL_DEL_W", Name: "Delete Me", SortName: "Delete Me"}
+	if err := repo.Create(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpsertAuthorIdentifier(ctx, a.ID, "hc:delete-me"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Delete(ctx, a.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	var n int
+	if err := database.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM author_identifiers WHERE author_id=?", a.ID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("author delete left %d orphaned identifier row(s); they block recreating the author", n)
+	}
+
+	// The user-visible symptom of the orphan: recreating the author with the
+	// same identifier hits the NOT NULL UNIQUE foreign_id and 409s forever.
+	b := &models.Author{ForeignID: "OL_DEL_W", Name: "Delete Me", SortName: "Delete Me"}
+	if err := repo.Create(ctx, b); err != nil {
+		t.Fatalf("recreate after delete: %v", err)
+	}
+	if err := repo.UpsertAuthorIdentifier(ctx, b.ID, "hc:delete-me"); err != nil {
+		t.Fatalf("re-attach identifier after delete: %v", err)
+	}
+}

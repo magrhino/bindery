@@ -28,7 +28,7 @@ func Open(dbPath string) (*sql.DB, error) {
 	if err := preflight(dbPath); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", dbPath+connectionPragmaDSN)
 	if err != nil {
 		return nil, fmt.Errorf("open database %q: %w", dbPath, err)
 	}
@@ -58,7 +58,7 @@ func Open(dbPath string) (*sql.DB, error) {
 
 // OpenMemory creates an in-memory database for testing.
 func OpenMemory() (*sql.DB, error) {
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := sql.Open("sqlite", ":memory:"+connectionPragmaDSN)
 	if err != nil {
 		return nil, fmt.Errorf("open memory database: %w", err)
 	}
@@ -146,11 +146,28 @@ func annotateCantOpen(dbPath string, err error) error {
 	return fmt.Errorf("open database %q: %w — %s", abs, err, hint)
 }
 
+// connectionPragmaDSN carries the per-connection pragmas as DSN parameters so
+// the driver re-applies them to EVERY connection it opens, not just the first
+// one (#1727).
+//
+// `foreign_keys` and `busy_timeout` are per-connection state in SQLite. Setting
+// them once through db.Exec only reaches whichever pooled connection served
+// that call; database/sql discards and replaces a connection whenever the
+// driver reports it as bad, and the replacement starts from SQLite's defaults —
+// foreign_keys OFF, busy_timeout 0. From that point on every declared
+// ON DELETE CASCADE in the schema is silently unenforced for the life of the
+// process. SetMaxOpenConns(1) does not prevent this: it bounds how many
+// connections exist at once, not whether the one connection is ever replaced.
+//
+// modernc.org/sqlite runs each `_pragma` value as a PRAGMA on connection open
+// (see the driver's package docs), which is the only placement that survives
+// replacement. journal_mode stays in setPragmas below because WAL is persisted
+// in the database file itself, so it does not need re-applying per connection.
+const connectionPragmaDSN = "?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
+
 func setPragmas(db *sql.DB) error {
 	pragmas := []string{
 		"PRAGMA journal_mode=WAL",
-		"PRAGMA foreign_keys=ON",
-		"PRAGMA busy_timeout=5000",
 	}
 	for _, p := range pragmas {
 		if _, err := db.Exec(p); err != nil {
