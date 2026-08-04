@@ -256,7 +256,10 @@ func (s *ListSyncer) syncList(ctx context.Context, il models.ImportList) error {
 			slog.Warn("failed to create book", "title", book.Title, "error", err)
 			continue
 		}
-		s.hydrateHardcoverEditions(ctx, &book, client)
+		// Tell hydration whether the media type was pinned by the list above:
+		// a pinned ebook must not be widened to "both" just because the work
+		// has an audio edition on Hardcover (#1732).
+		s.hydrateHardcoverEditions(ctx, &book, client, il.MediaType != "")
 		slog.Info("imported book from hardcover list", "title", book.Title, "author_id", authorID)
 
 		s.linkSeriesRefs(ctx, &book)
@@ -294,17 +297,18 @@ func (s *ListSyncer) tokenForList(ctx context.Context, il models.ImportList) str
 	return hardcover.NormalizeAPIToken(s.tokenSource(ctx))
 }
 
-func (s *ListSyncer) hydrateHardcoverEditions(ctx context.Context, book *models.Book, client hardcoverClient) {
+func (s *ListSyncer) hydrateHardcoverEditions(ctx context.Context, book *models.Book, client hardcoverClient, mediaTypePinned bool) {
 	if book == nil || client == nil || s.editions == nil {
 		return
 	}
 	bookhydrate.HydrateHardcoverEditions(ctx, bookhydrate.Options{
-		Book:          book,
-		Provider:      "hardcover",
-		Editions:      s.editions,
-		Books:         s.books,
-		FetchEditions: client.GetEditions,
-		Enricher:      s.enricher,
+		Book:            book,
+		Provider:        "hardcover",
+		Editions:        s.editions,
+		Books:           s.books,
+		FetchEditions:   client.GetEditions,
+		Enricher:        s.enricher,
+		MediaTypePinned: mediaTypePinned,
 	})
 }
 

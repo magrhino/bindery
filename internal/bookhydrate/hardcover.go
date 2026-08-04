@@ -38,6 +38,11 @@ type Options struct {
 	Books             BookUpdater
 	FetchEditions     EditionFetcher
 	Enricher          AudiobookEnricher
+	// MediaTypePinned marks the book's MediaType as a deliberate caller
+	// choice (e.g. an import list's per-list format override) rather than a
+	// provider-derived guess. Hydration must not widen a pinned single-format
+	// book to "both" just because an audio-shaped edition exists (#1732).
+	MediaTypePinned bool
 }
 
 // Result summarizes a best-effort hydration attempt.
@@ -125,7 +130,7 @@ func HydrateHardcoverEditions(ctx context.Context, opts Options) Result {
 	// maybePromoteASIN promotes the ASIN from, keeping the two derivations
 	// consistent.
 	if edition, ok := preferredAudioEdition(acceptedAudioEditions); ok {
-		if deriveAudiobookMetadataFromEdition(book, edition) {
+		if deriveAudiobookMetadataFromEdition(book, edition, opts.MediaTypePinned) {
 			result.MetadataDerived = true
 		}
 	}
@@ -189,13 +194,20 @@ func preferredAudioEdition(editions []models.Edition) (models.Edition, bool) {
 // never overwritten ("unknown ⇒ don't clobber known"). It also makes sure an
 // audio-bearing book carries an audiobook MediaType so the Audnex path is
 // eligible. Returns whether it changed anything.
-func deriveAudiobookMetadataFromEdition(book *models.Book, edition models.Edition) bool {
+//
+// mediaTypePinned means the caller set MediaType deliberately (a list's
+// per-list format override): the promotion below must not run, or an
+// ebook-pinned book would be widened to "both" whenever the work has any
+// audio edition on Hardcover — true for most popular titles (#1732). The
+// "" → audiobook arm is unaffected because a pinned MediaType is by
+// definition non-empty.
+func deriveAudiobookMetadataFromEdition(book *models.Book, edition models.Edition, mediaTypePinned bool) bool {
 	if book == nil {
 		return false
 	}
 	changed := false
 
-	if !bookAcceptsAudiobookASIN(book) {
+	if !bookAcceptsAudiobookASIN(book) && !mediaTypePinned {
 		// The chosen edition is audio-looking but the book wasn't flagged as
 		// audio yet; promote it so downstream audio enrichment is eligible.
 		switch book.MediaType {

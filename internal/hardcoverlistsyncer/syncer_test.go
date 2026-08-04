@@ -889,3 +889,121 @@ func TestSync_HydratesHardcoverEditions(t *testing.T) {
 		t.Fatalf("expected hydrated edition, got %+v", got)
 	}
 }
+
+// newHydrationSyncer wires a syncer with edition hydration against a real
+// in-memory DB and a stub client whose list serves one book (with the given
+// Hardcover-derived media type) plus one audio-shaped edition for it — the
+// shape that used to trigger the ebook → both promotion (#1732).
+func newHydrationSyncer(t *testing.T, listMediaType, derivedMediaType string) (*ListSyncer, *db.BookRepo, context.Context) {
+	t.Helper()
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	ctx := context.Background()
+	importLists := db.NewImportListRepo(database)
+	authors := db.NewAuthorRepo(database)
+	books := db.NewBookRepo(database)
+	editions := db.NewEditionRepo(database)
+
+	audioASIN := "B123PINNED"
+	client := &fakeHardcoverClient{
+		lists: []hardcover.HCList{{ID: 42, Slug: "pinned-list", Name: "Pinned"}},
+		books: []models.Book{{
+			ForeignID:        "hc:pinned-book",
+			Title:            "Pinned Book",
+			SortTitle:        "Pinned Book",
+			MetadataProvider: "hardcover",
+			MediaType:        derivedMediaType,
+			Genres:           []string{},
+			Author: &models.Author{
+				ForeignID:        "hc:pinned-author",
+				Name:             "Pinned Author",
+				SortName:         "Author, Pinned",
+				MetadataProvider: "hardcover",
+			},
+		}},
+		editions: []models.Edition{{
+			ForeignID: "hc:pinned-book-audio",
+			Title:     "Pinned Book",
+			ASIN:      &audioASIN,
+			Format:    "Audiobook",
+			Monitored: true,
+		}},
+	}
+	syncer := New(importLists, authors, books).
+		WithEditionHydration(editions, nil).
+		WithClientFactory(func(string) hardcoverClient { return client })
+	il := testImportList("Pinned", "hardcover", true)
+	il.URL = "pinned-list"
+	il.MediaType = listMediaType
+	if err := importLists.Create(ctx, &il); err != nil {
+		t.Fatal(err)
+	}
+	return syncer, books, ctx
+}
+
+// TestSync_EbookPinnedListSurvivesAudioEditionHydration is the #1732
+// regression: a list pinned to ebook creates the book as ebook, and the
+// edition hydration that runs immediately after must not widen it to "both"
+// just because the work has an audio edition on Hardcover (true for most
+// popular titles).
+func TestSync_EbookPinnedListSurvivesAudioEditionHydration(t *testing.T) {
+	syncer, books, ctx := newHydrationSyncer(t, models.MediaTypeEbook, models.MediaTypeBoth)
+	if err := syncer.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	book, err := books.GetByForeignID(ctx, "hc:pinned-book")
+	if err != nil || book == nil {
+		t.Fatalf("created book not found: %v", err)
+	}
+	if book.MediaType != models.MediaTypeEbook {
+		t.Fatalf("media type = %q, want ebook (list pin must survive edition hydration)", book.MediaType)
+	}
+	// An ebook must not carry the audio edition's ASIN either.
+	if book.ASIN != "" {
+		t.Fatalf("ASIN = %q, want empty on an ebook-pinned book", book.ASIN)
+	}
+}
+
+// TestSync_AudiobookPinnedListUnchangedByHydration confirms the working half
+// of the #1732 asymmetry stays working: an audiobook-pinned list stays
+// audiobook and still picks up the audio edition's ASIN.
+func TestSync_AudiobookPinnedListUnchangedByHydration(t *testing.T) {
+	syncer, books, ctx := newHydrationSyncer(t, models.MediaTypeAudiobook, models.MediaTypeBoth)
+	if err := syncer.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	book, err := books.GetByForeignID(ctx, "hc:pinned-book")
+	if err != nil || book == nil {
+		t.Fatalf("created book not found: %v", err)
+	}
+	if book.MediaType != models.MediaTypeAudiobook {
+		t.Fatalf("media type = %q, want audiobook", book.MediaType)
+	}
+	if book.ASIN != "B123PINNED" {
+		t.Fatalf("ASIN = %q, want the audio edition's ASIN promoted", book.ASIN)
+	}
+}
+
+// TestSync_UnpinnedEmptyMediaTypeStillPromotesToAudiobook confirms the fix
+// only suppresses the promotion for pinned lists: with no list pin and no
+// Hardcover-derived media type, an audio edition still promotes "" to
+// audiobook so downstream audio enrichment stays eligible.
+func TestSync_UnpinnedEmptyMediaTypeStillPromotesToAudiobook(t *testing.T) {
+	syncer, books, ctx := newHydrationSyncer(t, "", "")
+	if err := syncer.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	book, err := books.GetByForeignID(ctx, "hc:pinned-book")
+	if err != nil || book == nil {
+		t.Fatalf("created book not found: %v", err)
+	}
+	if book.MediaType != models.MediaTypeAudiobook {
+		t.Fatalf("media type = %q, want audiobook (unpinned \"\" still promotes)", book.MediaType)
+	}
+	if book.ASIN != "B123PINNED" {
+		t.Fatalf("ASIN = %q, want the audio edition's ASIN promoted", book.ASIN)
+	}
+}

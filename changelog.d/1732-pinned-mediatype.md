@@ -1,0 +1,2 @@
+### Fixed
+- **Ebook-pinned Hardcover lists no longer create books as "both"** (#1732) — edition hydration ran right after a list-synced book was created and widened a pinned `ebook` media type to `both` whenever the work had any audio-shaped edition on Hardcover (true for most popular titles). Hydration now knows when the media type was deliberately pinned by the list and leaves it alone; books with no media type at all still promote to `audiobook` when an audio edition exists.
