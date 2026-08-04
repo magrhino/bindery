@@ -4,6 +4,29 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
+## [v1.29.1] — 2026-08-04
+
+A patch release out of a codebase audit. Two of these are credential leaks that
+only mattered once Bindery went multi-user: an indexer API key riding along in
+every search and queue response, and profiles you could read or delete across
+users because their owner was never stamped. The rest are the same shape as
+v1.29.0 — settings that saved and then did nothing: a Calibre "Library import"
+toggle no code read, naming templates that only applied after a restart, and
+two clients quietly ignoring the outbound proxy. Plus one dead endpoint removed.
+
+### Security
+- **Metadata and quality profiles created via the API are now scoped to their creator** — `Create` never wrote `owner_user_id`, so with `BINDERY_ENFORCE_TENANCY` on, every API-created profile was owner-less and the per-user access check (`CheckOwnership`) treated it as shared, letting any authenticated user read, edit, or delete another user's profile. Both profile Create paths now stamp the caller's user id (`CreateForUser`), matching authors/books. Existing owner-less rows stay shared, as before.
+- **Indexer API keys no longer leak to non-admin users in search and queue responses** — interactive indexer search signs the instance's indexer/Prowlarr apikey into each result's `nzbUrl`, and that download URL was returned verbatim to any authenticated user (search results and the queue list). The apikey is now stripped from every client-facing response and re-attached server-side at grab time from the release's indexer id, so grabbing still works while the shared credential stays off the wire.
+
+### Fixed
+- **Book covers now backfill on Refresh Metadata, and edition covers are consulted** (#1748) — a book row that imported without a cover used to stay blank forever: the author refresh path updated only ratings and genres on existing rows, never `image_url`, so clicking Refresh Metadata could not fill a missing cover even once one was available upstream. The refresh now fills an empty cover (never overwriting one you already have). Separately, OpenLibrary attaches covers to editions far more consistently than to works, and Bindery previously read only the work-level cover; cover-less works are now sampled against their editions (bounded and memoized, same as language sampling) so a work whose cover lives only on an edition still gets one on add and on refresh.
+- **The Calibre "Library import" toggle now actually gates library imports** (opt-in) — the setting was UI-only: no backend code read it, so startup imports, the 24h scheduled sync, and the manual import ran off `calibre.library_path` regardless of the toggle. A user who saw the switch "off" was still being imported on every boot. All three import paths now honor `calibre.library_import_enabled`. Existing installs that already have a library path configured are backfilled to enabled by a migration, so no working import is disabled; a newly-configured library imports only after you turn the toggle on.
+- **Hardcover list sync and Prowlarr sync now honor `BINDERY_OUTBOUND_PROXY`** — `hardcover.NewAuthenticated` (used by the import-list syncer and import-list browse) and the Prowlarr client were built without the proxy transport, so they dialed `hardcover.app` / the Prowlarr host directly while every sibling code path was proxied. On a locked-down egress they failed outright; on a VPN-only setup they leaked traffic outside the configured proxy. Both now use the shared proxy transport like the other clients.
+- **Ebook/audiobook naming templates now take effect without a restart** — the destination templates (`naming.bookTemplate`, `naming_template_audiobook`) were read once at boot and baked into the renamer, so saving a new template in Settings did nothing until Bindery restarted — and Reorganize actively applied the stale boot-time template. Both templates are now re-read from settings per import and per reorganize, matching how the per-track audiobook template already worked.
+
+### Removed
+- **Dead `POST /book/{id}/map` endpoint** — an undocumented metadata-map handler with no caller (the Fix Match UI uses `rebind`, and ABS review uses its own resolve endpoint). Removing it drops maintained authenticated surface that duplicated rebind's logic; the shared helpers it used remain in place for the audiobook ASIN-map path.
+
 ## [v1.29.0] — 2026-08-04
 
 A release about failures that never said anything. Almost every fix here was a

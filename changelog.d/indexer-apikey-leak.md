@@ -1,2 +1,0 @@
-### Security
-- **Indexer API keys no longer leak to non-admin users in search and queue responses** — interactive indexer search signs the instance's indexer/Prowlarr apikey into each result's `nzbUrl`, and that download URL was returned verbatim to any authenticated user (search results and the queue list). The apikey is now stripped from every client-facing response and re-attached server-side at grab time from the release's indexer id, so grabbing still works while the shared credential stays off the wire.

@@ -1,2 +1,0 @@
-### Security
-- **Metadata and quality profiles created via the API are now scoped to their creator** — `Create` never wrote `owner_user_id`, so with `BINDERY_ENFORCE_TENANCY` on, every API-created profile was owner-less and the per-user access check (`CheckOwnership`) treated it as shared, letting any authenticated user read, edit, or delete another user's profile. Both profile Create paths now stamp the caller's user id (`CreateForUser`), matching authors/books. Existing owner-less rows stay shared, as before.
