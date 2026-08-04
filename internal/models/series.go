@@ -3,13 +3,18 @@ package models
 import "time"
 
 type Series struct {
-	ID               int64     `json:"id"`
-	ForeignID        string    `json:"foreignSeriesId"`
-	Title            string    `json:"title"`
-	Description      string    `json:"description"`
-	Monitored        bool      `json:"monitored"`
-	GenreOverride    []string  `json:"-"`
-	GenreOverrideSet bool      `json:"-"`
+	ID          int64  `json:"id"`
+	ForeignID   string `json:"foreignSeriesId"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Monitored   bool   `json:"monitored"`
+	// GenreOverride is the genre list applied and locked on every book created
+	// in this series (#1709). GenreOverrideSet distinguishes "no override" from
+	// "override deliberately set to no genres" — the column is nullable and the
+	// two states behave differently on book creation, so the client needs both
+	// to render the current state and to offer clearing it (#1711 follow-up).
+	GenreOverride    []string  `json:"genreOverride,omitempty"`
+	GenreOverrideSet bool      `json:"genreOverrideSet"`
 	CreatedAt        time.Time `json:"createdAt"`
 
 	// Joined data

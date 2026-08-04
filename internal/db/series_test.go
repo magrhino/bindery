@@ -651,3 +651,61 @@ func TestSeriesGenreOverridePersistence(t *testing.T) {
 		t.Fatalf("expected update error, got %v", err)
 	}
 }
+
+func TestSeriesGenreOverrideClearAndListVisibility(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	ctx := context.Background()
+	repo := NewSeriesRepo(database)
+	series, err := repo.CreateManual(ctx, "Demo Series")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetGenreOverride(ctx, series.ID, []string{"Fantasy"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The override has to survive the list queries, not just GetByID — those
+	// are what the series page reads, so an override invisible there cannot be
+	// shown or cleared by the user (#1709 follow-up).
+	listed, err := repo.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || !listed[0].GenreOverrideSet || len(listed[0].GenreOverride) != 1 || listed[0].GenreOverride[0] != "Fantasy" {
+		t.Fatalf("List dropped the override: %+v", listed)
+	}
+	withBooks, err := repo.ListWithBooksForUser(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withBooks) != 1 || !withBooks[0].GenreOverrideSet || len(withBooks[0].GenreOverride) != 1 {
+		t.Fatalf("ListWithBooksForUser dropped the override: %+v", withBooks)
+	}
+
+	// Clearing must reach "no override", which is distinct from an override of
+	// no genres: the latter locks every future book to an empty genre list.
+	if err := repo.SetGenreOverride(ctx, series.ID, []string{}); err != nil {
+		t.Fatal(err)
+	}
+	empty, err := repo.GetByID(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !empty.GenreOverrideSet || len(empty.GenreOverride) != 0 {
+		t.Fatalf("empty override should stay set: %+v", empty)
+	}
+	if err := repo.ClearGenreOverride(ctx, series.ID); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := repo.GetByID(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.GenreOverrideSet || cleared.GenreOverride != nil {
+		t.Fatalf("expected no override after clear, got set=%v value=%#v", cleared.GenreOverrideSet, cleared.GenreOverride)
+	}
+}

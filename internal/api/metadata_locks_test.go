@@ -241,3 +241,60 @@ func TestSeriesApplyGenresPersistenceFailure(t *testing.T) {
 		t.Fatalf("expected 500, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+// The override has to reach the client to be editable or clearable, and
+// clearing must land on "no override" rather than "override of no genres"
+// (#1709 follow-up to #1711).
+func TestSeriesGenreOverrideIsVisibleAndClearable(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	ctx := context.Background()
+	seriesRepo := db.NewSeriesRepo(database)
+	series, err := seriesRepo.CreateManual(ctx, "Demo Series")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := NewSeriesHandler(seriesRepo, db.NewBookRepo(database), db.NewAuthorRepo(database), nil, nil)
+	idStr := strconv.FormatInt(series.ID, 10)
+
+	raw, _ := json.Marshal(map[string]any{"genres": []string{"Fantasy"}})
+	rec := httptest.NewRecorder()
+	h.ApplyGenres(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/api/v1/series/"+idStr+"/genres", bytes.NewReader(raw)), "id", idStr))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply: %d %s", rec.Code, rec.Body.String())
+	}
+
+	listRec := httptest.NewRecorder()
+	h.List(listRec, httptest.NewRequest(http.MethodGet, "/api/v1/series", nil))
+	var listed []models.Series
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || !listed[0].GenreOverrideSet || len(listed[0].GenreOverride) != 1 || listed[0].GenreOverride[0] != "Fantasy" {
+		t.Fatalf("series list must expose the override, got %s", listRec.Body.String())
+	}
+
+	clearRec := httptest.NewRecorder()
+	h.ClearGenres(clearRec, withURLParam(httptest.NewRequest(http.MethodDelete, "/api/v1/series/"+idStr+"/genres", nil), "id", idStr))
+	if clearRec.Code != http.StatusOK {
+		t.Fatalf("clear: %d %s", clearRec.Code, clearRec.Body.String())
+	}
+	stored, err := seriesRepo.GetByID(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.GenreOverrideSet {
+		t.Fatalf("override still set after clear: %+v", stored)
+	}
+
+	// Clearing drops the policy for future books; genres already written onto
+	// existing books are an explicit edit and must stay locked.
+	missingRec := httptest.NewRecorder()
+	h.ClearGenres(missingRec, withURLParam(httptest.NewRequest(http.MethodDelete, "/api/v1/series/999/genres", nil), "id", "999"))
+	if missingRec.Code != http.StatusNotFound {
+		t.Fatalf("clear on a missing series = %d, want 404", missingRec.Code)
+	}
+}

@@ -22,7 +22,7 @@ func NewSeriesRepo(db *sql.DB) *SeriesRepo {
 
 func (r *SeriesRepo) List(ctx context.Context) ([]models.Series, error) {
 	rows, err := r.db.QueryContext(ctx,
-		"SELECT id, foreign_id, title, description, monitored, created_at FROM series ORDER BY title")
+		"SELECT id, foreign_id, title, description, monitored, genre_override, created_at FROM series ORDER BY title")
 	if err != nil {
 		return nil, fmt.Errorf("list series: %w", err)
 	}
@@ -32,10 +32,14 @@ func (r *SeriesRepo) List(ctx context.Context) ([]models.Series, error) {
 	for rows.Next() {
 		var s models.Series
 		var monitored int
-		if err := rows.Scan(&s.ID, &s.ForeignID, &s.Title, &s.Description, &monitored, &s.CreatedAt); err != nil {
+		var genreOverride sql.NullString
+		if err := rows.Scan(&s.ID, &s.ForeignID, &s.Title, &s.Description, &monitored, &genreOverride, &s.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan series: %w", err)
 		}
 		s.Monitored = monitored == 1
+		if err := applyGenreOverride(&s, genreOverride); err != nil {
+			return nil, err
+		}
 		series = append(series, s)
 	}
 	if err := rows.Err(); err != nil {
@@ -67,7 +71,7 @@ func (r *SeriesRepo) ListWithBooksForUser(ctx context.Context, userID int64) ([]
 		args = append(args, userID)
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT s.id, s.foreign_id, s.title, s.description, s.monitored, s.created_at,
+		SELECT s.id, s.foreign_id, s.title, s.description, s.monitored, s.genre_override, s.created_at,
 		       sb.series_id, sb.book_id, sb.position_in_series, sb.primary_series,
 		       b.id, b.foreign_id, b.author_id, b.title, b.sort_title, b.status,
 		       b.monitored, b.image_url, b.release_date, b.created_at, b.updated_at
@@ -85,13 +89,14 @@ func (r *SeriesRepo) ListWithBooksForUser(ctx context.Context, userID int64) ([]
 	for rows.Next() {
 		var s models.Series
 		var monitored int
+		var genreOverride sql.NullString
 		var sbSeriesID, sbBookID, bookID, authorID sql.NullInt64
 		var position sql.NullString
 		var primarySeries, bookMonitored sql.NullInt64
 		var foreignID, title, sortTitle, status, imageURL sql.NullString
 		var releaseDate, bookCreatedAt, bookUpdatedAt sql.NullTime
 		if err := rows.Scan(
-			&s.ID, &s.ForeignID, &s.Title, &s.Description, &monitored, &s.CreatedAt,
+			&s.ID, &s.ForeignID, &s.Title, &s.Description, &monitored, &genreOverride, &s.CreatedAt,
 			&sbSeriesID, &sbBookID, &position, &primarySeries,
 			&bookID, &foreignID, &authorID, &title, &sortTitle, &status,
 			&bookMonitored, &imageURL, &releaseDate, &bookCreatedAt, &bookUpdatedAt,
@@ -99,6 +104,9 @@ func (r *SeriesRepo) ListWithBooksForUser(ctx context.Context, userID int64) ([]
 			return nil, fmt.Errorf("scan series with books: %w", err)
 		}
 		s.Monitored = monitored == 1
+		if err := applyGenreOverride(&s, genreOverride); err != nil {
+			return nil, err
+		}
 
 		idx, ok := byID[s.ID]
 		if !ok {
@@ -197,9 +205,38 @@ func (r *SeriesRepo) SetMonitored(ctx context.Context, id int64, monitored bool)
 	return err
 }
 
+// applyGenreOverride decodes the nullable genre_override column onto s. A NULL
+// column means no override; a non-NULL empty array deliberately means "keep
+// genres empty and locked", which is why GenreOverrideSet is tracked
+// separately from the slice being empty.
+func applyGenreOverride(s *models.Series, raw sql.NullString) error {
+	if !raw.Valid {
+		return nil
+	}
+	s.GenreOverrideSet = true
+	if err := json.Unmarshal([]byte(raw.String), &s.GenreOverride); err != nil {
+		return fmt.Errorf("decode series %d genre override: %w", s.ID, err)
+	}
+	if s.GenreOverride == nil {
+		s.GenreOverride = []string{}
+	}
+	return nil
+}
+
+// ClearGenreOverride removes the override entirely, so future books in the
+// series take their genres from metadata again. This is distinct from setting
+// an empty override, which locks future books to no genres (#1709).
+func (r *SeriesRepo) ClearGenreOverride(ctx context.Context, id int64) error {
+	if _, err := r.db.ExecContext(ctx, "UPDATE series SET genre_override=NULL WHERE id=?", id); err != nil {
+		return fmt.Errorf("clear series %d genre override: %w", id, err)
+	}
+	return nil
+}
+
 // SetGenreOverride stores the genres that should be applied to current and
 // subsequently created books in a series. A non-NULL empty array deliberately
-// means "keep genres empty and locked".
+// means "keep genres empty and locked"; use ClearGenreOverride to remove the
+// override instead.
 func (r *SeriesRepo) SetGenreOverride(ctx context.Context, id int64, genres []string) error {
 	encoded, err := json.Marshal(genres)
 	if err != nil {
@@ -285,14 +322,8 @@ func (r *SeriesRepo) GetByIDForUser(ctx context.Context, id, userID int64) (*mod
 	if err != nil {
 		return nil, fmt.Errorf("get series %d: %w", id, err)
 	}
-	if genreOverride.Valid {
-		s.GenreOverrideSet = true
-		if err := json.Unmarshal([]byte(genreOverride.String), &s.GenreOverride); err != nil {
-			return nil, fmt.Errorf("decode series %d genre override: %w", id, err)
-		}
-		if s.GenreOverride == nil {
-			s.GenreOverride = []string{}
-		}
+	if err := applyGenreOverride(&s, genreOverride); err != nil {
+		return nil, err
 	}
 
 	// Fetch series books with minimal book data, scoped to the caller's
@@ -592,7 +623,7 @@ func (r *SeriesRepo) ListByAuthor(ctx context.Context, authorID int64) ([]models
 	// on series-only columns; we dedup series via a byID map (mirroring
 	// ListWithBooks) and append each book to its series.
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT s.id, s.foreign_id, s.title, s.description, s.monitored, s.created_at,
+		SELECT s.id, s.foreign_id, s.title, s.description, s.monitored, s.genre_override, s.created_at,
 		       sb.series_id, sb.book_id, sb.position_in_series, sb.primary_series,
 		       b.id, b.foreign_id, b.author_id, b.title, b.sort_title, b.status,
 		       b.monitored, b.image_url, b.release_date, b.created_at, b.updated_at
@@ -610,13 +641,14 @@ func (r *SeriesRepo) ListByAuthor(ctx context.Context, authorID int64) ([]models
 	for rows.Next() {
 		var s models.Series
 		var monitored int
+		var genreOverride sql.NullString
 		var sbSeriesID, sbBookID, bookID, bAuthorID sql.NullInt64
 		var position sql.NullString
 		var primarySeries, bookMonitored sql.NullInt64
 		var foreignID, title, sortTitle, status, imageURL sql.NullString
 		var releaseDate, bookCreatedAt, bookUpdatedAt sql.NullTime
 		if err := rows.Scan(
-			&s.ID, &s.ForeignID, &s.Title, &s.Description, &monitored, &s.CreatedAt,
+			&s.ID, &s.ForeignID, &s.Title, &s.Description, &monitored, &genreOverride, &s.CreatedAt,
 			&sbSeriesID, &sbBookID, &position, &primarySeries,
 			&bookID, &foreignID, &bAuthorID, &title, &sortTitle, &status,
 			&bookMonitored, &imageURL, &releaseDate, &bookCreatedAt, &bookUpdatedAt,
@@ -624,6 +656,9 @@ func (r *SeriesRepo) ListByAuthor(ctx context.Context, authorID int64) ([]models
 			return nil, fmt.Errorf("scan series by author: %w", err)
 		}
 		s.Monitored = monitored == 1
+		if err := applyGenreOverride(&s, genreOverride); err != nil {
+			return nil, err
+		}
 
 		idx, ok := byID[s.ID]
 		if !ok {

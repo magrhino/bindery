@@ -70,18 +70,35 @@ export default function SeriesPage() {
     setEditingSeries(null)
   }
 
-  // Genre override (#1446): prompt for a comma-separated list, then set +
-  // lock it on every book in the series so metadata refresh keeps it.
+  // Genre override (#1446, #1709): prompt for a comma-separated list, then set
+  // + lock it on every book in the series so metadata refresh keeps it. The
+  // list is also stored on the series and applied to books added later.
+  //
+  // The prompt is seeded with the current override so it reads as an edit
+  // rather than a blank slate, and submitting an empty box clears the override
+  // instead of silently doing nothing — without that there is no way to undo a
+  // "Set genre" from the UI.
   const applySeriesGenres = async (series: Series) => {
+    const current = series.genreOverride ?? []
     const input = prompt(
-      `Set genres for every book in "${series.title}" (comma-separated). Edited genres are locked against metadata refresh.`,
+      `Set genres for every book in "${series.title}" (comma-separated). Genres are locked against metadata refresh and applied to books added later. Leave empty to remove the override.`,
+      current.join(', '),
     )
     if (input === null) return
     const genres = input.split(',').map(g => g.trim()).filter(Boolean)
-    if (genres.length === 0) return
     setApplyingGenres(series.id)
     try {
+      if (genres.length === 0) {
+        if (!series.genreOverrideSet) return
+        await api.clearSeriesGenres(series.id)
+        setSeriesList(prev => prev.map(s =>
+          s.id === series.id ? { ...s, genreOverride: undefined, genreOverrideSet: false } : s))
+        setLinkResult(prev => ({ ...prev, [series.id]: 'Genre override removed' }))
+        return
+      }
       const { updated } = await api.applySeriesGenres(series.id, genres)
+      setSeriesList(prev => prev.map(s =>
+        s.id === series.id ? { ...s, genreOverride: genres, genreOverrideSet: true } : s))
       setLinkResult(prev => ({ ...prev, [series.id]: `Genres set on ${updated} book(s)` }))
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Genre apply failed')
@@ -332,9 +349,13 @@ export default function SeriesPage() {
                       onClick={() => applySeriesGenres(series)}
                       disabled={applyingGenres === series.id}
                       className="text-xs px-2.5 py-1 rounded font-medium bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 disabled:opacity-50"
-                      title="Set the same genres on every book in this series and lock them against metadata refresh"
+                      title={series.genreOverrideSet
+                        ? `Genre override active${series.genreOverride?.length ? `: ${series.genreOverride.join(', ')}` : ' (no genres)'}. Books added later inherit it. Click to edit or clear.`
+                        : 'Set the same genres on every book in this series and lock them against metadata refresh'}
                     >
-                      {applyingGenres === series.id ? '…' : 'Set genre'}
+                      {applyingGenres === series.id
+                        ? '…'
+                        : series.genreOverrideSet ? 'Genre ✓' : 'Set genre'}
                     </button>
                   )}
                   <button

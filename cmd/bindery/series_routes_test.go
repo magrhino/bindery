@@ -59,6 +59,10 @@ func (h *stubSeriesRouteHandler) ApplyGenres(w http.ResponseWriter, _ *http.Requ
 	h.record("applyGenres", w)
 }
 
+func (h *stubSeriesRouteHandler) ClearGenres(w http.ResponseWriter, _ *http.Request) {
+	h.record("clearGenres", w)
+}
+
 func (h *stubSeriesRouteHandler) GetHardcoverLink(w http.ResponseWriter, _ *http.Request) {
 	h.record("get-hardcover-link", w)
 }
@@ -94,6 +98,8 @@ func TestSeriesMutationRoutesRequireAdmin(t *testing.T) {
 		{name: "auto link hardcover", method: http.MethodPost, path: "/series/1/hardcover-link/auto"},
 		{name: "put hardcover link", method: http.MethodPut, path: "/series/1/hardcover-link"},
 		{name: "delete hardcover link", method: http.MethodDelete, path: "/series/1/hardcover-link"},
+		{name: "apply genres", method: http.MethodPut, path: "/series/1/genres"},
+		{name: "clear genres", method: http.MethodDelete, path: "/series/1/genres"},
 	}
 
 	for _, tt := range tests {
@@ -133,6 +139,8 @@ func TestSeriesMutationRoutesAllowAdmin(t *testing.T) {
 		{name: "auto link hardcover", method: http.MethodPost, path: "/series/1/hardcover-link/auto", called: "auto-link-hardcover"},
 		{name: "put hardcover link", method: http.MethodPut, path: "/series/1/hardcover-link", called: "put-hardcover-link"},
 		{name: "delete hardcover link", method: http.MethodDelete, path: "/series/1/hardcover-link", called: "delete-hardcover-link"},
+		{name: "apply genres", method: http.MethodPut, path: "/series/1/genres", called: "applyGenres"},
+		{name: "clear genres", method: http.MethodDelete, path: "/series/1/genres", called: "clearGenres"},
 	}
 
 	for _, tt := range tests {

@@ -75,6 +75,11 @@ export interface Series {
   title: string
   description: string
   monitored: boolean
+  // Genre override (#1709). genreOverrideSet distinguishes "no override" from
+  // "override set to no genres" — the latter locks future books to an empty
+  // genre list, so genreOverride being absent is not enough to tell them apart.
+  genreOverride?: string[]
+  genreOverrideSet?: boolean
   books?: Array<{
     seriesId: number
     bookId: number
@@ -112,6 +117,10 @@ export const seriesApi = {
   // and subsequently added book in the series.
   applySeriesGenres: (id: number, genres: string[]) =>
     request<{ updated: number }>(`/series/${id}/genres`, { method: 'PUT', body: JSON.stringify({ genres }) }),
+  // Drop the override so later books take their genres from metadata again.
+  // Genres already written onto existing books stay put and stay locked.
+  clearSeriesGenres: (id: number) =>
+    request<{ cleared: boolean }>(`/series/${id}/genres`, { method: 'DELETE' }),
   searchHardcoverSeries: (term: string, limit = 10) =>
     request<SeriesHardcoverSearchResult[]>(`/series/hardcover/search?term=${encodeURIComponent(term)}&limit=${limit}`),
   getSeriesHardcoverLink: (id: number) => request<SeriesHardcoverLink>(`/series/${id}/hardcover-link`),

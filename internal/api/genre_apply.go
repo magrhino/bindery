@@ -122,3 +122,29 @@ func (h *SeriesHandler) ApplyGenres(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"updated": updated})
 }
+
+// ClearGenres handles DELETE /series/{id}/genres — drop the series genre
+// override so books added later take their genres from metadata again (#1709).
+//
+// Deliberately asymmetric with ApplyGenres: this clears the *policy* for future
+// books and leaves the genres already written onto existing books alone. Those
+// were an explicit edit and stay locked; unlocking them here would silently
+// discard a user's taxonomy on the next metadata refresh, which is the exact
+// data loss the override exists to prevent.
+func (h *SeriesHandler) ClearGenres(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+	series, err := h.series.GetByID(r.Context(), id)
+	if err != nil || series == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "series not found"})
+		return
+	}
+	if err := h.series.ClearGenreOverride(r.Context(), series.ID); err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"cleared": true})
+}

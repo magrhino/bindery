@@ -26,6 +26,7 @@ vi.mock('../api/client', async importOriginal => {
       fillSeries: vi.fn(),
       fillSeriesAll: vi.fn(),
       applySeriesGenres: vi.fn(),
+      clearSeriesGenres: vi.fn(),
       autoLinkSeriesHardcover: vi.fn(),
       getSeriesHardcoverLink: vi.fn(),
       searchHardcoverSeries: vi.fn(),
@@ -111,6 +112,36 @@ describe('SeriesPage', () => {
 
       await waitFor(() => expect(api.applySeriesGenres).toHaveBeenCalledWith(12, ['Fantasy', 'Epic']))
       expect(await screen.findByText('Genres set on 0 book(s)')).toBeInTheDocument()
+    } finally {
+      promptSpy.mockRestore()
+    }
+  })
+
+  it('seeds the genre prompt with the current override and clears it when emptied', async () => {
+    vi.mocked(api.clearSeriesGenres).mockResolvedValue({ cleared: true })
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('')
+
+    try {
+      renderSeriesPage([{
+        id: 14,
+        foreignSeriesId: 'series-14',
+        title: 'Overridden Series',
+        description: '',
+        monitored: true,
+        genreOverride: ['Fantasy', 'Epic'],
+        genreOverrideSet: true,
+        books: [],
+      }])
+
+      fireEvent.click(await screen.findByRole('heading', { name: 'Overridden Series' }))
+      // An active override is visible on the control itself, not hidden state.
+      fireEvent.click(screen.getByRole('button', { name: 'Genre \u2713' }))
+
+      // The prompt must arrive pre-filled, otherwise editing means retyping.
+      expect(promptSpy).toHaveBeenCalledWith(expect.any(String), 'Fantasy, Epic')
+      await waitFor(() => expect(api.clearSeriesGenres).toHaveBeenCalledWith(14))
+      expect(api.applySeriesGenres).not.toHaveBeenCalled()
+      expect(await screen.findByText('Genre override removed')).toBeInTheDocument()
     } finally {
       promptSpy.mockRestore()
     }
