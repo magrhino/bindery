@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/models"
 )
 
@@ -119,6 +120,31 @@ func NewRenamerWithAudiobook(ebookTemplate, audiobookTemplate string) *Renamer {
 		audiobookTemplate = defaultAudiobookTemplate
 	}
 	return &Renamer{template: ebookTemplate, audiobookTemplate: audiobookTemplate}
+}
+
+// ResolveNamingTemplates reads the operator's ebook and audiobook destination
+// templates from settings. The keys mirror what the Settings UI writes:
+// naming.bookTemplate (with the legacy naming_template fallback, #1356) and
+// naming_template_audiobook. An empty return means "use the built-in default"
+// (NewRenamerWithAudiobook fills it in). It is the single source of truth for
+// this resolution, used both to seed the boot-time renamer and to re-read the
+// templates live per import/reorganize so a saved template takes effect without
+// a restart.
+func ResolveNamingTemplates(ctx context.Context, settings *db.SettingsRepo) (ebook, audiobook string) {
+	if settings == nil {
+		return "", ""
+	}
+	get := func(key string) string {
+		if s, _ := settings.Get(ctx, key); s != nil {
+			return s.Value
+		}
+		return ""
+	}
+	ebook = get("naming.bookTemplate")
+	if ebook == "" {
+		ebook = get("naming_template")
+	}
+	return ebook, get("naming_template_audiobook")
 }
 
 // DestPath computes the destination path for an ebook file.

@@ -330,7 +330,7 @@ func (s *Scanner) placeDroppedFormat(ctx context.Context, book *models.Book, aut
 
 	if format == models.MediaTypeAudiobook {
 		if layout == "templated" {
-			d, derr := s.renamer.AudiobookDestDir(folder, author, book, seriesTitle, seriesNum)
+			d, derr := s.destRenamer(ctx).AudiobookDestDir(folder, author, book, seriesTitle, seriesNum)
 			if derr != nil {
 				return "", true, derr
 			}
@@ -350,7 +350,7 @@ func (s *Scanner) placeDroppedFormat(ctx context.Context, book *models.Book, aut
 	for _, srcFile := range bookFiles {
 		var fileDest string
 		if layout == "templated" {
-			d, derr := s.renamer.DestPath(folder, author, book, seriesTitle, seriesNum, srcFile)
+			d, derr := s.destRenamer(ctx).DestPath(folder, author, book, seriesTitle, seriesNum, srcFile)
 			if derr != nil {
 				lastErr = derr
 				continue

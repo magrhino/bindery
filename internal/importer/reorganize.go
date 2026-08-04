@@ -142,10 +142,10 @@ func (s *Scanner) proposedPathFor(ctx context.Context, book *models.Book, author
 	audiobook := f.Format == models.MediaTypeAudiobook
 	if audiobook {
 		root := s.effectiveAudiobookDir(ctx, author)
-		dest, err = s.renamer.AudiobookDestDir(root, author, book, seriesTitle, seriesNum)
+		dest, err = s.destRenamer(ctx).AudiobookDestDir(root, author, book, seriesTitle, seriesNum)
 	} else {
 		root := s.effectiveLibraryDir(ctx, author)
-		dest, err = s.renamer.DestPath(root, author, book, seriesTitle, seriesNum, f.Path)
+		dest, err = s.destRenamer(ctx).DestPath(root, author, book, seriesTitle, seriesNum, f.Path)
 	}
 	if err != nil {
 		return "", ReorgStatusError, err.Error()

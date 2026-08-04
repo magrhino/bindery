@@ -1256,13 +1256,8 @@ func googleBooksAPIKey(ctx context.Context, settings *db.SettingsRepo) string {
 // (#1356 — the two sides used different keys, so UI-configured templates were
 // silently ignored and every import fell back to the built-in default).
 func defaultNamingTemplate(settings *db.SettingsRepo) string {
-	if s, _ := settings.Get(context.Background(), "naming.bookTemplate"); s != nil && s.Value != "" {
-		return s.Value
-	}
-	if s, _ := settings.Get(context.Background(), "naming_template"); s != nil && s.Value != "" {
-		return s.Value
-	}
-	return ""
+	ebook, _ := importer.ResolveNamingTemplates(context.Background(), settings)
+	return ebook
 }
 
 // syncOnStartup reads the calibre.sync_on_startup setting and returns
@@ -1278,10 +1273,8 @@ func syncOnStartup(settings *db.SettingsRepo) bool {
 }
 
 func audiobookNamingTemplate(settings *db.SettingsRepo) string {
-	if s, _ := settings.Get(context.Background(), "naming_template_audiobook"); s != nil && s.Value != "" {
-		return s.Value
-	}
-	return ""
+	_, audiobook := importer.ResolveNamingTemplates(context.Background(), settings)
+	return audiobook
 }
 
 // bootstrapAuth seeds the three auth settings on first boot:

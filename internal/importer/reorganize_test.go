@@ -136,6 +136,37 @@ func TestReorganize_EbookMove(t *testing.T) {
 	}
 }
 
+// Reorganize must render the destination with the CURRENT naming template, not
+// the one baked into the renamer at boot. Before the live-reread fix, a template
+// saved in the UI was ignored by Reorganize until a restart (#live-reload).
+func TestReorganize_UsesLiveNamingTemplate(t *testing.T) {
+	env, libraryDir, _, ctx := reorgFixture(t)
+	book := env.seed(t, ctx, "Jane Doe", "My Book")
+
+	oldPath := filepath.Join(libraryDir, "misc", "randomname.epub")
+	writeFileAt(t, oldPath)
+	if err := env.books.AddBookFile(ctx, book.ID, models.MediaTypeEbook, oldPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// Save a new template AFTER the scanner (and its boot renamer) were built.
+	if err := env.s.settings.Set(ctx, "naming.bookTemplate", "{Author} - {Title}.{ext}"); err != nil {
+		t.Fatal(err)
+	}
+
+	want := filepath.Join(libraryDir, "Jane Doe - My Book.epub")
+	moves, err := env.s.PreviewReorganizeBook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(moves) != 1 {
+		t.Fatalf("expected 1 move, got %d", len(moves))
+	}
+	if moves[0].Proposed != want {
+		t.Fatalf("proposed = %q, want %q (the live template, not the boot default)", moves[0].Proposed, want)
+	}
+}
+
 func TestReorganize_Noop(t *testing.T) {
 	env, libraryDir, _, ctx := reorgFixture(t)
 	book := env.seed(t, ctx, "Jane Doe", "My Book")

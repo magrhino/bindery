@@ -1,0 +1,2 @@
+### Fixed
+- **Ebook/audiobook naming templates now take effect without a restart** — the destination templates (`naming.bookTemplate`, `naming_template_audiobook`) were read once at boot and baked into the renamer, so saving a new template in Settings did nothing until Bindery restarted — and Reorganize actively applied the stale boot-time template. Both templates are now re-read from settings per import and per reorganize, matching how the per-track audiobook template already worked.

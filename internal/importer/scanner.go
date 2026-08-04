@@ -135,6 +135,20 @@ func NewScanner(downloads *db.DownloadRepo, clients *db.DownloadClientRepo,
 	}
 }
 
+// destRenamer returns a Renamer built from the CURRENT ebook/audiobook naming
+// templates in settings, so a template saved in the Settings UI takes effect on
+// the next import or reorganize without a Bindery restart. The boot-time
+// s.renamer is only a fallback for wiring that has no settings repo (tests).
+// Mirrors how the per-track audiobook template is already re-read live per
+// import (#1126).
+func (s *Scanner) destRenamer(ctx context.Context) *Renamer {
+	if s.settings == nil {
+		return s.renamer
+	}
+	ebook, audiobook := ResolveNamingTemplates(ctx, s.settings)
+	return NewRenamerWithAudiobook(ebook, audiobook)
+}
+
 // WithAudiobookDownloadDir records the separate audiobook download watch
 // folder. When non-empty, this directory is the expected landing zone for
 // completed audiobook downloads (separate from the general download dir).
@@ -951,7 +965,7 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 		// has any custom ebook root folder assigned (#421).
 		audiobookRoot := s.effectiveAudiobookDir(ctx, author)
 		seriesTitle, seriesNum := s.primarySeriesFor(ctx, book)
-		audiobookDest, destErr := s.renamer.AudiobookDestDir(audiobookRoot, author, book, seriesTitle, seriesNum)
+		audiobookDest, destErr := s.destRenamer(ctx).AudiobookDestDir(audiobookRoot, author, book, seriesTitle, seriesNum)
 		if destErr != nil {
 			slog.Error("failed to compute audiobook destination", "src", downloadPath, "error", destErr)
 			s.failImport(ctx, dl, models.StateImportBlocked, fmt.Sprintf("audiobook destination invalid: %v", destErr))
@@ -1196,7 +1210,7 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 		}
 
 		seriesTitle, seriesNum := s.primarySeriesFor(ctx, book)
-		destPath, destErr := s.renamer.DestPath(ebookRoot, author, book, seriesTitle, seriesNum, srcFile)
+		destPath, destErr := s.destRenamer(ctx).DestPath(ebookRoot, author, book, seriesTitle, seriesNum, srcFile)
 		if destErr != nil {
 			slog.Error("failed to compute book destination", "src", srcFile, "error", destErr)
 			lastFileErr = destErr
