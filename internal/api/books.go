@@ -1183,79 +1183,10 @@ func (h *BookHandler) ToggleExcluded(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, book)
 }
 
-func (h *BookHandler) MapMetadata(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
-	if !ok {
-		return
-	}
-	if h.meta == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "metadata provider unavailable"})
-		return
-	}
-	if h.authors == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "author repository unavailable"})
-		return
-	}
-	var req struct {
-		ForeignBookID string `json:"foreignBookId"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-		return
-	}
-	if strings.TrimSpace(req.ForeignBookID) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreignBookId is required"})
-		return
-	}
-	book, err := h.books.GetByID(r.Context(), id)
-	if err != nil || book == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
-		return
-	}
-	// Tier-1 cross-user IDOR guard (D1).
-	if !auth.CheckOwnership(r.Context(), book.OwnerUserID) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
-		return
-	}
-	target, err := h.meta.GetBook(r.Context(), req.ForeignBookID)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-	if target == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "upstream book not found"})
-		return
-	}
-	if target.ForeignID == "" {
-		target.ForeignID = req.ForeignBookID
-	}
-	currentAuthor, err := h.authors.GetByID(r.Context(), book.AuthorID)
-	if err != nil {
-		writeServerError(w, r, err)
-		return
-	}
-	if !bookMapAuthorMatches(currentAuthor, target.Author) {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "target book author does not match current author"})
-		return
-	}
-
-	preserveBookStateForMetadataMap(book, target)
-	if err := h.books.Update(r.Context(), book); err != nil {
-		writeServerError(w, r, err)
-		return
-	}
-	h.hydrateHardcoverEditions(r.Context(), book, book.MetadataProvider)
-	updated, err := h.books.GetByID(r.Context(), book.ID)
-	if err != nil {
-		writeServerError(w, r, err)
-		return
-	}
-	h.attachBookFiles(r.Context(), updated)
-	cleanBookDescription(updated)
-	proxyBookImages(updated)
-	writeJSON(w, http.StatusOK, updated)
-}
-
+// preserveBookStateForMetadataMap and bookMapAuthorMatches below are retained:
+// they are shared with tryMapAudiobookMetadataByASIN. The standalone
+// POST /book/{id}/map handler that also used them was removed as dead surface —
+// it had no caller (the UI uses rebind), and was undocumented.
 func preserveBookStateForMetadataMap(book *models.Book, target *models.Book) {
 	id := book.ID
 	authorID := book.AuthorID
