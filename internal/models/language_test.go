@@ -74,6 +74,22 @@ func TestIsLanguageAllowed(t *testing.T) {
 		{"fre", []string{"eng"}, false, false},
 		{"fre", []string{"eng", "fre"}, false, true},
 		{"ger", []string{"eng", "fre"}, false, false},
+		// #1729: provider vocabularies must converge on the profile's. Google
+		// Books returns ISO 639-1 ("en", "en-US"); a profile allowing "eng"
+		// must accept them.
+		{"en", []string{"eng"}, false, true},
+		{"en-US", []string{"eng"}, false, true},
+		{"EN", []string{"eng"}, false, true},
+		{"pt_BR", []string{"por"}, false, true},
+		// The allowed side is normalized too, so a profile written in
+		// two-letter codes still filters correctly.
+		{"eng", []string{"en"}, false, true},
+		// A genuinely different language is still rejected.
+		{"de", []string{"eng"}, false, false},
+		{"fr-CA", []string{"eng"}, false, false},
+		// Unknown-language behavior is unchanged by normalization.
+		{"", []string{"en"}, false, true},
+		{"", []string{"en"}, true, false},
 	}
 	for _, tc := range cases {
 		got := IsLanguageAllowed(tc.code, tc.allowed, tc.unknownFail)

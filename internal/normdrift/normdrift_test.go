@@ -8,6 +8,7 @@ import (
 
 	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/indexer/newznab"
+	"github.com/vavallee/bindery/internal/models"
 	"github.com/vavallee/bindery/internal/seriesmatch"
 	"github.com/vavallee/bindery/internal/textutil"
 )
@@ -267,6 +268,53 @@ func TestDiacriticSchemesAreTheDocumentedOnes(t *testing.T) {
 			t.Errorf("%s(%q) = %q, want %q — if this change is intended, update "+
 				"internal/textutil/fold.go and say which comparisons it moves",
 				tc.fold, tc.in, got, tc.want)
+		}
+	}
+}
+
+// adversarialLanguageCodes is the corpus for the language alphabet: every
+// vocabulary a provider actually hands us. Google Books returns ISO 639-1
+// with optional region ("en", "en-US"), EPUBs carry whatever dc:language
+// says, DNB emits 639-2 natively, and profiles are written in 639-2/B —
+// plus empty (work-level OpenLibrary data) and plain garbage.
+var adversarialLanguageCodes = []string{
+	"en", "en-US", "EN", "eng", "de", "ger", "deu", "pt-BR", "pt_BR",
+	"zh-Hans", "fr", "fre", " Eng ", "", "xx", "not a language",
+}
+
+// TestLanguageFilterIsInvariantUnderItsOwnCanonicaliser is the language
+// member of the same family: IsLanguageAllowed compares a provider-supplied
+// code against a profile's allowed list, and NormalizeLanguageCode is the
+// canonicaliser both sides are supposed to be reduced through. #1729 was the
+// filter trusting its inputs to already be canonical — a profile allowing
+// "eng" silently rejected every book arriving as "en" or "en-US". The
+// property: pre-normalizing either side must never change the verdict.
+func TestLanguageFilterIsInvariantUnderItsOwnCanonicaliser(t *testing.T) {
+	allowedLists := [][]string{
+		nil,
+		{"eng"},
+		{"en"},
+		{"eng", "fre"},
+		{"de", "ger", "deu"},
+		{"por"},
+		{"xx"},
+	}
+	for _, code := range adversarialLanguageCodes {
+		for _, allowed := range allowedLists {
+			normAllowed := make([]string, len(allowed))
+			for i, a := range allowed {
+				normAllowed[i] = models.NormalizeLanguageCode(a)
+			}
+			for _, unknownFail := range []bool{false, true} {
+				raw := models.IsLanguageAllowed(code, allowed, unknownFail)
+				canon := models.IsLanguageAllowed(models.NormalizeLanguageCode(code), normAllowed, unknownFail)
+				if raw != canon {
+					t.Errorf("IsLanguageAllowed(%q, %v, unknownFail=%v) = %v, but %v on the canonicalised "+
+						"forms (%q, %v) — the filter's verdict depends on which vocabulary the caller used",
+						code, allowed, unknownFail, raw, canon,
+						models.NormalizeLanguageCode(code), normAllowed)
+				}
+			}
 		}
 	}
 }

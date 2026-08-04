@@ -74,13 +74,21 @@ func NormalizeLanguageCode(code string) string {
 // code is empty (source didn't report a language — common with OpenLibrary
 // work-level data), unknownFail controls behavior: false keeps the book,
 // true rejects it. See issue #232.
+//
+// Both the incoming code and the allowed entries are run through
+// NormalizeLanguageCode before comparing: providers hand us whatever
+// vocabulary they use (Google Books returns ISO 639-1 "en"/"en-US"), and a
+// profile allowing "eng" must not reject those spellings of the same
+// language. See issue #1729.
 func IsLanguageAllowed(code string, allowed []string, unknownFail bool) bool {
 	if len(allowed) == 0 {
 		return true
 	}
-	code = strings.ToLower(strings.TrimSpace(code))
+	code = NormalizeLanguageCode(code)
 	if code == "" {
 		return !unknownFail
 	}
-	return slices.Contains(allowed, code)
+	return slices.ContainsFunc(allowed, func(a string) bool {
+		return NormalizeLanguageCode(a) == code
+	})
 }
