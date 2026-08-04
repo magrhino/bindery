@@ -411,6 +411,18 @@ func (s *Scanner) checkQbittorrentDownloads(ctx context.Context, client *models.
 			// category). Common causes: the torrent was manually removed, or the
 			// hash stored in Bindery doesn't match what qBittorrent returned. This
 			// is blockStaleImportFailures territory; only log at Debug to avoid noise.
+			//
+			// Skip terminal downloads BEFORE logging, mirroring the no-hash branch
+			// above (#1730): List() has no status filter, so every long-imported
+			// download whose torrent was removed after import lands here on every
+			// 15s poll, and the Debug line below dominated debug output (96% on a
+			// 53-download library). StateImportFailed deliberately keeps flowing —
+			// blockStaleImportFailures relies on those rows NOT being marked in
+			// seenSourceIDs to detect a source that vanished from the client, and
+			// the Debug line is the operator's trace for that path.
+			if dl.Status == models.StateImported || dl.Status == models.StateFailed {
+				continue
+			}
 			hash := ""
 			if dl.TorrentID != nil {
 				hash = *dl.TorrentID

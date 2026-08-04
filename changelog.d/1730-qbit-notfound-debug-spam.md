@@ -1,0 +1,2 @@
+### Fixed
+- **Stopped the qBittorrent poll logging a Debug line for every already-imported download** (#1730) — the 15-second poll walked all download rows and logged "download not found in torrent list" for long-imported downloads whose torrent had been removed after import, one line per download per poll forever (96% of debug output on a 53-download library). Terminal downloads are now skipped before the log, matching the no-hash branch; failed-import rows still log and still feed stale-source detection unchanged.
