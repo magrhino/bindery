@@ -4,7 +4,7 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
-## [v1.30.0] — 2026-08-06
+## [v1.30.0] — 2026-08-07
 
 Mostly a UI release for the Author and Book detail pages, which had drifted
 into looking unfinished. Two of those fixes are the same bug wearing different
