@@ -1,2 +1,0 @@
-### Docs
-- **`BINDERY_TRUSTED_PROXY` and forwarded scheme/host** (#1787) — the deployment reference now explains that this variable governs whether `X-Forwarded-Proto` / `X-Forwarded-Host` are honoured for the public scheme and host, not just proxy-auth and client-IP resolution. Behind a TLS-terminating reverse proxy those headers are stripped for untrusted peers, so OPDS feed links come out `http://` (and `BINDERY_COOKIE_SECURE=auto` and OIDC redirects see the wrong scheme) until the proxy's IP/CIDR is trusted here — set it even when you are not using proxy auth.

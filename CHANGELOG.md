@@ -4,6 +4,147 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
+## [v1.30.0] — 2026-08-06
+
+Mostly a UI release for the Author and Book detail pages, which had drifted
+into looking unfinished. Two of those fixes are the same bug wearing different
+clothes: a Tailwind class that compiles to nothing, and a Tailwind class that
+never compiles at all. Both had been shipping silently — the class name looks
+right in the DOM and the build succeeds, so nothing in the toolchain noticed the
+File card had collapsed to one column or that the author page had no width limit
+at all. Two lint rules now fail CI on either pattern. The rest of the UI work is
+structure: one shared width across both pages, overflow menus instead of
+eight-button rows, selects instead of ten filter chips, and a cover placeholder
+that no longer reads as a broken image.
+
+Riding along: backups can carry a label instead of a bare timestamp, Audiobookshelf
+imports stop re-querying the same author once per book, and Hardcover list-sync
+authors finally get the default metadata profile every other path assigns.
+
+### Added
+- **Label a backup when you create it** (#1790) — the Backup panel takes an
+  optional label, so a snapshot is saved as `bindery_<timestamp>_<label>.db`
+  (e.g. `bindery_20260726_181731_pre-import.db`) rather than a bare timestamp
+  you have to rename afterwards to recognise. Labelled backups restore and
+  delete correctly from the UI, which previously accepted only the
+  bare-timestamp filename; a backup renamed by hand to something outside the
+  `bindery_*` shape still lists but cannot be restored or deleted from the UI.
+  The label is sanitised before it reaches the filename — only `A-Za-z0-9_-`
+  survive, everything else collapses to `-`, capped at 40 characters — so a
+  label that reduces to nothing (an all-CJK one, for instance) is dropped and
+  the snapshot keeps its plain timestamp name. `POST /api/v1/backup` accepts the
+  optional `{"label": "..."}` body; sending none behaves exactly as before.
+- **Series name and position on the book detail page** (#1795) — `series_books`
+  has been populated since v0.7.0 and this page never surfaced it. A book that
+  belongs to a series now shows it in the meta row (`Discworld #3`), once per
+  series for books that belong to several. There is no book→series endpoint, so
+  this reuses `GET /author/{id}/series`; the lookup runs after the book loads,
+  never blocks rendering, and simply omits the row if it fails.
+- **`Downloading` and `Skipped` filters on the author page** (#1795) — both
+  values have been in the status filter's type since it was written, but the
+  chip row only ever offered All / Wanted / Downloaded / Imported, so there was
+  no way to see books in either state. The status control now offers every value
+  it supports.
+- **Books without cover art get a real placeholder** (#1795) — previously a flat
+  grey box with small centred text, which read as a failed image load; on a
+  library where half the covers are missing, that is most of the page. The
+  placeholder now sets the title large over a ground colour derived from the
+  book's id, so it is stable per book and consistent everywhere that book's
+  cover is drawn. Every colour carries white text at 4.5:1 or better and sits at least 3:1 from
+  both page backgrounds, enforced by tests.
+
+### Changed
+- **Both detail pages now use one container width** (#1795) — the author page
+  was effectively `7xl` and the book page `4xl`, so following a link from an
+  author to one of their books collapsed the content by 384px and shunted it
+  left. Both are now `7xl`, matching every other page; descriptions are held to
+  a readable measure individually rather than by narrowing the whole page.
+- **The author page's action row is five controls instead of eight** (#1795) —
+  it wrapped, which pushed Delete onto a line of its own and gave the most
+  destructive action the most prominence by accident. Monitored, a primary
+  "Search N wanted" that carries its count in the label, Refresh and Edit stay
+  on the row; Rename files, Merge, Link metadata and Delete move into a **More**
+  menu (keyboard-navigable, Escape and click-outside to close).
+- **Author page filters are three selects on one line** (#1795) — replacing three
+  labelled chip groups totalling ten buttons, plus a "Select all" that wrapped to
+  a second row and read as though it belonged to the Published group.
+- **"Show excluded" is now an option in the status filter, not a separate
+  checkbox** (#1795) — **note the behaviour change**: it used to *add* excluded
+  books to whatever you were looking at, and now *narrows to* only them,
+  consistent with every other option in that list. It is also remembered between
+  visits, which the checkbox never was.
+- **The author page's stats are a fixed four-cell strip** (#1795) — the old
+  run-on line dropped the audiobook count entirely when it was zero, so the row
+  changed shape between authors and no figure ever appeared in the same place
+  twice. Books / In library / Wanted / Audiobooks are now always all four.
+- **Book detail: Edit moved to the header, and the File card's actions are
+  ranked** (#1795) — Edit changes metadata, not the file, and was the one action
+  in that row with nothing to do with bytes on disk. Download, Re-bind and Fix
+  match stay visible; Exclude and Rename files move behind **More**. "Delete
+  file" drops from solid red to an outlined destructive style: it is reversible
+  by re-downloading, and it was louder than "Delete book + files", which is not.
+  Solid red now appears exactly once per page, on the action with no undo.
+- **Long book descriptions clamp with show more/less** (#1795), matching the
+  author page, instead of running the full height of the page.
+
+### Fixed
+- **Audiobookshelf imports no longer re-query the same author once per book**
+  (#1788) — the importer looked each book's author up against the metadata
+  providers with no caching, so every book on the same shelf re-issued an
+  identical provider search. When that search was slow or unreachable —
+  OpenLibrary author search timing out on romanised-CJK pen names, Hardcover
+  returning 401 — each repeat paid the full per-request timeout again, dragging
+  a single author's shelf out to minutes. The lookup is now memoised for the
+  duration of one import run. Note the trade: a provider that degrades
+  mid-import stays degraded for that author until the run ends, where
+  previously each book got a fresh attempt.
+- **Hardcover list-sync authors now get the default metadata profile** (#1736,
+  #1783) — they were created with no profile assigned instead of the default
+  "Standard", and existing rows are backfilled by migration. No behaviour
+  changed as a result, because every reader already fell back to the default;
+  what it fixes is the profile shown in the UI and three separate fallbacks
+  that had to stay in sync. Five other author-creation paths still insert no
+  profile, so the migration is a one-shot cleanup rather than a permanent fix —
+  tracked in #1803.
+- **The book detail File card had collapsed to a single column** (#1791) — its
+  label/value grid separated the two tracks with a comma, which Tailwind passes
+  through verbatim into an invalid `grid-template-columns` declaration that every
+  browser then drops. The rule was generated, so grepping the compiled CSS for
+  the class found it and it looked fine; only the computed style showed a single
+  track. A test now asserts the card resolves to two tracks, and a lint rule
+  fails CI on a top-level comma in any arbitrary value.
+- **The author detail page was rendering with no width constraint at all**
+  (#1791) — its `max-w-5xl` sat directly against a `${…}` interpolation, and
+  Tailwind v4 scans source text rather than runtime values, so it extracted the
+  token `max-w-5xl${selected.size` and never emitted `.max-w-5xl`. Neighbouring
+  widths were present in the CSS, which is what made it look like a framework
+  bug rather than a source one. A second lint rule now fails CI on any class
+  glued to an interpolation, and a sweep of the tree found no other instance.
+- **Clicking a table row on the author page did a full page reload** (#1795) —
+  the row navigated via `window.location.href` while the link inside that same
+  row routed client-side, so one row had two different behaviours depending on
+  where you clicked.
+- **Grid cards no longer end at ragged heights** (#1795) — the text block is a
+  fixed height, and the published year no longer appears and disappears between
+  cards (the formatter already returns an em dash for a missing date, so the
+  surrounding conditional only ever removed the row).
+
+### Docs
+- **`BINDERY_TRUSTED_PROXY` governs the forwarded scheme and host, not just
+  proxy auth** (#1787) — the deployment reference now says so. Requests from a
+  peer outside this list have every `X-Forwarded-*` header stripped, so behind
+  a TLS-terminating reverse proxy the OPDS feed links come out `http://`, and
+  `BINDERY_COOKIE_SECURE=auto` and the OIDC `redirect_uri` both see the wrong
+  scheme, until the proxy's IP or CIDR is trusted here. Set it even if you are
+  not using proxy auth.
+
+### Security
+- **Bumped js-yaml to 4.3.1** (#1793, GHSA-5p4m-2wfm-xmqj) — resolves a
+  high-severity quadratic-CPU advisory in `!!omap` resolution, where the
+  CVE-2026-59870 fix was never backported to the affected 4.x range. Build
+  tooling only: js-yaml reaches the tree as a transitive devDependency of ESLint
+  and never enters the browser bundle, so no running instance was exposed.
+
 ## [v1.29.1] — 2026-08-04
 
 A patch release out of a codebase audit. Two of these are credential leaks that
