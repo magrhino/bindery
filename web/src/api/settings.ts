@@ -21,6 +21,10 @@ export const settingsApi = {
 
   // Backup
   listBackups: () => request<Array<{ name: string; size: number; modTime: string }>>('/backup'),
-  createBackup: () => request<{ name: string; size: number; modTime: string }>('/backup', { method: 'POST' }),
+  createBackup: (label?: string) =>
+    request<{ name: string; size: number; modTime: string }>('/backup', {
+      method: 'POST',
+      body: label ? JSON.stringify({ label }) : undefined,
+    }),
   deleteBackup: (filename: string) => request<void>(`/backup/${encodeURIComponent(filename)}`, { method: 'DELETE' }),
 }

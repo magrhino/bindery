@@ -143,7 +143,7 @@ GET    /api/v1/notification                       list webhooks
 POST   /api/v1/notification                       create
 POST   /api/v1/notification/{id}/test             fire a test event
 
-POST   /api/v1/backup                             snapshot the SQLite database
+POST   /api/v1/backup                             snapshot the SQLite database (optional {"label": "..."})
 GET    /api/v1/system/status                      version, uptime, build info
 PUT    /api/v1/system/loglevel                    runtime log-level switch (debug/info/warn/error)
 GET    /api/v1/images?url=<encoded>               proxied + cached cover image (30-day TTL)
@@ -244,6 +244,20 @@ curl -H "X-Api-Key: $KEY" http://bindery:8787/api/v1/search/last-debug
 ```bash
 curl -X POST -H "X-Api-Key: $KEY" http://bindery:8787/api/v1/backup
 ```
+
+The body is optional. Pass a `label` to make the snapshot identifiable — it is
+appended to the filename as `bindery_<timestamp>_<label>.db`:
+
+```bash
+curl -X POST -H "X-Api-Key: $KEY" -H 'Content-Type: application/json' \
+  -d '{"label":"pre-upgrade"}' http://bindery:8787/api/v1/backup
+```
+
+The label is sanitised server-side before it reaches the filename: only
+`A-Za-z0-9_-` survive, every other character (including `/`, `\`, `.` and any
+non-ASCII) collapses to `-`, and the result is capped at 40 characters. A label
+that sanitises to nothing — an all-CJK label, for example — is dropped and the
+snapshot keeps the plain timestamp name.
 
 **Fire a test webhook:**
 

@@ -1,0 +1,2 @@
+### Added
+- **Label a backup when you create it** (#1790) — the Backup panel now has an optional label field, so a backup is saved as `bindery_<timestamp>_<label>.db` (e.g. `bindery_20260726_181731_pre-import.db`) instead of a bare timestamp you have to rename afterwards to recognise. Labeled and manually renamed (same-shape) backups now restore and delete correctly from the UI, which previously only accepted the bare-timestamp filename. Config-only backup, separate from the full database, is tracked as a follow-up.

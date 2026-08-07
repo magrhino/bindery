@@ -68,7 +68,7 @@ func TestBackupDelete_RejectsPathEscapeFilename(t *testing.T) {
 
 	for _, bad := range []string{
 		"../do_not_delete.db",
-		"bindery_2024.db",
+		"bindery_a/b.db",
 		"bindery_20240102_030405.db.tmp",
 		"evil.db",
 		"",
@@ -105,7 +105,11 @@ func TestBackupRestore_RejectsBadFilename(t *testing.T) {
 	database, dbPath, dataDir := backupTestDB(t)
 	h := NewBackupHandler(database, dbPath, dataDir)
 
-	for _, bad := range []string{"../../etc/passwd", "random.db", "bindery_bad.db", ""} {
+	// Bad-SHAPE names (path separators, wrong prefix, wrong extension, empty)
+	// are rejected before the filesystem is touched. Label-shaped names like
+	// "bindery_bad.db" are now valid shapes (#1790) — a missing one 404s, which
+	// is covered by TestBackup_Create_WithLabel's round-trip, not here.
+	for _, bad := range []string{"../../etc/passwd", "random.db", "bindery_a/b.db", "bindery_x.sqlite", ""} {
 		rec := httptest.NewRecorder()
 		req := backupURLRequest(http.MethodPost, bad)
 		req.Header.Set("X-Confirm-Restore", "true")

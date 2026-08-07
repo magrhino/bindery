@@ -5,6 +5,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,10 +19,19 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// backupFilenameRe matches files produced by Create, "bindery_YYYYMMDD_HHMMSS.db".
-// Restore/Delete reject anything else so path-traversal tricks like "..%2Fetc"
-// or unrelated files under the backup dir can't be referenced by untrusted input.
-var backupFilenameRe = regexp.MustCompile(`^bindery_\d{8}_\d{6}\.db$`)
+// backupFilenameRe matches files produced by Create: the timestamp name
+// "bindery_YYYYMMDD_HHMMSS.db" and the optional-label form
+// "bindery_YYYYMMDD_HHMMSS_<label>.db". The charset is restricted to
+// [A-Za-z0-9_-] with a fixed prefix and suffix, so Restore/Delete reject any
+// path-traversal trick ("..%2Fetc") or unrelated file — the name can contain no
+// slash, backslash, or dot other than the ".db" extension. Matching a manually
+// renamed backup that stays within this shape is intentional: List shows those
+// files, so Restore/Delete must be able to act on them too.
+var backupFilenameRe = regexp.MustCompile(`^bindery_[A-Za-z0-9_-]+\.db$`)
+
+// maxBackupLabelLen caps a sanitized backup label so the filename stays a sane
+// length.
+const maxBackupLabelLen = 40
 
 type BackupHandler struct {
 	db      *sql.DB
@@ -39,6 +49,41 @@ func NewBackupHandler(database *sql.DB, dbPath, dataDir string) *BackupHandler {
 
 func (h *BackupHandler) backupDir() string {
 	return filepath.Join(h.dataDir, "backups")
+}
+
+// sanitizeBackupLabel reduces a user-supplied backup label to the safe charset
+// allowed inside a backup filename ([A-Za-z0-9_-]): every other character (space,
+// slash, dot, unicode) becomes '-', runs of separators collapse, leading and
+// trailing separators are trimmed, and the result is capped at maxBackupLabelLen.
+// Returns "" when nothing usable remains, in which case the backup keeps its
+// plain timestamp name. This is what keeps a label from smuggling a path
+// separator or ".." into the filename.
+func sanitizeBackupLabel(raw string) string {
+	raw = strings.TrimSpace(raw)
+	var b strings.Builder
+	lastSep := false
+	for _, r := range raw {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastSep = false
+		case r == '_' || r == '-':
+			if !lastSep {
+				b.WriteRune(r)
+				lastSep = true
+			}
+		default:
+			if !lastSep {
+				b.WriteByte('-')
+				lastSep = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "_-")
+	if len(out) > maxBackupLabelLen {
+		out = strings.Trim(out[:maxBackupLabelLen], "_-")
+	}
+	return out
 }
 
 // List returns all backup files in the backup directory.
@@ -107,8 +152,25 @@ func (h *BackupHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	label := ""
+	if r.Body != nil {
+		// Optional {"label": "..."} body — a user-supplied tag folded into the
+		// filename so backups can be recognised at a glance (e.g. "pre-import").
+		// A missing/empty/malformed body is fine: the backup keeps its plain
+		// timestamp name. Cap the read so a huge body can't be forced through.
+		var body struct {
+			Label string `json:"label"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&body); err == nil {
+			label = sanitizeBackupLabel(body.Label)
+		}
+	}
+
 	timestamp := start.UTC().Format("20060102_150405")
 	destName := fmt.Sprintf("bindery_%s.db", timestamp)
+	if label != "" {
+		destName = fmt.Sprintf("bindery_%s_%s.db", timestamp, label)
+	}
 	destPath := filepath.Join(dir, destName)
 	// Stage the snapshot under a .tmp name and rename on success. SQLite's
 	// VACUUM INTO refuses to overwrite an existing file, and an aborted

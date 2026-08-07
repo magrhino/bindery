@@ -45,6 +45,7 @@ export default function LogsTab() {
   const [backups, setBackups] = useState<Array<{ name: string; size: number; modTime: string }>>([])
   const [creatingBackup, setCreatingBackup] = useState(false)
   const [deletingBackup, setDeletingBackup] = useState<string | null>(null)
+  const [backupLabel, setBackupLabel] = useState('')
 
   const fetchLogs = (page = 0) => {
     api.getLogs({
@@ -78,8 +79,9 @@ export default function LogsTab() {
   const handleBackup = async () => {
     setCreatingBackup(true)
     try {
-      const result = await api.createBackup()
+      const result = await api.createBackup(backupLabel.trim() || undefined)
       setBackups(prev => [result, ...prev])
+      setBackupLabel('')
       alert(`Backup created: ${result.name}`)
     } catch (err) {
       alert('Backup failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
@@ -348,13 +350,24 @@ export default function LogsTab() {
               <p className="text-sm text-slate-700 dark:text-zinc-300">{t('settings.general.backupCreate')}</p>
               <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">{t('settings.general.backupHint')}</p>
             </div>
-            <button
-              onClick={handleBackup}
-              disabled={creatingBackup}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium disabled:opacity-50 flex-shrink-0"
-            >
-              {creatingBackup ? t('settings.general.backupCreating') : t('settings.general.backupButton')}
-            </button>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <input
+                type="text"
+                value={backupLabel}
+                onChange={e => setBackupLabel(e.target.value)}
+                disabled={creatingBackup}
+                placeholder={t('settings.general.backupLabelPlaceholder')}
+                maxLength={40}
+                className="px-2 py-2 w-40 text-sm rounded border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-slate-800 dark:text-zinc-200 disabled:opacity-50"
+              />
+              <button
+                onClick={handleBackup}
+                disabled={creatingBackup}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-medium disabled:opacity-50"
+              >
+                {creatingBackup ? t('settings.general.backupCreating') : t('settings.general.backupButton')}
+              </button>
+            </div>
           </div>
           {backups.length > 0 && (
             <div className="mt-3 border-t border-slate-200 dark:border-zinc-800 pt-3">

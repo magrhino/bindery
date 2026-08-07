@@ -741,6 +741,7 @@
       "backupHint": "Includes authors, books, indexers, and settings",
       "backupButton": "Create Backup",
       "backupCreating": "Creating...",
+      "backupLabelPlaceholder": "Label (optional)",
       "existingBackups": "Existing backups:",
       "security": "Security",
       "logRetention": "Log Retention",
