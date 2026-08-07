@@ -2,6 +2,7 @@ package abs
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 
@@ -461,7 +462,59 @@ func (i *Importer) recordAuthorVariantAlias(ctx context.Context, canonicalID int
 	matcher.addAlias(*alias)
 }
 
+// resetUpstreamAuthorCache clears the per-run upstream author lookup memo. Call
+// once at the start of each Run so cached results never leak between imports.
+func (i *Importer) resetUpstreamAuthorCache() {
+	i.upstreamAuthorMu.Lock()
+	i.upstreamAuthorCache = make(map[string]upstreamAuthorLookup)
+	i.upstreamAuthorMu.Unlock()
+}
+
+// lookupUpstreamAuthor resolves an ABS author name against the metadata
+// providers, memoizing the result for the rest of the Run. Books by the same
+// author are common, and the underlying provider search can be slow or
+// unreachable (OpenLibrary author search timing out for romanized-CJK pen
+// names; Hardcover 401); without the memo every book by that author re-issues
+// the same search and pays the full per-request timeout again.
 func (i *Importer) lookupUpstreamAuthor(ctx context.Context, name string) (*models.Author, bool, error) {
+	key := upstreamAuthorCacheKey(name)
+	if key == "" {
+		return nil, false, nil
+	}
+	i.upstreamAuthorMu.Lock()
+	if i.upstreamAuthorCache != nil {
+		if hit, ok := i.upstreamAuthorCache[key]; ok {
+			i.upstreamAuthorMu.Unlock()
+			return hit.author, hit.ambiguous, hit.err
+		}
+	}
+	i.upstreamAuthorMu.Unlock()
+
+	author, ambiguous, err := i.lookupUpstreamAuthorUncached(ctx, name)
+
+	// A cancelled parent context means the whole run is shutting down, not that
+	// this specific name failed to resolve — don't poison the cache with it.
+	// A per-request deadline (the OpenLibrary timeout in the field reports) is a
+	// genuine "this name didn't resolve this run" outcome and IS cached, which
+	// is the entire point of the memo.
+	if errors.Is(err, context.Canceled) {
+		return author, ambiguous, err
+	}
+	i.upstreamAuthorMu.Lock()
+	if i.upstreamAuthorCache != nil {
+		i.upstreamAuthorCache[key] = upstreamAuthorLookup{author: author, ambiguous: ambiguous, err: err}
+	}
+	i.upstreamAuthorMu.Unlock()
+	return author, ambiguous, err
+}
+
+// upstreamAuthorCacheKey normalizes an author name to a stable cache key:
+// trimmed, internal whitespace collapsed, lowercased.
+func upstreamAuthorCacheKey(name string) string {
+	return strings.ToLower(strings.Join(strings.Fields(name), " "))
+}
+
+func (i *Importer) lookupUpstreamAuthorUncached(ctx context.Context, name string) (*models.Author, bool, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, false, nil

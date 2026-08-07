@@ -854,10 +854,12 @@ type stubABSMetadataProvider struct {
 	series               map[string][]metadata.SeriesSearchResult
 	catalogs             map[string]*metadata.SeriesCatalog
 	searchSeriesCalls    int
+	searchAuthorsCalls   int
 }
 
 func (p *stubABSMetadataProvider) Name() string { return "stub" }
 func (p *stubABSMetadataProvider) SearchAuthors(_ context.Context, query string) ([]models.Author, error) {
+	p.searchAuthorsCalls++
 	if p.searchAuthorsByQuery != nil {
 		return append([]models.Author(nil), p.searchAuthorsByQuery[query]...), nil
 	}

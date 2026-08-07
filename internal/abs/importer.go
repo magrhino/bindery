@@ -281,6 +281,7 @@ func (i *Importer) Run(ctx context.Context, cfg ImportConfig) (*ImportStats, err
 func (i *Importer) run(ctx context.Context, cfg ImportConfig) *ImportStats {
 	stats := &ImportStats{}
 	cfg = cfg.normalized()
+	i.resetUpstreamAuthorCache()
 	defer func() {
 		now := time.Now().UTC()
 		i.mu.Lock()

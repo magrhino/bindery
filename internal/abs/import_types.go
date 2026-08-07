@@ -11,6 +11,7 @@ import (
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/jobs"
 	"github.com/vavallee/bindery/internal/metadata"
+	"github.com/vavallee/bindery/internal/models"
 )
 
 const (
@@ -231,6 +232,27 @@ type Importer struct {
 	mu       sync.Mutex
 	running  bool
 	progress ImportProgress
+
+	// upstreamAuthorCache memoizes upstream author-metadata lookups for the
+	// duration of a single Run. Multiple books by the same author would
+	// otherwise each re-issue the same provider search — and when that search
+	// is slow or unreachable (OpenLibrary author search timing out for
+	// romanized-CJK pen names, Hardcover returning 401) every repeat pays the
+	// full per-request timeout again. Reset at the start of each Run so results
+	// never leak across imports. Guarded by its own mutex, independent of mu.
+	upstreamAuthorMu    sync.Mutex
+	upstreamAuthorCache map[string]upstreamAuthorLookup
+}
+
+// upstreamAuthorLookup is one cached result of lookupUpstreamAuthor: the
+// resolved author (nil when none matched), whether the match was ambiguous, and
+// any error from the lookup. The error is cached deliberately — a name whose
+// search timed out this run should not be retried for every subsequent book by
+// that author.
+type upstreamAuthorLookup struct {
+	author    *models.Author
+	ambiguous bool
+	err       error
 }
 
 func (s ImportStats) String() string {
