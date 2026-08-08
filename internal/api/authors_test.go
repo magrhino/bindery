@@ -333,6 +333,89 @@ func TestDeleteAuthor_SkipsFileOwnedByAnotherBook(t *testing.T) {
 	}
 }
 
+// TestDeleteAuthor_SweepsBookFilesAndPerFormatPaths guards the multi-format
+// sweep: deleting an author with ?deleteFiles=true must remove every file a
+// book tracks in book_files (ebook + audiobook), not just the legacy
+// file_path column. It also covers excluded books, which the FK cascade
+// deletes along with the author and whose files would otherwise be orphaned.
+// Before the fix the handler collected b.FilePath alone via ListByAuthor
+// (excluded=0), so all three files below survived on disk.
+func TestDeleteAuthor_SweepsBookFilesAndPerFormatPaths(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	database.SetMaxOpenConns(1)
+
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+	ctx := context.Background()
+
+	// Distinct basenames on purpose: safeRemoveBookPath also removes same-stem
+	// siblings, so a shared stem would let the old (file_path-only) sweep take
+	// the audiobook out as a side effect and hide the real gap. Different stems
+	// force the sweep to actually enumerate book_files.
+	dir := t.TempDir()
+	epub := filepath.Join(dir, "novel.epub")
+	m4b := filepath.Join(dir, "recording.m4b")
+	excludedFile := filepath.Join(dir, "hidden.epub")
+	for _, p := range []string{epub, m4b, excludedFile} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	author := &models.Author{ForeignID: "OLSWEEP", Name: "Sweep", SortName: "Sweep", MetadataProvider: "openlibrary", Monitored: true}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+
+	// Dual-format book: both files tracked in book_files, no legacy file_path.
+	dual := &models.Book{ForeignID: "OLDUAL", AuthorID: author.ID, Title: "Dual", SortTitle: "dual", Status: "imported", Genres: []string{}, MetadataProvider: "openlibrary", Monitored: true}
+	if err := bookRepo.Create(ctx, dual); err != nil {
+		t.Fatal(err)
+	}
+	if err := bookRepo.AddBookFile(ctx, dual.ID, models.MediaTypeEbook, epub); err != nil {
+		t.Fatal(err)
+	}
+	if err := bookRepo.AddBookFile(ctx, dual.ID, models.MediaTypeAudiobook, m4b); err != nil {
+		t.Fatal(err)
+	}
+
+	// Excluded book with a file. The cascade deletes it with the author, so its
+	// file must be swept too — which needs the include-excluded lister.
+	excluded := &models.Book{ForeignID: "OLEXCL", AuthorID: author.ID, Title: "Excl", SortTitle: "excl", Status: "imported", Genres: []string{}, MetadataProvider: "openlibrary", Monitored: true}
+	if err := bookRepo.Create(ctx, excluded); err != nil {
+		t.Fatal(err)
+	}
+	if err := bookRepo.AddBookFile(ctx, excluded.ID, models.MediaTypeEbook, excludedFile); err != nil {
+		t.Fatal(err)
+	}
+	excluded.Excluded = true
+	if err := bookRepo.Update(ctx, excluded); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, nil, nil, profileRepo, nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/author/"+strconv.FormatInt(author.ID, 10)+"?deleteFiles=true", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", strconv.FormatInt(author.ID, 10))
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	rec := httptest.NewRecorder()
+	h.Delete(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	for _, p := range []string{epub, m4b, excludedFile} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("file %s should have been swept on author delete, stat err=%v", p, err)
+		}
+	}
+}
+
 // TestDeleteAuthor_WithoutDeleteFiles confirms the default path leaves
 // files on disk. Preserves the pre-#15 behaviour for anyone who hits the
 // delete button reflexively without opting into a disk sweep.

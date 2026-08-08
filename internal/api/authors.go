@@ -1149,13 +1149,30 @@ func (h *AuthorHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	// rather than walking outside the library.
 	var pathsToRemove []string
 	if r.URL.Query().Get("deleteFiles") == "true" {
-		books, err := h.books.ListByAuthor(r.Context(), id)
+		// Include excluded books: the FK cascade below deletes them too, so
+		// their files must be swept as well or they are orphaned on disk.
+		books, err := h.books.ListByAuthorIncludingExcluded(r.Context(), id)
 		if err != nil {
 			slog.Warn("delete author: failed to list books for file cleanup", "author_id", id, "error", err)
 		}
 		for _, b := range books {
-			if b.FilePath != "" {
-				pathsToRemove = append(pathsToRemove, b.FilePath)
+			// Mirror the single-book delete (books.go Delete): prefer the
+			// book_files rows so every tracked ebook/audiobook file — including
+			// multi-format books and audiobook folders — is collected. Only fall
+			// back to the per-format / legacy columns for books that predate the
+			// book_files table (no rows). Collecting b.FilePath alone, as this
+			// did before, silently orphaned every file tracked in book_files.
+			files, _ := h.books.ListFiles(r.Context(), b.ID)
+			if len(files) > 0 {
+				for _, f := range files {
+					pathsToRemove = append(pathsToRemove, f.Path)
+				}
+				continue
+			}
+			for _, p := range []string{b.EbookFilePath, b.AudiobookFilePath, b.FilePath} {
+				if p != "" {
+					pathsToRemove = append(pathsToRemove, p)
+				}
 			}
 		}
 	}
