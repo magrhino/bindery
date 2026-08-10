@@ -14,9 +14,12 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"database/sql"
+	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -183,7 +186,125 @@ func sweepStaleAndDev(ctx context.Context, db *sql.DB) (int64, error) {
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
-	return n, nil
+	// Ledger rows age out on their own, longer, clock — they are the
+	// per-day history the aggregates are rebuilt from, not live state.
+	ledgerCutoff := time.Now().UTC().Add(-ledgerRetentionWindow).Format("2006-01-02")
+	resL, err := db.ExecContext(ctx,
+		`DELETE FROM daily_activity WHERE day < ?`, ledgerCutoff)
+	if err != nil {
+		return 0, err
+	}
+	nL, _ := resL.RowsAffected()
+	return n + nL, nil
+}
+
+// sqliteDSN builds the production connection string. modernc.org/sqlite
+// takes pragmas as `_pragma=name(value)` query params — the previous
+// `_journal=WAL&_timeout=5000` was mattn/go-sqlite3 syntax, which modernc
+// silently ignored, so the DB ran with journal DELETE and busy_timeout 0
+// and every concurrent write surfaced as SQLITE_BUSY (the nightly
+// snapshot/sweep failures and dropped pings). Applied per connection.
+func sqliteDSN(dbPath string) string {
+	return dbPath +
+		"?_pragma=journal_mode(WAL)" +
+		"&_pragma=busy_timeout(5000)" +
+		"&_pragma=synchronous(NORMAL)"
+}
+
+// createAggregateTables creates the daily aggregate tables (Phase 4), the
+// per-day activity ledger, and the meta table. One row per day for the
+// global counts, one per (day, version) for the version split, one per
+// (day, field) for feature adoption. Aggregates have perpetual retention
+// so charts can extend beyond the 60-day window we keep on raw rows.
+// Shared by main() and the test fixture so the schemas can't drift.
+func createAggregateTables(ctx context.Context, db *sql.DB) error {
+	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS daily_global (
+			day          TEXT PRIMARY KEY,
+			active_day   INTEGER NOT NULL DEFAULT 0,
+			new_installs INTEGER NOT NULL DEFAULT 0,
+			total        INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS daily_version (
+			day          TEXT NOT NULL,
+			version      TEXT NOT NULL,
+			active_count INTEGER NOT NULL,
+			PRIMARY KEY (day, version)
+		)`,
+		`CREATE TABLE IF NOT EXISTS daily_features (
+			day              TEXT NOT NULL,
+			field            TEXT NOT NULL,
+			enabled_count    INTEGER NOT NULL,
+			reporting_count  INTEGER NOT NULL,
+			PRIMARY KEY (day, field)
+		)`,
+		// Per-day activity ledger: one row per (day, install) written at
+		// ping time. This is the source of truth for "how many distinct
+		// installs were active on day X" — unlike last_seen, which rolls
+		// forward with every ping and so only ever attributes an install
+		// to its single most recent day (making historical days read as
+		// dormancy counts, not activity). version is the last version the
+		// install pinged with that day, feeding the version-mix trend.
+		`CREATE TABLE IF NOT EXISTS daily_activity (
+			day        TEXT NOT NULL,
+			install_id TEXT NOT NULL,
+			version    TEXT NOT NULL,
+			PRIMARY KEY (day, install_id)
+		) WITHOUT ROWID`,
+		`CREATE TABLE IF NOT EXISTS meta (
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)`,
+	} {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ledgerRetentionWindow bounds daily_activity growth. At ~1k active
+// installs/day the ledger adds ~365k rows/year, so 400 days is a few tens
+// of MB — kept long so daily_global/daily_version can always be recomputed
+// from raw per-day truth well beyond the 60-day installs retention.
+const ledgerRetentionWindow = 400 * 24 * time.Hour
+
+// ledgerEpochKey is the meta row recording the first day the activity
+// ledger collected live pings. Days before it were seeded from last_seen
+// and undercount; the dashboard footnotes any chart window that spans it.
+const ledgerEpochKey = "activity_ledger_epoch"
+
+// seedActivityLedger backfills daily_activity from installs.last_seen when
+// the ledger is empty (first boot after the migration) and records the
+// epoch. Idempotent: a non-empty ledger or an existing epoch row makes it
+// a no-op, so restarts and crashes mid-seed are safe (the INSERT and the
+// epoch write share one transaction).
+func seedActivityLedger(ctx context.Context, db *sql.DB) error {
+	var n int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM daily_activity`).Scan(&n); err != nil {
+		return fmt.Errorf("count: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO daily_activity (day, install_id, version)
+		SELECT substr(last_seen, 1, 10), install_id, version FROM installs
+	`); err != nil {
+		return fmt.Errorf("seed: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)
+	`, ledgerEpochKey, time.Now().UTC().Format("2006-01-02")); err != nil {
+		return fmt.Errorf("epoch: %w", err)
+	}
+	return tx.Commit()
 }
 
 // runRetentionLoop fires sweepStaleAndDev immediately, then every
@@ -217,19 +338,17 @@ var aggregateInterval = 24 * time.Hour
 // features) are upserted in one transaction so a partial failure leaves
 // no orphan rows. day is normalised to UTC YYYY-MM-DD on the way in.
 //
-// The active_day, version split, and feature counts are computed from
-// rows whose last_seen falls on `day`. Because last_seen is the most
-// recent ping per install, snapshotting historical days produces
-// approximate counts (installs that pinged then but more recently
-// updated last_seen forward won't be attributed to the older day). Run
-// daily so today's snapshot is captured before the rollover.
-// readVersionCounts returns a map of version → count of installs whose
-// last_seen falls on dayStr. Used by snapshotDay so its INSERT loop runs
+// The active_day and version split come from the daily_activity ledger,
+// which records every (day, install) pair at ping time — so snapshotting
+// a historical day is exact (within ledger retention), not approximate,
+// and a snapshot that fails one night is fully healed by a later run.
+// readVersionCounts returns a map of version → count of installs active
+// on dayStr, per the ledger. Used by snapshotDay so its INSERT loop runs
 // after the read cursor has been released (defer covers all return paths).
 func readVersionCounts(ctx context.Context, tx *sql.Tx, dayStr string) (map[string]int, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT version, COUNT(*) FROM installs
-		WHERE substr(last_seen, 1, 10) = ?
+		SELECT version, COUNT(*) FROM daily_activity
+		WHERE day = ?
 		GROUP BY version
 	`, dayStr)
 	if err != nil {
@@ -263,7 +382,7 @@ func (s *server) snapshotDay(ctx context.Context, day time.Time) error {
 	// daily_global: one row per day with active_day, new_installs, total.
 	var activeDay, newInstalls, total int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM installs WHERE substr(last_seen, 1, 10) = ?`, dayStr,
+		`SELECT COUNT(*) FROM daily_activity WHERE day = ?`, dayStr,
 	).Scan(&activeDay); err != nil {
 		return fmt.Errorf("snapshot %s: active_day: %w", dayStr, err)
 	}
@@ -314,11 +433,17 @@ func (s *server) snapshotDay(ctx context.Context, day time.Time) error {
 	// daily_features: one row per (day, field). reporting_count is the
 	// denominator (installs active on day with non-null features) and is
 	// the same for every field. enabled_count is the per-field numerator.
+	// Membership ("active that day") comes from the ledger; the features
+	// payload itself still comes from installs, which holds each install's
+	// latest-reported state. Exact for today/yesterday snapshots; for older
+	// heal-window days it reflects the install's current features rather
+	// than that day's (per-day feature history would need features in the
+	// ledger, which isn't worth the row size for this chart).
 	var reporting int
 	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM installs
-		WHERE substr(last_seen, 1, 10) = ?
-		  AND features IS NOT NULL
+		SELECT COUNT(*) FROM installs i
+		JOIN daily_activity a ON a.install_id = i.install_id AND a.day = ?
+		WHERE i.features IS NOT NULL
 	`, dayStr).Scan(&reporting); err != nil {
 		return fmt.Errorf("snapshot %s: features reporting: %w", dayStr, err)
 	}
@@ -331,10 +456,10 @@ func (s *server) snapshotDay(ctx context.Context, day time.Time) error {
 		for _, f := range featureFields {
 			var enabled int
 			if err := tx.QueryRowContext(ctx, `
-				SELECT COUNT(*) FROM installs
-				WHERE substr(last_seen, 1, 10) = ?
-				  AND features IS NOT NULL
-				  AND json_extract(features, '$.'||?) > 0
+				SELECT COUNT(*) FROM installs i
+				JOIN daily_activity a ON a.install_id = i.install_id AND a.day = ?
+				WHERE i.features IS NOT NULL
+				  AND json_extract(i.features, '$.'||?) > 0
 			`, dayStr, f.JSONKey).Scan(&enabled); err != nil {
 				return fmt.Errorf("snapshot %s: feature %s: %w", dayStr, f.JSONKey, err)
 			}
@@ -439,21 +564,146 @@ func (s *server) reconcileNewInstallsSeed(ctx context.Context, path string) (int
 	return raised, nil
 }
 
+// loadLedgerBackfill imports historical (day, install_id, version) rows
+// into the daily_activity ledger from an operator-supplied CSV (gzipped
+// when the path ends in .gz). Recovery path for days that predate the
+// ledger: the rows are reconstructed offline from archived /api/backup
+// snapshots (each install's last_seen day per snapshot) and ping log
+// lines, then mounted into the pod. For every day touched it recomputes
+// daily_global.active_day and the daily_version rows from the ledger —
+// leaving new_installs and total alone, since those are historical values
+// this data can't improve — and lowers the ledger epoch to the earliest
+// imported day so the dashboard stops footnoting days that are now real.
+//
+// Runs once: the meta row ledger_backfill_done records the imported row
+// count and the loader skips when it matches, so restarts don't re-import;
+// shipping a bigger file re-runs it (INSERT OR IGNORE keeps that safe).
+func (s *server) loadLedgerBackfill(ctx context.Context, path string) (int, error) {
+	f, err := os.Open(path) // #nosec G304 -- operator-supplied env var, not user input
+	if err != nil {
+		return 0, fmt.Errorf("open backfill: %w", err)
+	}
+	defer f.Close()
+	var r io.Reader = f
+	if strings.HasSuffix(path, ".gz") {
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			return 0, fmt.Errorf("gunzip backfill: %w", err)
+		}
+		defer func() { _ = gz.Close() }()
+		r = gz
+	}
+	recs, err := csv.NewReader(r).ReadAll()
+	if err != nil {
+		return 0, fmt.Errorf("parse backfill: %w", err)
+	}
+
+	var done string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(value), '') FROM meta WHERE key = 'ledger_backfill_done'`,
+	).Scan(&done); err != nil {
+		return 0, fmt.Errorf("read done marker: %w", err)
+	}
+	if done == fmt.Sprint(len(recs)) {
+		return 0, nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	inserted := 0
+	days := map[string]bool{}
+	minDay := ""
+	for _, rec := range recs {
+		if len(rec) != 3 {
+			continue
+		}
+		day, id, version := rec[0], rec[1], rec[2]
+		if !dayKeyRE.MatchString(day) || !uuidRE.MatchString(id) || !isReleaseVersion(version) {
+			slog.Warn("ledger backfill: skipping malformed row", "day", day)
+			continue
+		}
+		res, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO daily_activity (day, install_id, version)
+			VALUES (?, ?, ?)
+		`, day, id, normalizeVersion(version))
+		if err != nil {
+			return 0, fmt.Errorf("insert %s: %w", day, err)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			inserted++
+		}
+		days[day] = true
+		if minDay == "" || day < minDay {
+			minDay = day
+		}
+	}
+
+	// Re-derive the aggregates for every imported day from the (now
+	// fuller) ledger. active_day and the version split only — see doc.
+	for day := range days {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO daily_global (day, active_day, new_installs, total)
+			SELECT ?, COUNT(*), 0, 0 FROM daily_activity WHERE day = ?
+			ON CONFLICT(day) DO UPDATE SET active_day = excluded.active_day
+		`, day, day); err != nil {
+			return 0, fmt.Errorf("reaggregate global %s: %w", day, err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM daily_version WHERE day = ?`, day); err != nil {
+			return 0, fmt.Errorf("clear version %s: %w", day, err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO daily_version (day, version, active_count)
+			SELECT day, version, COUNT(*) FROM daily_activity
+			WHERE day = ? GROUP BY version
+		`, day); err != nil {
+			return 0, fmt.Errorf("reaggregate version %s: %w", day, err)
+		}
+	}
+
+	if minDay != "" {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE meta SET value = ? WHERE key = ? AND value > ?
+		`, minDay, ledgerEpochKey, minDay); err != nil {
+			return 0, fmt.Errorf("lower epoch: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO meta (key, value) VALUES ('ledger_backfill_done', ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value
+	`, fmt.Sprint(len(recs))); err != nil {
+		return 0, fmt.Errorf("done marker: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
+	}
+	return inserted, nil
+}
+
+// aggregateHealDays is how many trailing days each aggregate tick
+// re-snapshots. Snapshots read the daily_activity ledger, so recomputing a
+// past day is exact — a tick that fails (or a process that was down over a
+// rollover) is healed by any later tick inside this window.
+const aggregateHealDays = 7
+
 // runAggregateLoop drives snapshotDay on the same daily cadence as
-// retention. On each tick it snapshots both today and yesterday: yesterday
-// captures whatever pings landed since the previous tick before any of
-// today's pings have had a chance to roll last_seen forward; today fills
-// in the live "what's happening right now" row that the dashboard reads.
+// retention. Each tick snapshots today plus the trailing aggregateHealDays
+// days from the ledger: today keeps the live dashboard row fresh, and the
+// trailing window re-derives recent days so one failed or missed tick
+// can't leave a permanently wrong aggregate row behind.
 func (s *server) runAggregateLoop(ctx context.Context) {
 	tick := time.NewTicker(aggregateInterval)
 	defer tick.Stop()
 	for {
 		now := time.Now().UTC()
-		if err := s.snapshotDay(ctx, now); err != nil {
-			slog.Warn("snapshot today failed", "error", err)
-		}
-		if err := s.snapshotDay(ctx, now.AddDate(0, 0, -1)); err != nil {
-			slog.Warn("snapshot yesterday failed", "error", err)
+		for i := 0; i <= aggregateHealDays; i++ {
+			if err := s.snapshotDay(ctx, now.AddDate(0, 0, -i)); err != nil {
+				slog.Warn("snapshot failed", "days_ago", i, "error", err)
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -531,7 +781,7 @@ func main() {
 	statsToken := env("STATS_TOKEN", "")
 	releaseRepo := env("GITHUB_REPO", "vavallee/bindery")
 
-	db, err := sql.Open("sqlite", dbPath+"?_journal=WAL&_timeout=5000")
+	db, err := sql.Open("sqlite", sqliteDSN(dbPath))
 	if err != nil {
 		slog.Error("open db", "error", err)
 		os.Exit(1)
@@ -583,36 +833,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Daily aggregate tables (Phase 4). One row per day for the global
-	// counts, one per (day, version) for the version split, one per
-	// (day, field) for feature adoption. Populated by the nightly snapshot
-	// loop; perpetual retention so charts can extend beyond the 60-day
-	// retention window we keep on raw rows.
-	for _, stmt := range []string{
-		`CREATE TABLE IF NOT EXISTS daily_global (
-			day          TEXT PRIMARY KEY,
-			active_day   INTEGER NOT NULL DEFAULT 0,
-			new_installs INTEGER NOT NULL DEFAULT 0,
-			total        INTEGER NOT NULL DEFAULT 0
-		)`,
-		`CREATE TABLE IF NOT EXISTS daily_version (
-			day          TEXT NOT NULL,
-			version      TEXT NOT NULL,
-			active_count INTEGER NOT NULL,
-			PRIMARY KEY (day, version)
-		)`,
-		`CREATE TABLE IF NOT EXISTS daily_features (
-			day              TEXT NOT NULL,
-			field            TEXT NOT NULL,
-			enabled_count    INTEGER NOT NULL,
-			reporting_count  INTEGER NOT NULL,
-			PRIMARY KEY (day, field)
-		)`,
-	} {
-		if _, err := db.ExecContext(context.Background(), stmt); err != nil {
-			slog.Error("create aggregate table", "error", err)
-			os.Exit(1)
-		}
+	if err := createAggregateTables(context.Background(), db); err != nil {
+		slog.Error("create aggregate table", "error", err)
+		os.Exit(1)
+	}
+
+	// One-time ledger seed: on first boot with an empty daily_activity,
+	// project each existing install onto its last_seen day so the 30-day
+	// charts don't start from a cliff. Seeded days still undercount (the
+	// per-day data was never recorded before the ledger existed), so the
+	// epoch is stored in meta and the dashboard footnotes days before it.
+	if err := seedActivityLedger(context.Background(), db); err != nil {
+		slog.Error("seed activity ledger", "error", err)
+		os.Exit(1)
 	}
 
 	// Boot-time sweep so dashboards on a fresh process are clean immediately;
@@ -662,6 +895,23 @@ func main() {
 			slog.Warn("new-installs seed reconcile failed", "path", seedPath, "error", err)
 		} else {
 			slog.Info("new-installs seed reconciled", "path", seedPath, "days_raised", n)
+		}
+	}
+
+	// Optional one-time recovery: when LEDGER_BACKFILL_PATH points at a
+	// (day, install_id, version) CSV (.gz supported), import historical
+	// per-day activity into the ledger and re-derive those days' aggregate
+	// rows. See loadLedgerBackfill for provenance and idempotency; no-op
+	// when unset, safe to leave mounted across restarts.
+	// A missing file is a normal state (the deployment mounts an optional
+	// ConfigMap), so it skips silently rather than warning every boot.
+	if backfillPath := env("LEDGER_BACKFILL_PATH", ""); backfillPath != "" {
+		if n, err := s.loadLedgerBackfill(context.Background(), backfillPath); errors.Is(err, os.ErrNotExist) {
+			// no backfill mounted — nothing to do
+		} else if err != nil {
+			slog.Warn("ledger backfill failed", "path", backfillPath, "error", err)
+		} else {
+			slog.Info("ledger backfill applied", "path", backfillPath, "rows_inserted", n)
 		}
 	}
 
@@ -1008,17 +1258,39 @@ func (s *server) handlePing(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UTC()
-	_, err := s.db.ExecContext(r.Context(), `
-		INSERT INTO installs (install_id, version, os, arch, deploy, features, first_seen, last_seen)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(install_id) DO UPDATE SET
-			version   = excluded.version,
-			os        = excluded.os,
-			arch      = excluded.arch,
-			deploy    = excluded.deploy,
-			features  = excluded.features,
-			last_seen = excluded.last_seen
-	`, req.InstallID, req.Version, req.OS, req.Arch, req.Deploy, featuresJSON, now, now)
+	err := func() error {
+		tx, err := s.db.BeginTx(r.Context(), nil)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		if _, err := tx.ExecContext(r.Context(), `
+			INSERT INTO installs (install_id, version, os, arch, deploy, features, first_seen, last_seen)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(install_id) DO UPDATE SET
+				version   = excluded.version,
+				os        = excluded.os,
+				arch      = excluded.arch,
+				deploy    = excluded.deploy,
+				features  = excluded.features,
+				last_seen = excluded.last_seen
+		`, req.InstallID, req.Version, req.OS, req.Arch, req.Deploy, featuresJSON, now, now); err != nil {
+			return err
+		}
+		// Activity ledger: attribute this install to today. Unlike
+		// last_seen this row never rolls forward, so day-by-day activity
+		// stays queryable after later pings. version updates on conflict
+		// so the day reflects the install's latest version that day
+		// (an upgrade mid-day counts once, under the new version).
+		if _, err := tx.ExecContext(r.Context(), `
+			INSERT INTO daily_activity (day, install_id, version)
+			VALUES (?, ?, ?)
+			ON CONFLICT(day, install_id) DO UPDATE SET version = excluded.version
+		`, now.Format("2006-01-02"), req.InstallID, req.Version); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}()
 	if err != nil {
 		slog.Warn("upsert install", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -1074,12 +1346,17 @@ type statsData struct {
 	Arch             []statsBucket
 	Deploy           []statsBucket
 	Daily            []dailyBucket
-	DailyNew         []dailyBucket     // new installs per day (first_seen), 30 days
-	Longevity        []statsBucket     // age buckets for 30d-active installs
-	LongevityYoungDB bool              // true when DB span < 30d, so higher buckets cannot fire
-	Monthly          []statsBucket     // new installs per calendar month, last 12 mo
-	VersionTrend     []versionTrendDay // per-day per-version active counts, 30 days
-	TopVersions      []string          // top-N versions for VersionTrend legend
+	DailyNew         []dailyBucket // new installs per day (first_seen), 30 days
+	Longevity        []statsBucket // age buckets for 30d-active installs
+	LongevityYoungDB bool          // true when DB span < 30d, so higher buckets cannot fire
+	// LedgerEpoch is the YYYY-MM-DD the activity ledger started collecting
+	// live pings ("" before the migration has run). Chart days before it
+	// were seeded from last_seen and undercount; the dashboard footnotes
+	// the two ledger-fed charts while the 30-day window still spans it.
+	LedgerEpoch  string
+	Monthly      []statsBucket     // new installs per calendar month, last 12 mo
+	VersionTrend []versionTrendDay // per-day per-version active counts, 30 days
+	TopVersions  []string          // top-N versions for VersionTrend legend
 
 	// Features (last 7d): per-subsystem adoption counts among installs that
 	// have reported a features payload in the last 7 days. FeaturesReporting
@@ -1162,11 +1439,16 @@ func (s *server) computeStats(ctx context.Context) (*statsData, error) {
 		return nil, err
 	}
 
-	// Daily activity for the last 30 days. last_seen is stored in Go's
-	// time.Time.String() form (`YYYY-MM-DD HH:MM:SS.NNNNNNNNN ±HHMM TZ`),
-	// which SQLite's date() can't parse — slice the YYYY-MM-DD prefix instead.
+	// Daily activity for the last 30 days, from the per-day ledger. The
+	// previous source — GROUP BY substr(last_seen,1,10) over installs —
+	// counted each install only toward its most recent ping day, so
+	// historical days showed "installs that went dormant that day" (~5%
+	// of the truth) while the newest 1–2 days absorbed everyone else and
+	// rendered as spurious spikes. The ledger records every (day, install)
+	// pair at ping time, so each day keeps its true distinct-active count.
+	cutoff30d := time.Now().UTC().AddDate(0, 0, -29).Format("2006-01-02")
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT substr(last_seen, 1, 10) AS day, COUNT(*) FROM installs WHERE last_seen >= ? GROUP BY day ORDER BY day`, cutoff)
+		`SELECT day, COUNT(*) FROM daily_activity WHERE day >= ? GROUP BY day ORDER BY day`, cutoff30d)
 	if err != nil {
 		return nil, err
 	}
@@ -1183,6 +1465,14 @@ func (s *server) computeStats(ctx context.Context) (*statsData, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	// Ledger epoch for the pre-ledger-undercount footnote. A missing meta
+	// row (fresh DB, seed not yet run) leaves it "" — no footnote.
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(value), '') FROM meta WHERE key = ?`, ledgerEpochKey,
+	).Scan(&d.LedgerEpoch); err != nil {
+		return nil, err
+	}
+
 	// Fill in zero-count days so the sparkline has a continuous 30-day axis.
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	for i := 29; i >= 0; i-- {
@@ -1321,10 +1611,11 @@ func (s *server) computeStats(ctx context.Context) (*statsData, error) {
 		d.TopVersions = append(d.TopVersions, v.Label)
 	}
 
-	// Version mix per day for the last 30 days (stacked trend chart).
+	// Version mix per day for the last 30 days (stacked trend chart), from
+	// the ledger — same rationale as the daily-activity chart above.
 	rowsVer, err := s.db.QueryContext(ctx,
-		`SELECT substr(last_seen, 1, 10) AS day, version, COUNT(*) FROM installs WHERE last_seen >= ? GROUP BY day, version ORDER BY day`,
-		cutoff)
+		`SELECT day, version, COUNT(*) FROM daily_activity WHERE day >= ? GROUP BY day, version ORDER BY day`,
+		cutoff30d)
 	if err != nil {
 		return nil, err
 	}
@@ -1726,6 +2017,26 @@ func renderVersionsTable(buckets30d, buckets7d []statsBucket, maxBars int, pinLa
 	return sb.String()
 }
 
+// renderLedgerFootnote returns a footnote for the ledger-fed charts (daily
+// activity, version mix) while their 30-day window still reaches back past
+// the ledger epoch. Days before the epoch were seeded from last_seen —
+// each install attributed only to its single most recent day — so those
+// bars undercount. Returns "" once the window has aged past the epoch (or
+// before the epoch exists at all).
+func renderLedgerFootnote(epoch string) string {
+	if epoch == "" {
+		return ""
+	}
+	windowStart := time.Now().UTC().AddDate(0, 0, -29).Format("2006-01-02")
+	if epoch <= windowStart {
+		return ""
+	}
+	return `<p class="empty" style="margin-top:.5rem">Days before ` +
+		html.EscapeString(epoch) + ` predate per-day activity tracking ` +
+		`and undercount (each install was attributed only to its most ` +
+		`recent ping day).</p>`
+}
+
 // renderLongevity wraps renderBarChart with a footnote that fires when the
 // DB has been collecting for less than 30 days. In that case the "1 to 3
 // months" and "3+ months" buckets cannot exist no matter how many installs
@@ -2082,12 +2393,12 @@ func (s *server) handleStatsPage(w http.ResponseWriter, r *http.Request) {
 		renderBarChart(d.OS, 0, ""),
 		renderBarChart(d.Arch, 0, ""),
 		renderBarChart(d.Deploy, 0, ""),
-		renderSparkline(d.Daily),
+		renderSparkline(d.Daily)+renderLedgerFootnote(d.LedgerEpoch),
 		renderSparkline(d.DailyNew),
 		renderMonthlyChart(d.Monthly),
 		renderLongevity(d.Longevity, d.LongevityYoungDB),
 		renderFeatures(d.Features, d.FeaturesReporting),
-		renderVersionTrend(d.VersionTrend, d.TopVersions),
+		renderVersionTrend(d.VersionTrend, d.TopVersions)+renderLedgerFootnote(d.LedgerEpoch),
 		time.Now().UTC().Format("2006-01-02 15:04 MST"),
 	); err != nil {
 		slog.Warn("stats: write response", "error", err)

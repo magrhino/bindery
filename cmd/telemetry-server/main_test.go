@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -125,40 +126,23 @@ func newTestServer(t *testing.T, latest string) *server {
 		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	for _, stmt := range []string{
-		`CREATE TABLE installs (
-			install_id  TEXT PRIMARY KEY,
-			version     TEXT NOT NULL,
-			os          TEXT NOT NULL,
-			arch        TEXT NOT NULL,
-			first_seen  DATETIME NOT NULL,
-			last_seen   DATETIME NOT NULL,
-			deploy      TEXT NOT NULL DEFAULT '',
-			features    TEXT
-		)`,
-		`CREATE TABLE daily_global (
-			day          TEXT PRIMARY KEY,
-			active_day   INTEGER NOT NULL DEFAULT 0,
-			new_installs INTEGER NOT NULL DEFAULT 0,
-			total        INTEGER NOT NULL DEFAULT 0
-		)`,
-		`CREATE TABLE daily_version (
-			day          TEXT NOT NULL,
-			version      TEXT NOT NULL,
-			active_count INTEGER NOT NULL,
-			PRIMARY KEY (day, version)
-		)`,
-		`CREATE TABLE daily_features (
-			day              TEXT NOT NULL,
-			field            TEXT NOT NULL,
-			enabled_count    INTEGER NOT NULL,
-			reporting_count  INTEGER NOT NULL,
-			PRIMARY KEY (day, field)
-		)`,
-	} {
-		if _, err := db.ExecContext(context.Background(), stmt); err != nil {
-			t.Fatalf("create table: %v", err)
-		}
+	// Same aggregate-table DDL as production so tests can't drift from the
+	// real schema. The installs CREATE differs (the deploy/features ALTERs
+	// are folded in), so it stays inline.
+	if _, err := db.ExecContext(context.Background(), `CREATE TABLE installs (
+		install_id  TEXT PRIMARY KEY,
+		version     TEXT NOT NULL,
+		os          TEXT NOT NULL,
+		arch        TEXT NOT NULL,
+		first_seen  DATETIME NOT NULL,
+		last_seen   DATETIME NOT NULL,
+		deploy      TEXT NOT NULL DEFAULT '',
+		features    TEXT
+	)`); err != nil {
+		t.Fatalf("create installs: %v", err)
+	}
+	if err := createAggregateTables(context.Background(), db); err != nil {
+		t.Fatalf("create aggregate tables: %v", err)
 	}
 	s := &server{db: db}
 	s.setLatest(latest)
@@ -336,6 +320,19 @@ func insertInstall(t *testing.T, s *server, id, version string, firstSeen, lastS
 		 VALUES (?, ?, 'linux', 'amd64', ?, ?, 'docker')`,
 		id, version, firstSeen, lastSeen); err != nil {
 		t.Fatalf("insert install %s: %v", id, err)
+	}
+	insertActivity(t, s, id, version, lastSeen)
+}
+
+// insertActivity mirrors the ledger row handlePing writes alongside every
+// installs upsert, attributing the install to its ping day.
+func insertActivity(t *testing.T, s *server, id, version string, day time.Time) {
+	t.Helper()
+	if _, err := s.db.ExecContext(context.Background(),
+		`INSERT INTO daily_activity (day, install_id, version) VALUES (?, ?, ?)
+		 ON CONFLICT(day, install_id) DO UPDATE SET version = excluded.version`,
+		day.UTC().Format("2006-01-02"), id, version); err != nil {
+		t.Fatalf("insert activity %s: %v", id, err)
 	}
 }
 
@@ -567,6 +564,7 @@ func insertInstallWithFeatures(t *testing.T, s *server, id, version string, firs
 		id, version, firstSeen, lastSeen, featuresJSON); err != nil {
 		t.Fatalf("insert install %s: %v", id, err)
 	}
+	insertActivity(t, s, id, version, lastSeen)
 }
 
 // TestHandlePing_StoresFeatures verifies a ping with a features payload
@@ -873,12 +871,18 @@ func TestSnapshotDayReplaceVersionRows(t *testing.T) {
 		t.Fatalf("first snapshot: %v", err)
 	}
 
-	// Move the install to 1.15.2; re-snapshot. The 1.14.0 row from the
-	// first snapshot must disappear.
+	// Move the install to 1.15.2 (both the installs row and its ledger row
+	// for the day, as a real upgrade ping would); re-snapshot. The 1.14.0
+	// row from the first snapshot must disappear.
 	if _, err := s.db.ExecContext(context.Background(),
 		`UPDATE installs SET version = '1.15.2' WHERE install_id = ?`, uuid('1'),
 	); err != nil {
 		t.Fatalf("update version: %v", err)
+	}
+	if _, err := s.db.ExecContext(context.Background(),
+		`UPDATE daily_activity SET version = '1.15.2' WHERE install_id = ?`, uuid('1'),
+	); err != nil {
+		t.Fatalf("update ledger version: %v", err)
 	}
 	if err := s.snapshotDay(context.Background(), target); err != nil {
 		t.Fatalf("second snapshot: %v", err)
@@ -1147,5 +1151,306 @@ func TestReconcileNewInstallsSeed(t *testing.T) {
 	}
 	if raised2 != 0 {
 		t.Errorf("second reconcile raised = %d, want 0 (idempotent)", raised2)
+	}
+}
+
+// TestSqliteDSN_PragmasApply opens a real file-backed DB with the
+// production DSN and asserts the pragmas took effect. This is the
+// regression test for the silent-DSN bug: the old mattn-style params
+// (`_journal=WAL&_timeout=5000`) were ignored by modernc.org/sqlite, so
+// journal_mode stayed DELETE and busy_timeout stayed 0 — invisible to any
+// test that opened ":memory:" without the production DSN.
+func TestSqliteDSN_PragmasApply(t *testing.T) {
+	db, err := sql.Open("sqlite", sqliteDSN(t.TempDir()+"/t.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	var journal string
+	if err := db.QueryRowContext(context.Background(),
+		`PRAGMA journal_mode`).Scan(&journal); err != nil {
+		t.Fatalf("journal_mode: %v", err)
+	}
+	if journal != "wal" {
+		t.Errorf("journal_mode = %q, want wal", journal)
+	}
+	var timeout int
+	if err := db.QueryRowContext(context.Background(),
+		`PRAGMA busy_timeout`).Scan(&timeout); err != nil {
+		t.Fatalf("busy_timeout: %v", err)
+	}
+	if timeout != 5000 {
+		t.Errorf("busy_timeout = %d, want 5000", timeout)
+	}
+}
+
+// TestComputeStats_DailyCountsEveryActiveDay is the regression test for
+// the daily-activity chart: an install that pings on two consecutive days
+// must count toward BOTH days. The old query grouped installs by
+// substr(last_seen,1,10), which attributed each install only to its most
+// recent ping day — historical days degraded into "installs that went
+// dormant that day" and the newest days absorbed everyone else, rendering
+// as spurious spikes.
+func TestComputeStats_DailyCountsEveryActiveDay(t *testing.T) {
+	s := newTestServer(t, "v1.15.3")
+	now := time.Now().UTC()
+	yesterday := now.AddDate(0, 0, -1)
+
+	// installs row carries only the latest state (last_seen = today) …
+	insertInstall(t, s, uuid('1'), "1.15.3", now.AddDate(0, 0, -10), now)
+	// … but the ledger remembers yesterday's activity too.
+	insertActivity(t, s, uuid('1'), "1.15.3", yesterday)
+
+	d, err := s.computeStats(context.Background())
+	if err != nil {
+		t.Fatalf("computeStats: %v", err)
+	}
+	got := map[string]int{}
+	for _, b := range d.Daily {
+		got[b.Day.Format("2006-01-02")] = b.Count
+	}
+	for _, day := range []string{
+		yesterday.Format("2006-01-02"),
+		now.Format("2006-01-02"),
+	} {
+		if got[day] != 1 {
+			t.Errorf("daily[%s] = %d, want 1 (install was active both days)", day, got[day])
+		}
+	}
+
+	// Same property for the stacked version trend.
+	verGot := map[string]int{}
+	for _, vd := range d.VersionTrend {
+		verGot[vd.Day.Format("2006-01-02")] = vd.Versions["1.15.3"]
+	}
+	for _, day := range []string{
+		yesterday.Format("2006-01-02"),
+		now.Format("2006-01-02"),
+	} {
+		if verGot[day] != 1 {
+			t.Errorf("versionTrend[%s][1.15.3] = %d, want 1", day, verGot[day])
+		}
+	}
+}
+
+// TestHandlePing_WritesLedger verifies the ping handler writes the
+// (day, install) ledger row alongside the installs upsert, and that a
+// second same-day ping updates the ledger row's version in place instead
+// of duplicating it.
+func TestHandlePing_WritesLedger(t *testing.T) {
+	s := newTestServer(t, "v1.15.3")
+	s.limiter = newRateLimiter(time.Hour, time.Minute)
+
+	ping := func(version, remoteAddr string) {
+		t.Helper()
+		body, _ := json.Marshal(pingRequest{
+			InstallID: "11111111-1111-1111-1111-111111111111",
+			Version:   version, OS: "linux", Arch: "amd64",
+		})
+		r := httptest.NewRequest(http.MethodPost, "/api/ping", bytes.NewReader(body))
+		r.RemoteAddr = remoteAddr // distinct IPs bypass the per-IP rate limit
+		w := httptest.NewRecorder()
+		s.handlePing(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("ping status = %d, body = %s", w.Code, w.Body.String())
+		}
+	}
+	ping("1.15.2", "192.0.2.10:1234")
+	ping("1.15.3", "192.0.2.11:1234") // same-day upgrade
+
+	today := time.Now().UTC().Format("2006-01-02")
+	var n int
+	var version string
+	if err := s.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*), MAX(version) FROM daily_activity WHERE day = ?`, today,
+	).Scan(&n, &version); err != nil {
+		t.Fatalf("read ledger: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("ledger rows for today = %d, want 1 (same-day pings collapse)", n)
+	}
+	if version != "1.15.3" {
+		t.Errorf("ledger version = %q, want 1.15.3 (last ping of the day wins)", version)
+	}
+}
+
+// TestSeedActivityLedger verifies the one-time migration: an empty ledger
+// is seeded from installs.last_seen and the epoch is recorded; a second
+// call is a no-op (idempotent across restarts).
+func TestSeedActivityLedger(t *testing.T) {
+	s := newTestServer(t, "v1.15.3")
+	now := time.Now().UTC()
+	// Bypass insertInstall — pre-migration DBs have no ledger rows.
+	for _, id := range []byte{'1', '2'} {
+		if _, err := s.db.ExecContext(context.Background(),
+			`INSERT INTO installs (install_id, version, os, arch, first_seen, last_seen, deploy)
+			 VALUES (?, '1.15.2', 'linux', 'amd64', ?, ?, 'docker')`,
+			uuid(id), now.AddDate(0, 0, -10), now); err != nil {
+			t.Fatalf("insert install: %v", err)
+		}
+	}
+
+	if err := seedActivityLedger(context.Background(), s.db); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	var n int
+	if err := s.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM daily_activity`).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("ledger rows after seed = %d, want 2", n)
+	}
+	var epoch string
+	if err := s.db.QueryRowContext(context.Background(),
+		`SELECT value FROM meta WHERE key = ?`, ledgerEpochKey).Scan(&epoch); err != nil {
+		t.Fatalf("epoch: %v", err)
+	}
+	if epoch != now.Format("2006-01-02") {
+		t.Errorf("epoch = %q, want %q", epoch, now.Format("2006-01-02"))
+	}
+
+	// Second call: no-op, no duplicate rows, epoch unchanged.
+	if err := seedActivityLedger(context.Background(), s.db); err != nil {
+		t.Fatalf("re-seed: %v", err)
+	}
+	if err := s.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM daily_activity`).Scan(&n); err != nil {
+		t.Fatalf("recount: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("ledger rows after re-seed = %d, want 2 (idempotent)", n)
+	}
+}
+
+// TestSweepStaleAndDev_LedgerRetention verifies ledger rows age out on the
+// 400-day ledger clock while recent rows survive the 60-day installs sweep.
+func TestSweepStaleAndDev_LedgerRetention(t *testing.T) {
+	s := newTestServer(t, "v1.15.3")
+	now := time.Now().UTC()
+	insertActivity(t, s, uuid('1'), "1.15.2", now.AddDate(0, 0, -401)) // past ledger retention
+	insertActivity(t, s, uuid('2'), "1.15.2", now.AddDate(0, 0, -100)) // inside it (but past installs')
+	insertActivity(t, s, uuid('3'), "1.15.3", now)
+
+	if _, err := sweepStaleAndDev(context.Background(), s.db); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	rows, err := s.db.QueryContext(context.Background(),
+		`SELECT install_id FROM daily_activity ORDER BY day`)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	defer rows.Close()
+	var kept []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		kept = append(kept, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iter: %v", err)
+	}
+	want := []string{uuid('2'), uuid('3')}
+	if len(kept) != 2 || kept[0] != want[0] || kept[1] != want[1] {
+		t.Errorf("kept = %v, want %v", kept, want)
+	}
+}
+
+// TestLoadLedgerBackfill covers the historical-recovery path: importing a
+// gzipped (day, install_id, version) CSV populates the ledger, re-derives
+// active_day + daily_version for the touched days without disturbing
+// new_installs/total, lowers the epoch, and is a no-op on re-run.
+func TestLoadLedgerBackfill(t *testing.T) {
+	s := newTestServer(t, "v1.15.3")
+	ctx := context.Background()
+
+	// Pre-existing state: a (wrong, undercounted) aggregate row for the
+	// backfill day with historical new_installs/total that must survive,
+	// an epoch later than the backfill span, and one ledger row that the
+	// import must not duplicate.
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO daily_global (day, active_day, new_installs, total) VALUES ('2026-06-01', 7, 12, 300)`,
+	); err != nil {
+		t.Fatalf("seed daily_global: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO meta (key, value) VALUES (?, '2026-08-01')`, ledgerEpochKey,
+	); err != nil {
+		t.Fatalf("seed epoch: %v", err)
+	}
+	insertActivity(t, s, uuid('1'), "1.15.2", time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC))
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	// uuid('1') on 2026-06-01 duplicates the existing ledger row; the
+	// malformed line must be skipped without failing the import.
+	for _, line := range []string{
+		"2026-06-01," + uuid('1') + ",1.15.2",
+		"2026-06-01," + uuid('2') + ",1.15.2",
+		"2026-06-01," + uuid('3') + ",1.15.1",
+		"2026-06-02," + uuid('2') + ",1.15.2",
+		"not-a-day,junk,1.15.2",
+	} {
+		if _, err := gz.Write([]byte(line + "\n")); err != nil {
+			t.Fatalf("gzip write: %v", err)
+		}
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "backfill.csv.gz")
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatalf("write backfill: %v", err)
+	}
+
+	n, err := s.loadLedgerBackfill(ctx, path)
+	if err != nil {
+		t.Fatalf("loadLedgerBackfill: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("rows inserted = %d, want 3 (1 dup ignored, 1 malformed skipped)", n)
+	}
+
+	var activeDay, newInstalls, total int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT active_day, new_installs, total FROM daily_global WHERE day = '2026-06-01'`,
+	).Scan(&activeDay, &newInstalls, &total); err != nil {
+		t.Fatalf("read daily_global: %v", err)
+	}
+	if activeDay != 3 {
+		t.Errorf("active_day = %d, want 3 (re-derived from ledger)", activeDay)
+	}
+	if newInstalls != 12 || total != 300 {
+		t.Errorf("new_installs/total = %d/%d, want 12/300 (historical values preserved)", newInstalls, total)
+	}
+
+	var verCount int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT active_count FROM daily_version WHERE day = '2026-06-01' AND version = '1.15.2'`,
+	).Scan(&verCount); err != nil {
+		t.Fatalf("read daily_version: %v", err)
+	}
+	if verCount != 2 {
+		t.Errorf("daily_version[1.15.2] = %d, want 2", verCount)
+	}
+
+	var epoch string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT value FROM meta WHERE key = ?`, ledgerEpochKey).Scan(&epoch); err != nil {
+		t.Fatalf("read epoch: %v", err)
+	}
+	if epoch != "2026-06-01" {
+		t.Errorf("epoch = %q, want 2026-06-01 (lowered to earliest backfill day)", epoch)
+	}
+
+	// Second run with the same file: done-marker short-circuits.
+	n2, err := s.loadLedgerBackfill(ctx, path)
+	if err != nil {
+		t.Fatalf("re-run: %v", err)
+	}
+	if n2 != 0 {
+		t.Errorf("re-run inserted = %d, want 0 (done marker)", n2)
 	}
 }

@@ -69,6 +69,16 @@ spec:
                 secretKeyRef:
                   name: bindery-ping-secret
                   key: stats-token
+            # One-time historical recovery (2026-08): per-day activity
+            # reconstructed offline from archived /api/backup snapshots +
+            # ping log lines. The CSV holds install UUIDs, so it is NOT in
+            # git — the ConfigMap is created out-of-band:
+            #   kubectl -n bindery-ping create configmap ledger-backfill \
+            #     --from-file=ledger.csv.gz=ledger_backfill.csv.gz
+            # The loader is a guarded no-op after the first import (and when
+            # the file is absent), so this stays safe to leave mounted.
+            - name: LEDGER_BACKFILL_PATH
+              value: /backfill/ledger.csv.gz
           ports:
             - containerPort: 8080
           readinessProbe:
@@ -93,10 +103,17 @@ spec:
             # stdlib path that falls back to it.
             - name: tmp
               mountPath: /tmp
+            - name: backfill
+              mountPath: /backfill
+              readOnly: true
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: bindery-ping-data
+        - name: backfill
+          configMap:
+            name: ledger-backfill
+            optional: true
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
