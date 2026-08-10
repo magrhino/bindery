@@ -48,7 +48,7 @@ export default function BooksPage() {
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [sort, setSort] = useState<SortMode>('title-az')
   const [view, setView] = useView('books', 'grid')
-  const needsSetup = useNeedsSetup()
+  const { needsIndexer, needsClient, needsAny } = useNeedsSetup()
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [bulkBusy, setBulkBusy] = useState(false)
   const selectAllRef = useRef<HTMLInputElement>(null)
@@ -219,7 +219,7 @@ export default function BooksPage() {
         <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
           {!debouncedSearch && !statusFilter && !mediaFilter && !monitoredFilter ? (
             <>
-              {needsSetup && <GettingStartedGuidance reasonKey="gettingStarted.reasonBooks" />}
+              {needsAny && <GettingStartedGuidance reasonKey="gettingStarted.reasonBooks" needsIndexer={needsIndexer} needsClient={needsClient} />}
               <p className="font-medium">{t('books.empty')}</p>
               <p className="text-sm mt-1">{t('books.emptyHint')}</p>
             </>

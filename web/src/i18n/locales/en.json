@@ -1000,8 +1000,13 @@
     "title": "Getting started",
     "reasonAuthors": "Configure an indexer and a download client before adding authors — without them, added authors won't fetch anything.",
     "reasonBooks": "Configure an indexer and a download client before searching — without them, searches can't find or grab anything.",
+    "clientMissing": "An indexer is configured but there is no download client — searches will find releases, but every grab will fail.",
+    "indexerMissing": "A download client is configured but there is no indexer — searches have nowhere to look and will find nothing.",
     "indexers": "Set up Indexers",
     "downloadClients": "Set up Download Clients"
+  },
+  "setupBanner": {
+    "both": "Finish setting up: add an indexer and a download client so searches and downloads work."
   },
   "users": {
     "title": "Users",

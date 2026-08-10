@@ -1,0 +1,2 @@
+### Fixed
+- **Half-configured installs now get setup guidance.** The getting-started card required indexers AND download clients to BOTH be missing, so a user who had configured one of the two — the state where searches or grabs fail silently — saw no guidance at all. It now names the one missing step ("…every grab will fail") and links only to it. Guidance also no longer hides inside the Authors/Books empty states: a dismissible banner in the app shell shows while the pipeline is incomplete, so library-importers (whose pages are never empty) finally see it too.

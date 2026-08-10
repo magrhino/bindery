@@ -83,27 +83,39 @@ describe('AuthorsPage first-run onboarding guidance', () => {
     expect(clientsLink).toHaveAttribute('href', '/settings?tab=clients')
   })
 
-  it('does NOT show the guidance when at least one indexer exists', async () => {
+  // Half-configured states used to show NOTHING (the hook required both
+  // lists empty), which is exactly the state where grabs fail silently.
+  // Now the guidance names the one missing step and links only to it.
+  it('shows only the download-client step when an indexer exists but no client', async () => {
     vi.mocked(api.listIndexers).mockResolvedValue([fakeIndexer])
     vi.mocked(api.listDownloadClients).mockResolvedValue([])
 
     renderPage()
 
-    // Normal empty state still renders...
-    expect(await screen.findByText('No authors yet')).toBeInTheDocument()
-    // ...but the guidance does not.
-    await waitFor(() => expect(api.listIndexers).toHaveBeenCalled())
-    expect(screen.queryByText('Getting started')).not.toBeInTheDocument()
+    expect(await screen.findByText('Getting started')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Set up Download Clients' })).toHaveAttribute('href', '/settings?tab=clients')
+    expect(screen.queryByRole('link', { name: 'Set up Indexers' })).not.toBeInTheDocument()
   })
 
-  it('does NOT show the guidance when at least one download client exists', async () => {
+  it('shows only the indexer step when a client exists but no indexer', async () => {
     vi.mocked(api.listIndexers).mockResolvedValue([])
     vi.mocked(api.listDownloadClients).mockResolvedValue([fakeClient])
 
     renderPage()
 
+    expect(await screen.findByText('Getting started')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Set up Indexers' })).toHaveAttribute('href', '/settings?tab=indexers')
+    expect(screen.queryByRole('link', { name: 'Set up Download Clients' })).not.toBeInTheDocument()
+  })
+
+  it('does NOT show the guidance when both an indexer and a client exist', async () => {
+    vi.mocked(api.listIndexers).mockResolvedValue([fakeIndexer])
+    vi.mocked(api.listDownloadClients).mockResolvedValue([fakeClient])
+
+    renderPage()
+
     expect(await screen.findByText('No authors yet')).toBeInTheDocument()
-    await waitFor(() => expect(api.listDownloadClients).toHaveBeenCalled())
+    await waitFor(() => expect(api.listIndexers).toHaveBeenCalled())
     expect(screen.queryByText('Getting started')).not.toBeInTheDocument()
   })
 })

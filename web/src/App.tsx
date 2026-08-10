@@ -7,6 +7,7 @@ import AuthGuard from './auth/AuthGuard'
 import PublicOnlyRoute from './auth/PublicOnlyRoute'
 import ErrorBoundary from './components/ErrorBoundary'
 import Logo from './components/Logo'
+import SetupBanner from './components/SetupBanner'
 import VersionBadge from './components/VersionBadge'
 import { useTheme } from './theme'
 
@@ -240,6 +241,8 @@ function Shell() {
           </div>
         )}
       </header>
+
+      {isAdmin && <SetupBanner />}
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <Suspense fallback={<PageLoadingFallback />}>

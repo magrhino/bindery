@@ -47,6 +47,9 @@ vi.mock('./auth/AuthContext', () => ({
 vi.mock('./api/client', () => ({
   api: {
     status: vi.fn().mockResolvedValue({ version: '0.15.0', commit: 'abc', buildDate: '' }),
+    // SetupBanner (mounted in the admin shell) probes these on mount.
+    listIndexers: vi.fn().mockResolvedValue([]),
+    listDownloadClients: vi.fn().mockResolvedValue([]),
   },
 }))
 
