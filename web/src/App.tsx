@@ -7,6 +7,7 @@ import AuthGuard from './auth/AuthGuard'
 import PublicOnlyRoute from './auth/PublicOnlyRoute'
 import ErrorBoundary from './components/ErrorBoundary'
 import Logo from './components/Logo'
+import VersionBadge from './components/VersionBadge'
 import { useTheme } from './theme'
 
 // Route-scoped error boundary: a render crash in one page shows an inline error
@@ -65,11 +66,15 @@ function Shell() {
   useTheme() // ensures dark class is applied on every mount, not only when Settings is visited
   const { t } = useTranslation()
   const [version, setVersion] = useState('')
+  const [latestVersion, setLatestVersion] = useState<string | undefined>(undefined)
   const [menuOpen, setMenuOpen] = useState(false)
   const { status, logout, isAdmin } = useAuth()
 
   useEffect(() => {
-    api.status().then(s => setVersion(s.version)).catch(() => {})
+    api.status().then(s => {
+      setVersion(s.version)
+      setLatestVersion(s.latestVersion)
+    }).catch(() => {})
   }, [])
 
   const linkClass = ({ isActive }: { isActive: boolean }) =>
@@ -144,23 +149,7 @@ function Shell() {
                 </svg>
               </NavLink>
               {isAdmin && version && (
-                /^\d+\.\d+/.test(version) ? (
-                  <a
-                    href={`https://github.com/vavallee/bindery/releases/tag/v${version}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="hidden lg:block text-xs text-fg-muted hover:underline whitespace-nowrap"
-                  >
-                    {`v${version}`}
-                  </a>
-                ) : (
-                  <a
-                    href="https://github.com/vavallee/bindery/releases"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="hidden lg:block text-xs text-fg-muted hover:underline whitespace-nowrap"
-                  >{version}</a>
-                )
+                <VersionBadge version={version} latestVersion={latestVersion} className="hidden lg:block" />
               )}
               {status?.authenticated && status.mode !== 'disabled' && (
                 <>
@@ -237,23 +226,7 @@ function Shell() {
             </nav>
             <div className="flex items-center justify-between px-4 py-2 border-t border-slate-200 dark:border-zinc-800">
               {isAdmin && version && (
-                /^\d+\.\d+/.test(version) ? (
-                  <a
-                    href={`https://github.com/vavallee/bindery/releases/tag/v${version}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs text-slate-500 dark:text-zinc-600 hover:underline"
-                  >
-                    {`v${version}`}
-                  </a>
-                ) : (
-                  <a
-                    href="https://github.com/vavallee/bindery/releases"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs text-slate-500 dark:text-zinc-600 hover:underline"
-                  >{version}</a>
-                )
+                <VersionBadge version={version} latestVersion={latestVersion} />
               )}
               {status?.authenticated && status.mode !== 'disabled' && (
                 <button

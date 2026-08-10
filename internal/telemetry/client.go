@@ -30,6 +30,7 @@ import (
 	"os"
 	"regexp"
 	"runtime"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -203,9 +204,11 @@ type Gatherer func(ctx context.Context) Features
 
 // Client sends anonymous usage pings and surfaces the latest published version.
 type Client struct {
-	settings       *db.SettingsRepo
-	version        string
-	latestVersion  string
+	settings *db.SettingsRepo
+	version  string
+	// latestVersion is written by the ping goroutine and read by the
+	// /system/status HTTP handler, so it must be atomic. Holds a string.
+	latestVersion  atomic.Value
 	gatherer       Gatherer
 	errorsGatherer ErrorsGatherer
 }
@@ -237,9 +240,11 @@ func (c *Client) WithErrorsGatherer(g ErrorsGatherer) *Client {
 }
 
 // LatestVersion returns the most recently received latest-version string from
-// the ping server. Empty string means no ping has succeeded yet.
+// the ping server. Empty string means no ping has succeeded yet (or telemetry
+// is disabled, in which case no update information is available by design).
 func (c *Client) LatestVersion() string {
-	return c.latestVersion
+	v, _ := c.latestVersion.Load().(string)
+	return v
 }
 
 // Ping sends one anonymous ping if telemetry is enabled. It is safe to call
@@ -313,7 +318,7 @@ func (c *Client) Ping(ctx context.Context) {
 		LatestVersion string `json:"latest_version"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&reply); err == nil && reply.LatestVersion != "" {
-		c.latestVersion = reply.LatestVersion
+		c.latestVersion.Store(reply.LatestVersion)
 		slog.Debug("telemetry: ping ok", "latest", reply.LatestVersion)
 	}
 }

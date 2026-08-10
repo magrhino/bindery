@@ -1,6 +1,7 @@
 import { ReactNode, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, SystemStatus } from '../../api/client'
+import { isNewerRelease } from '../../util/version'
 
 // Where the in-app "check Settings → About" guidance (update message,
 // bug_report.yml pre-flight) lands. Surfaces the build identity already exposed
@@ -73,6 +74,20 @@ export default function AboutTab() {
               <Row label={t('settings.about.version', 'Version')}>
                 <ReleaseLink version={status.version} />
               </Row>
+              {status.latestVersion !== undefined && isNewerRelease(status.version, status.latestVersion) && (
+                <Row label={t('settings.about.update', 'Update')}>
+                  <a
+                    href={`https://github.com/vavallee/bindery/releases/tag/v${status.latestVersion.replace(/^v/, '')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm font-medium text-amber-600 dark:text-amber-400 hover:underline"
+                  >
+                    {t('settings.about.updateAvailable', 'v{{version}} available', {
+                      version: status.latestVersion.replace(/^v/, ''),
+                    })}
+                  </a>
+                </Row>
+              )}
               <Row label={t('settings.about.commit', 'Commit')}>
                 <code className="font-mono text-xs">{status.commit}</code>
               </Row>

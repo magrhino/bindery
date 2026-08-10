@@ -4,6 +4,9 @@ export interface SystemStatus {
   version: string
   commit: string
   buildDate: string
+  /** Newest published release per the ping server; absent when unknown
+   *  (no successful ping yet, or telemetry disabled). */
+  latestVersion?: string
   imageCacheBytes?: number
   enhancedHardcoverApi: boolean
   hardcoverTokenConfigured: boolean

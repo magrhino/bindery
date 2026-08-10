@@ -69,7 +69,8 @@
     "search": "Search",
     "blocklist": "Blocklist",
     "settings": "Settings",
-    "users": "Users"
+    "users": "Users",
+    "updateAvailable": "Update available"
   },
   "manualImport": {
     "title": "Manual Import",
@@ -438,6 +439,8 @@
       "version": "Version",
       "commit": "Commit",
       "buildDate": "Build date",
+      "update": "Update",
+      "updateAvailable": "v{{version}} available",
       "loadError": "Could not load build details."
     },
     "abs": {
