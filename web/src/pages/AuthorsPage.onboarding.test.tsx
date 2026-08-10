@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import AuthorsPage from './AuthorsPage'
 import { api } from '../api/client'
-import type { Indexer, DownloadClient } from '../api/client'
+import type { SetupState } from '../api/client'
 
 vi.mock('../api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('../api/client')>()
@@ -12,8 +12,7 @@ vi.mock('../api/client', async importOriginal => {
     api: {
       ...actual.api,
       listAuthors: vi.fn(),
-      listIndexers: vi.fn(),
-      listDownloadClients: vi.fn(),
+      setupState: vi.fn(),
     },
   }
 })
@@ -24,10 +23,15 @@ vi.mock('react-i18next', () => ({
       const labels: Record<string, string> = {
         'authors.empty': 'No authors yet',
         'authors.emptyHint': 'Click Add Author to start',
-        'gettingStarted.title': 'Getting started',
-        'gettingStarted.reasonAuthors': 'Configure an indexer and a download client before adding authors.',
+        'setupChecklist.title': 'Setup progress',
+        'setupChecklist.indexer': 'Add an indexer',
+        'setupChecklist.client': 'Add a download client',
+        'setupChecklist.author': 'Add an author',
+        'setupChecklist.grab': 'Grab a book',
+        'setupChecklist.import': 'First book imported',
         'gettingStarted.indexers': 'Set up Indexers',
         'gettingStarted.downloadClients': 'Set up Download Clients',
+        'common.dismiss': 'Dismiss',
       }
       return labels[key] ?? fallback ?? key
     },
@@ -51,8 +55,17 @@ vi.mock('../components/usePagination', () => ({
 
 vi.mock('../components/Pagination', () => ({ default: () => null }))
 
-const fakeIndexer = { id: 1, name: 'NZBgeek' } as unknown as Indexer
-const fakeClient = { id: 1, name: 'qBittorrent' } as unknown as DownloadClient
+function state(overrides: Partial<SetupState> = {}): SetupState {
+  return {
+    hasIndexer: false,
+    hasClient: false,
+    hasAuthor: false,
+    hasGrab: false,
+    hasImport: false,
+    complete: false,
+    ...overrides,
+  }
+}
 
 function renderPage() {
   return render(
@@ -62,60 +75,67 @@ function renderPage() {
   )
 }
 
-describe('AuthorsPage first-run onboarding guidance', () => {
+describe('AuthorsPage setup checklist', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.clear()
     vi.mocked(api.listAuthors).mockResolvedValue({ items: [], total: 0, limit: 100, offset: 0 })
   })
 
-  it('shows the getting-started guidance with links to settings when there are no authors and no indexers/clients', async () => {
-    vi.mocked(api.listIndexers).mockResolvedValue([])
-    vi.mocked(api.listDownloadClients).mockResolvedValue([])
+  it('lists every outstanding step with links to the settings tabs', async () => {
+    vi.mocked(api.setupState).mockResolvedValue(state())
 
     renderPage()
 
-    const heading = await screen.findByText('Getting started')
-    expect(heading).toBeInTheDocument()
-
-    const indexersLink = screen.getByRole('link', { name: 'Set up Indexers' })
-    expect(indexersLink).toHaveAttribute('href', '/settings?tab=indexers')
-    const clientsLink = screen.getByRole('link', { name: 'Set up Download Clients' })
-    expect(clientsLink).toHaveAttribute('href', '/settings?tab=clients')
-  })
-
-  // Half-configured states used to show NOTHING (the hook required both
-  // lists empty), which is exactly the state where grabs fail silently.
-  // Now the guidance names the one missing step and links only to it.
-  it('shows only the download-client step when an indexer exists but no client', async () => {
-    vi.mocked(api.listIndexers).mockResolvedValue([fakeIndexer])
-    vi.mocked(api.listDownloadClients).mockResolvedValue([])
-
-    renderPage()
-
-    expect(await screen.findByText('Getting started')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Set up Download Clients' })).toHaveAttribute('href', '/settings?tab=clients')
-    expect(screen.queryByRole('link', { name: 'Set up Indexers' })).not.toBeInTheDocument()
-  })
-
-  it('shows only the indexer step when a client exists but no indexer', async () => {
-    vi.mocked(api.listIndexers).mockResolvedValue([])
-    vi.mocked(api.listDownloadClients).mockResolvedValue([fakeClient])
-
-    renderPage()
-
-    expect(await screen.findByText('Getting started')).toBeInTheDocument()
+    expect(await screen.findByText('Setup progress')).toBeInTheDocument()
+    expect(screen.getByText('0/5')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Set up Indexers' })).toHaveAttribute('href', '/settings?tab=indexers')
-    expect(screen.queryByRole('link', { name: 'Set up Download Clients' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Set up Download Clients' })).toHaveAttribute('href', '/settings?tab=clients')
   })
 
-  it('does NOT show the guidance when both an indexer and a client exist', async () => {
-    vi.mocked(api.listIndexers).mockResolvedValue([fakeIndexer])
-    vi.mocked(api.listDownloadClients).mockResolvedValue([fakeClient])
+  it('counts completed steps and drops their action links', async () => {
+    vi.mocked(api.setupState).mockResolvedValue(state({ hasIndexer: true, hasClient: true, hasAuthor: true }))
+
+    renderPage()
+
+    expect(await screen.findByText('3/5')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Set up Indexers' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Set up Download Clients' })).not.toBeInTheDocument()
+    // Outstanding steps still listed.
+    expect(screen.getByText('Grab a book')).toBeInTheDocument()
+  })
+
+  // The checklist is a first-run aid, not a permanent fixture: once the
+  // pipeline has produced an import it must disappear for good.
+  it('hides itself once setup is complete', async () => {
+    vi.mocked(api.setupState).mockResolvedValue(
+      state({ hasIndexer: true, hasClient: true, hasAuthor: true, hasGrab: true, hasImport: true, complete: true }),
+    )
 
     renderPage()
 
     expect(await screen.findByText('No authors yet')).toBeInTheDocument()
-    await waitFor(() => expect(api.listIndexers).toHaveBeenCalled())
-    expect(screen.queryByText('Getting started')).not.toBeInTheDocument()
+    await waitFor(() => expect(api.setupState).toHaveBeenCalled())
+    expect(screen.queryByText('Setup progress')).not.toBeInTheDocument()
+  })
+
+  it('stays hidden when the setup-state request fails', async () => {
+    vi.mocked(api.setupState).mockRejectedValue(new Error('boom'))
+
+    renderPage()
+
+    expect(await screen.findByText('No authors yet')).toBeInTheDocument()
+    await waitFor(() => expect(api.setupState).toHaveBeenCalled())
+    expect(screen.queryByText('Setup progress')).not.toBeInTheDocument()
+  })
+
+  it('respects a stored dismissal', async () => {
+    localStorage.setItem('bindery.setupChecklistDismissed', '1')
+    vi.mocked(api.setupState).mockResolvedValue(state())
+
+    renderPage()
+
+    expect(await screen.findByText('No authors yet')).toBeInTheDocument()
+    expect(screen.queryByText('Setup progress')).not.toBeInTheDocument()
   })
 })

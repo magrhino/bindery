@@ -13,6 +13,18 @@ export interface SystemStatus {
   enhancedHardcoverDisabledReason?: 'env_disabled' | 'missing_token' | 'admin_disabled' | string
 }
 
+/** Onboarding-checklist progress; see internal/api/setup_state.go for why
+ *  the indexer/client fields are current state while the rest are
+ *  ever-happened. */
+export interface SetupState {
+  hasIndexer: boolean
+  hasClient: boolean
+  hasAuthor: boolean
+  hasGrab: boolean
+  hasImport: boolean
+  complete: boolean
+}
+
 export interface LogEntry {
   // Ring buffer shape
   time?: string
@@ -49,6 +61,7 @@ export const systemApi = {
   // System
   health: () => request<{ status: string; version: string }>('/health'),
   status: () => request<SystemStatus>('/system/status'),
+  setupState: () => request<SetupState>('/system/setup-state'),
   getLogs: (params?: { level?: string; component?: string; from?: string; to?: string; q?: string; limit?: number; offset?: number }) => {
     const p: Record<string, string> = {}
     if (params?.level) p.level = params.level

@@ -562,6 +562,7 @@ func main() {
 	} else {
 		slog.Warn("download client startup health check skipped", "error", err)
 	}
+	setupStateHandler := api.NewSetupStateHandler(indexerRepo, dlClientRepo, authorRepo, settingsRepo)
 	dlClientHandler := api.NewDownloadClientHandler(dlClientRepo).
 		WithHealth(downloadHealth).
 		WithStoragePaths(cfg.DownloadDir, cfg.AudiobookDownloadDir).
@@ -778,6 +779,9 @@ func main() {
 				EnhancedHardcoverDisabledReason: hardcoverState.EnhancedHardcoverDisabledReason,
 			})
 		})
+
+		// Onboarding checklist state (indexer/client/author/grab/import).
+		r.Get("/system/setup-state", setupStateHandler.Get)
 
 		// Auth — status/login/logout/setup are always allowed through the
 		// middleware (see auth.AllowUnauthPath). The config + mutation

@@ -1015,6 +1015,14 @@
     "updated": "Updated to v{{version}}.",
     "link": "See what's new"
   },
+  "setupChecklist": {
+    "title": "Setup progress",
+    "indexer": "Add an indexer",
+    "client": "Add a download client",
+    "author": "Add an author",
+    "grab": "Grab a book",
+    "import": "First book imported"
+  },
   "protocolMismatch": {
     "torrent": "A Torznab indexer is enabled but no torrent download client (qBittorrent, Transmission, Deluge) is — its releases can be found but never downloaded.",
     "usenet": "A Newznab indexer is enabled but no usenet download client (SABnzbd, NZBGet) is — its releases can be found but never downloaded."

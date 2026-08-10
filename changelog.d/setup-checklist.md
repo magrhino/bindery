@@ -1,0 +1,2 @@
+### Added
+- **Setup progress checklist** on the Authors page — indexer → download client → author → grab → import, ticking off as each happens and disappearing for good once a book has imported. This is the "your setup works" confirmation the app never had: until now the only evidence that first-run setup succeeded was a download showing up hours later, so a mis-wired install looked identical to a working one. Backed by a new `GET /api/v1/system/setup-state`; it replaces the getting-started card on that page (the checklist says everything the card did, plus what comes next).

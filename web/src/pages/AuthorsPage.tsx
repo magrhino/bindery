@@ -11,8 +11,7 @@ import Pagination from '../components/Pagination'
 import { useServerPagination } from '../components/usePagination'
 import ViewToggle from '../components/ViewToggle'
 import { useView } from '../components/useView'
-import GettingStartedGuidance from '../components/GettingStartedGuidance'
-import { useNeedsSetup } from '../components/useNeedsSetup'
+import SetupChecklist from '../components/SetupChecklist'
 import { btn, btnSize } from '../components/buttons'
 import Switch from '../components/Switch'
 
@@ -48,7 +47,6 @@ export default function AuthorsPage() {
     return ''
   })
   const [view, setView] = useView('authors', 'grid')
-  const { needsIndexer, needsClient, needsAny } = useNeedsSetup()
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [bulkBusy, setBulkBusy] = useState(false)
   const selectAllRef = useRef<HTMLInputElement>(null)
@@ -368,11 +366,12 @@ export default function AuthorsPage() {
         <button onClick={() => setMonitoredFilter('unmonitored')} className={sortBtnCls(monitoredFilter === 'unmonitored')}>{t('authors.filterUnmonitored')}</button>
       </div>
 
+      <SetupChecklist />
+
       {loading ? (
         <div className="text-slate-600 dark:text-zinc-500">{t('common.loading')}</div>
       ) : total === 0 && !debouncedSearch && !monitoredFilter ? (
         <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
-          {needsAny && <GettingStartedGuidance reasonKey="gettingStarted.reasonAuthors" needsIndexer={needsIndexer} needsClient={needsClient} />}
           <p className="text-lg mb-2">{t('authors.empty')}</p>
           <p className="text-sm">{t('authors.emptyHint')}</p>
         </div>
