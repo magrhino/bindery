@@ -12,7 +12,7 @@ Fix GitHub issue $ARGUMENTS.
 4. Implement the fix on a branch `fix/<n>-<slug>`. Address the root cause, not the symptom.
 5. Security-sensitive area (auth, settings endpoints, user-scoped resources, proxy headers)? Check against the conventions in CLAUDE.md before proceeding.
 6. Run the affected package tests, then lint. Fix what breaks.
-7. Add a CHANGELOG.md entry under Unreleased.
+7. Add a fragment under `changelog.d/` (format in `changelog.d/README.md`; preview with `make changelog`). Do not edit CHANGELOG.md directly — a maintainer assembles it at release time.
 8. Push, open a PR targeting `main` with `Fixes #<n>`, summarize the root cause in the body.
 
 Never tag a release from this workflow — releases follow the flow in CLAUDE.md and are Vincent's call.
