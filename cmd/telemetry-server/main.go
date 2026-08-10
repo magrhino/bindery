@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -740,6 +741,15 @@ type featuresPayload struct {
 	HardcoverToken  *bool `json:"hardcover_token,omitempty"`
 	OIDCEnabled     *bool `json:"oidc_enabled,omitempty"`
 	MultiUser       *bool `json:"multi_user,omitempty"`
+
+	// Setup-funnel day offsets (v1.31.0+): whole days from install creation
+	// to each first milestone; absent = hasn't happened. Must be listed here
+	// or handlePing's normalising re-marshal would silently drop them.
+	SetupIndexerDay *int `json:"setup_indexer_day,omitempty"`
+	SetupClientDay  *int `json:"setup_client_day,omitempty"`
+	FirstAuthorDay  *int `json:"first_author_day,omitempty"`
+	FirstGrabDay    *int `json:"first_grab_day,omitempty"`
+	FirstImportDay  *int `json:"first_import_day,omitempty"`
 }
 
 // validDeploys constrains the set of deploy strings we accept on /api/ping.
@@ -1171,6 +1181,11 @@ const telemetryFieldsHTML = `<!DOCTYPE html>
     <div class="why">Booleans: whether OIDC sign-in is configured, and whether there is more than one user account in the local DB.</div>
   </div>
 
+  <div class="field">
+    <code>features.setup_indexer_day</code> / <code>features.setup_client_day</code> / <code>features.first_author_day</code> / <code>features.first_grab_day</code> / <code>features.first_import_day</code>
+    <div class="why">Integers (v1.31.0+): whole days between install creation and the first time each milestone happened — first indexer added, first download client added, first author added, first grab, first import. 0 means "the same day"; a field is absent until its milestone happens. Never timestamps, dates, or times of day — only a day count. These exist because most installs that never finish initial setup are abandoned within a day, and a day-count is the least data that shows where setup stalls.</div>
+  </div>
+
   <h2>What we don't collect</h2>
 
   <ul>
@@ -1359,6 +1374,12 @@ type statsData struct {
 	TopVersions  []string          // top-N versions for VersionTrend legend
 
 	// Features (last 7d): per-subsystem adoption counts among installs that
+	// Setup funnel: how fast new installs (first_seen in the last 30 days,
+	// on a funnel-capable client version) reach each first milestone.
+	// Filled by computeSetupFunnel; empty slice renders a "no data yet"
+	// note during the rollout window.
+	Funnel []funnelStage
+
 	// have reported a features payload in the last 7 days. FeaturesReporting
 	// is the denominator; each bucket count is the numerator. Older clients
 	// without the features field don't contribute to either, so the
@@ -1567,6 +1588,10 @@ func (s *server) computeStats(ctx context.Context) (*statsData, error) {
 	// Older clients send features = NULL and don't appear in either the
 	// numerator or the denominator, which gives an accurate "% of installs
 	// we have data for" rather than a misleading "% of all installs."
+	if err := s.computeSetupFunnel(ctx, time.Now().UTC().AddDate(0, 0, -30), d); err != nil {
+		return nil, err
+	}
+
 	if err := s.computeFeatureAdoption(ctx, cutoff7d, d); err != nil {
 		return nil, err
 	}
@@ -1702,6 +1727,116 @@ var featureFields = []featureField{
 	{"hardcover_token", "Hardcover enhanced"},
 	{"oidc_enabled", "OIDC auth"},
 	{"multi_user", "Multi-user"},
+}
+
+// funnelMinVersion is the first client release that reports the setup-funnel
+// day offsets. Installs on older versions can't be told apart from installs
+// that stalled before their first milestone (both send no funnel fields), so
+// the funnel cohort is gated on version, not on field presence.
+var funnelMinVersion = [3]int{1, 31, 0}
+
+// funnelCapable reports whether a version string is >= funnelMinVersion.
+func funnelCapable(version string) bool {
+	m := regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)$`).FindStringSubmatch(version)
+	if m == nil {
+		return false
+	}
+	for i := range 3 {
+		n, _ := strconv.Atoi(m[i+1])
+		if n != funnelMinVersion[i] {
+			return n > funnelMinVersion[i]
+		}
+	}
+	return true
+}
+
+// funnelStage is one milestone row in the setup-funnel table. Numerators
+// and denominators are kept per column because the windows differ: an
+// install two days old cannot yet have reached anything "by day 7", so it
+// belongs in the D+1 denominator but not the D+7 one.
+type funnelStage struct {
+	Label  string
+	D1Num  int // reached with day offset <= 1
+	D1Den  int // installs at least 1 day old
+	D7Num  int
+	D7Den  int // installs at least 7 days old
+	Ever   int
+	Cohort int // all funnel-capable installs in the window
+}
+
+func pct(num, den int) string {
+	if den == 0 {
+		return "–"
+	}
+	return fmt.Sprintf("%d%%", int(100*float64(num)/float64(den)+0.5))
+}
+
+// computeSetupFunnel fills d.Funnel from installs first seen inside the
+// window on funnel-capable versions. Row volume is small (new installs per
+// month is in the hundreds), so version filtering happens in Go where the
+// semver compare is honest, not approximated in SQL.
+func (s *server) computeSetupFunnel(ctx context.Context, since time.Time, d *statsData) error {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT version, substr(first_seen, 1, 10), COALESCE(features, '')
+		  FROM installs
+		 WHERE first_seen >= ?`, since)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	stages := []funnelStage{
+		{Label: "Indexer configured"},
+		{Label: "Download client configured"},
+		{Label: "Author added"},
+		{Label: "First grab"},
+		{Label: "First import"},
+	}
+	today := time.Now().UTC()
+	for rows.Next() {
+		var version, firstDay, featJSON string
+		if err := rows.Scan(&version, &firstDay, &featJSON); err != nil {
+			return err
+		}
+		if !funnelCapable(version) {
+			continue
+		}
+		var f featuresPayload
+		if featJSON != "" {
+			_ = json.Unmarshal([]byte(featJSON), &f)
+		}
+		fd, err := time.Parse("2006-01-02", firstDay)
+		if err != nil {
+			continue
+		}
+		age := int(today.Sub(fd).Hours() / 24)
+		for i, day := range []*int{f.SetupIndexerDay, f.SetupClientDay, f.FirstAuthorDay, f.FirstGrabDay, f.FirstImportDay} {
+			st := &stages[i]
+			st.Cohort++
+			if age >= 1 {
+				st.D1Den++
+				if day != nil && *day <= 1 {
+					st.D1Num++
+				}
+			}
+			if age >= 7 {
+				st.D7Den++
+				if day != nil && *day <= 7 {
+					st.D7Num++
+				}
+			}
+			if day != nil {
+				st.Ever++
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if stages[0].Cohort > 0 {
+		d.Funnel = stages
+	}
+	return nil
 }
 
 // computeFeatureAdoption fills d.FeaturesReporting and d.Features from
@@ -2059,6 +2194,36 @@ func renderLongevity(buckets []statsBucket, youngDB bool) string {
 // 7d-active install has reported a features payload yet (older clients
 // only), the section renders an explanatory message instead of an empty
 // chart with confusing zero counts.
+// renderFunnel renders the setup-funnel milestone table: for each first
+// milestone, the share of new funnel-capable installs that reached it
+// within 1 day, within 7 days, and at all. Denominators differ per column
+// (see funnelStage); each cell shows the honest cohort for its window.
+func renderFunnel(stages []funnelStage) string {
+	if len(stages) == 0 {
+		return `<div class="chart"><p class="empty">No funnel data yet. ` +
+			`Clients report setup-funnel day offsets starting with v1.31.0; ` +
+			`this section populates as new installs arrive on it.</p></div>`
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b,
+		`<p class="empty" style="margin:0 0 .5rem 0">Out of %d new install%s on funnel-capable versions. `+
+			`"By D+1/D+7" count only installs old enough for that window.</p>`,
+		stages[0].Cohort, pluralS(stages[0].Cohort))
+	b.WriteString(`<div class="chart"><table class="bars"><tr>` +
+		`<td class="legend-cell"></td>` +
+		`<td class="count-cell">by D+1</td>` +
+		`<td class="count-cell">by D+7</td>` +
+		`<td class="count-cell">ever</td></tr>`)
+	for _, st := range stages {
+		b.WriteString(`<tr><td class="legend-cell">` + html.EscapeString(st.Label) + `</td>` +
+			`<td class="count-cell">` + pct(st.D1Num, st.D1Den) + `</td>` +
+			`<td class="count-cell">` + pct(st.D7Num, st.D7Den) + `</td>` +
+			`<td class="count-cell">` + pct(st.Ever, st.Cohort) + `</td></tr>`)
+	}
+	b.WriteString(`</table></div>`)
+	return b.String()
+}
+
 func renderFeatures(buckets []statsBucket, reporting int) string {
 	if reporting == 0 {
 		return `<div class="chart"><p class="empty">No features data yet. ` +
@@ -2373,6 +2538,11 @@ func (s *server) handleStatsPage(w http.ResponseWriter, r *http.Request) {
   </section>
 
   <section>
+    <h2>Setup funnel (installs from the last 30 days)</h2>
+    %s
+  </section>
+
+  <section>
     <h2>Feature adoption (last 7 days)</h2>
     %s
   </section>
@@ -2397,6 +2567,7 @@ func (s *server) handleStatsPage(w http.ResponseWriter, r *http.Request) {
 		renderSparkline(d.DailyNew),
 		renderMonthlyChart(d.Monthly),
 		renderLongevity(d.Longevity, d.LongevityYoungDB),
+		renderFunnel(d.Funnel),
 		renderFeatures(d.Features, d.FeaturesReporting),
 		renderVersionTrend(d.VersionTrend, d.TopVersions)+renderLedgerFootnote(d.LedgerEpoch),
 		time.Now().UTC().Format("2006-01-02 15:04 MST"),

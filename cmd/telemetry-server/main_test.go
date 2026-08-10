@@ -1454,3 +1454,109 @@ func TestLoadLedgerBackfill(t *testing.T) {
 		t.Errorf("re-run inserted = %d, want 0 (done marker)", n2)
 	}
 }
+
+func TestFunnelCapable(t *testing.T) {
+	for v, want := range map[string]bool{
+		"1.31.0": true, "1.31.1": true, "1.32.0": true, "2.0.0": true,
+		"1.30.0": false, "1.29.1": false, "sha-abc": false, "dev": false, "": false,
+	} {
+		if got := funnelCapable(v); got != want {
+			t.Errorf("funnelCapable(%q) = %v, want %v", v, got, want)
+		}
+	}
+}
+
+// TestComputeSetupFunnel exercises the per-column denominators: an install
+// too young for a window stays out of that window's denominator, funnel-
+// incapable versions stay out entirely, and day offsets bucket correctly.
+func TestComputeSetupFunnel(t *testing.T) {
+	s := newTestServer(t, "v1.31.0")
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	insert := func(id byte, version string, ageDays int, features string) {
+		t.Helper()
+		var f any
+		if features != "" {
+			f = features
+		}
+		if _, err := s.db.ExecContext(ctx, `
+			INSERT INTO installs (install_id, version, os, arch, deploy, features, first_seen, last_seen)
+			VALUES (?, ?, 'linux', 'amd64', 'docker', ?, ?, ?)`,
+			uuid(id), version, f, now.AddDate(0, 0, -ageDays), now); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+
+	// 10 days old, full same-day setup → counts in D1, D7, ever.
+	insert('1', "1.31.0", 10, `{"setup_indexer_day":0,"setup_client_day":0,"first_grab_day":2}`)
+	// 10 days old, never configured anything → in all denominators, no numerators.
+	insert('2', "1.31.0", 10, `{}`)
+	// 3 days old, indexer on day 2 → in D1 denominator (missed), NOT in D7 denominator.
+	insert('3', "1.31.2", 3, `{"setup_indexer_day":2}`)
+	// funnel-incapable version → excluded from the cohort entirely.
+	insert('4', "1.30.0", 10, `{"indexers":3}`)
+
+	d := &statsData{}
+	if err := s.computeSetupFunnel(ctx, now.AddDate(0, 0, -30), d); err != nil {
+		t.Fatalf("computeSetupFunnel: %v", err)
+	}
+	if len(d.Funnel) != 5 {
+		t.Fatalf("stages = %d, want 5", len(d.Funnel))
+	}
+	idx := d.Funnel[0] // Indexer configured
+	if idx.Cohort != 3 {
+		t.Errorf("cohort = %d, want 3 (1.30.0 install excluded)", idx.Cohort)
+	}
+	if idx.D1Den != 3 || idx.D1Num != 1 {
+		t.Errorf("D1 = %d/%d, want 1/3 (only install 1 by day 1)", idx.D1Num, idx.D1Den)
+	}
+	if idx.D7Den != 2 || idx.D7Num != 1 {
+		t.Errorf("D7 = %d/%d, want 1/2 (3-day-old install not in D7 window)", idx.D7Num, idx.D7Den)
+	}
+	if idx.Ever != 2 {
+		t.Errorf("ever = %d, want 2 (installs 1 and 3)", idx.Ever)
+	}
+	grab := d.Funnel[3] // First grab
+	if grab.D1Num != 0 || grab.D7Num != 1 {
+		t.Errorf("grab D1/D7 = %d/%d, want 0 and 1 (day-2 grab misses D1)", grab.D1Num, grab.D7Num)
+	}
+}
+
+// TestHandlePing_PreservesFunnelFields guards the normalising re-marshal in
+// handlePing: a features payload with funnel day offsets must round-trip
+// into the stored JSON, including a 0 ("same day") value.
+func TestHandlePing_PreservesFunnelFields(t *testing.T) {
+	s := newTestServer(t, "v1.31.0")
+	s.limiter = newRateLimiter(time.Hour, time.Minute)
+
+	body := []byte(`{"install_id":"11111111-1111-1111-1111-111111111111","version":"1.31.0",` +
+		`"os":"linux","arch":"amd64","features":{"indexers":2,"setup_indexer_day":0,"first_grab_day":3}}`)
+	r := httptest.NewRequest(http.MethodPost, "/api/ping", bytes.NewReader(body))
+	r.RemoteAddr = "192.0.2.30:1234"
+	w := httptest.NewRecorder()
+	s.handlePing(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ping status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	var stored string
+	if err := s.db.QueryRowContext(context.Background(),
+		`SELECT features FROM installs WHERE install_id = '11111111-1111-1111-1111-111111111111'`,
+	).Scan(&stored); err != nil {
+		t.Fatalf("read features: %v", err)
+	}
+	var f featuresPayload
+	if err := json.Unmarshal([]byte(stored), &f); err != nil {
+		t.Fatalf("parse stored features: %v", err)
+	}
+	if f.SetupIndexerDay == nil || *f.SetupIndexerDay != 0 {
+		t.Errorf("setup_indexer_day = %v, want 0 (zero must survive the re-marshal)", f.SetupIndexerDay)
+	}
+	if f.FirstGrabDay == nil || *f.FirstGrabDay != 3 {
+		t.Errorf("first_grab_day = %v, want 3", f.FirstGrabDay)
+	}
+	if f.SetupClientDay != nil {
+		t.Errorf("setup_client_day = %d, want nil (not sent)", *f.SetupClientDay)
+	}
+}
