@@ -56,23 +56,58 @@ jobs:
     if: >-
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      # The header says this workflow "no-ops cleanly" until ANTHROPIC_API_KEY
+      # exists. It did not — with no key it installed bun, the CLI, and then
+      # failed hard, putting a red X on every pull request. A check that is red
+      # for a reason nobody can act on is a check people stop reading, which is
+      # how three unrelated breakages here went unnoticed for over a week.
+      #
+      # secrets cannot be referenced from a step-level `if`, so the test is
+      # lifted to a job-level env var and read from there.
+      HAS_ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
     steps:
+      - name: Report that review is disabled
+        if: env.HAS_ANTHROPIC_KEY != 'true'
+        shell: bash
+        run: |
+          echo "ANTHROPIC_API_KEY is not set; skipping AI review." >> "$GITHUB_STEP_SUMMARY"
+          echo "Add the secret to enable it — note that doing so spends API credit on every internal-branch PR." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Harden the runner (block non-allowlisted egress)
+        if: env.HAS_ANTHROPIC_KEY == 'true'
         uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
         with:
           # block (#1401): this job hands ANTHROPIC_API_KEY and a write-scoped
           # token to an LLM agent that reads untrusted issue/PR text. The
           # allowedTools list is the first barrier; the egress allowlist is the
           # network backstop so a future allowlist regression can't exfiltrate.
+          #
+          # 2026-08-10: this workflow had not completed a single run since at
+          # least 2026-08-01 — 0 successes in 100 runs — and nothing had changed
+          # here. GitHub moved release-asset downloads from
+          # objects.githubusercontent.com to release-assets.githubusercontent.com,
+          # so setup-bun's 302 landed on a host that was not allowlisted, bun
+          # never installed, and every run died with exit 127. An allowlist that
+          # silently expires when a third party changes CDN is worth knowing
+          # about: a red check on every PR is easy to stop reading.
           egress-policy: block
+          # Every entry below is one the job demonstrably needs. Nothing is
+          # added speculatively — a host in this list is a host an exfiltration
+          # can use, so "probably required" is not a good enough reason.
           allowed-endpoints: >
             api.anthropic.com:443
             api.github.com:443
             github.com:443
             objects.githubusercontent.com:443
             raw.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            registry.npmjs.org:443
+            claude.ai:443
+            downloads.claude.ai:443
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.HAS_ANTHROPIC_KEY == 'true'
         with:
           # The agent only needs the tree for Read/Grep/Glob. Don't leave a
           # push-capable token in .git/config where its own Read tool can slurp
@@ -80,11 +115,26 @@ jobs:
           persist-credentials: false
 
       - name: Triage / review with Claude
+        if: env.HAS_ANTHROPIC_KEY == 'true'
         uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1.0.183
         env:
           GH_TOKEN: ${{ github.token }}
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Use this job's own token rather than the action's default auth.
+          #
+          # Without it, setupGitHubToken() mints a GitHub OIDC token and
+          # exchanges it for a GitHub App installation token — which needs
+          # `id-token: write` and, more importantly, carries the action's own
+          # DEFAULT_PERMISSIONS of contents/pull_requests/issues: write. Those
+          # are independent of the `permissions:` block above, so that path
+          # would hand this job issue-write capability again and silently undo
+          # the narrowing in #1819.
+          #
+          # Passing the token explicitly takes the OVERRIDE_GITHUB_TOKEN branch
+          # and returns before any OIDC call, which keeps `permissions:` the
+          # single source of truth for what this workflow can do.
+          github_token: ${{ github.token }}
           # Narrowed from Bash(gh:*): the agent reads untrusted issue/PR text, so
           # deny it `gh api` / `gh secret` / `gh auth` / `gh workflow` and any
           # arbitrary Bash. It gets exactly the issue+PR subcommands it needs.
