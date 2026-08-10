@@ -14,6 +14,17 @@ interface Props {
   setClients: React.Dispatch<React.SetStateAction<DownloadClient[]>>
 }
 
+// loopbackTestHint appends the single most common cause of a failed
+// connection test — Bindery running in Docker while the client address says
+// localhost, which inside the container is the container itself. Docs-only
+// knowledge until now (QUICKSTART.md); surfacing it here turns a dead-end
+// "connection refused" into a one-line fix. Only fires for connection-shaped
+// failures so an auth error on localhost doesn't get a misleading hint.
+function isLoopbackConnFailure(host: string, error: string): boolean {
+  const loopback = host === 'localhost' || host === '127.0.0.1' || host === '::1'
+  return loopback && /refused|timeout|timed out|unreachable|no route|EOF|connect/i.test(error)
+}
+
 export default function ClientsTab({ clients, setClients }: Props) {
   const { t } = useTranslation()
   const [showAddClient, setShowAddClient] = useState(false)
@@ -64,7 +75,9 @@ export default function ClientsTab({ clients, setClients }: Props) {
                           : undefined
                         setClientTestResult(prev => ({ ...prev, [c.id]: { ok: true, msg: t('common.connOk'), warn } }))
                       } catch (err: unknown) {
-                        setClientTestResult(prev => ({ ...prev, [c.id]: { ok: false, msg: t('common.connFail', { error: err instanceof Error ? err.message : 'Unknown error' }) } }))
+                        const error = err instanceof Error ? err.message : 'Unknown error'
+                        const warn = isLoopbackConnFailure(c.host, error) ? t('settings.clients.loopbackHint') : undefined
+                        setClientTestResult(prev => ({ ...prev, [c.id]: { ok: false, msg: t('common.connFail', { error }), warn } }))
                       }
                     }}
                     className="text-xs text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white"
@@ -186,7 +199,9 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
         : undefined
       setTestResult({ ok: true, msg: t('common.connOk'), warn })
     } catch (err: unknown) {
-      setTestResult({ ok: false, msg: t('common.connFail', { error: err instanceof Error ? err.message : 'Unknown error' }) })
+      const error = err instanceof Error ? err.message : 'Unknown error'
+      const warn = isLoopbackConnFailure(host, error) ? t('settings.clients.loopbackHint') : undefined
+      setTestResult({ ok: false, msg: t('common.connFail', { error }), warn })
     } finally {
       setTesting(false)
     }
@@ -364,7 +379,9 @@ function AddClientForm({ onClose, onAdded }: { onClose: () => void; onAdded: (c:
         : undefined
       setTestResult({ ok: true, msg: t('common.connOk'), warn })
     } catch (err: unknown) {
-      setTestResult({ ok: false, msg: t('common.connFail', { error: err instanceof Error ? err.message : 'Unknown error' }) })
+      const error = err instanceof Error ? err.message : 'Unknown error'
+      const warn = isLoopbackConnFailure(host, error) ? t('settings.clients.loopbackHint') : undefined
+      setTestResult({ ok: false, msg: t('common.connFail', { error }), warn })
     } finally {
       setTesting(false)
     }

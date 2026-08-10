@@ -558,7 +558,8 @@
       "audiobookCategoryLabel": "Audiobook Category / Label",
       "audiobookCategoryPlaceholder": "audiobooks",
       "audiobookCategoryHelp": "Optional. When set, audiobook grabs use this category instead of the one above. Leave blank to use the same category as ebooks.",
-      "pathNotVisible": "Connected, but Bindery can't read the client's completed-downloads folder. Configure a path remap or a shared mount so both point at the same storage, otherwise downloads won't import."
+      "pathNotVisible": "Connected, but Bindery can't read the client's completed-downloads folder. Configure a path remap or a shared mount so both point at the same storage, otherwise downloads won't import.",
+      "loopbackHint": "The host is localhost — if Bindery runs in Docker, localhost is the Bindery container itself, not the machine. Use the host's LAN IP or the client's container/service name instead."
     },
     "notifications": {
       "heading": "Webhook Notifications",
@@ -903,6 +904,8 @@
     "confirmAdd": "Add author",
     "autoGrabLabel": "Auto-grab books on add",
     "autoGrabHint": "Bindery will always fetch the book catalogue. Enable this to also queue downloads immediately.",
+    "autoGrabNoClient": "Auto-search is on, but no download client is configured — searches will run and every grab will fail silently.",
+    "autoGrabNoIndexer": "Auto-search is on, but no indexer is configured — searches will run and find nothing.",
     "searchPlaceholder": "Search by author name...",
     "search": "Search",
     "searching": "Searching...",
@@ -1007,6 +1010,10 @@
   },
   "setupBanner": {
     "both": "Finish setting up: add an indexer and a download client so searches and downloads work."
+  },
+  "protocolMismatch": {
+    "torrent": "A Torznab indexer is enabled but no torrent download client (qBittorrent, Transmission, Deluge) is — its releases can be found but never downloaded.",
+    "usenet": "A Newznab indexer is enabled but no usenet download client (SABnzbd, NZBGet) is — its releases can be found but never downloaded."
   },
   "users": {
     "title": "Users",

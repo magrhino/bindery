@@ -1,0 +1,2 @@
+### Fixed
+- **Three silent first-run failure modes now warn in the UI** instead of living only in QUICKSTART.md: (1) an enabled Torznab/Newznab indexer with no matching-protocol download client shows an amber warning on the Indexers/Clients settings tabs (searches would find releases nothing could download); (2) turning on auto-search when the pipeline is incomplete warns right in the Add Author dialog (the background search's failure was invisible); (3) a failed download-client connection test against localhost explains the Docker loopback trap and what to use instead.

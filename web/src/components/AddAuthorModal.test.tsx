@@ -37,6 +37,11 @@ vi.mock('../api/client', () => ({
     listRootFolders: vi.fn().mockResolvedValue([]),
     getSetting: vi.fn().mockResolvedValue({ key: 'default.media_type', value: 'ebook' }),
     searchAuthors: vi.fn(),
+    // useNeedsSetup (auto-grab misconfig warning) probes these on mount;
+    // report a configured pipeline so no warning interferes with layout
+    // assertions here.
+    listIndexers: vi.fn().mockResolvedValue([{ id: 1, enabled: true, type: 'newznab' }]),
+    listDownloadClients: vi.fn().mockResolvedValue([{ id: 1, enabled: true, type: 'sabnzbd' }]),
     searchBooks: vi.fn(),
     addAuthor: vi.fn(),
   },

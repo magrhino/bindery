@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, DownloadClient, Indexer, ProwlarrInstance } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
+import ProtocolMismatchWarning from '../components/ProtocolMismatchWarning'
 
 // Decomposed from the former ~5100-line SettingsPage monolith (#547): each tab
 // now lives in its own file under ./settings/. Tabs are React.lazy code-split
@@ -132,8 +133,18 @@ export default function SettingsPage() {
   const renderTab = () => {
     switch (tab) {
       case 'general': return <GeneralTab onNavigate={navigateToTab} />
-      case 'indexers': return <IndexersTab indexers={indexers} setIndexers={setIndexers} prowlarrInstances={prowlarrInstances} setProwlarrInstances={setProwlarrInstances} />
-      case 'clients': return <ClientsTab clients={clients} setClients={setClients} />
+      case 'indexers': return (
+        <>
+          <ProtocolMismatchWarning indexers={indexers} clients={clients} onNavigate={navigateToTab} />
+          <IndexersTab indexers={indexers} setIndexers={setIndexers} prowlarrInstances={prowlarrInstances} setProwlarrInstances={setProwlarrInstances} />
+        </>
+      )
+      case 'clients': return (
+        <>
+          <ProtocolMismatchWarning indexers={indexers} clients={clients} onNavigate={navigateToTab} />
+          <ClientsTab clients={clients} setClients={setClients} />
+        </>
+      )
       case 'notifications': return <NotificationsTab />
       case 'quality': return <QualityTab />
       case 'metadata': return <MetadataTab />

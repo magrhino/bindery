@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, AddAuthorRequest, Author, AuthorConflictBody, AuthorMonitorMode, MediaType, MetadataProfile, RootFolder } from '../api/client'
 import { splitAuthorSearchResults } from './addAuthorTitleGuard'
+import { useNeedsSetup } from './useNeedsSetup'
 import { canLinkAuthorMetadata, hasSparseMetadata } from '../util/authorMetadata'
 
 interface Props {
@@ -57,6 +58,10 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
   const [rootFolders, setRootFolders] = useState<RootFolder[]>([])
   const [rootFolderId, setRootFolderId] = useState<number | null>(null)
   const [searchOnAdd, setSearchOnAdd] = useState(loadAutoGrabDefault)
+  // Preempt the silent auto-search failure: backend auto-search-on-add runs
+  // async, so a missing indexer/client fails with no visible error anywhere.
+  // Warn at the moment the user opts into it instead.
+  const { needsAny, needsClient } = useNeedsSetup()
   const [mediaType, setMediaType] = useState<MediaType>('ebook')
   const [monitorMode, setMonitorMode] = useState<AuthorMonitorMode>(DEFAULT_MONITOR_MODE)
   const [monitorLatestCount, setMonitorLatestCount] = useState(DEFAULT_MONITOR_LATEST_COUNT)
@@ -289,6 +294,13 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
                     <span className="block text-xs text-fg-muted mt-0.5">{t('addAuthorModal.autoGrabHint')}</span>
                   </span>
                 </label>
+                {searchOnAdd && needsAny && (
+                  <p className="mt-2 px-3 py-2 rounded bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700/60 text-xs text-amber-900 dark:text-amber-200">
+                    {needsClient
+                      ? t('addAuthorModal.autoGrabNoClient', 'Auto-search is on, but no download client is configured — searches will run and every grab will fail silently.')
+                      : t('addAuthorModal.autoGrabNoIndexer', 'Auto-search is on, but no indexer is configured — searches will run and find nothing.')}
+                  </p>
+                )}
               </div>
             </details>
 
