@@ -742,7 +742,7 @@ type featuresPayload struct {
 	OIDCEnabled     *bool `json:"oidc_enabled,omitempty"`
 	MultiUser       *bool `json:"multi_user,omitempty"`
 
-	// Setup-funnel day offsets (v1.31.0+): whole days from install creation
+	// Setup-funnel day offsets (v1.30.1+): whole days from install creation
 	// to each first milestone; absent = hasn't happened. Must be listed here
 	// or handlePing's normalising re-marshal would silently drop them.
 	SetupIndexerDay *int `json:"setup_indexer_day,omitempty"`
@@ -1183,7 +1183,7 @@ const telemetryFieldsHTML = `<!DOCTYPE html>
 
   <div class="field">
     <code>features.setup_indexer_day</code> / <code>features.setup_client_day</code> / <code>features.first_author_day</code> / <code>features.first_grab_day</code> / <code>features.first_import_day</code>
-    <div class="why">Integers (v1.31.0+): whole days between install creation and the first time each milestone happened — first indexer added, first download client added, first author added, first grab, first import. 0 means "the same day"; a field is absent until its milestone happens. Never timestamps, dates, or times of day — only a day count. These exist because most installs that never finish initial setup are abandoned within a day, and a day-count is the least data that shows where setup stalls.</div>
+    <div class="why">Integers (v1.30.1+): whole days between install creation and the first time each milestone happened — first indexer added, first download client added, first author added, first grab, first import. 0 means "the same day"; a field is absent until its milestone happens. Never timestamps, dates, or times of day — only a day count. These exist because most installs that never finish initial setup are abandoned within a day, and a day-count is the least data that shows where setup stalls.</div>
   </div>
 
   <h2>What we don't collect</h2>
@@ -1733,7 +1733,7 @@ var featureFields = []featureField{
 // day offsets. Installs on older versions can't be told apart from installs
 // that stalled before their first milestone (both send no funnel fields), so
 // the funnel cohort is gated on version, not on field presence.
-var funnelMinVersion = [3]int{1, 31, 0}
+var funnelMinVersion = [3]int{1, 30, 1}
 
 // funnelCapable reports whether a version string is >= funnelMinVersion.
 func funnelCapable(version string) bool {
@@ -2201,7 +2201,7 @@ func renderLongevity(buckets []statsBucket, youngDB bool) string {
 func renderFunnel(stages []funnelStage) string {
 	if len(stages) == 0 {
 		return `<div class="chart"><p class="empty">No funnel data yet. ` +
-			`Clients report setup-funnel day offsets starting with v1.31.0; ` +
+			`Clients report setup-funnel day offsets starting with v1.30.1; ` +
 			`this section populates as new installs arrive on it.</p></div>`
 	}
 	var b strings.Builder

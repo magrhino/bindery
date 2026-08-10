@@ -1457,8 +1457,13 @@ func TestLoadLedgerBackfill(t *testing.T) {
 
 func TestFunnelCapable(t *testing.T) {
 	for v, want := range map[string]bool{
-		"1.31.0": true, "1.31.1": true, "1.32.0": true, "2.0.0": true,
-		"1.30.0": false, "1.29.1": false, "sha-abc": false, "dev": false, "": false,
+		// The boundary is a PATCH bump (1.30.1), so the pair that matters
+		// most is 1.30.0/1.30.1 — a major/minor-only comparison would let
+		// the whole 1.30.x line in and pollute the cohort with installs
+		// that cannot report funnel fields at all.
+		"1.30.1": true, "1.30.2": true, "1.31.0": true, "1.32.0": true, "2.0.0": true,
+		"1.30.0": false, "1.29.9": false, "1.29.1": false, "0.99.9": false,
+		"sha-abc": false, "dev": false, "": false,
 	} {
 		if got := funnelCapable(v); got != want {
 			t.Errorf("funnelCapable(%q) = %v, want %v", v, got, want)
@@ -1470,7 +1475,7 @@ func TestFunnelCapable(t *testing.T) {
 // too young for a window stays out of that window's denominator, funnel-
 // incapable versions stay out entirely, and day offsets bucket correctly.
 func TestComputeSetupFunnel(t *testing.T) {
-	s := newTestServer(t, "v1.31.0")
+	s := newTestServer(t, "v1.30.1")
 	ctx := context.Background()
 	now := time.Now().UTC()
 
@@ -1489,11 +1494,11 @@ func TestComputeSetupFunnel(t *testing.T) {
 	}
 
 	// 10 days old, full same-day setup → counts in D1, D7, ever.
-	insert('1', "1.31.0", 10, `{"setup_indexer_day":0,"setup_client_day":0,"first_grab_day":2}`)
+	insert('1', "1.30.1", 10, `{"setup_indexer_day":0,"setup_client_day":0,"first_grab_day":2}`)
 	// 10 days old, never configured anything → in all denominators, no numerators.
-	insert('2', "1.31.0", 10, `{}`)
+	insert('2', "1.30.1", 10, `{}`)
 	// 3 days old, indexer on day 2 → in D1 denominator (missed), NOT in D7 denominator.
-	insert('3', "1.31.2", 3, `{"setup_indexer_day":2}`)
+	insert('3', "1.31.0", 3, `{"setup_indexer_day":2}`)
 	// funnel-incapable version → excluded from the cohort entirely.
 	insert('4', "1.30.0", 10, `{"indexers":3}`)
 
@@ -1527,10 +1532,10 @@ func TestComputeSetupFunnel(t *testing.T) {
 // handlePing: a features payload with funnel day offsets must round-trip
 // into the stored JSON, including a 0 ("same day") value.
 func TestHandlePing_PreservesFunnelFields(t *testing.T) {
-	s := newTestServer(t, "v1.31.0")
+	s := newTestServer(t, "v1.30.1")
 	s.limiter = newRateLimiter(time.Hour, time.Minute)
 
-	body := []byte(`{"install_id":"11111111-1111-1111-1111-111111111111","version":"1.31.0",` +
+	body := []byte(`{"install_id":"11111111-1111-1111-1111-111111111111","version":"1.30.1",` +
 		`"os":"linux","arch":"amd64","features":{"indexers":2,"setup_indexer_day":0,"first_grab_day":3}}`)
 	r := httptest.NewRequest(http.MethodPost, "/api/ping", bytes.NewReader(body))
 	r.RemoteAddr = "192.0.2.30:1234"
