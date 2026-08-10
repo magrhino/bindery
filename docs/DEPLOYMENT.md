@@ -444,7 +444,7 @@ On first launch Bindery bootstraps itself — **no environment variables are req
 
 **Graceful shutdown** — `BINDERY_SHUTDOWN_GRACE` (default `10s`) controls how long the server drains in-flight requests after SIGTERM. `kubectl rollout restart` no longer drops in-flight requests. After request draining, detached background jobs (ABS import, Grimmory sync, manual library scan, startup syncs) are drained for up to `BINDERY_JOBS_DRAIN_GRACE` (default `15s`) before the database is closed, so a deploy mid-import no longer produces "database is closed" errors or (for Grimmory) re-uploads on the next run. The two graces run serially, so the defaults total 25s — under the default Kubernetes 30s `terminationGracePeriodSeconds`; raise both together if you extend either.
 
-**Log level UI toggle** — The log level toggle in Settings → System now immediately affects the log viewer (previously only `BINDERY_LOG_LEVEL` at startup worked).
+**Log level UI toggle** — The **Runtime level** selector in Settings → Logs now immediately affects the log viewer (previously only `BINDERY_LOG_LEVEL` at startup worked).
 
 ### From v0.11.x to v0.12.0 (security posture)
 

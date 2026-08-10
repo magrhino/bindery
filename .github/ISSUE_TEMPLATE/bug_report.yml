@@ -45,7 +45,8 @@ body:
     attributes:
       label: Trace logs
       description: |
-        Set log level to DEBUG in Settings → General, reproduce the bug, then paste the relevant log section.
+        Set the **Runtime level** to DEBUG in Settings → Logs, reproduce the bug, then paste the relevant log section.
+        Settings → Logs is admin-only; on an instance where you are not an admin, start Bindery with `BINDERY_LOG_LEVEL=debug` instead.
         **Issues without logs may be closed without investigation.**
       render: text
     validations:
