@@ -23,6 +23,7 @@ import (
 	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
+	"github.com/vavallee/bindery/internal/telemetry"
 	"github.com/vavallee/bindery/internal/textutil"
 )
 
@@ -437,6 +438,7 @@ func (h *AuthorHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// pass searchOnAdd so FetchAuthorBooks knows whether to also queue grabs.
 	h.fetchAuthorBooksAsync(author, req.SearchOnAdd, mediaType, false)
 
+	telemetry.MarkFirst(r.Context(), h.settings, telemetry.SettingFirstAuthorAt)
 	writeJSON(w, http.StatusCreated, author)
 }
 

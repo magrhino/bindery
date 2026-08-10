@@ -119,6 +119,17 @@ type Features struct {
 	HardcoverToken  bool `json:"hardcover_token,omitempty"`
 	OIDCEnabled     bool `json:"oidc_enabled,omitempty"`
 	MultiUser       bool `json:"multi_user,omitempty"`
+
+	// Setup-funnel day offsets: whole days between install creation and the
+	// first occurrence of each milestone (0 = same day). Pointers so the
+	// common and most meaningful value, 0, survives omitempty; nil (absent
+	// on the wire) means "hasn't happened yet". Never timestamps — an
+	// integer day count is not identifying. See funnel.go for collection.
+	SetupIndexerDay *int `json:"setup_indexer_day,omitempty"`
+	SetupClientDay  *int `json:"setup_client_day,omitempty"`
+	FirstAuthorDay  *int `json:"first_author_day,omitempty"`
+	FirstGrabDay    *int `json:"first_grab_day,omitempty"`
+	FirstImportDay  *int `json:"first_import_day,omitempty"`
 }
 
 // ErrorEntry is one aggregated error row: a slog message constant and how
@@ -360,6 +371,11 @@ func (c *Client) installID(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("get install_id: %w", err)
 	}
+	// Anchor for the setup-funnel day offsets, on both paths: a fresh
+	// install stamps its true creation time; a pre-existing install that
+	// upgrades into this version gets stamped exactly once, at its first
+	// post-upgrade ping (see SettingInstallCreatedAt for the skew note).
+	defer MarkFirst(ctx, c.settings, SettingInstallCreatedAt)
 	if s != nil && s.Value != "" {
 		return s.Value, nil
 	}

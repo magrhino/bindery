@@ -46,6 +46,29 @@ func (r *HistoryRepo) List(ctx context.Context) ([]models.HistoryEvent, error) {
 	return r.query(ctx, "SELECT "+historyColumns+" FROM history ORDER BY created_at DESC")
 }
 
+// FirstEventAt returns the timestamp of the earliest history event of the
+// given type, or nil when none exists. Used by the telemetry setup funnel
+// to derive (and then pin) an install's first grab / first import.
+//
+// Deliberately ORDER BY + LIMIT 1 rather than MIN(created_at): an aggregate
+// loses the column decltype, so the driver would hand back raw TEXT that a
+// time scan rejects. A direct column read converts to time.Time normally,
+// and the stored text form sorts chronologically.
+func (r *HistoryRepo) FirstEventAt(ctx context.Context, eventType string) (*time.Time, error) {
+	var at time.Time
+	err := r.db.QueryRowContext(ctx,
+		"SELECT created_at FROM history WHERE event_type=? ORDER BY created_at ASC LIMIT 1", eventType,
+	).Scan(&at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("first %s event: %w", eventType, err)
+	}
+	t := at.UTC()
+	return &t, nil
+}
+
 func (r *HistoryRepo) ListByBook(ctx context.Context, bookID int64) ([]models.HistoryEvent, error) {
 	return r.query(ctx, "SELECT "+historyColumns+" FROM history WHERE book_id=? ORDER BY created_at DESC", bookID)
 }

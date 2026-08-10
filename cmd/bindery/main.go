@@ -485,7 +485,7 @@ func main() {
 	// never attrs) so topology-specific breakage — e.g. loopback-Prowlarr
 	// SSRF rejections — shows up in aggregate without waiting on bug reports.
 	telemetryClient := telemetry.New(settingsRepo, version).
-		WithGatherer(buildTelemetryGatherer(indexerRepo, dlClientRepo, notificationRepo, userRepo, settingsRepo)).
+		WithGatherer(buildTelemetryGatherer(indexerRepo, dlClientRepo, notificationRepo, userRepo, settingsRepo, historyRepo)).
 		WithErrorsGatherer(telemetry.NewLogErrorsGatherer(logRepo))
 	sched.WithTelemetry(telemetryClient)
 
@@ -566,7 +566,8 @@ func main() {
 		WithHealth(downloadHealth).
 		WithStoragePaths(cfg.DownloadDir, cfg.AudiobookDownloadDir).
 		WithDownloadPathRemap(cfg.DownloadPathRemap).
-		WithLifetimeCtx(appCtx)
+		WithLifetimeCtx(appCtx).
+		WithSettings(settingsRepo)
 	queueHandler := api.NewQueueHandler(downloadRepo, dlClientRepo, bookRepo, historyRepo).
 		WithNotifier(notif).
 		WithStoragePaths(cfg.DownloadDir, cfg.AudiobookDownloadDir).
@@ -1484,6 +1485,7 @@ func buildTelemetryGatherer(
 	notifications *db.NotificationRepo,
 	users *db.UserRepo,
 	settings *db.SettingsRepo,
+	history *db.HistoryRepo,
 ) telemetry.Gatherer {
 	return func(ctx context.Context) telemetry.Features {
 		f := telemetry.Features{}
@@ -1541,6 +1543,10 @@ func buildTelemetryGatherer(
 				f.OIDCEnabled = true
 			}
 		}
+
+		// Setup-funnel day offsets (days from install to first indexer /
+		// client / author / grab / import). See telemetry/funnel.go.
+		telemetry.GatherFunnel(ctx, settings, history, &f)
 
 		return f
 	}

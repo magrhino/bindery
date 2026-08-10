@@ -15,6 +15,7 @@ import (
 	"github.com/vavallee/bindery/internal/downloader"
 	"github.com/vavallee/bindery/internal/httpsec"
 	"github.com/vavallee/bindery/internal/models"
+	"github.com/vavallee/bindery/internal/telemetry"
 )
 
 // sanitizeHost strips any scheme prefix a user may have accidentally included
@@ -59,6 +60,9 @@ type DownloadClientHandler struct {
 	// shutdown so the health-probe goroutine fired by Create/Update does
 	// not outlive the process. Falls back to context.Background(); see #846.
 	lifetimeCtx context.Context
+	// settings is used only for the setup-funnel first-client marker; nil
+	// (as in tests) skips the marker.
+	settings *db.SettingsRepo
 }
 
 func NewDownloadClientHandler(clients *db.DownloadClientRepo) *DownloadClientHandler {
@@ -71,6 +75,13 @@ func (h *DownloadClientHandler) WithLifetimeCtx(ctx context.Context) *DownloadCl
 	if ctx != nil {
 		h.lifetimeCtx = ctx
 	}
+	return h
+}
+
+// WithSettings attaches the settings repo, used only to record the
+// setup-funnel first-client marker. Nil (as in tests) skips the marker.
+func (h *DownloadClientHandler) WithSettings(settings *db.SettingsRepo) *DownloadClientHandler {
+	h.settings = settings
 	return h
 }
 
@@ -154,6 +165,7 @@ func (h *DownloadClientHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, err)
 		return
 	}
+	telemetry.MarkFirst(r.Context(), h.settings, telemetry.SettingFirstClientAt)
 	h.refreshClientHealthAsync(c)
 	h.attachClientHealth(&c)
 	writeJSON(w, http.StatusCreated, c)

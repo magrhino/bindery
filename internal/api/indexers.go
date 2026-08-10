@@ -15,6 +15,7 @@ import (
 	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/indexer/newznab"
 	"github.com/vavallee/bindery/internal/models"
+	"github.com/vavallee/bindery/internal/telemetry"
 )
 
 // lastDebugStore holds the audit trail from the most recent SearchBook run.
@@ -155,6 +156,7 @@ func (h *IndexerHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, err)
 		return
 	}
+	telemetry.MarkFirst(r.Context(), h.settings, telemetry.SettingFirstIndexerAt)
 	writeJSON(w, http.StatusCreated, idx)
 }
 
