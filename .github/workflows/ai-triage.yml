@@ -1,7 +1,7 @@
 # Event-driven AI PR review.
 #
 # On a new/reopened/ready PR (internal branches only — fork PRs are skipped
-# because they have no access to ANTHROPIC_API_KEY): review the diff and post
+# because they have no access to the auth secret): review the diff and post
 # one summary review.
 #
 # 2026-08-10: issue triage was removed from this workflow. It now runs in the
@@ -21,8 +21,11 @@
 # bindhelper ingests external and fork PRs for classification without writing
 # to them.
 #
-# REQUIRES a repo secret ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN). The
-# workflow no-ops cleanly until that exists. Model is overridable via the repo
+# REQUIRES the repo secret CLAUDE_CODE_OAUTH_TOKEN (minted with
+# `claude setup-token`, billed against the maintainer's Claude subscription
+# rather than per-token API pricing — 2026-08-10). The workflow no-ops cleanly
+# until it exists. Deliberately OAuth-only: passing an API key as well would
+# make it ambiguous which credential each run billed. Model is overridable via the repo
 # variable AI_BOT_MODEL (default claude-sonnet-4-6 — triage is high-volume, so
 # Sonnet by default; bump to an Opus id if you want heavier PR review).
 name: AI Triage & PR Review
@@ -57,28 +60,26 @@ jobs:
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
     env:
-      # The header says this workflow "no-ops cleanly" until ANTHROPIC_API_KEY
-      # exists. It did not — with no key it installed bun, the CLI, and then
-      # failed hard, putting a red X on every pull request. A check that is red
-      # for a reason nobody can act on is a check people stop reading, which is
-      # how three unrelated breakages here went unnoticed for over a week.
+      # Gate every step on the credential existing: without this the job used
+      # to install bun and the CLI and then fail hard, putting a red X on every
+      # pull request for a reason nobody could act on.
       #
       # secrets cannot be referenced from a step-level `if`, so the test is
       # lifted to a job-level env var and read from there.
-      HAS_ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+      HAS_AUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
     steps:
       - name: Report that review is disabled
-        if: env.HAS_ANTHROPIC_KEY != 'true'
+        if: env.HAS_AUTH != 'true'
         shell: bash
         run: |
-          echo "ANTHROPIC_API_KEY is not set; skipping AI review." >> "$GITHUB_STEP_SUMMARY"
-          echo "Add the secret to enable it — note that doing so spends API credit on every internal-branch PR." >> "$GITHUB_STEP_SUMMARY"
+          echo "CLAUDE_CODE_OAUTH_TOKEN is not set; skipping AI review." >> "$GITHUB_STEP_SUMMARY"
+          echo "Mint one with claude setup-token and add it as a repo secret. Reviews bill against the maintainer Claude subscription." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Harden the runner (block non-allowlisted egress)
-        if: env.HAS_ANTHROPIC_KEY == 'true'
+        if: env.HAS_AUTH == 'true'
         uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
         with:
-          # block (#1401): this job hands ANTHROPIC_API_KEY and a write-scoped
+          # block (#1401): this job hands CLAUDE_CODE_OAUTH_TOKEN and a write-scoped
           # token to an LLM agent that reads untrusted issue/PR text. The
           # allowedTools list is the first barrier; the egress allowlist is the
           # network backstop so a future allowlist regression can't exfiltrate.
@@ -107,7 +108,7 @@ jobs:
             downloads.claude.ai:443
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: env.HAS_ANTHROPIC_KEY == 'true'
+        if: env.HAS_AUTH == 'true'
         with:
           # The agent only needs the tree for Read/Grep/Glob. Don't leave a
           # push-capable token in .git/config where its own Read tool can slurp
@@ -115,12 +116,15 @@ jobs:
           persist-credentials: false
 
       - name: Triage / review with Claude
-        if: env.HAS_ANTHROPIC_KEY == 'true'
+        if: env.HAS_AUTH == 'true'
         uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1.0.183
         env:
           GH_TOKEN: ${{ github.token }}
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Subscription auth, not API billing. A long-lived credential like the
+          # PATs: it expires silently, and a run of auth-failure red X marks
+          # here is the symptom.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Use this job's own token rather than the action's default auth.
           #
           # Without it, setupGitHubToken() mints a GitHub OIDC token and
