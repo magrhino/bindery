@@ -2,12 +2,30 @@ package metadata
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/vavallee/bindery/internal/models"
 )
 
 type mockProvider struct {
+	// mu guards only the call-recording fields below (searchAuthorQueries,
+	// searchBookQueries, getBookCalls, gotBookIDs, getByISBNCalls, gotISBNs).
+	//
+	// The aggregator used to call every provider method from one goroutine, so
+	// the recorders needed no synchronisation. #1888 gave the author-works
+	// enrichment passes a bounded fan-out, and enrichBook reaches SearchBooks
+	// from each worker — so the bare `append` at SearchBooks became a genuine
+	// data race, caught by the `race (non-api)` shard.
+	//
+	// Only the writers lock. Every assertion reads these fields from the test
+	// body after the pass has returned, and concurrency.RunBounded waits on its
+	// WaitGroup before returning, which establishes the happens-before those
+	// reads need. That keeps the ~110 existing read sites untouched.
+	//
+	// The configuration fields are written once during setup and only read
+	// afterwards, so they stay unguarded.
+	mu                   sync.Mutex
 	name                 string
 	searchBooks          []models.Book
 	searchBooksByQuery   map[string][]models.Book
@@ -38,7 +56,9 @@ type mockProvider struct {
 
 func (m *mockProvider) Name() string { return m.name }
 func (m *mockProvider) SearchAuthors(_ context.Context, query string) ([]models.Author, error) {
+	m.mu.Lock()
 	m.searchAuthorQueries = append(m.searchAuthorQueries, query)
+	m.mu.Unlock()
 	if m.searchAuthorsByQuery != nil {
 		if authors, ok := m.searchAuthorsByQuery[query]; ok {
 			return authors, m.searchAuthErr
@@ -47,7 +67,9 @@ func (m *mockProvider) SearchAuthors(_ context.Context, query string) ([]models.
 	return m.searchAuthors, m.searchAuthErr
 }
 func (m *mockProvider) SearchBooks(_ context.Context, query string) ([]models.Book, error) {
+	m.mu.Lock()
 	m.searchBookQueries = append(m.searchBookQueries, query)
+	m.mu.Unlock()
 	if m.searchBooksByQuery != nil {
 		if books, ok := m.searchBooksByQuery[query]; ok {
 			return books, m.searchBookErr
@@ -59,8 +81,10 @@ func (m *mockProvider) GetAuthor(_ context.Context, _ string) (*models.Author, e
 	return m.getAuthor, m.getAuthorErr
 }
 func (m *mockProvider) GetBook(_ context.Context, foreignID string) (*models.Book, error) {
+	m.mu.Lock()
 	m.getBookCalls++
 	m.gotBookIDs = append(m.gotBookIDs, foreignID)
+	m.mu.Unlock()
 	if m.getBookByID != nil {
 		return m.getBookByID[foreignID], m.getBookErr
 	}
@@ -70,8 +94,10 @@ func (m *mockProvider) GetEditions(_ context.Context, _ string) ([]models.Editio
 	return m.getEditions, m.getEditionsErr
 }
 func (m *mockProvider) GetBookByISBN(_ context.Context, isbn string) (*models.Book, error) {
+	m.mu.Lock()
 	m.getByISBNCalls++
 	m.gotISBNs = append(m.gotISBNs, isbn)
+	m.mu.Unlock()
 	if m.getByISBNByISBN != nil {
 		return m.getByISBNByISBN[isbn], m.getByISBNErr
 	}
