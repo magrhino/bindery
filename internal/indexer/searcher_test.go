@@ -1558,6 +1558,77 @@ func TestFilterRelevantEmbeddedTitleDifferentAuthor(t *testing.T) {
 	}
 }
 
+// TestFilterRelevantSingleKeywordExtendedTitle covers #1731: a one-word title
+// must not accept a release whose title runs PAST that word into a longer,
+// different book. The reported grab: Clive Cussler's "Treasure" (Dirk Pitt 9)
+// auto-imported "Dirk Pitt Universe Bk 29 - The Treasure of Khan", a separate
+// book by the same author — so the author corroboration added by #1539/#1063
+// passes for both and cannot separate them.
+//
+// The far bigger risk here is over-rejecting: a correct release for a one-word
+// title continues past the word constantly (year, format, series, narrator,
+// subtitle). Every "keep" case below is a shape that must survive the rule.
+func TestFilterRelevantSingleKeywordExtendedTitle(t *testing.T) {
+	const (
+		title  = "Treasure"
+		author = "Clive Cussler"
+	)
+	cases := []struct {
+		name    string
+		release string
+		want    bool
+	}{
+		{
+			name:    "reported grab: different book by the same author",
+			release: "Clive.Cussler.-.Dirk.Pitt.Universe.Bk.29.-.The.Treasure.of.Khan.64.kbps",
+			want:    false,
+		},
+		{
+			name:    "same extension without the series prefix",
+			release: "Clive.Cussler.-.The.Treasure.of.Khan.Unabridged.m4b",
+			want:    false,
+		},
+		{
+			name:    "year and format suffix",
+			release: "Clive.Cussler.-.Treasure.(1988).[EPUB]",
+			want:    true,
+		},
+		{
+			name:    "series, author and bitrate suffix",
+			release: "Treasure.-.Dirk.Pitt.9.-.Clive.Cussler.64kbps",
+			want:    true,
+		},
+		{
+			name:    "trailing subtitle opening with an article",
+			release: "Clive.Cussler.-.Treasure.-.A.Dirk.Pitt.Novel.Unabridged.m4b",
+			want:    true,
+		},
+		{
+			name:    "connective followed by a language tag, not a title word",
+			release: "Clive.Cussler.Treasure.in.English.128kbps.mp3",
+			want:    true,
+		},
+		{
+			name:    "connective followed by a format token",
+			release: "Clive.Cussler.Treasure.in.EPUB.retail",
+			want:    true,
+		},
+		{
+			name:    "author named after the title",
+			release: "Treasure.by.Clive.Cussler.Unabridged.m4b",
+			want:    true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := filterRelevant(toResults(tc.release), title, author, nil)
+			if has := contains(got, tc.release); has != tc.want {
+				t.Errorf("filterRelevant(%q) kept=%v, want %v", tc.release, has, tc.want)
+			}
+		})
+	}
+}
+
 // The in-order fallback (stop-word-separated titles) has the same embedding
 // hole as the phrase path — a contiguous phrase is trivially in-order, and a
 // gapped sequence inside a longer foreign title is equally weak evidence. Both

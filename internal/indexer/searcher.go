@@ -487,12 +487,125 @@ func matchAnchored(normResult string, re *regexp.Regexp, authorToks []string) bo
 	return true
 }
 
+// titleExtensionConnectives are the words that, sitting immediately AFTER a
+// single-word title inside a release name, carry it on into a longer, different
+// title: "Treasure" -> "The Treasure of Khan" (#1731).
+//
+// Articles ("a", "an", "the") are deliberately excluded, and so is "by". An
+// article that belongs to a longer title sits BEFORE the requested word ("The
+// Treasure of Khan"), where the prefix check already looks; AFTER the word it
+// almost always opens a trailing descriptor that a release appends to the real
+// title -- "Outliers: The Story of Success", "Treasure - A Dirk Pitt Novel".
+// Treating those as extensions would reject the correct release for a large
+// class of one-word titles. "by" introduces the author, for the same reason.
+var titleExtensionConnectives = map[string]bool{
+	"of": true, "and": true, "or": true, "in": true, "on": true,
+	"at": true, "to": true, "for": true, "from": true,
+}
+
+// releaseMetaTokens are release-name words that describe the FILE rather than
+// the work: bitrate/encoding markers, edition and narration qualifiers. Like
+// years, formats and series markers they carry no evidence that the release is
+// a different book, so they are benign wherever they trail a title.
+var releaseMetaTokens = map[string]bool{
+	"kbps": true, "kbit": true, "vbr": true, "abr": true,
+	"khz": true, "mono": true, "stereo": true, "bitrate": true,
+	"retail": true, "unabridged": true, "abridged": true, "complete": true,
+	"audiobook": true, "audio": true, "ebook": true, "edition": true,
+	"read": true, "narrated": true, "narrator": true, "novel": true,
+}
+
+// benignTrailingToken reports whether tok, appearing after a connective that
+// follows the matched title, is compatible with the release still BEING that
+// title. It extends benignPrefixToken (author tokens, bare numbers, stop words,
+// series markers) with the vocabulary that only ever trails a title: file
+// formats, the bitrate/edition markers above, and release language tags. A word
+// outside all of those is a real foreign word -- the rest of a longer title.
+func benignTrailingToken(tok string, authorToks []string) bool {
+	if benignPrefixToken(tok, authorToks) {
+		return true
+	}
+	if releaseMetaTokens[tok] {
+		return true
+	}
+	// Digit-led tokens are sizes, bitrates and disc counts ("64kbps", "128k",
+	// "3cd"); benignPrefixToken already covers the bare-number form. No title
+	// word starts with a digit.
+	if tok[0] >= '0' && tok[0] <= '9' {
+		return true
+	}
+	if _, ok := releaseLanguageTags[tok]; ok {
+		return true
+	}
+	for _, f := range formatTokens {
+		if tok == f {
+			return true
+		}
+	}
+	return false
+}
+
+// keywordExtendsIntoLongerTitle reports whether every occurrence of kw in
+// normResult is immediately followed by a connective plus a further significant
+// word, i.e. the release title does not stop at kw but runs on into a longer,
+// different work: "the treasure of khan" for the book "Treasure" (#1731).
+//
+// This is the right-hand counterpart to matchAnchored, and it exists because
+// author corroboration structurally cannot separate these two: "The Treasure of
+// Khan" is by the same Clive Cussler as "Treasure", so the author check added
+// by #1539 and #1063 passes for both. A single-word title carries no phrase
+// context either, so without this it matches every longer title in its author's
+// catalogue that happens to contain that word.
+//
+// The scan stops at the FIRST significant word after the connective and asks
+// only whether that word is benign (see benignTrailingToken); it deliberately
+// does not read on to the end of the release. Reading further would find the
+// narrator, release group or scene tag of a perfectly correct release and
+// reject it.
+//
+// Only a release where EVERY occurrence extends is rejected: one clean
+// occurrence of the word is enough to believe the release names the book.
+func keywordExtendsIntoLongerTitle(normResult, kw string, authorToks []string) bool {
+	re := WordBoundaryRegex(kw)
+	toks := strings.Fields(normResult)
+	found := false
+	for i, tok := range toks {
+		if !re.MatchString(tok) {
+			continue
+		}
+		found = true
+		if !extendsAfter(toks, i, authorToks) {
+			return false
+		}
+	}
+	return found
+}
+
+// extendsAfter reports whether the token at index i is followed by a
+// title-extending connective and then a significant, non-benign word.
+// Insignificant words between the two ("of the khan") are skipped.
+func extendsAfter(toks []string, i int, authorToks []string) bool {
+	if i+1 >= len(toks) || !titleExtensionConnectives[toks[i+1]] {
+		return false
+	}
+	for _, tok := range toks[i+2:] {
+		if len(newznab.SigWords(tok)) == 0 {
+			continue
+		}
+		return !benignTrailingToken(tok, authorToks)
+	}
+	// The connective ends the release name; there is nothing to extend into.
+	return false
+}
+
 // titleMatchesResult returns true if the normalized result contains the
 // significant words of the title either as a contiguous phrase or (for
 // multi-word titles as a fallback) with every significant word appearing at
 // a word boundary. A single-significant-word title additionally requires the
 // author to be present (first+last for multi-token authors, surname-only for
-// single-token authors); see authorMatchesRelease.
+// single-token authors; see authorMatchesRelease) and requires the release
+// title not to run PAST that word into a longer, different title (see
+// keywordExtendsIntoLongerTitle).
 //
 // A phrase or in-order hit alone is only trusted when it is ANCHORED (see
 // matchAnchored): a release whose title merely embeds the requested title
@@ -511,6 +624,13 @@ func titleMatchesResult(normResult string, titleKws []string, authorToks []strin
 		return authorMatchesRelease(normResult, authorToks)
 	case 1:
 		if !WordBoundaryRegex(titleKws[0]).MatchString(normResult) {
+			return false
+		}
+		// The word is present, but does the release title stop there? If it
+		// runs on into a longer title the release is a different book by (very
+		// often) the same author, which no amount of author checking can catch
+		// (#1731). See keywordExtendsIntoLongerTitle.
+		if keywordExtendsIntoLongerTitle(normResult, titleKws[0], authorToks) {
 			return false
 		}
 		if len(authorToks) == 0 {
