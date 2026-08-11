@@ -572,6 +572,13 @@ func RequireXRequestedWith(next http.Handler) http.Handler {
 			// requiring the header is pure friction for non-browser clients.
 			// This mirrors the identical exemption in RequireCSRFToken.
 			if !AuthedViaAPIKey(r.Context()) && !AllowUnauthPath(r.Method, r.URL.Path) && r.Header.Get("X-Requested-With") != "bindery-ui" {
+				// Leave a trace: this rejection was silent at every level, so
+				// a 403 here was indistinguishable from an auth failure or a
+				// routing mistake (#1895). Only the header's presence is
+				// logged, never its value — that is caller-controlled bytes.
+				logCSRFRejection("x_requested_with", r,
+					"request is not API-key-authenticated and X-Requested-With is not the UI value",
+					"x_requested_with_present", r.Header.Get("X-Requested-With") != "")
 				w.Header().Set("Content-Type", "application/json")
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return

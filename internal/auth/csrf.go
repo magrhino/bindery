@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"log/slog"
 	"net/http"
 )
 
@@ -68,6 +69,9 @@ func RequireCSRFToken(secrets func() [][]byte) func(http.Handler) http.Handler {
 					if c, err := r.Cookie(SessionCookieName); err == nil && c.Value != "" {
 						tok := r.Header.Get("X-CSRF-Token")
 						if !ValidCSRFToken(secrets(), r, tok) {
+							logCSRFRejection("csrf_token", r,
+								"session cookie present but X-CSRF-Token is missing or does not match the session",
+								"csrf_token_present", tok != "")
 							w.Header().Set("Content-Type", "application/json")
 							w.WriteHeader(http.StatusForbidden)
 							_, _ = w.Write([]byte(`{"error":"invalid or missing CSRF token"}`))
@@ -79,4 +83,52 @@ func RequireCSRFToken(secrets func() [][]byte) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// logCSRFRejection records why one of the two CSRF guards
+// (RequireXRequestedWith, RequireCSRFToken) turned a mutating request away.
+// Both used to reject with a bare `{"error":"forbidden"}` and no log line at
+// any level, which is what made #1849 impossible to diagnose from the outside:
+// a request carrying a valid API key came back 403 and the server left no
+// trace, so the cause had to be reconstructed from the source (#1895).
+//
+// Debug, deliberately. This guard also fires on genuine cross-site forgery
+// attempts, and an unauthenticated caller decides how often it fires — at Warn
+// or Info that would be a default-level log flood anyone could trigger from
+// outside. At Debug it costs nothing until an operator raises the level to
+// chase exactly this question.
+//
+// No credential material is logged: not the API key, the session cookie, the
+// CSRF token, nor the Authorization header — only whether such material was
+// *present*, which is what distinguishes "sent no key" from "sent a key we did
+// not accept". The path is r.URL.Path and never RequestURI, because the query
+// string can carry ?apikey= (#708 finding 4a).
+func logCSRFRejection(guard string, r *http.Request, reason string, extra ...any) {
+	peer := ""
+	if ip := requestPeerIP(r); ip != nil {
+		peer = ip.String()
+	}
+	attrs := []any{
+		"guard", guard,
+		"method", r.Method,
+		"path", r.URL.Path,
+		"peer", peer,
+		"reason", reason,
+		"api_key_header", r.Header.Get("X-Api-Key") != "",
+		// A key in ?apikey= is ignored on mutating methods (#708 finding 4a),
+		// so "sent a key, still got 403" is a routine cause of landing here.
+		// Reporting the parameter's presence separately answers that without
+		// the operator having to know the rule.
+		"api_key_query", r.URL.Query().Has("apikey"),
+		"session_cookie_present", sessionCookiePresent(r),
+	}
+	slog.Debug("csrf guard: rejecting mutating request", append(attrs, extra...)...)
+}
+
+// sessionCookiePresent reports whether the request carries a non-empty session
+// cookie. Only its presence is ever logged — the value authenticates the
+// caller and would be a session-hijacking credential in a log file.
+func sessionCookiePresent(r *http.Request) bool {
+	c, err := r.Cookie(SessionCookieName)
+	return err == nil && c.Value != ""
 }

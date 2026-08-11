@@ -1,10 +1,12 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1760,4 +1762,144 @@ func TestInstallAuthenticatedRequestsCarryOperatorIdentity(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- #1895: the CSRF guards must leave a trace ---------------------------------
+//
+// RequireXRequestedWith and RequireCSRFToken both rejected with a bare
+// `{"error":"forbidden"}` and no slog call at any level. That is what made
+// #1849 unreportable from the outside: the reporter ran with debug logging on,
+// saw the 403, and the container log had nothing tied to the request — the
+// cause had to be read out of the source. These tests pin that the rejection
+// is logged, that it is logged at Debug (an unauthenticated caller decides how
+// often this fires, so it must not reach a default-level log), and that no
+// credential material rides along into the log line.
+
+// captureAuthLogs redirects the default logger into a buffer for one test.
+func captureAuthLogs(t *testing.T, level slog.Level) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: level})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+// assertNoSecretsLogged fails if any credential value reached the log.
+func assertNoSecretsLogged(t *testing.T, logged string, secrets ...string) {
+	t.Helper()
+	for _, s := range secrets {
+		if strings.Contains(logged, s) {
+			t.Errorf("log line leaked credential material %q:\n%s", s, logged)
+		}
+	}
+}
+
+func TestRequireXRequestedWith_RejectionIsLogged(t *testing.T) {
+	buf := captureAuthLogs(t, slog.LevelDebug)
+
+	h := RequireXRequestedWith(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		t.Error("handler must not be reached")
+	}))
+
+	// The #1849 shape: a key was sent but the request was never marked
+	// AuthedViaAPIKey, so the guard fires. Every credential-shaped value here
+	// is distinctive so the leak assertion below can look for it.
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/importlist/1/sync?apikey=leaky-query-key", nil)
+	req.Header.Set("X-Api-Key", "super-secret-api-key")
+	req.Header.Set("Authorization", "Bearer super-secret-bearer-token")
+	req.Header.Set("X-CSRF-Token", "super-secret-csrf-token")
+	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "super-secret-session-value"})
+	req.RemoteAddr = "192.168.1.5:12345"
+	w := &captureWriter{}
+	h.ServeHTTP(w, req)
+
+	if w.status != http.StatusForbidden {
+		t.Fatalf("status = %d; want 403", w.status)
+	}
+	logged := buf.String()
+	if logged == "" {
+		t.Fatal("RequireXRequestedWith rejected the request without logging anything (#1895)")
+	}
+	for _, want := range []string{
+		"guard=x_requested_with",
+		"method=POST",
+		"path=/api/v1/importlist/1/sync",
+		"peer=192.168.1.5",
+		"api_key_header=true",
+		"api_key_query=true",
+		"session_cookie_present=true",
+		"x_requested_with_present=false",
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log line missing %q — a reader cannot tell why the request was rejected:\n%s", want, logged)
+		}
+	}
+	assertNoSecretsLogged(t, logged,
+		"super-secret-api-key",
+		"super-secret-bearer-token",
+		"super-secret-csrf-token",
+		"super-secret-session-value",
+		"leaky-query-key",
+	)
+}
+
+// TestCSRFGuardRejection_StaysBelowInfo pins the level choice. The guard fires
+// on genuine cross-site forgery attempts and on any anonymous POST, so logging
+// it at Info or Warn would hand an unauthenticated caller a default-level log
+// flood.
+func TestCSRFGuardRejection_StaysBelowInfo(t *testing.T) {
+	buf := captureAuthLogs(t, slog.LevelInfo)
+
+	h := RequireXRequestedWith(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		t.Error("handler must not be reached")
+	}))
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/author", nil)
+	req.RemoteAddr = "8.8.8.8:12345"
+	h.ServeHTTP(&captureWriter{}, req)
+
+	if got := buf.String(); got != "" {
+		t.Errorf("rejection logged at Info or above — an anonymous caller can flood the default log:\n%s", got)
+	}
+}
+
+func TestRequireCSRFToken_RejectionIsLogged(t *testing.T) {
+	buf := captureAuthLogs(t, slog.LevelDebug)
+
+	secret := testSecret32
+	sessionVal, err := SignSession(secret, 1, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	mw := RequireCSRFToken(func() [][]byte { return [][]byte{secret} })
+	h := mw(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		t.Error("handler must not be reached")
+	}))
+
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/author", nil)
+	req.Header.Set("X-CSRF-Token", "super-secret-wrong-token")
+	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: sessionVal})
+	req.RemoteAddr = "10.0.0.5:50000"
+	w := &captureWriter{}
+	h.ServeHTTP(w, req)
+
+	if w.status != http.StatusForbidden {
+		t.Fatalf("status = %d; want 403", w.status)
+	}
+	logged := buf.String()
+	if logged == "" {
+		t.Fatal("RequireCSRFToken rejected the request without logging anything (#1895)")
+	}
+	for _, want := range []string{
+		"guard=csrf_token",
+		"method=POST",
+		"path=/api/v1/author",
+		"csrf_token_present=true",
+		"session_cookie_present=true",
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log line missing %q:\n%s", want, logged)
+		}
+	}
+	assertNoSecretsLogged(t, logged, "super-secret-wrong-token", sessionVal)
 }
