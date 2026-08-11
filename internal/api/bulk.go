@@ -30,10 +30,21 @@ var (
 // bulkSearchConcurrency caps how many indexer searches a single bulk
 // action can fan out at once. Sized to a small fixed number rather than
 // the configured indexer count so a 500-book author "search all" can't
-// drown every indexer in one click; the scheduled wanted-search loop
-// uses the same bound. Tune in code if real-world indexer pools change
-// shape — a setting for one number would be more noise than signal.
-const bulkSearchConcurrency = 8
+// drown every indexer in one click. Tune in code if real-world indexer
+// pools change shape — a setting for one number would be more noise than
+// signal.
+//
+// One slot is not one indexer request: each book runs a multi-tier query
+// cascade, a dual-format book runs it once per format, and the searcher
+// queries every enabled indexer, so the real request rate is this number
+// times a single-digit multiplier. At 8 the bulk fan-out was the outlier
+// among the search fan-outs in this codebase — the per-author auto-search
+// and series fill both run at 4 and the scheduled wanted loop at 2 — and it
+// is the one a user triggers by hand, potentially while a catalogue refresh's
+// auto-search is still running. #1814: a 26-book author saturated a single
+// indexer and every search after the first minute died on the shared
+// deadline. Aligned with its siblings at authorAutoSearchConcurrency.
+const bulkSearchConcurrency = authorAutoSearchConcurrency
 
 // searchPaceInterval is the minimum gap between successive indexer-search
 // launches in every user- or catalogue-triggered fan-out in this package

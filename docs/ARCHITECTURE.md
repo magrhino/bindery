@@ -44,7 +44,7 @@ The `internal/` tree is organised by domain, not by layer:
 | `migrate` | Bulk-import of authors and related records from a `readarr.db` or a Goodreads CSV export. |
 | `models` | Domain types (Author, Book, Edition, Series, Indexer, etc.) shared across handlers, repos, and pipelines. |
 | `metadata` | OpenLibrary, Google Books, Hardcover, DNB, Audnex, Audible — fetchers and unifying interfaces. |
-| `indexer` | Newznab/Torznab clients, query builder, four-tier fallback, deduplication, ranking. |
+| `indexer` | Newznab/Torznab clients, query builder, four-tier fallback, per-indexer query deduplication, result deduplication, ranking. |
 | `decision` | Quality profiles, language filter, custom formats, delay profiles, blocklist consultation. |
 | `downloader` | SABnzbd, NZBGet, qBittorrent, Transmission, Deluge clients (queue/history polling, submission, deletion). |
 | `importer` | NZO-ID matching, Move/Copy/Hardlink semantics, naming-token expansion, cross-FS-safe moves. |

@@ -1089,6 +1089,57 @@ func TestAuthorsBulk_Search_BoundsConcurrency(t *testing.T) {
 	}
 }
 
+// TestAuthorsBulk_Search_SharesTheSearchFanOutBound is the #1814 guard. One
+// slot in the bulk pool is not one indexer request: the book runs a multi-tier
+// query cascade, once per format, against every enabled indexer. The bulk
+// fan-out used to run at 8 while every sibling search fan-out in the codebase
+// ran at 4 or less, and it is the one a user can trigger by hand — a 26-book
+// author saturated a single indexer and every search past the first minute died
+// on the shared deadline. It must not drift back above its siblings.
+func TestAuthorsBulk_Search_SharesTheSearchFanOutBound(t *testing.T) {
+	// The bound is what's under test; pacing is covered in the concurrency
+	// package and would only slow this down.
+	searchPaceInterval = 0
+	t.Cleanup(func() { searchPaceInterval = 3 * time.Second })
+
+	const total = 32
+	searcher := newBoundedMockSearcher(total)
+	h, _, books, author, ctx := bulkFixtureWithSearcher(t, searcher)
+
+	for i := 0; i < total; i++ {
+		mustCreateBook(t, books, ctx, &models.Book{
+			ForeignID:        fmt.Sprintf("OL_BULKBOUND_%d", i),
+			AuthorID:         author.ID,
+			Title:            fmt.Sprintf("Wanted %d", i),
+			SortTitle:        fmt.Sprintf("wanted %d", i),
+			Status:           models.BookStatusWanted,
+			Monitored:        true,
+			MetadataProvider: "openlibrary",
+			Genres:           []string{},
+		})
+	}
+
+	rec := postBulk(t, h.AuthorsBulk, fmt.Sprintf(`{"ids":[%d],"action":"search"}`, author.ID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	select {
+	case <-searcher.done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout waiting for bounded fan-out; calls=%d max=%d",
+			atomic.LoadInt32(&searcher.callCount), atomic.LoadInt32(&searcher.maxActive))
+	}
+
+	// Compared against the per-author auto-search bound rather than
+	// bulkSearchConcurrency itself, so the assertion still bites if someone
+	// raises the bulk constant on its own.
+	if got := atomic.LoadInt32(&searcher.maxActive); got > authorAutoSearchConcurrency {
+		t.Fatalf("peak concurrent bulk searches = %d, want <= %d (the per-author auto-search bound)",
+			got, authorAutoSearchConcurrency)
+	}
+}
+
 // ctxCapturingSearcher records the per-call context the bulk fan-out passes
 // in so #846 regression tests can assert the lifetime ctx is propagated.
 // The first call publishes its ctx and signals seen; later calls overwrite

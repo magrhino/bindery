@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"golang.org/x/text/unicode/norm"
 
@@ -32,6 +33,10 @@ type Client struct {
 	baseHost string
 	apiKey   string
 	http     *http.Client
+	// queries collapses identical search requests issued close together, so a
+	// bulk sweep over an author's wanted books cannot ask one indexer the same
+	// question dozens of times (#1814). nil disables the cache.
+	queries *queryCache
 }
 
 // New creates a Newznab client for a specific indexer.
@@ -57,6 +62,7 @@ func New(baseURL, apiKey string) *Client {
 		baseHost: baseHost,
 		apiKey:   resolvedAPIKey,
 		http:     newHTTPClient(),
+		queries:  newQueryCache(),
 	}
 }
 
@@ -252,7 +258,17 @@ func (c *Client) Caps(ctx context.Context) (*capsResponse, error) {
 }
 
 // Search performs a general search with optional category filtering.
+//
+// An empty (or whitespace-only) query is never sent. `q=` with nothing after it
+// is not a search: the indexer answers with whatever its category feed happens
+// to hold, the relevance filter then discards all of it, and the call has cost
+// the indexer a request for nothing. #1814 saw these fired in bulk during a
+// "search all wanted" sweep.
 func (c *Client) Search(ctx context.Context, query string, categories []int) ([]SearchResult, error) {
+	if strings.TrimSpace(query) == "" {
+		slog.Debug("indexer query skipped: empty search term")
+		return nil, nil
+	}
 	cats := intSliceToCSV(categories)
 	u, err := c.buildURL("search", map[string]string{
 		"q":     query,
@@ -266,7 +282,7 @@ func (c *Client) Search(ctx context.Context, query string, categories []int) ([]
 	slog.Debug("indexer query", "url", redactAPIKey(u))
 
 	var rss rssResponse
-	if err := c.getXML(ctx, u, &rss); err != nil {
+	if err := c.getXMLCached(ctx, u, &rss); err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
 
@@ -296,6 +312,15 @@ func (c *Client) Search(ctx context.Context, query string, categories []int) ([]
 func (c *Client) BookSearch(ctx context.Context, title, author string, categories []int) ([]SearchResult, error) {
 	origTitle := primaryTitleForQuery(title)
 	origAuthor := norm.NFC.String(author)
+
+	// Decided once, before transliteration: a title with nothing searchable in
+	// it would otherwise run the cascade, come back empty, and then run it a
+	// second time for the original-spelling retry (#1814).
+	if !hasSearchableText(origTitle) {
+		slog.Debug("book search skipped: title has no searchable text", "title", title, "author", author)
+		return nil, nil
+	}
+
 	queryTitle := TransliterateQuery(origTitle)
 	queryAuthor := TransliterateQuery(origAuthor)
 
@@ -322,9 +347,22 @@ func (c *Client) BookSearch(ctx context.Context, title, author string, categorie
 //     short titles (e.g. "Russell The Sparrow" beats "The Sparrow" alone).
 //  3. t=search "Author Title" — full author name + title.
 //  4. t=search "Title" — last-resort fallback.
+//
+// A book whose title normalises to nothing searchable (blank title, a title
+// that is only a parenthesised qualifier such as "(German Edition)", or bare
+// punctuation) has nothing to search for: every tier would degenerate into an
+// empty term or a bare author name, which returns that author's whole shelf for
+// the relevance filter to throw away. BookSearch skips the cascade outright in
+// that case (#1814); the guard is repeated here because bookSearchTiers is also
+// reached directly by the original-spelling retry.
 func (c *Client) bookSearchTiers(ctx context.Context, queryTitle, author string, categories []int) ([]SearchResult, error) {
 	surname := authorSurname(author)
 	cats := intSliceToCSV(categories)
+
+	if !hasSearchableText(queryTitle) {
+		slog.Debug("book search skipped: title has no searchable text", "title", queryTitle, "author", author)
+		return nil, nil
+	}
 
 	// Tier 1: structured t=book
 	if author != "" {
@@ -337,7 +375,7 @@ func (c *Client) bookSearchTiers(ctx context.Context, queryTitle, author string,
 		if err == nil {
 			slog.Debug("indexer query", "tier", 1, "url", redactAPIKey(u))
 			var rss rssResponse
-			if err := c.getXML(ctx, u, &rss); err != nil {
+			if err := c.getXMLCached(ctx, u, &rss); err != nil {
 				// Hard errors (auth failure, rate limit) mean the indexer has
 				// explicitly rejected this session. Firing tiers 2-4 at the same
 				// indexer would repeat the same rejection — abort immediately so
@@ -456,6 +494,20 @@ func NormalizeQueryTitle(title string) string {
 	).Replace(title)
 	title = parenSuffixRe.ReplaceAllString(title, "")
 	return strings.Join(strings.Fields(title), " ")
+}
+
+// hasSearchableText reports whether s carries at least one letter or digit.
+// Deliberately weaker than SigWords, which also discards stop words and short
+// tokens: "It" and "Us" are real book titles and must stay searchable. This
+// only rejects a term an indexer could never match on — empty, whitespace, or
+// pure punctuation.
+func hasSearchableText(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return true
+		}
+	}
+	return false
 }
 
 func authorSurname(author string) string {
@@ -672,21 +724,46 @@ func redactedErr(err error) error {
 }
 
 func (c *Client) getXML(ctx context.Context, rawURL string, target interface{}) error {
+	body, err := c.fetchXML(ctx, rawURL)
+	if err != nil {
+		return err
+	}
+	return xml.Unmarshal(body, target)
+}
+
+// getXMLCached is getXML with the per-indexer query cache in front of the HTTP
+// request, so an identical query issued again during the same search sweep
+// reuses the first response instead of hitting the indexer a second time
+// (#1814). Only search commands use it — see the queryCache doc comment.
+func (c *Client) getXMLCached(ctx context.Context, rawURL string, target interface{}) error {
+	body, err := c.queries.do(ctx, redactAPIKey(rawURL), func() ([]byte, error) {
+		return c.fetchXML(ctx, rawURL)
+	})
+	if err != nil {
+		return err
+	}
+	return xml.Unmarshal(body, target)
+}
+
+// fetchXML performs the request and returns the validated response body,
+// translating an indexer-reported <error> document or a non-200 status into an
+// error. The caller unmarshals.
+func (c *Client) fetchXML(ctx context.Context, rawURL string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return redactedErr(err)
+		return nil, redactedErr(err)
 	}
 	req.Header.Set("User-Agent", useragent.Get())
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return redactedErr(err)
+		return nil, redactedErr(err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
-		return fmt.Errorf("read indexer response: %w", err)
+		return nil, fmt.Errorf("read indexer response: %w", err)
 	}
 
 	// Newznab/Torznab indexers report failures (bad API key, rate limit, site
@@ -695,7 +772,7 @@ func (c *Client) getXML(ctx context.Context, rawURL string, target interface{}) 
 	// the indexer's own code and description rather than leaking the XML
 	// decoder's unhelpful "expected element type <rss> but have <error>".
 	if nzErr := parseNewznabError(body); nzErr != nil {
-		return nzErr
+		return nil, nzErr
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -703,10 +780,10 @@ func (c *Client) getXML(ctx context.Context, rawURL string, target interface{}) 
 		if len(snippet) > 512 {
 			snippet = snippet[:512]
 		}
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, snippet)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, snippet)
 	}
 
-	return xml.Unmarshal(body, target)
+	return body, nil
 }
 
 // parseNewznabError returns a non-nil *IndexerError when body is a
