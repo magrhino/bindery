@@ -36,7 +36,9 @@ const (
 // notification showed the same string twice and never said what occurred. The
 // original item name is preserved under `item`, and `eventType` is added to
 // every payload (not just `test`) so templates can key off it. All original
-// fields (size, format, path, status, clientId, …) are kept for templaters.
+// fields (size, format, path, status, clientId, …) are kept for templaters, and
+// `format` is additionally mirrored to `mediaFormat` because Apprise reserves
+// the `format` key — see send(), which drops it for Apprise targets only (#1886).
 func normalizeEventPayload(eventType string, payload map[string]interface{}) map[string]interface{} {
 	out := make(map[string]interface{}, len(payload)+3)
 	for k, v := range payload {
@@ -93,9 +95,50 @@ func normalizeEventPayload(eventType string, payload map[string]interface{}) map
 	default:
 		title, body = item, msg
 	}
+	// "format" is a reserved field in Apprise's REST payload: it names the body's
+	// markup (text/html/markdown) and anything else is rejected with HTTP 400
+	// before the notification is dispatched. Our media format
+	// ("ebook"/"audiobook") travels under exactly that key, so every import and
+	// upgrade webhook failed on Apprise while grab/failure/health — the events
+	// carrying no "format" — went through (#1886).
+	//
+	// Mirror it to "mediaFormat" rather than renaming it. "format" is a
+	// documented payload field (docs/API.md) that every non-Apprise consumer
+	// receives today, and dropping it here would break their templates to fix a
+	// third party's key collision. The collision is resolved per-target in send()
+	// instead, which is where the other Apprise accommodation already lives.
+	if v, ok := out["format"]; ok {
+		out["mediaFormat"] = v
+	}
+
 	out["title"] = title
 	out["message"] = body
 	return out
+}
+
+// isAppriseTarget reports whether raw looks like an apprise-api notify endpoint.
+//
+// apprise-api serves its notify handler at /notify, /notify/<config-key> and
+// /notify/apprise (stateless), so the leading path segment is the signal. This
+// is a heuristic and deliberately a narrow one: it decides only whether to strip
+// the reserved "format" key, so a false positive costs a non-Apprise webhook one
+// documented field it still receives as "mediaFormat", and a false negative
+// leaves that target exactly as it is today. Nothing else branches on it.
+//
+// A per-notification setting would be exact, but it is config surface the user
+// has to know to switch on to fix a failure whose error message names neither
+// Bindery nor the field (#1886).
+func isAppriseTarget(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	for _, segment := range strings.Split(u.Path, "/") {
+		if strings.EqualFold(segment, "notify") {
+			return true
+		}
+	}
+	return false
 }
 
 // ntfyRootURL strips a topic URL (https://ntfy.sh/mytopic) down to the server
@@ -261,6 +304,21 @@ func (n *Notifier) send(ctx context.Context, notif *models.Notification, payload
 	}
 	if title, _ := out["title"].(string); title == "" {
 		out["title"] = "Bindery"
+	}
+
+	// Apprise reserves top-level "format" for the body's markup and rejects the
+	// whole request with HTTP 400 when it holds anything but text/html/markdown
+	// — so our media format made every bookImported and upgrade notification
+	// fail before it was ever dispatched (#1886).
+	//
+	// Stripped here rather than in normalizeEventPayload so the collision costs
+	// only the target that has it. "format" is documented (docs/API.md) and
+	// every ntfy / Home Assistant / Discord-proxy consumer receives it today;
+	// removing it globally would break their templates to accommodate a third
+	// party. The same value is always present as "mediaFormat", so an Apprise
+	// user has a key to template on and everyone else keeps both.
+	if isAppriseTarget(notif.URL) {
+		delete(out, "format")
 	}
 
 	// When a topic is configured, publish to the ntfy server root with the topic

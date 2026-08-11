@@ -3,6 +3,7 @@ package notifier
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -414,6 +415,111 @@ func TestNormalizeEventPayload(t *testing.T) {
 				t.Errorf("item = %v, want %q", out["item"], item)
 			}
 		})
+	}
+}
+
+// TestSend_AppriseTargetOmitsReservedFormatKey is the #1886 regression test.
+//
+// Apprise 400s a payload whose "format" is not one of its body markups
+// (text/html/markdown), which killed every bookImported and upgrade webhook
+// while grab/failure/health — the events with no "format" — delivered fine.
+//
+// The reserved key is dropped for Apprise targets ONLY. Removing it everywhere
+// would fix Apprise by breaking every other consumer's templates, and "format"
+// is a documented payload field (docs/API.md).
+func TestSend_AppriseTargetOmitsReservedFormatKey(t *testing.T) {
+	// Apprise's accepted values for the reserved "format" field.
+	appriseFormats := map[string]bool{"text": true, "html": true, "markdown": true}
+
+	for _, event := range []string{EventBookImported, EventUpgrade} {
+		t.Run(event, func(t *testing.T) {
+			var gotBody []byte
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotBody, _ = io.ReadAll(r.Body)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+
+			n := testNotifier(&http.Client{})
+			payload := normalizeEventPayload(event, map[string]interface{}{"title": "Dune", "format": "ebook"})
+			// An apprise-api notify endpoint.
+			if err := n.send(context.Background(), &models.Notification{URL: srv.URL + "/notify/bindery"}, payload); err != nil {
+				t.Fatalf("send: %v", err)
+			}
+
+			var got map[string]interface{}
+			if err := json.Unmarshal(gotBody, &got); err != nil {
+				t.Fatalf("unmarshal sent body: %v (%s)", err, gotBody)
+			}
+			if f, ok := got["format"]; ok && !appriseFormats[fmt.Sprint(f)] {
+				t.Errorf("Apprise payload carries reserved key format=%v, which it rejects with HTTP 400", f)
+			}
+			if got["mediaFormat"] != "ebook" {
+				t.Errorf("mediaFormat = %v, want %q — Apprise needs a key it can template on", got["mediaFormat"], "ebook")
+			}
+			// The human-readable body still names the format.
+			if got["body"] != "Dune (ebook)" {
+				t.Errorf("body = %v, want %q", got["body"], "Dune (ebook)")
+			}
+		})
+	}
+}
+
+// TestSend_NonAppriseTargetKeepsFormatKey is the compatibility half, and the
+// reason the strip is per-target rather than global. ntfy, Home Assistant and
+// Discord-proxy consumers have received "format" since the field existed and it
+// is documented in docs/API.md; a template reading it must keep working.
+func TestSend_NonAppriseTargetKeepsFormatKey(t *testing.T) {
+	for _, path := range []string{"", "/webhook", "/api/v1/hooks/bindery"} {
+		t.Run("path="+path, func(t *testing.T) {
+			var gotBody []byte
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotBody, _ = io.ReadAll(r.Body)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+
+			n := testNotifier(&http.Client{})
+			payload := normalizeEventPayload(EventBookImported, map[string]interface{}{"title": "Dune", "format": "ebook"})
+			if err := n.send(context.Background(), &models.Notification{URL: srv.URL + path}, payload); err != nil {
+				t.Fatalf("send: %v", err)
+			}
+
+			var got map[string]interface{}
+			if err := json.Unmarshal(gotBody, &got); err != nil {
+				t.Fatalf("unmarshal sent body: %v (%s)", err, gotBody)
+			}
+			if got["format"] != "ebook" {
+				t.Errorf("format = %v, want %q — dropping it here breaks existing templates to fix a third party", got["format"], "ebook")
+			}
+			// Both keys, so a consumer can migrate on its own schedule.
+			if got["mediaFormat"] != "ebook" {
+				t.Errorf("mediaFormat = %v, want %q", got["mediaFormat"], "ebook")
+			}
+		})
+	}
+}
+
+// TestIsAppriseTarget pins the detection itself, including the shapes
+// apprise-api actually serves and the ones that must not match.
+func TestIsAppriseTarget(t *testing.T) {
+	for _, tc := range []struct {
+		url  string
+		want bool
+	}{
+		{"https://apprise.example.com/notify", true},
+		{"https://apprise.example.com/notify/mykey", true},
+		{"https://apprise.example.com/notify/apprise", true},
+		{"http://apprise:8000/notify/bindery", true},
+		{"https://ntfy.sh/mytopic", false},
+		{"https://discord.com/api/webhooks/1/abc", false},
+		{"https://example.com/", false},
+		{"https://example.com/notifications", false},
+		{"not a url at all", false},
+	} {
+		if got := isAppriseTarget(tc.url); got != tc.want {
+			t.Errorf("isAppriseTarget(%q) = %v, want %v", tc.url, got, tc.want)
+		}
 	}
 }
 
