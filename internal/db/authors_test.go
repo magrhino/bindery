@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
@@ -666,5 +667,167 @@ func TestAuthorDeleteCleansIdentifiersWithoutCascade(t *testing.T) {
 	}
 	if err := repo.UpsertAuthorIdentifier(ctx, b.ID, "hc:delete-me"); err != nil {
 		t.Fatalf("re-attach identifier after delete: %v", err)
+	}
+}
+
+// TestAuthorCreateForUser_ReflectsPersistedOwner pins the write-back that
+// #1872 was missing.
+//
+// CreateForUser already reflects the row's generated id and timestamps back
+// onto the caller's struct — UserRepo.Create does the same with SessionEpoch,
+// for the stated reason that the in-memory value must match the row that was
+// just written. owner_user_id was the one column left out, so a caller held an
+// author it believed was NULL-owned while the row belonged to ownerUserID.
+//
+// That gap is not cosmetic: AuthorHandler.FetchAuthorBooks stamps
+// author.OwnerUserID onto every book it creates, so an author added by a real
+// user produced an entire catalogue of NULL-owned rows, which per-user scoping
+// treats as shared and shows to every account on the install.
+func TestAuthorCreateForUser_ReflectsPersistedOwner(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	owner, err := NewUserRepo(database).Create(ctx, "owner", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewAuthorRepo(database)
+	a := &models.Author{ForeignID: "OL_OWNED_A", Name: "Owned Author", SortName: "Author, Owned"}
+	if err := repo.CreateForUser(ctx, a, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	if a.OwnerUserID != owner.ID {
+		t.Fatalf("in-memory owner = %d, want %d — the struct disagrees with the row it just wrote", a.OwnerUserID, owner.ID)
+	}
+
+	persisted, err := repo.GetByID(ctx, a.ID)
+	if err != nil || persisted == nil {
+		t.Fatalf("read back author: err=%v got=%v", err, persisted)
+	}
+	if persisted.OwnerUserID != a.OwnerUserID {
+		t.Fatalf("persisted owner = %d, in-memory owner = %d", persisted.OwnerUserID, a.OwnerUserID)
+	}
+}
+
+// TestAuthorCreate_ReportsTheNullOwnerItWrote is the other half of the same
+// invariant, and the reason the #1843 fixture could not be made non-vacuous by
+// setting the struct field alone.
+//
+// Create is the system-owned constructor: it hard-codes ownerUserID 0 and
+// writes NULL, ignoring whatever the caller put in a.OwnerUserID. Silently
+// discarding that value is what made the drift invisible, so Create now
+// reports the owner it actually persisted. A caller that wants an owned author
+// must use CreateForUser.
+func TestAuthorCreate_ReportsTheNullOwnerItWrote(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	repo := NewAuthorRepo(database)
+	a := &models.Author{ForeignID: "OL_UNOWNED_A", Name: "Unowned", SortName: "Unowned", OwnerUserID: 7}
+	if err := repo.Create(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if a.OwnerUserID != 0 {
+		t.Fatalf("in-memory owner = %d after Create, want 0 — Create writes NULL and must say so", a.OwnerUserID)
+	}
+
+	persisted, err := repo.GetByID(ctx, a.ID)
+	if err != nil || persisted == nil {
+		t.Fatalf("read back author: err=%v got=%v", err, persisted)
+	}
+	if persisted.OwnerUserID != 0 {
+		t.Fatalf("persisted owner = %d, want 0", persisted.OwnerUserID)
+	}
+}
+
+// TestMigration074_BackfillsBookOwnerFromAuthor pins the repair migration for
+// the rows #1872 already wrote.
+//
+// Three shapes have to come out differently:
+//   - an owned author's NULL-owned book is adopted (the bug's signature)
+//   - a NULL-owned author's NULL-owned book is left NULL (deliberately shared
+//     content, and legacy pre-multi-user data; there is no owner to inherit)
+//   - a book that already has an owner is never re-pointed, including to a
+//     different user than its author's
+func TestMigration074_BackfillsBookOwnerFromAuthor(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	users := NewUserRepo(database)
+	alice, err := users.Create(ctx, "alice", "h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := users.Create(ctx, "bob", "h")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	authors := NewAuthorRepo(database)
+	owned := &models.Author{ForeignID: "OL_OWNED", Name: "Owned", SortName: "Owned"}
+	if err := authors.CreateForUser(ctx, owned, alice.ID); err != nil {
+		t.Fatal(err)
+	}
+	shared := &models.Author{ForeignID: "OL_SHARED", Name: "Shared", SortName: "Shared"}
+	if err := authors.Create(ctx, shared); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write the three rows straight to SQL: the point is the state on disk
+	// after the buggy code ran, which the repaired repo can no longer produce.
+	insert := func(foreignID string, authorID int64, owner any) {
+		t.Helper()
+		if _, err := database.ExecContext(ctx,
+			`INSERT INTO books (foreign_id, author_id, title, sort_title, status, owner_user_id, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, 'wanted', ?, datetime('now'), datetime('now'))`,
+			foreignID, authorID, foreignID, foreignID, owner); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("B_ORPHANED", owned.ID, nil)   // the bug: owned author, NULL book
+	insert("B_SHARED", shared.ID, nil)    // no owner to inherit
+	insert("B_ALREADY", owned.ID, bob.ID) // already attributed, to someone else
+
+	// OpenMemory already ran 074 at open, before these rows existed. Re-apply
+	// the real file (not a hand-copied query) against the state above.
+	migration, err := migrationsFS.ReadFile("migrations/074_backfill_book_owner_from_author.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, string(migration)); err != nil {
+		t.Fatalf("apply migration 074: %v", err)
+	}
+
+	ownerOf := func(foreignID string) (int64, bool) {
+		t.Helper()
+		var owner sql.NullInt64
+		if err := database.QueryRowContext(ctx,
+			"SELECT owner_user_id FROM books WHERE foreign_id=?", foreignID).Scan(&owner); err != nil {
+			t.Fatal(err)
+		}
+		return owner.Int64, owner.Valid
+	}
+
+	if got, ok := ownerOf("B_ORPHANED"); !ok || got != alice.ID {
+		t.Errorf("orphaned book owner = %d (set=%v), want alice %d", got, ok, alice.ID)
+	}
+	if _, ok := ownerOf("B_SHARED"); ok {
+		t.Error("a NULL-owned author's book must stay NULL-owned — nothing to inherit")
+	}
+	if got, ok := ownerOf("B_ALREADY"); !ok || got != bob.ID {
+		t.Errorf("already-owned book owner = %d (set=%v), want bob %d untouched", got, ok, bob.ID)
 	}
 }

@@ -1520,10 +1520,24 @@ func (h *AuthorHandler) fetchAuthorBooks(author *models.Author, autoSearch bool,
 	// times out and the direct insert didn't land (#804, #1559), and a user
 	// can delete the author mid-refresh. Bail out instead of running an
 	// insert loop where every row fails the author_id FK constraint.
-	if current, err := h.authors.GetByID(ctx, author.ID); err == nil && current == nil {
-		slog.Info("author deleted while catalogue fetch was running; aborting sync",
-			"author", author.Name, "authorId", author.ID)
-		return
+	if current, err := h.authors.GetByID(ctx, author.ID); err == nil {
+		if current == nil {
+			slog.Info("author deleted while catalogue fetch was running; aborting sync",
+				"author", author.Name, "authorId", author.ID)
+			return
+		}
+		// This re-read is also the last chance to correct a stale owner before
+		// the insert loop stamps it onto every new book. `author` is a
+		// caller-supplied snapshot whose OwnerUserID may never have matched the
+		// row, and the row itself can be re-owned between the snapshot and here.
+		// The persisted value is the only one that satisfies the books.owner_user_id
+		// foreign key and the only one per-user scoping will agree with (#1872).
+		if author.OwnerUserID != current.OwnerUserID {
+			slog.Debug("catalogue sync adopting the author row's persisted owner",
+				"author", author.Name, "authorId", author.ID,
+				"snapshotOwner", author.OwnerUserID, "persistedOwner", current.OwnerUserID)
+			author.OwnerUserID = current.OwnerUserID
+		}
 	}
 
 	// Track titles we've already added (case-insensitive) to avoid OL duplicates.

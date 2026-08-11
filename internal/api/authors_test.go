@@ -4375,13 +4375,29 @@ func TestAddBook_ExistingAuthorDirectInsertWhenSyncSkipsWork(t *testing.T) {
 	profileRepo := db.NewMetadataProfileRepo(database)
 
 	ctx := context.Background()
-	// The author is already in the library, added long before this request.
+	// The author is already in the library, added long before this request, and
+	// belongs to a real user — which is what every author on a multi-user
+	// install looks like.
+	//
+	// The owner is not incidental to this test. Seeding it through
+	// CreateForUser (with a users row to satisfy the books.owner_user_id
+	// foreign key) is what makes the tenancy assertion at the bottom mean
+	// something: against a zero-owned author it compared 0 to 0 and would have
+	// passed with tenancy inheritance deleted outright (#1760, #1843). Setting
+	// the struct field alone does not work — Create writes NULL regardless.
+	owner, err := db.NewUserRepo(database).Create(ctx, "reader", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
 	author := &models.Author{
 		ForeignID: "OL23919A", Name: "J. K. Rowling", SortName: "Rowling, J. K.",
 		MetadataProvider: "openlibrary", Monitored: true,
 	}
-	if err := authorRepo.Create(ctx, author); err != nil {
+	if err := authorRepo.CreateForUser(ctx, author, owner.ID); err != nil {
 		t.Fatal(err)
+	}
+	if author.OwnerUserID == 0 {
+		t.Fatal("fixture: the author must be owned, or the tenancy assertion below is vacuous")
 	}
 
 	// The catalogue sync sees the requested work tagged with a language the
@@ -4453,8 +4469,13 @@ func TestAddBook_ExistingAuthorDirectInsertWhenSyncSkipsWork(t *testing.T) {
 		t.Errorf("explicit media type should win, got %q", got.MediaType)
 	}
 	// Tenancy (#1457): the direct-inserted row inherits the author's owner.
+	// Asserted against the literal seeded owner, not just author.OwnerUserID,
+	// so this cannot go vacuous again if the fixture's owner regresses to 0.
+	if got.OwnerUserID != owner.ID {
+		t.Errorf("book owner = %d, want the author's owner %d", got.OwnerUserID, owner.ID)
+	}
 	if got.OwnerUserID != author.OwnerUserID {
-		t.Errorf("book owner = %d, want the author's owner %d", got.OwnerUserID, author.OwnerUserID)
+		t.Errorf("book owner = %d, author owner = %d", got.OwnerUserID, author.OwnerUserID)
 	}
 
 	// The explicit add must not resurrect anything the user did NOT pick:
@@ -5352,5 +5373,137 @@ func TestAddBook_DirectInsertRejectsUnusableTitle(t *testing.T) {
 				t.Fatalf("unusable title %q must not be inserted, got %d row(s): %q", tc.title, len(rows), rows[0].Title)
 			}
 		})
+	}
+}
+
+// TestFetchAuthorBooks_NewBooksInheritThePersistedOwner is the production-facing
+// half of #1872.
+//
+// The reported symptom was books vanishing from an owned author's catalogue,
+// blamed on the allowed-languages filter. The filter is innocent. The author
+// snapshot handed to the sync carried the wrong owner, because
+// AuthorRepo.CreateForUser wrote owner_user_id to the row but never reflected
+// it back onto the struct — so `b.OwnerUserID = author.OwnerUserID` in the
+// insert loop stamped 0 onto every new book.
+//
+// Zero means NULL means "shared" to every per-user query in the codebase, so a
+// multi-user install silently published one user's whole catalogue to all the
+// others.
+//
+// This pins the end-to-end invariant, not one layer's mechanism: the fix has a
+// write-back in CreateForUser AND an owner re-read in FetchAuthorBooks, and
+// either alone satisfies this test. TestAuthorCreateForUser_ReflectsPersistedOwner
+// pins the write-back on its own; the stale-snapshot test below pins the re-read.
+func TestFetchAuthorBooks_NewBooksInheritThePersistedOwner(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	database.SetMaxOpenConns(1)
+
+	ctx := context.Background()
+	owner, err := db.NewUserRepo(database).Create(ctx, "owner", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+
+	author := &models.Author{
+		ForeignID: "OL23919A", Name: "J. K. Rowling", SortName: "Rowling, J. K.",
+		MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := authorRepo.CreateForUser(ctx, author, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	stub := &stubMetaProvider{
+		name: "openlibrary",
+		works: []models.Book{
+			{ForeignID: "OL82563W", Title: "Harry Potter and the Prisoner of Azkaban", SortTitle: "harry potter and the prisoner of azkaban", Language: "eng", Status: models.BookStatusWanted, Genres: []string{}, MetadataProvider: "openlibrary"},
+		},
+	}
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, metadata.NewAggregator(stub), nil, profileRepo, nil)
+	h.FetchAuthorBooks(author, false, "")
+
+	got, err := bookRepo.GetByForeignID(ctx, "OL82563W")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("the catalogue sync created no book at all")
+	}
+	if got.OwnerUserID != owner.ID {
+		t.Fatalf("book owner = %d, want the author's owner %d — a 0 here is a NULL-owned row every user on the install can see",
+			got.OwnerUserID, owner.ID)
+	}
+}
+
+// TestFetchAuthorBooks_AdoptsPersistedOwnerOverStaleSnapshot covers the second
+// half of the #1872 fix, independently of who wrote the snapshot.
+//
+// FetchAuthorBooks already re-reads the author row before its insert loop (to
+// abort when the row was deleted mid-fetch) but used only the nil check and
+// discarded the row. Any snapshot whose owner disagrees with the row — a stale
+// copy, a re-owned author, or the CreateForUser gap above — therefore stamped
+// the wrong owner on every book.
+//
+// The wrong owner is not merely mislabelled. books.owner_user_id is
+// `REFERENCES users(id)`, so a snapshot naming a user that does not exist makes
+// every insert fail the foreign key: the sync logs one WARN per work, adds
+// nothing, and the catalogue looks empty for reasons the log line about the
+// language filter does not explain. That is exactly the failure #1843 hit.
+func TestFetchAuthorBooks_AdoptsPersistedOwnerOverStaleSnapshot(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	database.SetMaxOpenConns(1)
+
+	ctx := context.Background()
+	owner, err := db.NewUserRepo(database).Create(ctx, "owner", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+
+	author := &models.Author{
+		ForeignID: "OL23919A", Name: "J. K. Rowling", SortName: "Rowling, J. K.",
+		MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := authorRepo.CreateForUser(ctx, author, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// The snapshot names a user id that was never created. Before the fix this
+	// reached books.Create verbatim and every insert died on the FK.
+	stale := *author
+	stale.OwnerUserID = owner.ID + 999
+
+	stub := &stubMetaProvider{
+		name: "openlibrary",
+		works: []models.Book{
+			{ForeignID: "OL82563W", Title: "Harry Potter and the Prisoner of Azkaban", SortTitle: "harry potter and the prisoner of azkaban", Language: "eng", Status: models.BookStatusWanted, Genres: []string{}, MetadataProvider: "openlibrary"},
+		},
+	}
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, metadata.NewAggregator(stub), nil, profileRepo, nil)
+	h.FetchAuthorBooks(&stale, false, "")
+
+	got, err := bookRepo.GetByForeignID(ctx, "OL82563W")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("no book created — the stale owner failed the books.owner_user_id foreign key")
+	}
+	if got.OwnerUserID != owner.ID {
+		t.Fatalf("book owner = %d, want the author row's persisted owner %d", got.OwnerUserID, owner.ID)
 	}
 }

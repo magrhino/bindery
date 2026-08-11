@@ -382,6 +382,15 @@ func (r *AuthorRepo) CreateForUser(ctx context.Context, a *models.Author, ownerU
 	a.ID = id
 	a.CreatedAt = now
 	a.UpdatedAt = now
+	// Reflect the persisted owner back onto the struct, exactly as
+	// QualityProfileRepo.CreateForUser and MetadataProfileRepo.CreateForUser
+	// already do. Without this the caller holds an author it believes is
+	// NULL-owned while the row is owned by ownerUserID, and every downstream
+	// use of that snapshot inherits the wrong tenancy: FetchAuthorBooks copies
+	// author.OwnerUserID onto each book it creates, so an author added by user
+	// 7 produced a whole catalogue of NULL-owned (globally visible) book rows
+	// (#1872).
+	a.OwnerUserID = ownerUserID
 	if err := r.upsertIdentifierTx(ctx, tx, a.ID, a.ForeignID, now); err != nil {
 		return err
 	}
