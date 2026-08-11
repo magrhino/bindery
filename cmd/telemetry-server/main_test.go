@@ -1464,6 +1464,14 @@ func TestFunnelCapable(t *testing.T) {
 		"1.30.1": true, "1.30.2": true, "1.31.0": true, "1.32.0": true, "2.0.0": true,
 		"1.30.0": false, "1.29.9": false, "1.29.1": false, "0.99.9": false,
 		"sha-abc": false, "dev": false, "": false,
+		// The Docker image reports a v-prefixed version (ci.yml builds it from
+		// `git describe --tags --match 'v*'`), while the GoReleaser binaries
+		// report the bare form. Both must land in the same cohort; requiring
+		// the bare form excluded every Docker install.
+		"v1.30.1": true, "v1.30.2": true, "v1.31.0": true, "v2.0.0": true,
+		"v1.30.0": false, "v1.29.9": false,
+		// Still not a release version just because it starts with a v.
+		"vdev": false, "v1.30": false, "1.30.1-rc1": false,
 	} {
 		if got := funnelCapable(v); got != want {
 			t.Errorf("funnelCapable(%q) = %v, want %v", v, got, want)

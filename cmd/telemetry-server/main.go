@@ -1736,8 +1736,18 @@ var featureFields = []featureField{
 var funnelMinVersion = [3]int{1, 30, 1}
 
 // funnelCapable reports whether a version string is >= funnelMinVersion.
+//
+// The leading "v" is optional because both spellings are in the wild: the
+// GoReleaser binaries build with {{ .Version }}, which strips it, while the
+// Docker image builds with `git describe --tags --match 'v*'` and keeps it
+// (.github/workflows/ci.yml, Dockerfile's VERSION arg). The telemetry client's
+// own releaseVersionPattern is `^v?\d+\.\d+\.\d+$`, so it accepts and sends
+// both. Requiring the bare form here silently dropped every Docker install out
+// of the funnel cohort — the dominant deployment method — which looked
+// identical to an install that stalled before its first milestone, the exact
+// ambiguity the version gate exists to remove.
 func funnelCapable(version string) bool {
-	m := regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)$`).FindStringSubmatch(version)
+	m := regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)$`).FindStringSubmatch(version)
 	if m == nil {
 		return false
 	}
