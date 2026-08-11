@@ -16,11 +16,18 @@ import (
 // that's what KOReader / Moon+ Reader / Aldiko all speak natively:
 //
 //  1. Mode == disabled                 — always allowed
-//  2. Mode == local-only + RFC1918 IP  — always allowed
-//  3. Valid X-Api-Key header or ?apikey= query — allowed
+//  2. Valid X-Api-Key header or ?apikey= query — allowed
+//  3. Mode == local-only + RFC1918 IP  — always allowed
 //  4. Valid signed session cookie      — allowed
 //  5. Valid Basic credentials          — allowed
 //  6. Otherwise                        — 401 with WWW-Authenticate: Basic
+//
+// Steps 2 and 3 are in that order on purpose, matching auth.Middleware after
+// #1849: a request that carries a valid key must be recognised as a key
+// request even when its source address would have been let through anyway.
+// The reverse order let the local-only bypass swallow a verified key before
+// anything could observe it, which is what turned into a 403 on mutations in
+// #1849 (#1894). A missing or wrong key still falls through to the bypass.
 //
 // The realm ("Bindery OPDS") is what shows in the client's credential
 // prompt; keep it descriptive so users know which server is asking.
@@ -33,11 +40,18 @@ func OPDSAuth(p auth.Provider, users *db.UserRepo, limiter *auth.LoginLimiter) f
 				next.ServeHTTP(w, r)
 				return
 			}
-			if mode == auth.ModeLocalOnly && auth.IsLocalRequestTrusted(r, p.TrustedProxyCIDRs()) {
+			// Checked before the local-only bypass below, mirroring
+			// auth.Middleware (#1849). Both branches let the request through
+			// with identical context today, so for a trusted-local caller
+			// nothing observable changes — but the bypass running first is the
+			// exact shape that made a verified key invisible downstream in
+			// #1849, and the OPDS subtree is one mutating route away from
+			// reproducing it. Keep the key check first (#1894).
+			if key := opdsAPIKey(r); key != "" && subtle.ConstantTimeCompare([]byte(key), []byte(p.APIKey())) == 1 {
 				next.ServeHTTP(w, r)
 				return
 			}
-			if key := opdsAPIKey(r); key != "" && subtle.ConstantTimeCompare([]byte(key), []byte(p.APIKey())) == 1 {
+			if mode == auth.ModeLocalOnly && auth.IsLocalRequestTrusted(r, p.TrustedProxyCIDRs()) {
 				next.ServeHTTP(w, r)
 				return
 			}

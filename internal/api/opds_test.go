@@ -318,6 +318,125 @@ func TestOPDS_LocalOnlyMode_BypassesAuth(t *testing.T) {
 	}
 }
 
+// --- #1894: the API-key check must precede the local-only bypass --------------
+//
+// #1849 was this exact ordering in auth.Middleware: the local-only bypass ran
+// ahead of the API-key check, so a request carrying a valid X-Api-Key from a
+// trusted LAN address short-circuited before the key was ever verified, never
+// got marked AuthedViaAPIKey, and the CSRF guard then rejected its mutations
+// with 403. The OPDS subtree is read-only, so here the ordering is inert — and
+// that is exactly why it needs pinning: no functional test would notice it
+// flipping back, and the first mutating OPDS route would reproduce #1849.
+
+// orderProbeProvider records which provider methods the middleware consults,
+// in order. p.APIKey() is reached only from the API-key branch and
+// p.TrustedProxyCIDRs() only from the local-only branch, so the recorded
+// sequence reads back which of the two ran first.
+type orderProbeProvider struct {
+	*testProvider
+	calls []string
+}
+
+func (p *orderProbeProvider) APIKey() string {
+	p.calls = append(p.calls, "APIKey")
+	return p.testProvider.APIKey()
+}
+
+func (p *orderProbeProvider) TrustedProxyCIDRs() []*net.IPNet {
+	p.calls = append(p.calls, "TrustedProxyCIDRs")
+	return p.testProvider.TrustedProxyCIDRs()
+}
+
+// opdsAuthProbe wires OPDSAuth around a trivial handler with an order-probing
+// provider in local-only mode. users and limiter are nil: neither the API-key
+// nor the local-only branch touches them, and the middleware tolerates nil for
+// both, so this stays a test of the precedence chain and nothing else.
+func opdsAuthProbe(t *testing.T) (http.Handler, *orderProbeProvider, *bool) {
+	t.Helper()
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	settings := db.NewSettingsRepo(database)
+	for _, kv := range [][2]string{
+		{SettingAuthAPIKey, "test-api-key"},
+		{SettingAuthMode, string(auth.ModeLocalOnly)},
+	} {
+		if err := settings.Set(context.Background(), kv[0], kv[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	p := &orderProbeProvider{testProvider: &testProvider{settings: settings}}
+	served := false
+	h := OPDSAuth(p, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		served = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	return h, p, &served
+}
+
+// TestOPDS_LocalOnly_APIKeyCheckedBeforeBypass is the #1894 regression test: a
+// valid key from an address local-only already trusts must still be verified
+// as a key. The local-only bypass must not get to answer first and hide it.
+func TestOPDS_LocalOnly_APIKeyCheckedBeforeBypass(t *testing.T) {
+	h, p, served := opdsAuthProbe(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/opds/", nil)
+	req.Header.Set("X-Api-Key", "test-api-key")
+	req.RemoteAddr = "127.0.0.1:1234" // loopback — local-only would allow this anyway
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if !*served {
+		t.Fatalf("valid-key request from a trusted-local address must reach the handler; status = %d", rec.Code)
+	}
+	if len(p.calls) != 1 || p.calls[0] != "APIKey" {
+		t.Errorf("provider calls = %v; want [APIKey] — the API-key check must run and answer "+
+			"before the local-only bypass, or a verified key goes unnoticed (#1894)", p.calls)
+	}
+}
+
+// TestOPDS_LocalOnly_BadKeyStillFallsThroughToBypass pins the other half: the
+// reordering must not cost a trusted-local caller the bypass it had before. A
+// wrong key is not a rejection, it is a miss — the request carries on to the
+// local-only branch exactly as it did when that branch ran first.
+func TestOPDS_LocalOnly_BadKeyStillFallsThroughToBypass(t *testing.T) {
+	h, p, served := opdsAuthProbe(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/opds/", nil)
+	req.Header.Set("X-Api-Key", "wrong-key")
+	req.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if !*served {
+		t.Fatalf("wrong key must fall through to the local-only bypass, not reject; status = %d", rec.Code)
+	}
+	if len(p.calls) != 2 || p.calls[0] != "APIKey" || p.calls[1] != "TrustedProxyCIDRs" {
+		t.Errorf("provider calls = %v; want [APIKey TrustedProxyCIDRs] (#1894)", p.calls)
+	}
+}
+
+// TestOPDS_LocalOnly_KeyWorksFromUntrustedAddress guards the case the bypass
+// never covered: off-LAN callers depend on the key branch alone, so it must
+// keep answering for them after the move.
+func TestOPDS_LocalOnly_KeyWorksFromUntrustedAddress(t *testing.T) {
+	h, _, served := opdsAuthProbe(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/opds/", nil)
+	req.Header.Set("X-Api-Key", "test-api-key")
+	req.RemoteAddr = "203.0.113.7:5555" // public address — no local-only bypass
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if !*served {
+		t.Fatalf("valid key from an untrusted address must still be allowed; status = %d", rec.Code)
+	}
+}
+
 // --- D3 per-user scoping -----------------------------------------------------
 
 // TestOPDS_FeedFiltersToCallerLibraryWhenGateOn verifies the scoped OPDS
