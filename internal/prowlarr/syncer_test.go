@@ -119,6 +119,36 @@ func TestFilterCategoriesForMedia(t *testing.T) {
 	}
 }
 
+// The opt-in lives only on the Bindery row; a sync refreshes categories from
+// Prowlarr and must leave the boolean alone. Categories still get the usual
+// parent-stripping — the searcher re-derives the parent at query time from the
+// children that survive here, so the stored list stays the normalised one.
+func TestSyncer_PreservesParentCategoryChoiceAndUpdatesCategories(t *testing.T) {
+	pID := 10
+	instID := int64(1)
+	existing := []models.Indexer{{
+		ID: 10, Name: "IndexerA", Type: "torznab", Categories: []int{7020},
+		IncludeParentCategories: true, ProwlarrInstanceID: &instID, ProwlarrIndexerID: &pID,
+	}}
+	srv := prowlarrStub(t, `[{"id":10,"name":"IndexerA","enable":true,"protocol":"torrent","supportsSearch":true,"categories":[{"id":7000},{"id":7020},{"id":7030}]}]`)
+	defer srv.Close()
+	existing[0].URL = srv.URL + "/10/api"
+	store := &fakeIndexerStore{existing: existing}
+
+	if _, err := NewSyncer(New(srv.URL, "k"), store, fakeInstanceStore{}).Sync(context.Background(), 1); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if len(store.updated) != 1 {
+		t.Fatalf("updated = %d, want 1", len(store.updated))
+	}
+	if !store.updated[0].IncludeParentCategories {
+		t.Fatal("IncludeParentCategories was overwritten during sync")
+	}
+	if want := []int{7020, 7030}; !intSliceEqual(store.updated[0].Categories, want) {
+		t.Errorf("Categories = %v, want %v", store.updated[0].Categories, want)
+	}
+}
+
 func TestIndexerTypeForProtocol(t *testing.T) {
 	cases := []struct {
 		in, want string

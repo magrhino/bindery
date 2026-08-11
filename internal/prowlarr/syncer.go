@@ -194,6 +194,13 @@ func indexerTypeForProtocol(protocol string) string {
 // children are already present. When only the parent is present (no children),
 // it is widened to its most useful specific child: 7000→7020 (Ebooks),
 // 3000→3030 (Audiobooks). All other categories pass through unchanged.
+//
+// Indexer.IncludeParentCategories deliberately does NOT reach this function.
+// The opt-in is applied at search time by the indexer package, which decides
+// from the stored child categories whether the indexer serves the media type
+// being searched. Storing the parent as well would be a second, redundant
+// place for the option to change behaviour, and the search-time guard already
+// covers rows whose parent Prowlarr stripped.
 func filterCategoriesForMedia(cats []int) []int {
 	var has7000, has3000, hasChild7, hasChild3 bool
 	for _, c := range cats {

@@ -182,7 +182,13 @@ func (h *IndexerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var idx models.Indexer
+	// Decode over a copy of the stored row rather than a zero value: JSON
+	// decoding only writes the keys the client actually sent, so an omitted
+	// field keeps whatever is on disk instead of being reset. Previously any
+	// client that did not know about a boolean — freeleechOnly, and now
+	// includeParentCategories — silently turned it off on every save.
+	// An explicitly sent false still disables it.
+	idx := *existing
 	if err := json.NewDecoder(r.Body).Decode(&idx); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return

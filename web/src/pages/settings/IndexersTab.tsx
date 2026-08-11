@@ -104,6 +104,22 @@ function FreeleechOnlyField({ value, onChange }: { value: boolean; onChange: (v:
   )
 }
 
+// ParentCategoriesField opts the indexer in to searching the broad Books /
+// Audio parent alongside its subcategories. It sits directly under Categories
+// because that is the list it widens, and mirrors FreeleechOnlyField's markup.
+function ParentCategoriesField({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+  const { t } = useTranslation()
+  return (
+    <div>
+      <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-zinc-400">
+        <input type="checkbox" checked={value} onChange={e => onChange(e.target.checked)} className="accent-emerald-600 dark:accent-emerald-500" />
+        {t('settings.indexers.form.includeParentCategories')}
+      </label>
+      <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">{t('settings.indexers.form.includeParentCategoriesHint')}</p>
+    </div>
+  )
+}
+
 // indexers/prowlarrInstances are owned by SettingsPage so they can be fetched
 // eagerly on page mount (matching the pre-refactor monolith), not on tab open.
 interface Props {
@@ -346,6 +362,7 @@ function EditIndexerForm({ indexer, onClose, onSaved }: { indexer: Indexer; onCl
   const [url, setUrl] = useState(indexer.url)
   const [apiKey, setApiKey] = useState(indexer.apiKey)
   const [categories, setCategories] = useState((indexer.categories ?? [7020]).join(', '))
+  const [includeParentCategories, setIncludeParentCategories] = useState(indexer.includeParentCategories ?? false)
   const [priority, setPriority] = useState(String(indexer.priority ?? 0))
   const [seedRatio, setSeedRatio] = useState<number | null>(indexer.seedRatio ?? null)
   const [freeleechOnly, setFreeleechOnly] = useState(indexer.freeleechOnly ?? false)
@@ -354,7 +371,7 @@ function EditIndexerForm({ indexer, onClose, onSaved }: { indexer: Indexer; onCl
   const labelCls = 'block text-xs text-slate-600 dark:text-zinc-400 mb-1'
 
   const submit = async () => {
-    const updated = await api.updateIndexer(indexer.id, { ...indexer, name, type, url, apiKey, categories: parseCats(categories), priority: parsePriority(priority), seedRatio, freeleechOnly })
+    const updated = await api.updateIndexer(indexer.id, { ...indexer, name, type, url, apiKey, categories: parseCats(categories), includeParentCategories, priority: parsePriority(priority), seedRatio, freeleechOnly })
     onSaved(updated)
   }
 
@@ -400,6 +417,7 @@ function EditIndexerForm({ indexer, onClose, onSaved }: { indexer: Indexer; onCl
         <input value={categories} onChange={e => setCategories(e.target.value)} placeholder={t('settings.indexers.form.categoriesPlaceholder')} className={inputCls} />
         <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">{t('settings.indexers.form.categoriesHint')}</p>
       </div>
+      <ParentCategoriesField value={includeParentCategories} onChange={setIncludeParentCategories} />
       <div>
         <label className={labelCls}>{t('settings.indexers.form.priority')}</label>
         <input type="number" value={priority} onChange={e => setPriority(e.target.value)} placeholder="0" className={inputCls} />
@@ -424,6 +442,7 @@ function AddIndexerForm({ onClose, onAdded }: { onClose: () => void; onAdded: (i
   const [url, setUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [categories, setCategories] = useState('7020')
+  const [includeParentCategories, setIncludeParentCategories] = useState(false)
   const [priority, setPriority] = useState('0')
   const [seedRatio, setSeedRatio] = useState<number | null>(null)
   const [freeleechOnly, setFreeleechOnly] = useState(false)
@@ -432,7 +451,7 @@ function AddIndexerForm({ onClose, onAdded }: { onClose: () => void; onAdded: (i
   const labelCls = 'block text-xs text-slate-600 dark:text-zinc-400 mb-1'
 
   const submit = async () => {
-    const idx = await api.addIndexer({ name, url, apiKey, type, categories: parseCats(categories), priority: parsePriority(priority), enabled: true, seedRatio, freeleechOnly })
+    const idx = await api.addIndexer({ name, url, apiKey, type, categories: parseCats(categories), includeParentCategories, priority: parsePriority(priority), enabled: true, seedRatio, freeleechOnly })
     onAdded(idx)
   }
 
@@ -478,6 +497,7 @@ function AddIndexerForm({ onClose, onAdded }: { onClose: () => void; onAdded: (i
         <input value={categories} onChange={e => setCategories(e.target.value)} placeholder={t('settings.indexers.form.categoriesPlaceholder')} className={inputCls} />
         <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">{t('settings.indexers.form.categoriesHint')}</p>
       </div>
+      <ParentCategoriesField value={includeParentCategories} onChange={setIncludeParentCategories} />
       <div>
         <label className={labelCls}>{t('settings.indexers.form.priority')}</label>
         <input type="number" value={priority} onChange={e => setPriority(e.target.value)} placeholder="0" className={inputCls} />

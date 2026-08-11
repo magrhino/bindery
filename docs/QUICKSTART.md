@@ -61,6 +61,16 @@ point Bindery at a Prowlarr instance.
 - **Categories** — comma-separated Newznab category IDs. Default `7020`
   (eBooks); `3030` is Audiobooks. Add custom IDs for indexers with
   non-standard categories.
+- **Include broad parent categories** — disabled by default. Enable it for an
+  indexer that files releases loosely under Books (`7000`) or Audio (`3000`)
+  rather than a specific child. Bindery then adds that parent to searches
+  alongside the configured children, including on indexers whose stored mapping
+  no longer contains it. The parent is only added for a media type the indexer
+  already has categories under, so a books-only indexer never gets an audio
+  query; indexers with non-standard category trees (e.g. `100xxx` IDs) are left
+  alone entirely. Broader queries can recover releases missed by an incomplete
+  mapping, but can also return comics, magazines, music, or other unrelated
+  results. Prowlarr re-syncs preserve this local choice.
 
 **Prowlarr** — under **Settings → Indexers → Add Prowlarr**, give the base URL
 (e.g. `http://prowlarr:9696`) and API key, then **Sync now** to pull its
