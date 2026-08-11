@@ -4,6 +4,253 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
+## [v1.30.2] — 2026-08-11
+
+A maintenance release, and most of it is the same shape: something that had
+been quietly not working, in a way that looked exactly like it working.
+
+The biggest one is a tenancy bug. On a multi-user install, every book an author
+sync created was written with no owner, which per-user scoping reads as
+"shared" — so one user's whole catalogue was listed for every other account.
+A migration repairs the rows already written. If you run multi-user, expect
+books to disappear from other people's views on upgrade; that is the fix.
+
+The rest came out of a bug sweep. Books were being dropped from a catalogue with
+nothing to show for it beyond a debug log line — one reporter lost 65 books from
+a single author and only found out by going looking. Import notifications were
+being rejected by Apprise before they were ever dispatched, because of a payload
+key whose name collides with one Apprise reserves. A book search would stop at
+the first indexer response even when that response was unrelated, and never try
+the queries that would have found the book. Hardcover search results could still
+file a book under its narrator. An author refresh was asking OpenLibrary for the
+same URL twice per work and doing every request one at a time.
+
+Three of these were reported by users rather than found in the code, and one was
+fixed by an outside contributor.
+
+### Added
+
+- **Sortable column headers on the Authors page**
+  ([#1349](https://github.com/vavallee/bindery/issues/1349)) — Name, Books,
+  Rating and Monitored are now clickable, ascending on the first click and
+  descending on a second, matching the Books page. This completes #1349, whose
+  Books half shipped in v1.28.0 while the Authors half never did. Sort keys are
+  whitelisted server-side and every new sort carries a name tiebreaker, so ties
+  cannot shuffle rows between pages of a paginated list.
+- **Optional broad indexer categories**
+  ([#1571](https://github.com/vavallee/bindery/issues/1571)) — an indexer can
+  now opt in to searching the Newznab Books (`7000`) or Audio (`3000`) parent
+  category alongside its configured subcategories, which recovers releases from
+  trackers that file things loosely instead of under a specific child. The
+  parent is only ever added for a media type the indexer already carries
+  subcategories under, so a books-only indexer never gets an audio query, and
+  indexers with non-standard taxonomies (MyAnonaMouse-style `100xxx` IDs) are
+  left alone. Off by default — broad categories also return comics, magazines
+  and music. Set it when adding or editing an indexer; Prowlarr syncs preserve
+  the choice.
+- **An author refresh now says which books it skipped, and why**
+  ([#1889](https://github.com/vavallee/bindery/issues/1889)) — the catalogue
+  sync already counted the works it dropped, but the counts only ever reached a
+  Debug log line per book plus one Info summary, so an author whose catalogue
+  had been filtered down to a handful looked exactly like an author who only
+  wrote a handful. One reporter lost 65 books from a single author to the
+  allowed-languages filter and found out only by going looking in the logs,
+  which a rootless container does not hand them. The author detail response now
+  carries a `lastSync` summary — works returned, books added, and how many each
+  filter dropped — and the author page shows a note above the book list naming
+  the language set that was applied, whether the profile also rejects works with
+  no reported language, and a few of the dropped titles. The run's summary log
+  line moves from `INFO` to `WARN` when anything was skipped, so it also shows
+  up in Settings → Logs at the default level. Nothing about the filtering
+  changed: a metadata profile set to reject unknown languages still rejects
+  them, it just no longer does it silently. The summary is kept in memory, so it
+  reports syncs this process has run rather than surviving a restart.
+
+### Fixed
+
+- **Books created by an author sync now belong to the user who added the author**
+  ([#1872](https://github.com/vavallee/bindery/issues/1872)) — `CreateForUser`
+  wrote `owner_user_id` to the `authors` row but never set it on the struct it
+  returned, so the catalogue sync stamped owner `0` onto every book it created.
+  A `0` owner is stored as NULL, which per-user scoping reads as "shared", so on
+  a multi-user install one user's whole catalogue was visible to every other
+  account. The repo now reflects the persisted owner back onto the author, and
+  the sync re-reads the author row before its insert loop so a stale snapshot
+  can no longer carry the wrong owner into new books. Migration
+  `074_backfill_book_owner_from_author.sql` repairs the rows already written: a
+  NULL-owned book under an owned author inherits that author's owner. Books
+  under a NULL-owned author are left alone, so deliberately shared content and
+  pre-multi-user libraries are untouched. On a multi-user install this will
+  remove books from other users' views — that is the fix working. The issue was
+  reported as the allowed-languages filter dropping books; the language filter
+  was not involved.
+- **Import and upgrade webhooks reach Apprise again**
+  ([#1886](https://github.com/vavallee/bindery/issues/1886), thanks @nathang21)
+  — `bookImported` and `upgrade` payloads carried the media format under a
+  `format` key, but Apprise's REST API reserves `format` for the *body markup*
+  and accepts only `text`, `html`, or `markdown`. It rejected `ebook` and
+  `audiobook` with HTTP 400 before dispatching anything, so an Apprise relay
+  delivered every grab, failure, and health notification — none of which carry
+  a `format` — and silently dropped every successful import. The reserved key
+  is now omitted for Apprise targets only, identified by a `/notify` path
+  segment in the webhook URL. **No other consumer is affected**: ntfy, Home
+  Assistant and Discord-proxy relays still receive `format` exactly as before,
+  so existing templates keep working. Every payload also carries the same value
+  as `mediaFormat`, which is never stripped, so an Apprise template has a key to
+  read and anyone else can migrate at their own pace. The report diagnosed this
+  as an empty `body`; the body was in fact populated, and the reserved key was
+  the real reason for the 400.
+- **Author refresh no longer spends every metadata round trip in sequence**
+  ([#1888](https://github.com/vavallee/bindery/issues/1888)) — a refresh that
+  added 65 books for one author took close to an hour. The catalogue sync loop
+  was not the problem: the cost was in the three per-work enrichment phases that
+  run *before* it, each a strictly serial walk of the whole work list. A 65-work
+  author paid 195 upstream round trips one after another before the first book
+  row was written, so any slow or timing-out provider multiplied straight into
+  wall clock. Two of those phases were also asking OpenLibrary for the *same
+  URL* twice: the work-language sampler (#891) and the work-cover sampler
+  (#1748) both fetch `/works/{id}/editions.json?limit=5` and each kept its own
+  cache. They now share one sample, which halves OpenLibrary requests for the
+  pass — measured at 130 → 65 requests for a 65-work author — and the sampling
+  and cover-enrichment passes run four works at a time instead of one, matching
+  the pace already used elsewhere for provider fan-out. On a 65-work author with
+  a 20 ms provider the sampling pass drops from 1.31 s to 0.35 s; against a real
+  provider, where a round trip is seconds rather than milliseconds, the saving
+  scales with it. Per-book Hardcover edition hydration inside the sync loop is
+  still serial and is tracked separately, and the original report has not yet
+  been confirmed fixed.
+- **A junk indexer response no longer ends a book search early**
+  ([#1891](https://github.com/vavallee/bindery/issues/1891)) — an indexer search
+  runs a cascade of increasingly specific queries and stops at the first one
+  that works, but only the structured `t=book` query checked that what came
+  back was actually about the book. The freeform tiers stopped on any response
+  at all, so an indexer answering "author surname + title" with unrelated
+  releases ended the cascade there, the relevance filter then discarded every
+  one of them, and the search finished with nothing — never having tried the
+  queries that would have found the book. Broad parent categories (#1571) make
+  that response much more likely, so an indexer opted in to them could return
+  fewer results than a narrow category list. Every tier now has to return
+  something plausibly on-target before it stops the cascade, and if none of
+  them do, the earliest tier's results are still what comes back. The extra
+  queries this can cost are capped at one per cascade: once any tier has
+  answered, the broadest query in the ladder (title with no author) is skipped,
+  since two more specific tiers have already failed and its results would lose
+  to the earlier ones anyway.
+- **Hardcover search results no longer file a book under its narrator**
+  ([#1892](https://github.com/vavallee/bindery/issues/1892)) — #1733 added a
+  contribution-role filter so an audiobook's narrator stops being treated as its
+  author, but it covered only the GraphQL book queries. The Typesense search
+  documents carry the same `contribution` field and it was never decoded, so
+  every search-sourced credit arrived with an empty role, which the filter reads
+  as "this is the author", and the first credit won. Hardcover lists the narrator
+  first on plenty of audiobook-bearing works, so anything resolved through search
+  rather than through a book query kept the pre-#1733 behaviour. The field name
+  was confirmed against the live API rather than guessed — a wrong guess would
+  have decoded to empty and silently preserved the bug while looking fixed.
+- **Calibre rollback previews show edition names**
+  ([#1896](https://github.com/vavallee/bindery/issues/1896), thanks
+  @floze-the-genius) — created-edition rollback actions looked their edition up
+  by scanning the editions of book ID `0`, a row that cannot exist, so the name
+  was always blank. They now fetch the edition directly, through the repository
+  executor so the lookup still works from inside the rollback transaction.
+- **Sortable column headers on the Books page now look sortable**
+  ([#1349](https://github.com/vavallee/bindery/issues/1349)) — the Books table
+  has supported sorting by author, type and status since v1.28.0, but nothing
+  said so: the Sort toolbar above the table offers only title and date, the
+  headers had no pointer cursor, and the ▲/▼ marker appeared only on the column
+  already in use. An unsorted Type or Status header was indistinguishable from
+  plain text, so the feature read as missing. Headers now show a pointer cursor,
+  a muted ↕ when inactive, and a "Sort by …" tooltip.
+- **The Books column on the Authors page shows a real count**
+  ([#1349](https://github.com/vavallee/bindery/issues/1349)) — it rendered `—`
+  for every author, in every version that has had the column. The list query
+  selected no count and nothing on that path ever set the author's statistics,
+  so the field was omitted from the API response entirely and the UI fell back
+  to its placeholder. The count is now computed per author and scoped to the
+  books the requesting user can see, so it cannot report rows that belong to
+  another user.
+- **`/authors` now resolves**
+  ([#1349](https://github.com/vavallee/bindery/issues/1349)) — Authors is served
+  from `/` because it was the first page that existed, while every nav entry
+  added later (`/books`, `/import`, `/settings`, …) got a real path. `/authors`
+  matched no route, and with no catch-all it rendered the site chrome around an
+  empty page rather than a 404. It now redirects to `/`, the same way
+  `/blocklist` redirects into Settings.
+- **Directory-move containment check now folds case**
+  ([#1809](https://github.com/vavallee/bindery/issues/1809)) — on a
+  case-insensitive filesystem (APFS, a Windows bind mount) a destination
+  differing from the source only in case is the same directory, so the move was
+  still able to recurse into its own output. Symlink resolution does not
+  normalise case, so the comparison now runs folded as well as exact.
+- **A 403 from the CSRF guards now says why in the log**
+  ([#1895](https://github.com/vavallee/bindery/issues/1895)) —
+  `RequireXRequestedWith` and `RequireCSRFToken` rejected a mutating request
+  with a bare `{"error":"forbidden"}` and wrote nothing at any level, not even
+  debug. That is what made [#1849](https://github.com/vavallee/bindery/issues/1849)
+  so hard to report: a client with a valid API key got a 403 and the container
+  log had nothing tied to the request, so the cause had to be read out of the
+  source rather than out of a log. Both guards now emit a debug line naming the
+  guard that fired, the reason, the method, the path and the peer address, plus
+  whether an `X-Api-Key` header, an `?apikey=` parameter (ignored on mutating
+  methods, and a common cause of exactly this 403), a session cookie, an
+  `X-CSRF-Token` and an `X-Requested-With` header were present. Only presence is
+  logged, never a value — no API key, session cookie, CSRF token or
+  `Authorization` header content reaches the log. Debug rather than warn because
+  this guard also fires on genuine cross-site forgery attempts, and an
+  unauthenticated caller controls how often it fires; set the log level to debug
+  in Settings → Logs when chasing an unexplained 403.
+- **The OPDS guard now checks the API key before the local-only bypass**
+  ([#1894](https://github.com/vavallee/bindery/issues/1894)) — no user-visible
+  change today; this closes off a repeat of
+  [#1849](https://github.com/vavallee/bindery/issues/1849) before it can happen.
+  In `OPDSAuth` the `auth.mode=local-only` bypass ran ahead of the `X-Api-Key`
+  check, so a request arriving from an address local-only trusts was let through
+  without its key ever being verified. That is byte-for-byte the ordering that
+  caused #1849 in `auth.Middleware`, where the swallowed key meant a valid
+  API-key mutation was rejected `403` by the CSRF header guard. It stays
+  harmless in OPDS only because every `/opds` route is a read, so nothing
+  downstream cares how the request was authenticated. The moment a mutating
+  OPDS route exists, the same client with the same documented credential would
+  have started getting the same unexplained `403`. The key check now runs first,
+  matching `auth.Middleware`; a missing or wrong key still falls through to the
+  bypass exactly as before, so local-only OPDS readers are unaffected.
+- **`models.Book.ISBNs` is now `ProviderISBNs`, so it stops looking like stored
+  data** ([#1893](https://github.com/vavallee/bindery/issues/1893)) — no
+  user-visible behaviour changes; this is an internal rename plus documentation
+  and a regression test. The field sat in a struct otherwise full of real
+  columns, but there is no `isbns` column and nothing in `internal/db` ever
+  wrote or read it: metadata providers fill it in during a search, the
+  aggregator uses it to dedup results across providers, and it is empty on
+  every book loaded from the database. Anything built on it compiles, reads
+  correctly, and matches nothing at runtime — which nearly shipped as the fix
+  for the ISBN search criteria in
+  [#1724](https://github.com/vavallee/bindery/issues/1724) before the persisted
+  ISBNs were traced to `editions.isbn_13` / `isbn_10`. The declaration now spells
+  out the field's lifetime and points at `indexer.CriteriaISBN` as the way to get
+  a stored ISBN, and a database round-trip test pins the "not persisted"
+  property so anyone who later adds a column has to change the test on purpose.
+- **The frontend package version no longer poses as a release version**
+  ([#1897](https://github.com/vavallee/bindery/issues/1897)) — `web/package.json`
+  had been frozen at `1.22.3` since that release while the app shipped 1.30.x,
+  because nothing in the release pipeline bumps it. This is metadata only, with
+  no user-visible effect: the version shown in the UI comes from the API
+  (`/system/status`), which reports the Go build's stamped version, so the app
+  never displayed the stale number. The risk was in tooling that reads the file
+  — npm banners, the vitest header, an SBOM generated from the frontend tree —
+  where `1.22.3` looked like a real, current answer. Rather than adding release
+  machinery to bump a number nothing consumes, the field is now pinned to the
+  `0.0.0` sentinel, which reads unmistakably as "not a version" and cannot drift
+  again. A test keeps it pinned.
+
+### Internal
+
+- **The OpenSSF Scorecard workflow pinned an action SHA that does not exist
+  upstream** — `ossf/scorecard-action` was pinned to a commit that is not in
+  that repository, so Scorecard's own publish step rejected every run on `main`
+  as an imposter commit. A fork's commit stays reachable through the upstream
+  repository's shared object store, so the pin resolved and the action ran while
+  looking properly pinned. Repinned to v2.4.4 at a SHA resolved from the tag.
+
 ## [v1.30.1] — 2026-08-11
 
 The onboarding half of this release is about the same blind spot: until now the
