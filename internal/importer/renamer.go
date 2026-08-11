@@ -2,6 +2,7 @@ package importer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -463,6 +464,23 @@ func MoveFile(src, dst string) error {
 	return os.Remove(src)
 }
 
+// ErrDestInsideSource is returned by the directory move/copy paths when the
+// destination sits inside the source tree (#1809). Such a placement has no safe
+// copy-based implementation: the recursive copy would walk into the directory
+// it is creating and duplicate the tree into itself until the disk fills.
+var ErrDestInsideSource = errors.New("destination is inside the source directory")
+
+// dirContains reports whether p is lexically nested strictly inside dir. Purely
+// path-based (the destination normally does not exist yet), matching how the
+// rest of the importer reasons about containment.
+func dirContains(dir, p string) bool {
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(p))
+	if err != nil || rel == "." {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // MoveDir moves a directory (with all its contents) to the destination.
 // Cross-filesystem safe: tries rename first, else recursive copy + delete.
 // The destination directory must not already exist.
@@ -668,6 +686,12 @@ func hardlinkDirRooted(srcRoot, dstRoot *os.Root, rel string) error {
 // what lets callers safely skip os.RemoveAll(src) on cancellation — the copy
 // never finishes, so the seeding source is never deleted.
 func copyDirContext(ctx context.Context, srcDir, dstDir string) error {
+	// A destination nested inside the source is unwalkable: the recursion below
+	// would descend into the directory tree it is creating and copy forever
+	// (#1809). Refuse before anything is created.
+	if dirContains(srcDir, dstDir) {
+		return fmt.Errorf("%w: %s is inside %s", ErrDestInsideSource, dstDir, srcDir)
+	}
 	if err := os.MkdirAll(dstDir, 0o750); err != nil {
 		return err
 	}

@@ -326,6 +326,54 @@ func TestReorganize_DualFormatSharedRoot(t *testing.T) {
 	}
 }
 
+// TestReorganize_DestInsideSourceFolder is the regression test for #1809. An
+// audiobook tracked at the author folder itself templates to
+// "<root>/Jane Doe/My Book (2020)" — a destination INSIDE its own source. The
+// copy-based move used to descend into the folder it had just created and copy
+// forever; reorganize must classify it as an error and never touch disk.
+func TestReorganize_DestInsideSourceFolder(t *testing.T) {
+	env, _, audiobookDir, ctx := reorgFixture(t)
+	book := env.seed(t, ctx, "Jane Doe", "My Book")
+
+	// The tracked audiobook "folder" is the flat author directory.
+	srcDir := filepath.Join(audiobookDir, "Jane Doe")
+	writeFileAt(t, filepath.Join(srcDir, "part1.mp3"))
+	if err := env.books.AddBookFile(ctx, book.ID, models.MediaTypeAudiobook, srcDir); err != nil {
+		t.Fatal(err)
+	}
+
+	moves, err := env.s.PreviewReorganizeBook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(moves) != 1 {
+		t.Fatalf("expected 1 move, got %d", len(moves))
+	}
+	if moves[0].Status != ReorgStatusError {
+		t.Fatalf("preview status = %q (%s), want error", moves[0].Status, moves[0].Message)
+	}
+
+	// Apply must refuse it too, not attempt the move.
+	results := env.s.ApplyReorganize(ctx, []int64{moves[0].FileID})
+	if len(results) != 1 || results[0].Status == ReorgStatusMoved {
+		t.Fatalf("apply result = %+v, want the move refused", results)
+	}
+	if _, err := os.Stat(filepath.Join(srcDir, "part1.mp3")); err != nil {
+		t.Errorf("source content must be left intact: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(srcDir, "My Book (2020)")); !os.IsNotExist(err) {
+		t.Errorf("no destination folder should have been created inside the source, stat err = %v", err)
+	}
+	// Index still points at the untouched source.
+	files, err := env.books.ListBookFiles(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Path != srcDir {
+		t.Errorf("book_files path = %v, want %q", files, srcDir)
+	}
+}
+
 func TestReorganize_AuthorAndLibraryScope(t *testing.T) {
 	env, libraryDir, _, ctx := reorgFixture(t)
 	author := env.seedAuthor(t, ctx, "Jane Doe")

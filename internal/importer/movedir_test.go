@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -35,6 +36,32 @@ func TestMoveDirRefusesExistingDst(t *testing.T) {
 	dst := t.TempDir() // already exists
 	if err := MoveDir(src, dst); err == nil {
 		t.Error("expected error when dst already exists")
+	}
+}
+
+// TestMoveDirRefusesDstInsideSrc is the regression test for #1809: a reorganize
+// that turns a flat author folder into a per-book folder underneath it computes
+// a destination inside the source. Rename cannot do that (EINVAL), so the
+// copy-based slow path took over and recursed into the directory it had just
+// created, copying the tree into itself until the disk (or the path length)
+// gave out. Both the move and the copy entrypoint must refuse it up front.
+func TestMoveDirRefusesDstInsideSrc(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "Jane Doe")
+	mustWrite(t, filepath.Join(src, "part1.mp3"), "part1")
+	dst := filepath.Join(src, "My Book (2020)")
+
+	if err := MoveDir(src, dst); !errors.Is(err, ErrDestInsideSource) {
+		t.Errorf("MoveDir err = %v, want ErrDestInsideSource", err)
+	}
+	if err := CopyDir(src, dst); !errors.Is(err, ErrDestInsideSource) {
+		t.Errorf("CopyDir err = %v, want ErrDestInsideSource", err)
+	}
+	// Nothing copied, nothing created, source left exactly as it was.
+	if _, err := os.Stat(filepath.Join(src, "part1.mp3")); err != nil {
+		t.Errorf("source content must survive the refused move: %v", err)
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Errorf("destination should not have been created, stat err = %v", err)
 	}
 }
 
