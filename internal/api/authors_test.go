@@ -22,6 +22,7 @@ import (
 
 	"github.com/vavallee/bindery/internal/auth"
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/importer"
 	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
 )
@@ -5505,5 +5506,96 @@ func TestFetchAuthorBooks_AdoptsPersistedOwnerOverStaleSnapshot(t *testing.T) {
 	}
 	if got.OwnerUserID != owner.ID {
 		t.Fatalf("book owner = %d, want the author row's persisted owner %d", got.OwnerUserID, owner.ID)
+	}
+}
+
+// snapshottingStubFinder implements the librarySnapshotter capability so the
+// sync-side seam can be pinned: FetchAuthorBooks must take ONE snapshot before
+// its create loop and route every per-book lookup through it, never through
+// the finder's own per-call FindExisting. If the loop regressed to h.finder
+// directly, perCallQueries would record the lookups and the assertion below
+// names the regression.
+type snapshottingStubFinder struct {
+	snapshot       *importer.LibrarySnapshot
+	snapshotsTaken int
+	perCallQueries []string
+}
+
+func (f *snapshottingStubFinder) FindExisting(_ context.Context, title, _, _ string) string {
+	f.perCallQueries = append(f.perCallQueries, title)
+	return ""
+}
+
+func (f *snapshottingStubFinder) SnapshotFinder() *importer.LibrarySnapshot {
+	f.snapshotsTaken++
+	return f.snapshot
+}
+
+// TestFetchAuthorBooks_UsesOneLibrarySnapshotForTheLoop is the api half of
+// #1888/#1929: the create loop calls FindExisting once per new book, and each
+// call used to walk the whole library. The fix is one snapshot per sync, so
+// this pins three things at once — the snapshot is taken exactly once, the
+// per-book lookups all go through it (the on-disk book gets its file path from
+// the snapshot's temp library), and the finder's per-call path is never used.
+func TestFetchAuthorBooks_UsesOneLibrarySnapshotForTheLoop(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	database.SetMaxOpenConns(1)
+
+	libDir := t.TempDir()
+	ownedPath := filepath.Join(libDir, "Snapshot Author", "Owned Book - Snapshot Author.epub")
+	if err := os.MkdirAll(filepath.Dir(ownedPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ownedPath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+
+	ctx := context.Background()
+	author := &models.Author{
+		ForeignID: "OL900A", Name: "Snapshot Author", SortName: "Author, Snapshot",
+		MetadataProvider: "openlibrary", Monitored: false,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+
+	stub := &stubMetaProvider{
+		works: []models.Book{
+			{ForeignID: "OL901W", Title: "Owned Book", SortTitle: "owned book", Language: "eng", Status: models.BookStatusWanted, Genres: []string{}, MetadataProvider: "openlibrary", MediaType: models.MediaTypeEbook},
+			{ForeignID: "OL902W", Title: "Missing Book", SortTitle: "missing book", Language: "eng", Status: models.BookStatusWanted, Genres: []string{}, MetadataProvider: "openlibrary", MediaType: models.MediaTypeEbook},
+		},
+	}
+	finder := &snapshottingStubFinder{snapshot: importer.NewLibrarySnapshot(libDir, "")}
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, metadata.NewAggregator(stub), nil, profileRepo, nil).WithFinder(finder)
+
+	h.FetchAuthorBooks(author, false, "")
+
+	if finder.snapshotsTaken != 1 {
+		t.Errorf("snapshots taken = %d, want exactly 1 per sync", finder.snapshotsTaken)
+	}
+	if len(finder.perCallQueries) != 0 {
+		t.Errorf("per-call FindExisting ran for %v — the loop bypassed the snapshot and paid a library walk per book", finder.perCallQueries)
+	}
+	owned, err := bookRepo.GetByForeignID(ctx, "OL901W")
+	if err != nil || owned == nil {
+		t.Fatalf("owned book not created: err=%v", err)
+	}
+	if owned.FilePath != ownedPath {
+		t.Errorf("owned book file path = %q, want %q from the snapshot's library", owned.FilePath, ownedPath)
+	}
+	missing, err := bookRepo.GetByForeignID(ctx, "OL902W")
+	if err != nil || missing == nil {
+		t.Fatalf("missing book not created: err=%v", err)
+	}
+	if missing.FilePath != "" {
+		t.Errorf("missing book unexpectedly got a file path %q", missing.FilePath)
 	}
 }

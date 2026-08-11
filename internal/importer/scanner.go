@@ -1579,70 +1579,19 @@ func largestFileIsVideo(downloadPath string, explicitFiles []string) bool {
 // called before auto-searching so books the user already owns are not
 // re-downloaded.
 func (s *Scanner) FindExisting(ctx context.Context, title, authorName, mediaType string) string {
-	if title == "" {
-		return ""
-	}
-	roots := make([]string, 0, 2)
-	switch mediaType {
-	case models.MediaTypeEbook:
-		if s.libraryDir != "" {
-			roots = append(roots, s.libraryDir)
-		}
-	case models.MediaTypeAudiobook:
-		switch {
-		case s.audiobookDir != "":
-			roots = append(roots, s.audiobookDir)
-		case s.libraryDir != "":
-			roots = append(roots, s.libraryDir)
-		}
-	default:
-		if s.libraryDir != "" {
-			roots = append(roots, s.libraryDir)
-		}
-		if s.audiobookDir != "" && s.audiobookDir != s.libraryDir {
-			roots = append(roots, s.audiobookDir)
-		}
-	}
-	for _, root := range roots {
-		if found := s.findExistingInDir(root, title, authorName); found != "" {
-			return found
-		}
-	}
-	return ""
+	// A fresh snapshot per call is exactly the old semantics: one walk of each
+	// selected root, now cancellable. Callers with many lookups against the
+	// same library state — the author sync creates one lookup per new book —
+	// should hold one SnapshotFinder across the batch instead (#1888/#1929).
+	return s.SnapshotFinder().FindExisting(ctx, title, authorName, mediaType)
 }
 
-// findExistingInDir walks a single root directory looking for a book file
-// whose title matches and whose parent directory agrees with the expected
-// author, preventing cross-author false matches.
-func (s *Scanner) findExistingInDir(root, title, authorName string) string {
-	var found string
-	if err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || found != "" {
-			return nil
-		}
-		if !IsBookFile(path) {
-			return nil
-		}
-		// Author-folder pre-filter: the first directory under root must match
-		// the expected author. This prevents a file under books/David Wong/
-		// from being matched as a Matt Dinniman book.
-		if authorName != "" {
-			if rel, relErr := filepath.Rel(root, path); relErr == nil {
-				parts := strings.SplitN(rel, string(filepath.Separator), 2)
-				if len(parts) >= 2 && !authorMatch(authorName, parts[0]) {
-					return nil
-				}
-			}
-		}
-		parsed := ParseFilename(path)
-		if titleMatch(parsed.Title, title) && authorMatch(authorName, parsed.Author) {
-			found = path
-		}
-		return nil
-	}); err != nil {
-		slog.Warn("failed to search library for existing file", "path", root, "error", err)
-	}
-	return found
+// SnapshotFinder returns a LibrarySnapshot over this scanner's roots: a
+// FindExisting that walks each library root at most once and answers every
+// later query from the parsed entries. See LibrarySnapshot for the staleness
+// contract.
+func (s *Scanner) SnapshotFinder() *LibrarySnapshot {
+	return NewLibrarySnapshot(s.libraryDir, s.audiobookDir)
 }
 
 // normalizeTitle folds a title into the shared title-comparison alphabet

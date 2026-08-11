@@ -1607,6 +1607,18 @@ func (h *AuthorHandler) fetchAuthorBooks(author *models.Author, autoSearch bool,
 	searchQueue := make([]models.Book, 0)
 	autoSearchEnabled := autoSearch && h.searcher != nil && author.Monitored && h.isAutoGrabEnabled(ctx)
 
+	// One library snapshot for the whole create loop (#1888, #1929). The loop
+	// below calls handleNewWantedBook once per new book, and its FindExisting
+	// used to re-walk every library root per call — a 65-book sync did 65 full
+	// walks of the library, which on network storage is minutes to an hour of
+	// pure stat traffic. The snapshot walks each root once, on first use.
+	//
+	// The staleness this buys is deliberate and near-vacuous here: a file that
+	// can match a book this loop is creating was on disk before the sync began,
+	// because auto-search for these books only runs after the loop. See the
+	// LibrarySnapshot contract for the full argument.
+	finder := snapshotFinder(h.finder)
+
 	// Strict media-type policy (#1575). When on and the default is a single
 	// format, catalogue population is narrowed to that format so an ebook-only
 	// (or audiobook-only) user never accumulates rows they can't grab.
@@ -1840,7 +1852,7 @@ func (h *AuthorHandler) fetchAuthorBooks(author *models.Author, autoSearch bool,
 		h.hydrateHardcoverEditions(ctx, &b)
 		added++
 
-		if fileFound := handleNewWantedBook(ctx, h.books, h.series, h.finder, b, author.Name); fileFound {
+		if fileFound := handleNewWantedBook(ctx, h.books, h.series, finder, b, author.Name); fileFound {
 			continue // don't auto-search for a book we already have
 		}
 
