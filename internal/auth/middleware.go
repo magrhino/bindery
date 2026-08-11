@@ -328,11 +328,18 @@ func AllowUnauthPath(method, path string) bool {
 //     proxy-authed user instead of always returning authenticated:false (#560).
 //  3. Health / auth endpoints — always allowed through
 //  4. Mode == disabled            — always allowed
-//  5. Mode == local-only + local  — always allowed
-//  6. Valid X-Api-Key header or ?apikey= query — allowed
+//  5. Valid X-Api-Key header or ?apikey= query — allowed
+//  6. Mode == local-only + local  — always allowed
 //  7. Valid signed session cookie — allowed
 //  8. Mode == proxy: trusted peer IP + identity header → resolve/provision user
 //  9. Otherwise                   — 401
+//
+// The API-key check deliberately precedes the local-only bypass: both grant
+// admin, but only the key branch marks the request AuthedViaAPIKey, and the
+// CSRF guards downstream key their exemption off that flag. With local-only
+// first, a valid-key mutation from a LAN address short-circuited into the
+// bypass, never got the flag, and was then rejected 403 by
+// RequireXRequestedWith (#1849).
 func Middleware(p Provider) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -403,19 +410,14 @@ func Middleware(p Provider) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			if mode == ModeLocalOnly && IsLocalRequestTrusted(r, p.TrustedProxyCIDRs()) {
-				// Local-only bypass is always treated as admin, mirroring the
-				// API-key branch below. Without this, RequireAdmin-protected
-				// endpoints (auth mode change, user CRUD, settings writes)
-				// return "admin role required" 403 to trusted-local requests
-				// even though the whole point of local-only mode is to grant
-				// frictionless access from a trusted private network (#799).
-				ctx := context.WithValue(r.Context(), userRoleCtxKey, "admin")
-				ctx = withOperatorUserID(ctx, p)
-				r = r.WithContext(ctx)
-				next.ServeHTTP(w, r)
-				return
-			}
+			// Checked before the local-only bypass below: both branches grant
+			// admin, so for a trusted-local caller the only thing that changes
+			// is the AuthedViaAPIKey flag — and that flag is what exempts the
+			// request from the X-Requested-With / CSRF guards. Running the
+			// bypass first meant a valid-key mutation from the LAN never earned
+			// the exemption and came back 403 (#1849). An absent or wrong key
+			// falls through to the bypass exactly as before, so local-only
+			// callers with no key are unaffected and still need the header.
 			if key := requestAPIKey(r); key != "" && subtle.ConstantTimeCompare([]byte(key), []byte(p.APIKey())) == 1 {
 				// API key authentication is always treated as admin. Set the role
 				// so RequireAdmin-protected endpoints are accessible without a
@@ -427,6 +429,19 @@ func Middleware(p Provider) func(http.Handler) http.Handler {
 				// (#708 finding 3). A request reaches this branch only after
 				// subtle.ConstantTimeCompare confirmed the key.
 				ctx = context.WithValue(ctx, viaAPIKeyCtxKey, true)
+				ctx = withOperatorUserID(ctx, p)
+				r = r.WithContext(ctx)
+				next.ServeHTTP(w, r)
+				return
+			}
+			if mode == ModeLocalOnly && IsLocalRequestTrusted(r, p.TrustedProxyCIDRs()) {
+				// Local-only bypass is always treated as admin, mirroring the
+				// API-key branch above. Without this, RequireAdmin-protected
+				// endpoints (auth mode change, user CRUD, settings writes)
+				// return "admin role required" 403 to trusted-local requests
+				// even though the whole point of local-only mode is to grant
+				// frictionless access from a trusted private network (#799).
+				ctx := context.WithValue(r.Context(), userRoleCtxKey, "admin")
 				ctx = withOperatorUserID(ctx, p)
 				r = r.WithContext(ctx)
 				next.ServeHTTP(w, r)

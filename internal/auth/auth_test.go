@@ -1109,6 +1109,108 @@ func TestLocalOnlyBypassRoleVisibleInContext(t *testing.T) {
 	}
 }
 
+// --- #1849: local-only must not swallow a valid API key -------------------------
+//
+// The local-only bypass used to run before the API-key check, so a mutation
+// carrying a valid X-Api-Key from a trusted LAN address short-circuited into
+// the bypass and never got marked AuthedViaAPIKey. RequireXRequestedWith then
+// rejected it with 403 unless the caller also sent the browser's private
+// X-Requested-With value. The three tests below pin the fixed behaviour and,
+// crucially, pin that CSRF protection was not weakened for keyless requests.
+
+// TestLocalOnlyWithValidAPIKeyExemptsMutationFromCSRFGuards is the #1849
+// regression test: local-only mode, trusted source address, valid API key,
+// mutating request, no X-Requested-With — must reach the handler and must be
+// marked AuthedViaAPIKey.
+func TestLocalOnlyWithValidAPIKeyExemptsMutationFromCSRFGuards(t *testing.T) {
+	secret := stackSecret32
+	p := &fakeProvider{mode: ModeLocalOnly, apiKey: "harpoon-key", secret: secret}
+
+	called := false
+	viaKey := false
+	stack := buildCSRFStack(p, secret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		viaKey = AuthedViaAPIKey(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req, _ := http.NewRequest("POST", "/api/v1/importlist/1/sync", nil)
+	req.Header.Set("X-Api-Key", "harpoon-key")
+	req.RemoteAddr = "192.168.1.5:12345" // address local-only trusts
+	rw := &captureWriter{}
+	stack.ServeHTTP(rw, req)
+
+	if !called {
+		t.Fatalf("valid-API-key POST from a local-only-trusted address must reach the handler; got status %d", rw.status)
+	}
+	if !viaKey {
+		t.Error("AuthedViaAPIKey = false; want true — the local-only bypass must not swallow a verified key (#1849)")
+	}
+}
+
+// TestLocalOnlyWithoutAPIKeyStillRequiresXRequestedWith is the guard on the
+// fix: the narrow reordering must not turn into a blanket CSRF exemption for
+// LAN traffic. A keyless mutation from a trusted address is exactly the
+// browser request RequireXRequestedWith exists to stop, and it must still 403.
+func TestLocalOnlyWithoutAPIKeyStillRequiresXRequestedWith(t *testing.T) {
+	secret := stackSecret32
+	p := &fakeProvider{mode: ModeLocalOnly, apiKey: "harpoon-key", secret: secret}
+
+	called := false
+	stack := buildCSRFStack(p, secret, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// No X-Api-Key, no X-Requested-With — a cross-site-forgeable LAN mutation.
+	req, _ := http.NewRequest("POST", "/api/v1/importlist/1/sync", nil)
+	req.RemoteAddr = "192.168.1.5:12345"
+	rw := &captureWriter{}
+	stack.ServeHTTP(rw, req)
+
+	if called {
+		t.Fatal("keyless POST from a local-only-trusted address must still be blocked by RequireXRequestedWith")
+	}
+	if rw.status != http.StatusForbidden {
+		t.Errorf("status = %d; want 403", rw.status)
+	}
+}
+
+// TestLocalOnlyWithInvalidAPIKeyStillGetsLocalAdmin pins the fall-through: a
+// wrong key must not cost a trusted-local caller the local-only bypass it had
+// before, and must not mark the request AuthedViaAPIKey (#708 finding 3 —
+// an unverified key never buys the CSRF exemption).
+func TestLocalOnlyWithInvalidAPIKeyStillGetsLocalAdmin(t *testing.T) {
+	secret := stackSecret32
+	p := &fakeProvider{mode: ModeLocalOnly, apiKey: "harpoon-key", secret: secret}
+
+	called := false
+	var gotRole string
+	viaKey := true
+	stack := buildCSRFStack(p, secret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		gotRole = UserRoleFromContext(r.Context())
+		viaKey = AuthedViaAPIKey(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req, _ := http.NewRequest("GET", "/api/v1/author", nil)
+	req.Header.Set("X-Api-Key", "wrong-key")
+	req.RemoteAddr = "192.168.1.5:12345"
+	rw := &captureWriter{}
+	stack.ServeHTTP(rw, req)
+
+	if !called {
+		t.Fatalf("bad key must fall through to the local-only bypass, not reject; got status %d", rw.status)
+	}
+	if gotRole != "admin" {
+		t.Errorf("role in context = %q; want \"admin\" — local-only bypass still applies", gotRole)
+	}
+	if viaKey {
+		t.Error("AuthedViaAPIKey = true; want false — an unverified key must never earn the CSRF exemption")
+	}
+}
+
 func TestCSRFStack_BrowserSessionWithoutCSRFTokenIsRejected(t *testing.T) {
 	secret := stackSecret32
 	p := &fakeProvider{mode: ModeEnabled, apiKey: "harpoon-key", secret: secret}
