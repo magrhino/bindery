@@ -337,9 +337,10 @@ func (c *Client) BookSearch(ctx context.Context, title, author string, categorie
 }
 
 // bookSearchTiers runs the four-tier query cascade for one spelling of the
-// title/author and returns the first tier that yields results (empty if none
-// do). BookSearch calls it with the ASCII-transliterated spelling first and,
-// on a miss, with the original umlaut spelling. Query order:
+// title/author and returns the first tier that yields results plausibly about
+// the requested book (empty if none do). BookSearch calls it with the
+// ASCII-transliterated spelling first and, on a miss, with the original umlaut
+// spelling. Query order:
 //
 //  1. Structured t=book with title+author (primary title only — subtitles
 //     are dropped for the query; filterRelevant still matches on the full).
@@ -404,35 +405,113 @@ func (c *Client) bookSearchTiers(ctx context.Context, queryTitle, author string,
 		}
 	}
 
+	// fallback holds the earliest text tier that returned results the relevance
+	// gate rejected, and is returned only if no tier passes the gate — see
+	// textTier.
+	var fallback []SearchResult
+
+	// textTier runs one freeform t=search tier and reports whether it produced
+	// anything relevant. The gate is the same titleHasRelevantResult tier 1
+	// uses: tiers 2-4 used to short-circuit on len(results) > 0 alone, so a tier
+	// answering with junk stopped the ladder, filterRelevant discarded all of it
+	// downstream, and the search ended with nothing — having never run the
+	// remaining, more specific tiers that would have found the book. Broad
+	// parent categories (#1571) make an early text tier much likelier to return
+	// something irrelevant, which is exactly that condition (#1891).
+	//
+	// A rejected tier's results are remembered rather than dropped. If no tier
+	// is relevant the earliest non-empty one is returned, which is precisely
+	// what this cascade returned before, so the gate can only promote a later
+	// tier over an earlier one — it can never lose results.
+	// titleHasRelevantResult is a coarse canned-feed detector, not a
+	// re-implementation of filterRelevant, and on the titles where it is the
+	// stricter of the two (a possessive in the title, #409) the fallback is what
+	// keeps the old behaviour.
+	//
+	// The extra queries only fire on a tier that previously ended the cascade
+	// with junk, and at most two per cascade, so the request budget #1814 cares
+	// about is unchanged in the common case: a tier that matches still stops the
+	// ladder where it always did.
+	textTier := func(tier int, term string) ([]SearchResult, bool, error) {
+		results, err := c.Search(ctx, term, categories)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(results) == 0 {
+			return nil, false, nil
+		}
+		if titleHasRelevantResult(queryTitle, results) {
+			slog.Debug("indexer query tier matched", "tier", tier, "count", len(results))
+			return results, true, nil
+		}
+		slog.Debug("indexer query tier returned nothing relevant, falling through",
+			"tier", tier, "count", len(results), "words_checked", SigWords(queryTitle))
+		if fallback == nil {
+			fallback = results
+		}
+		return results, false, nil
+	}
+
 	// Tier 2: surname + title (short, disambiguating)
 	if surname != "" && !strings.EqualFold(surname, author) {
-		results, err := c.Search(ctx, surname+" "+queryTitle, categories)
+		results, ok, err := textTier(2, surname+" "+queryTitle)
 		if err != nil {
 			if IsHardIndexerError(err) || ctx.Err() != nil {
 				return nil, err
 			}
-		} else if len(results) > 0 {
-			slog.Debug("indexer query tier matched", "tier", 2, "count", len(results))
+		} else if ok {
 			return results, nil
 		}
 	}
 
 	// Tier 3: full author + title
 	if author != "" {
-		results, err := c.Search(ctx, author+" "+queryTitle, categories)
+		results, ok, err := textTier(3, author+" "+queryTitle)
 		if err != nil {
 			if IsHardIndexerError(err) || ctx.Err() != nil {
 				return nil, err
 			}
-		} else if len(results) > 0 {
-			slog.Debug("indexer query tier matched", "tier", 3, "count", len(results))
+		} else if ok {
 			return results, nil
 		}
 	}
 
-	// Tier 4: title only
+	// Tier 4 is skipped once an earlier tier has already answered with something,
+	// even something the gate rejected. It is the broadest query in the ladder —
+	// title with no author at all — so after two more specific tiers have failed
+	// the gate it is the least likely to return anything better, and its results
+	// would lose to the fallback below anyway.
+	//
+	// This is what bounds the cost of the fix. Without it a cascade that used to
+	// stop at tier 2 with junk would run tiers 3 AND 4, two extra queries per
+	// spelling and BookSearch runs two spellings. With it the ceiling is one
+	// extra query, paid only on a search that was previously returning results
+	// filterRelevant would discard — a search that was already failing (#1814).
+	if len(fallback) > 0 {
+		slog.Debug("indexer query skipping tier 4; an earlier tier already returned results",
+			"count", len(fallback))
+		return fallback, nil
+	}
+
+	// Tier 4: title only. Nothing follows it, so its results stand even when the
+	// gate rejects them.
 	slog.Debug("indexer query tier 4 (title only)", "title", queryTitle)
-	return c.Search(ctx, queryTitle, categories)
+	results, ok, err := textTier(4, queryTitle)
+	if err != nil {
+		// A soft error on the last tier is not fatal when an earlier tier
+		// already returned something; hard errors and an otherwise empty
+		// cascade still surface the error to the caller.
+		if len(fallback) > 0 && !IsHardIndexerError(err) && ctx.Err() == nil {
+			return fallback, nil
+		}
+		return nil, err
+	}
+	if !ok && len(fallback) > 0 {
+		slog.Debug("indexer query no tier relevant, returning earliest results",
+			"count", len(fallback))
+		return fallback, nil
+	}
+	return results, nil
 }
 
 // redactAPIKey replaces the apikey query parameter value with *** so URLs

@@ -165,13 +165,12 @@ func (s *Searcher) makeClient(baseURL, apiKey string) *newznab.Client {
 //     7000 into a MaM-style indexer is the same mistake as substituting 7020
 //     there: the standard ID does not address the extended subcategory tree.
 //
-// Note the interaction with the query cascade: BookSearch tiers 2-4 return on
-// ANY result, before filterRelevant runs. Broadening the category list can make
-// an early text tier come back with junk, stop the ladder, and then have
-// filterRelevant discard all of it — leaving an opted-in indexer with fewer
-// good results than a narrow list would have produced. Confining the opt-in to
-// the structured tier-1 t=book query is the real fix; it is a follow-up, not
-// done here.
+// Note the interaction with the query cascade: broadening the category list
+// makes an early text tier likelier to come back with junk. That used to stop
+// the ladder — tiers 2-4 returned on ANY result, before filterRelevant ran —
+// leaving an opted-in indexer with fewer good results than a narrow list would
+// have produced. Every tier now gates on relevance before short-circuiting, so
+// a junk tier falls through to the more specific ones (#1891).
 func filterCategoriesForMedia(cats []int, mediaType string, includeParentCategories bool) []int {
 	// Newznab category convention: 7xxx is the Books parent (7020 ebook,
 	// 7030 magazines), 3xxx is Audio (3030 audiobook). The bare parents
