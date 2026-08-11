@@ -384,7 +384,8 @@ func TestQueueRetryImport_AcceptsImportFailed(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("reload download: %v", err)
 	}
-	if got.Status != models.StateImportFailed || got.ImportRetryCount != 0 || got.ErrorMessage != "path did not resolve" {
+	// The retry re-arms the row and clears the failure that prompted it (#1633).
+	if got.Status != models.StateImportFailed || got.ImportRetryCount != 0 || got.ErrorMessage != "" {
 		t.Fatalf("unexpected retry state: status=%q retry=%d error=%q", got.Status, got.ImportRetryCount, got.ErrorMessage)
 	}
 }

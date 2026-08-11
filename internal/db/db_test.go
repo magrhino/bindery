@@ -1376,8 +1376,10 @@ func TestDownloadRepoResetImportRetry(t *testing.T) {
 	if got.ImportRetryCount != 0 {
 		t.Fatalf("import retry count = %d, want 0", got.ImportRetryCount)
 	}
-	if got.ErrorMessage != "visible import failure" {
-		t.Fatalf("error message changed to %q", got.ErrorMessage)
+	// The message describes the failure the reset just re-armed, so it must not
+	// survive the retry (#1633).
+	if got.ErrorMessage != "" {
+		t.Fatalf("error message = %q, want cleared by the retry", got.ErrorMessage)
 	}
 	if got.SABnzbdNzoID == nil || *got.SABnzbdNzoID != nzoID || got.TorrentID == nil || *got.TorrentID != torrentID {
 		t.Fatalf("remote IDs changed, got nzo=%v torrent=%v", got.SABnzbdNzoID, got.TorrentID)

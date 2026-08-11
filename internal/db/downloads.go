@@ -165,9 +165,16 @@ func (r *DownloadRepo) RetryFailed(ctx context.Context, d *models.Download) (boo
 // the scanner picks it up again with a fresh count (#1589). It returns
 // accepted=false when the row exists but is in another (non-recoverable) state,
 // and found=false when no row exists.
+//
+// The retry also clears error_message (#1633). The message describes the attempt
+// that just got re-armed ("import retry limit reached (3 attempts)"), so keeping
+// it would leave a healthy row contradicting itself: only StateImported clears
+// the field on the way through UpdateStatus, and the external hand-off settles
+// in StateImportExternal instead, where the row lives in the queue permanently
+// and would display the stale error next to an import that demonstrably worked.
 func (r *DownloadRepo) ResetImportRetry(ctx context.Context, id int64) (accepted bool, found bool, err error) {
 	result, err := r.db.ExecContext(ctx,
-		"UPDATE downloads SET import_retry_count=0, status=? WHERE id=? AND status IN (?, ?)",
+		"UPDATE downloads SET import_retry_count=0, error_message='', status=? WHERE id=? AND status IN (?, ?)",
 		models.StateImportFailed, id, models.StateImportFailed, models.StateImportBlocked)
 	if err != nil {
 		return false, false, fmt.Errorf("reset import retry: %w", err)

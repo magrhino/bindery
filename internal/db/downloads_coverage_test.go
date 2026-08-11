@@ -229,6 +229,69 @@ func TestDownloadRepo_ImportClearsError(t *testing.T) {
 	}
 }
 
+// TestDownloadRepo_ResetImportRetryClearsErrorExternal is the regression test
+// for #1633, walking the exact path from the report: an external-mode import
+// exhausts its retry budget and lands in StateImportBlocked with "import retry
+// limit reached (3 attempts)", the operator fixes the drop folder and calls
+// retry-import, and the hand-off then succeeds into StateImportExternal.
+//
+// StateImportExternal is non-terminal by design, so the row stays in the queue
+// forever. Only the StateImported transition clears error_message, and this path
+// never touches it, so unless ResetImportRetry clears the message itself the
+// healthy row displays a stale error next to a successful import.
+func TestDownloadRepo_ResetImportRetryClearsErrorExternal(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	repo := NewDownloadRepo(database)
+
+	dl := &models.Download{GUID: "blocked-then-external", Title: "x", NZBURL: "x", Status: models.StateImporting}
+	if err := repo.Create(ctx, dl); err != nil {
+		t.Fatal(err)
+	}
+	// Retry budget spent: the scanner blocks the row and records why.
+	if err := repo.SetErrorWithStatus(ctx, dl.ID, models.StateImportBlocked, "import retry limit reached (3 attempts)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, "UPDATE downloads SET import_retry_count=3 WHERE id=?", dl.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// The operator fixes the drop folder and retries.
+	accepted, found, err := repo.ResetImportRetry(ctx, dl.ID)
+	if err != nil {
+		t.Fatalf("ResetImportRetry: %v", err)
+	}
+	if !accepted || !found {
+		t.Fatalf("ResetImportRetry accepted=%v found=%v, want true true", accepted, found)
+	}
+
+	// The hand-off now succeeds and settles in the external terminal state.
+	if err := repo.UpdateStatus(ctx, dl.ID, models.StateImportPending); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateStatus(ctx, dl.ID, models.StateImportExternal); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.GetByGUID(ctx, "blocked-then-external")
+	if err != nil || got == nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got.Status != models.StateImportExternal {
+		t.Fatalf("status = %q, want importExternal", got.Status)
+	}
+	if got.ImportRetryCount != 0 {
+		t.Errorf("import retry count = %d, want 0", got.ImportRetryCount)
+	}
+	if got.ErrorMessage != "" {
+		t.Errorf("error_message = %q, want cleared by the retry — a successful external hand-off must not keep showing the old failure", got.ErrorMessage)
+	}
+}
+
 // TestDownloadRepo_UpdateStatusRaceGuard is the regression test for #1462.
 // UpdateStatus used to validate the transition in Go and then issue an UPDATE
 // with no status guard, so two writers that both read the same starting state
