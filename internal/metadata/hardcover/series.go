@@ -89,6 +89,7 @@ func (c *Client) GetSeriesCatalog(ctx context.Context, foreignID string) (*metad
 					default_audio_edition_id
 					default_ebook_edition_id
 					contributions {
+						contribution
 						author { id name slug }
 					}
 				}

@@ -43,6 +43,7 @@ func (c *Client) GetUserWishlist(ctx context.Context, limit int) ([]models.Recom
 					ratings_count
 					rating
 					contributions {
+						contribution
 						author { id name slug }
 					}
 				}
@@ -280,6 +281,7 @@ func (c *Client) GetListBooks(ctx context.Context, listID int) ([]models.Book, e
 					series { id name }
 				}
 				contributions {
+					contribution
 					author { id name slug }
 				}
 			}
@@ -347,6 +349,7 @@ func (c *Client) getShelfBooks(ctx context.Context, statusID int) ([]models.Book
 						series { id name }
 					}
 					contributions {
+						contribution
 						author { id name slug }
 					}
 				}

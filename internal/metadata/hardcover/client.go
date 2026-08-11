@@ -191,11 +191,16 @@ func (c *Client) GetAuthorWorksByName(ctx context.Context, authorName string) ([
 	// and the entire author-works supplement fails (#1036-adjacent report). A
 	// book's language can only be derived by traversing to a default edition;
 	// until that's added, supplemental books carry no language.
+	//
+	// The contributions predicate must also pin the *role*: matching on name
+	// alone returned every book the person touched in any capacity, so a
+	// narrator's or translator's credits were imported as their own works and
+	// re-broke manual corrections on every metadata refresh (#1733).
 	gql := `query GetAuthorWorksByName($author: String!, $limit: Int!, $offset: Int!) {
 		books(
 			where: {
 				canonical_id: {_is_null: true},
-				contributions: {author: {name: {_eq: $author}}}
+				contributions: {author: {name: {_eq: $author}}, ` + authorContributionFilter + `}
 			},
 			limit: $limit,
 			offset: $offset,
@@ -216,6 +221,7 @@ func (c *Client) GetAuthorWorksByName(ctx context.Context, authorName string) ([
 			default_audio_edition_id
 			default_ebook_edition_id
 			contributions {
+				contribution
 				author { id name slug }
 			}
 		}
@@ -311,6 +317,7 @@ func (c *Client) GetBook(ctx context.Context, foreignID string) (*models.Book, e
 			default_audio_edition_id
 			default_ebook_edition_id
 			contributions {
+				contribution
 				author { id name slug }
 			}
 		}
@@ -328,6 +335,7 @@ func (c *Client) GetBook(ctx context.Context, foreignID string) (*models.Book, e
 			default_audio_edition_id
 			default_ebook_edition_id
 			contributions {
+				contribution
 				author { id name slug }
 			}
 		}
@@ -475,6 +483,7 @@ func (c *Client) GetBookByISBN(ctx context.Context, isbn string) (*models.Book, 
 				default_audio_edition_id
 				default_ebook_edition_id
 				contributions {
+					contribution
 					author { id name slug }
 				}
 			}
@@ -612,6 +621,46 @@ type hcAuthor struct {
 
 type hcContribution struct {
 	Author hcAuthor `json:"author"`
+	// Contribution is the role the person played on the book — Hardcover's
+	// `contributions.contribution` column, a free-text nullable String, not an
+	// enum. Documented values include "Author", "Narrator", "Translator",
+	// "Illustrator", "Editor", "Foreword" and "Cover Artist", but real rows are
+	// unstructured (mixed case, compounds like "Author/Narrator") and the
+	// primary author's row usually leaves it null. Queries that omit the field
+	// decode it empty, which authorContribution treats as the author role — so
+	// a missing selection degrades to the pre-#1733 behaviour rather than
+	// stripping every author.
+	Contribution string `json:"contribution"`
+}
+
+// authorContributionFilter is the Hardcover `contributions` predicate that
+// keeps only author-role rows. It must accept a null/empty role: on Hardcover
+// the primary author's contribution row almost never sets `contribution`, so a
+// bare `{contribution: {_eq: "Author"}}` matches nearly nothing and would
+// silently return an empty result set (#1733). The `_ilike` arm has no
+// wildcard prefix, so it matches "Author", "author" and compounds such as
+// "Author/Narrator" without matching "Narrator" or "Translator".
+const authorContributionFilter = `_or: [{contribution: {_is_null: true}}, {contribution: {_eq: ""}}, {contribution: {_ilike: "author%"}}]`
+
+// isAuthorContributionRole mirrors authorContributionFilter client-side. An
+// empty role means "author" both because Hardcover leaves the primary author's
+// row null and because a query that did not select the field decodes as empty.
+func isAuthorContributionRole(role string) bool {
+	role = strings.ToLower(strings.TrimSpace(role))
+	return role == "" || strings.HasPrefix(role, "author")
+}
+
+// authorContribution returns the first author-role contribution. Hardcover
+// returns contributions in credit order, so for a co-authored book that is the
+// primary author — models.Book carries a single author, so the rest are
+// dropped, same as before #1733.
+func authorContribution(contributions []hcContribution) (hcAuthor, bool) {
+	for _, contribution := range contributions {
+		if isAuthorContributionRole(contribution.Contribution) {
+			return contribution.Author, true
+		}
+	}
+	return hcAuthor{}, false
 }
 
 type hcBook struct {
@@ -1260,7 +1309,18 @@ func (c *Client) toBook(b hcBook) models.Book {
 	if b.AudioSeconds != nil && *b.AudioSeconds > 0 {
 		bk.DurationSeconds = *b.AudioSeconds
 	}
-	if len(b.Contributions) > 0 {
+	// Pick the author-role contribution rather than whichever row Hardcover
+	// happened to return first: taking index 0 unconditionally filed books
+	// under their narrator or translator (#1733 — Will Wight's Cradle books
+	// landing under their audiobook narrator).
+	if author, ok := authorContribution(b.Contributions); ok {
+		a := c.toAuthor(author)
+		bk.Author = &a
+	} else if len(b.Contributions) > 0 {
+		// Contributions exist but none is an author — e.g. an anthology
+		// credited only to its editor. Fall back to the first credit rather
+		// than leaving Author nil: a book with no author is dropped by the
+		// import paths, which is worse than an imperfect credit.
 		a := c.toAuthor(b.Contributions[0].Author)
 		bk.Author = &a
 	} else if len(b.AuthorNames) > 0 {

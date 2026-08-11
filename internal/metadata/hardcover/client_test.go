@@ -2470,3 +2470,277 @@ func TestQuery_RequestFormat(t *testing.T) {
 		t.Errorf("variable 'key' not set: %v", req.Variables)
 	}
 }
+
+// --- #1733: contribution roles ---
+
+// narratorFirstBookJSON is the raw shape behind the report: Hardcover lists the
+// audiobook narrator's contribution first and the author's own row leaves
+// `contribution` null. Decoding it end to end (query → JSON → toBook) is the
+// only way to catch a missing `contribution` selection; a hand-built hcBook
+// would pass either way.
+const narratorFirstBookJSON = `{"id":42,"title":"Blackflame","slug":"blackflame",` +
+	`"contributions":[` +
+	`{"contribution":"Narrator","author":{"id":7,"name":"Travis Baldree","slug":"travis-baldree"}},` +
+	`{"contribution":null,"author":{"id":3,"name":"Will Wight","slug":"will-wight"}}` +
+	`]}`
+
+// requireSelectsContributionRole fails unless the query's `contributions`
+// selection set requests the role field itself, not just the author sub-object.
+func requireSelectsContributionRole(t *testing.T, query string) {
+	t.Helper()
+	const open = "contributions {"
+	idx := strings.Index(query, open)
+	if idx < 0 {
+		t.Fatalf("query has no contributions selection: %s", query)
+	}
+	rest := query[idx+len(open):]
+	end := strings.Index(rest, "author {")
+	if end < 0 {
+		t.Fatalf("contributions selection has no author sub-selection: %s", query)
+	}
+	if !slices.Contains(strings.Fields(rest[:end]), "contribution") {
+		t.Fatalf("contributions selection must request the `contribution` role field (#1733): %s", query)
+	}
+}
+
+func newQueryCapturingClient(t *testing.T, response string, gotQuery *string) *Client {
+	t.Helper()
+	return newMockClient(func(r *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		var req gqlRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Errorf("request body is not valid JSON: %v", err)
+		}
+		*gotQuery = req.Query
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(response)),
+			Header:     make(http.Header),
+		}, nil
+	}).WithToken("hc-token")
+}
+
+func TestGetAuthorWorksByName_FiltersToAuthorContributionRole(t *testing.T) {
+	var gotQuery string
+	c := newQueryCapturingClient(t, `{"data":{"books":[`+narratorFirstBookJSON+`]}}`, &gotQuery)
+
+	books, err := c.GetAuthorWorksByName(context.Background(), "Will Wight")
+	if err != nil {
+		t.Fatalf("GetAuthorWorksByName: %v", err)
+	}
+
+	// The structural half of #1733: matching a contribution by name alone
+	// returned every book the person merely narrated or translated, which is
+	// why a manual correction reverted on the next metadata refresh.
+	if !strings.Contains(gotQuery, `contributions: {author: {name: {_eq: $author}}, _or: [`) {
+		t.Fatalf("author-works query must constrain the contribution role alongside the name (#1733): %s", gotQuery)
+	}
+	// The author's own row usually has a null role, so the filter has to accept
+	// null/empty as well as an explicit "Author": a filter that only matched
+	// `_eq: "Author"` would match almost nothing and strip every author instead.
+	for _, want := range []string{
+		`{contribution: {_is_null: true}}`,
+		`{contribution: {_eq: ""}}`,
+		`{contribution: {_ilike: "author%"}}`,
+	} {
+		if !strings.Contains(gotQuery, want) {
+			t.Fatalf("author-works role filter missing %s: %s", want, gotQuery)
+		}
+	}
+	requireSelectsContributionRole(t, gotQuery)
+
+	if len(books) != 1 {
+		t.Fatalf("books len = %d, want 1", len(books))
+	}
+	if books[0].Author == nil || books[0].Author.Name != "Will Wight" {
+		t.Fatalf("author = %+v, want Will Wight (the null-role contribution), not the narrator", books[0].Author)
+	}
+}
+
+func TestGetBook_UsesAuthorContributionRole(t *testing.T) {
+	var gotQuery string
+	c := newQueryCapturingClient(t, `{"data":{"books":[`+narratorFirstBookJSON+`]}}`, &gotQuery)
+
+	book, err := c.GetBook(context.Background(), "hc:blackflame")
+	if err != nil {
+		t.Fatalf("GetBook: %v", err)
+	}
+	requireSelectsContributionRole(t, gotQuery)
+	if book == nil || book.Author == nil {
+		t.Fatalf("book = %+v, want an author", book)
+	}
+	if book.Author.Name != "Will Wight" {
+		t.Fatalf("author = %q, want Will Wight, not the narrator listed first", book.Author.Name)
+	}
+}
+
+func TestGetListBooks_UsesAuthorContributionRole(t *testing.T) {
+	// The reported path: a Hardcover list sync filed Cradle books under their
+	// audiobook narrator.
+	tests := []struct {
+		name     string
+		listID   int
+		response string
+	}{
+		{
+			name:     "list",
+			listID:   42,
+			response: `{"data":{"list_books":[{"book":` + narratorFirstBookJSON + `}]}}`,
+		},
+		{
+			name:     "shelf",
+			listID:   -1,
+			response: `{"data":{"me":[{"user_books":[{"book":` + narratorFirstBookJSON + `}]}]}}`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotQuery string
+			c := newQueryCapturingClient(t, tc.response, &gotQuery)
+
+			books, err := c.GetListBooks(context.Background(), tc.listID)
+			if err != nil {
+				t.Fatalf("GetListBooks: %v", err)
+			}
+			requireSelectsContributionRole(t, gotQuery)
+			if len(books) != 1 {
+				t.Fatalf("books len = %d, want 1", len(books))
+			}
+			if books[0].Author == nil || books[0].Author.Name != "Will Wight" {
+				t.Fatalf("author = %+v, want Will Wight, not the narrator listed first", books[0].Author)
+			}
+		})
+	}
+}
+
+// TestBookQueriesSelectContributionRole guards every query that feeds toBook.
+// A query that forgets the field decodes an empty role, which toBook treats as
+// the author — i.e. it silently reverts to the pre-#1733 "first credit wins"
+// behaviour instead of failing loudly.
+func TestBookQueriesSelectContributionRole(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*Client) error
+	}{
+		{"author works", func(c *Client) error {
+			_, err := c.GetAuthorWorksByName(context.Background(), "Will Wight")
+			return err
+		}},
+		{"book by slug", func(c *Client) error {
+			_, err := c.GetBook(context.Background(), "hc:blackflame")
+			return err
+		}},
+		{"book by isbn", func(c *Client) error {
+			_, err := c.GetBookByISBN(context.Background(), "9780000000000")
+			return err
+		}},
+		{"wishlist", func(c *Client) error {
+			_, err := c.GetUserWishlist(context.Background(), 10)
+			return err
+		}},
+		{"list books", func(c *Client) error {
+			_, err := c.GetListBooks(context.Background(), 42)
+			return err
+		}},
+		{"shelf books", func(c *Client) error {
+			_, err := c.GetListBooks(context.Background(), -1)
+			return err
+		}},
+		{"series catalog", func(c *Client) error {
+			_, err := c.GetSeriesCatalog(context.Background(), "hc-series:123")
+			return err
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotQuery string
+			c := newQueryCapturingClient(t, `{"data":{}}`, &gotQuery)
+			if err := tc.call(c); err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+			requireSelectsContributionRole(t, gotQuery)
+		})
+	}
+}
+
+func TestToBook_ContributionRoleSelection(t *testing.T) {
+	author := func(name string) hcAuthor {
+		return hcAuthor{ID: 1, Name: name, Slug: strings.ToLower(strings.ReplaceAll(name, " ", "-"))}
+	}
+	tests := []struct {
+		name          string
+		contributions []hcContribution
+		authorNames   []string
+		wantAuthor    string
+	}{
+		{
+			name: "null role is the author",
+			contributions: []hcContribution{
+				{Contribution: "Narrator", Author: author("Travis Baldree")},
+				{Contribution: "", Author: author("Will Wight")},
+			},
+			wantAuthor: "Will Wight",
+		},
+		{
+			name: "explicit role is matched case-insensitively",
+			contributions: []hcContribution{
+				{Contribution: "Translator", Author: author("Ken Liu")},
+				{Contribution: "author", Author: author("Cixin Liu")},
+			},
+			wantAuthor: "Cixin Liu",
+		},
+		{
+			name: "compound author role still counts",
+			contributions: []hcContribution{
+				{Contribution: "Illustrator", Author: author("Chris Riddell")},
+				{Contribution: "Author/Narrator", Author: author("Neil Gaiman")},
+			},
+			wantAuthor: "Neil Gaiman",
+		},
+		{
+			name: "first author role wins for co-authored books",
+			contributions: []hcContribution{
+				{Contribution: "Author", Author: author("Terry Pratchett")},
+				{Contribution: "Author", Author: author("Neil Gaiman")},
+			},
+			wantAuthor: "Terry Pratchett",
+		},
+		{
+			// No author-role credit at all (an anthology credited only to its
+			// editor). Keep the legacy first-credit pick: a nil author gets the
+			// book dropped downstream, which is worse than an imperfect credit.
+			name: "falls back to the first credit when no role is an author",
+			contributions: []hcContribution{
+				{Contribution: "Editor", Author: author("Ellen Datlow")},
+				{Contribution: "Illustrator", Author: author("Charles Vess")},
+			},
+			wantAuthor: "Ellen Datlow",
+		},
+		{
+			name:        "author names still fill in when there are no contributions",
+			authorNames: []string{"Frank Herbert"},
+			wantAuthor:  "Frank Herbert",
+		},
+	}
+	c := New()
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			book := c.toBook(hcBook{
+				ID:            1,
+				Title:         "Book",
+				Slug:          "book",
+				Contributions: tc.contributions,
+				AuthorNames:   tc.authorNames,
+			})
+			if book.Author == nil {
+				t.Fatalf("author = nil, want %q", tc.wantAuthor)
+			}
+			if book.Author.Name != tc.wantAuthor {
+				t.Fatalf("author = %q, want %q", book.Author.Name, tc.wantAuthor)
+			}
+		})
+	}
+}
