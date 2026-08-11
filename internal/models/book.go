@@ -26,7 +26,6 @@ type Book struct {
 	AverageRating     float64    `json:"averageRating"`
 	RatingsCount      int        `json:"ratingsCount"`
 	EditionCount      int        `json:"-"`
-	ISBNs             []string   `json:"-"`
 	Monitored         bool       `json:"monitored"`
 	Status            string     `json:"status"`
 	AnyEditionOK      bool       `json:"anyEditionOk"`
@@ -83,6 +82,18 @@ type Book struct {
 	// Transport-only: series data from the metadata provider, used during
 	// ingestion to populate series/series_books. Never stored in books table.
 	SeriesRefs []SeriesRef `json:"-"`
+
+	// Transport-only: the ISBNs a metadata provider reported for this work
+	// during a search or enrichment call. THERE IS NO isbns COLUMN — nothing in
+	// internal/db writes or scans this field, so it is always empty on a book
+	// loaded from the database and anything derived from it silently matches
+	// nothing (#1893). It exists only so the aggregator can dedup search
+	// results across providers before anything is persisted.
+	//
+	// The stored ISBNs live on editions.isbn_13 / editions.isbn_10 — read them
+	// from the book's Editions (indexer.CriteriaISBN is the worked example, from
+	// the near-miss in #1724 that prompted the rename from ISBNs).
+	ProviderISBNs []string `json:"-"`
 
 	// Transport-only: the provider author keys credited on this work (e.g.
 	// OpenLibrary author IDs from the work's authors array). Used by the

@@ -67,8 +67,8 @@ func TestAggregator_SearchBooks_MergesEnrichers(t *testing.T) {
 }
 
 func TestAggregator_SearchBooks_DedupesByISBN(t *testing.T) {
-	primary := &mockProvider{name: "ol", searchBooks: []models.Book{{Title: "Dune", ForeignID: "OL1W", ISBNs: []string{"978-0-441-17271-9"}}}}
-	enricher := &mockProvider{name: "googlebooks", searchBooks: []models.Book{{Title: "Dune (different edition)", ForeignID: "gb:dup", ISBNs: []string{"9780441172719"}}}}
+	primary := &mockProvider{name: "ol", searchBooks: []models.Book{{Title: "Dune", ForeignID: "OL1W", ProviderISBNs: []string{"978-0-441-17271-9"}}}}
+	enricher := &mockProvider{name: "googlebooks", searchBooks: []models.Book{{Title: "Dune (different edition)", ForeignID: "gb:dup", ProviderISBNs: []string{"9780441172719"}}}}
 	agg := newTestAggregator(primary, enricher)
 
 	got, err := agg.SearchBooks(context.Background(), "dune")

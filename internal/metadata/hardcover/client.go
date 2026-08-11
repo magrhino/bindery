@@ -1255,7 +1255,7 @@ func (c *Client) toBook(b hcBook) models.Book {
 		Monitored:        true,
 		Status:           models.BookStatusWanted,
 		Genres:           []string{},
-		ISBNs:            b.ISBNs,
+		ProviderISBNs:    b.ISBNs,
 		SeriesRefs:       seriesRefs,
 		Language:         hardcoverLanguageName(b.Language),
 		IsCompilation:    b.Compilation,

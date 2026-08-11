@@ -10,14 +10,16 @@ import (
 	"github.com/vavallee/bindery/internal/models"
 )
 
-// seedLayoutBook inserts an author + book (optionally with ISBNs) and returns the book.
-func seedLayoutBook(t *testing.T, books *db.BookRepo, authors *db.AuthorRepo, ctx context.Context, authorName, title string, isbns ...string) *models.Book {
+// seedLayoutBook inserts an author + book and returns the book. It takes no
+// ISBNs: books.Create has no ISBN column to write them to (#1893), so a seeded
+// ISBN would silently vanish and any test relying on one would prove nothing.
+func seedLayoutBook(t *testing.T, books *db.BookRepo, authors *db.AuthorRepo, ctx context.Context, authorName, title string) *models.Book {
 	t.Helper()
 	a := &models.Author{Name: authorName, ForeignID: "la-" + authorName, SortName: authorName}
 	if err := authors.Create(ctx, a); err != nil {
 		t.Fatal(err)
 	}
-	b := &models.Book{AuthorID: a.ID, Title: title, ForeignID: "lb-" + title, Status: "wanted", ISBNs: isbns}
+	b := &models.Book{AuthorID: a.ID, Title: title, ForeignID: "lb-" + title, Status: "wanted"}
 	if err := books.Create(ctx, b); err != nil {
 		t.Fatal(err)
 	}

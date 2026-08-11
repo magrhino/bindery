@@ -159,9 +159,9 @@ func lookupUnit(root, path string, books []models.Book, authorNames map[int64]st
 	// Tier 2: title match, narrowed by the effective author when we have one.
 	// (Embedded ISBN is read and surfaced but not matched here: catalogue ISBNs
 	// live in the editions table, which the batch catalogue load doesn't join,
-	// so Book.ISBNs is empty for this comparison — matchByTitleAuthor has the
-	// same limitation. Title+author is the reliable signal against the loaded
-	// catalogue.)
+	// so Book.ProviderISBNs is empty for this comparison — it is never persisted
+	// at all (#1893) — and matchByTitleAuthor has the same limitation.
+	// Title+author is the reliable signal against the loaded catalogue.)
 	var matches []models.Book
 	for i := range books {
 		if !titleMatch(books[i].Title, effTitle) {

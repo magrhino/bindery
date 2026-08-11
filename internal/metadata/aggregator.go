@@ -628,7 +628,7 @@ func queryHasLetters(q string) bool {
 func searchBookSeen(b models.Book, seenISBN, seenTA map[string]bool) bool {
 	var isbns []string
 	dup := false
-	for _, raw := range b.ISBNs {
+	for _, raw := range b.ProviderISBNs {
 		n := isbnutil.Normalize(raw)
 		if n == "" {
 			continue

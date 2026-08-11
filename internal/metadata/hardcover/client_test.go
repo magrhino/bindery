@@ -400,8 +400,8 @@ func TestSearchBooks_ParsesStringResultsAndAuthorNames(t *testing.T) {
 	if book.AverageRating != 4.4 || book.RatingsCount != 12000 {
 		t.Errorf("rating/count = %f/%d, want 4.4/12000", book.AverageRating, book.RatingsCount)
 	}
-	if !slices.Equal(book.ISBNs, []string{"9780441172719", "0441172717"}) {
-		t.Errorf("ISBNs = %+v", book.ISBNs)
+	if !slices.Equal(book.ProviderISBNs, []string{"9780441172719", "0441172717"}) {
+		t.Errorf("ProviderISBNs = %+v", book.ProviderISBNs)
 	}
 	if !slices.Equal(book.Genres, []string{"Science Fiction", "Classic"}) {
 		t.Errorf("Genres = %+v", book.Genres)
@@ -454,8 +454,8 @@ func TestSearchBooks_ParsesSupplementalPayloadMetadata(t *testing.T) {
 	if book.Author == nil || book.Author.Name != "Brandon Sanderson" {
 		t.Fatalf("Author = %+v, want Brandon Sanderson", book.Author)
 	}
-	if !slices.Equal(book.ISBNs, []string{"9780765326355", "0765326353"}) {
-		t.Errorf("ISBNs = %+v", book.ISBNs)
+	if !slices.Equal(book.ProviderISBNs, []string{"9780765326355", "0765326353"}) {
+		t.Errorf("ProviderISBNs = %+v", book.ProviderISBNs)
 	}
 	if !slices.Equal(book.Genres, []string{"Fantasy"}) {
 		t.Errorf("Genres = %+v", book.Genres)

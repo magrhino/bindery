@@ -85,9 +85,10 @@ type MatchCriteria struct {
 // book's selected edition wins when it has one; otherwise the first edition
 // with a usable ISBN does, in the order the caller supplied.
 //
-// Book.ISBNs is deliberately not consulted: it is transport-only metadata
-// filled in by providers during ingestion and is never read back out of the
-// books table, so it is always empty on a book loaded from the database.
+// Book.ProviderISBNs is deliberately not consulted: it is transport-only
+// metadata filled in by providers during ingestion and is never read back out
+// of the books table, so it is always empty on a book loaded from the database
+// (#1893).
 func CriteriaISBN(book *models.Book, editions []models.Edition) string {
 	if book == nil {
 		return ""
