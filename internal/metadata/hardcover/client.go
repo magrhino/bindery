@@ -637,10 +637,21 @@ type hcContribution struct {
 // keeps only author-role rows. It must accept a null/empty role: on Hardcover
 // the primary author's contribution row almost never sets `contribution`, so a
 // bare `{contribution: {_eq: "Author"}}` matches nearly nothing and would
-// silently return an empty result set (#1733). The `_ilike` arm has no
-// wildcard prefix, so it matches "Author", "author" and compounds such as
-// "Author/Narrator" without matching "Narrator" or "Translator".
-const authorContributionFilter = `_or: [{contribution: {_is_null: true}}, {contribution: {_eq: ""}}, {contribution: {_ilike: "author%"}}]`
+// silently return an empty result set (#1733). Verified live: on "Blackflame"
+// the narrator's row reads `contribution: "Narrator"` while Will Wight's own
+// row is null.
+//
+// The explicit spellings are NOT decoration and NOT reachable by a pattern
+// match. Hardcover's server rejects pattern operators outright —
+//
+//	{"error":"ilike and related operations are not permitted on this server."}  (HTTP 403)
+//
+// — so an `_ilike: "author%"` arm does not merely fail to match, it fails the
+// whole request, which would take down every per-author "Refresh Metadata" and
+// "Refresh All" run. `_in` is the widest operator the server actually allows
+// here. A literal "Author" is rare but real (verified live), so the arm earns
+// its place: without it those authors' catalogues come back empty.
+const authorContributionFilter = `_or: [{contribution: {_is_null: true}}, {contribution: {_eq: ""}}, {contribution: {_in: ["Author", "author", "AUTHOR"]}}]`
 
 // isAuthorContributionRole mirrors authorContributionFilter client-side. An
 // empty role means "author" both because Hardcover leaves the primary author's

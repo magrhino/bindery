@@ -1,0 +1,2 @@
+### Fixed
+- **Author metadata refresh works again against Hardcover** — the author-role filter added for the narrator-as-author fix used an `_ilike` pattern arm, and Hardcover's API rejects pattern operators outright with `403 ilike and related operations are not permitted on this server`. That is a hard request failure rather than a missed match, so every per-author "Refresh Metadata" and every "Refresh All" against a Hardcover-linked author would have failed. The filter now uses `_in` with the literal spellings, which is the widest operator the server allows on that field.

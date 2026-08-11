@@ -2544,10 +2544,20 @@ func TestGetAuthorWorksByName_FiltersToAuthorContributionRole(t *testing.T) {
 	for _, want := range []string{
 		`{contribution: {_is_null: true}}`,
 		`{contribution: {_eq: ""}}`,
-		`{contribution: {_ilike: "author%"}}`,
+		`{contribution: {_in: ["Author", "author", "AUTHOR"]}}`,
 	} {
 		if !strings.Contains(gotQuery, want) {
 			t.Fatalf("author-works role filter missing %s: %s", want, gotQuery)
+		}
+	}
+	// Hardcover's server refuses pattern operators outright, with HTTP 403
+	// "ilike and related operations are not permitted on this server." An
+	// _ilike arm therefore does not degrade to a missed match, it fails the
+	// entire request — taking every per-author refresh with it. Verified live
+	// against api.hardcover.app.
+	for _, banned := range []string{"_ilike", "_like", "_similar", "_iregex", "_regex"} {
+		if strings.Contains(gotQuery, banned) {
+			t.Fatalf("author-works query uses %s, which Hardcover rejects with 403: %s", banned, gotQuery)
 		}
 	}
 	requireSelectsContributionRole(t, gotQuery)
