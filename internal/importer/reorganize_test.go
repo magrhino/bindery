@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -402,5 +403,49 @@ func TestReorganize_AuthorAndLibraryScope(t *testing.T) {
 	}
 	if len(libMoves) != 2 {
 		t.Fatalf("library scope: want 2 moves, got %d", len(libMoves))
+	}
+}
+
+// TestReorganize_DestinationInsideSourceIsRefused is the #1809 regression at
+// the reorganize layer: a flat author folder tracked as the audiobook location
+// templates to a book folder *inside itself*, which the copy-based move used to
+// walk into forever. Preview must classify it as an error naming both paths,
+// and apply must leave the folder untouched.
+func TestReorganize_DestinationInsideSourceIsRefused(t *testing.T) {
+	env, _, audiobookDir, ctx := reorgFixture(t)
+	book := env.seed(t, ctx, "Jane Doe", "My Book")
+
+	// The tracked audiobook "folder" is the author directory itself.
+	srcDir := filepath.Join(audiobookDir, "Jane Doe")
+	writeFileAt(t, filepath.Join(srcDir, "My Book.m4b"))
+	if err := env.books.AddBookFile(ctx, book.ID, models.MediaTypeAudiobook, srcDir); err != nil {
+		t.Fatal(err)
+	}
+
+	// The template resolves to <audiobookDir>/Jane Doe/My Book (2020).
+	moves, err := env.s.PreviewReorganizeBook(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(moves) != 1 {
+		t.Fatalf("want 1 move, got %d", len(moves))
+	}
+	if moves[0].Status != ReorgStatusError {
+		t.Fatalf("preview = %+v, want status %q", moves[0], ReorgStatusError)
+	}
+	if !strings.Contains(moves[0].Message, srcDir) || !strings.Contains(moves[0].Message, "inside the source directory") {
+		t.Fatalf("preview message %q does not name the containment conflict", moves[0].Message)
+	}
+
+	results := env.s.ApplyReorganize(ctx, []int64{moves[0].FileID})
+	if results[0].Status != ReorgStatusError {
+		t.Fatalf("apply = %+v, want it left unmoved", results[0])
+	}
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "My Book.m4b" {
+		t.Fatalf("source folder was modified: %v", entries)
 	}
 }

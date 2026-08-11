@@ -177,8 +177,8 @@ func (s *Scanner) proposedPathFor(ctx context.Context, book *models.Book, author
 	// move would have to copy the source into a subdirectory of itself, and the
 	// recursive copy walks straight into what it is creating (#1809). Report it
 	// instead of offering a move that can only fail.
-	if dirContains(f.Path, dest) {
-		return dest, ReorgStatusError, "destination would be inside the source folder"
+	if err := checkDestNotInsideSource("move", f.Path, dest); err != nil {
+		return dest, ReorgStatusError, err.Error()
 	}
 	// Never overwrite: if something already occupies the proposed path it is
 	// either an untracked file or another book's file. Surface it and skip.

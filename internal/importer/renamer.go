@@ -464,21 +464,81 @@ func MoveFile(src, dst string) error {
 	return os.Remove(src)
 }
 
-// ErrDestInsideSource is returned by the directory move/copy paths when the
-// destination sits inside the source tree (#1809). Such a placement has no safe
-// copy-based implementation: the recursive copy would walk into the directory
-// it is creating and duplicate the tree into itself until the disk fills.
+// ErrDestInsideSource marks a directory placement whose destination sits inside
+// the source directory. Callers can test for it with errors.Is; the wrapped
+// message names both paths.
 var ErrDestInsideSource = errors.New("destination is inside the source directory")
 
 // dirContains reports whether p is lexically nested strictly inside dir. Purely
 // path-based (the destination normally does not exist yet), matching how the
-// rest of the importer reasons about containment.
+// rest of the importer reasons about containment. The reorganize preview and
+// the inner copy walk use this cheap form; the entry-point guards below use
+// checkDestNotInsideSource, which additionally resolves symlinks.
 func dirContains(dir, p string) bool {
 	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(p))
 	if err != nil || rel == "." {
 		return false
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// checkDestNotInsideSource rejects a directory move/copy/hardlink whose
+// destination lands inside the source tree (#1809).
+//
+// The kernel refuses a rename into a subdirectory of the source, so such a
+// placement always falls through to the recursive copy path — and that walk
+// reads the source while the destination it is creating grows inside it, so it
+// descends into its own output and never terminates, filling the disk with
+// nested directories until the process is killed. A reorganize that moves
+// /library/Author/Title into /library/Author/Title/Title (a series folder named
+// after the book), or a placement of the flat folder /library/Author into
+// /library/Author/Book, hits exactly this shape.
+//
+// Both paths are resolved to absolute, symlink-free form before comparing, and
+// the comparison runs on path component boundaries, so /library/Author/Book is
+// not treated as containing /library/Author/BookTwo.
+//
+// src == dst is deliberately NOT rejected here: it is a distinct case (nothing
+// to move), and the callers' pre-existing "destination already exists" check
+// already reports it, which is also how the reorganize layer classifies a
+// same-path move (ReorgStatusNoop) before it ever reaches these primitives.
+func checkDestNotInsideSource(op, src, dst string) error {
+	rsrc, rdst := resolveForContainment(src), resolveForContainment(dst)
+	if rsrc == rdst {
+		return nil
+	}
+	rel, err := filepath.Rel(rsrc, rdst)
+	if err != nil {
+		return nil // different volumes: cannot be nested
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil
+	}
+	return fmt.Errorf("cannot %s %q into %q: %w; choose a destination that is not nested under the source folder", op, src, dst, ErrDestInsideSource)
+}
+
+// resolveForContainment returns p in absolute, symlink-resolved form for the
+// containment comparison. p need not exist: the deepest existing ancestor is
+// resolved and the remaining (not yet created) components are re-joined, so a
+// destination that has not been created yet still compares correctly against a
+// source reached through a symlinked library root.
+func resolveForContainment(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		abs = filepath.Clean(p)
+	}
+	cur, tail := abs, ""
+	for {
+		if resolved, rerr := filepath.EvalSymlinks(cur); rerr == nil {
+			return filepath.Join(resolved, tail)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return abs
+		}
+		tail = filepath.Join(filepath.Base(cur), tail)
+		cur = parent
+	}
 }
 
 // MoveDir moves a directory (with all its contents) to the destination.
@@ -499,6 +559,9 @@ func moveDirCtx(ctx context.Context, src, dst string) error {
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("source is not a directory: %s", src)
+	}
+	if err := checkDestNotInsideSource("move", src, dst); err != nil {
+		return err
 	}
 	if _, err := os.Stat(dst); err == nil {
 		return fmt.Errorf("destination already exists: %s", dst)
@@ -575,6 +638,9 @@ func copyDirPublicCtx(ctx context.Context, src, dst string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("source is not a directory: %s", src)
 	}
+	if err := checkDestNotInsideSource("copy", src, dst); err != nil {
+		return err
+	}
 	if _, err := os.Stat(dst); err == nil {
 		return fmt.Errorf("destination already exists: %s", dst)
 	}
@@ -600,6 +666,9 @@ func HardlinkDir(src, dst string) error {
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("source is not a directory: %s", src)
+	}
+	if err := checkDestNotInsideSource("hardlink", src, dst); err != nil {
+		return err
 	}
 	if _, err := os.Stat(dst); err == nil {
 		return fmt.Errorf("destination already exists: %s", dst)
