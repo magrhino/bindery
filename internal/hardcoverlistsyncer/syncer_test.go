@@ -379,6 +379,184 @@ func TestSyncOne_NewAuthorDefaultsMetadataProfile(t *testing.T) {
 	}
 }
 
+// newTestSyncerWithQualityProfiles returns a syncer wired against a real
+// in-memory DB and hands the test the QualityProfileRepo so it can seed a
+// profile and resolve the one an author ends up with through the same helper
+// the grab and interactive-search paths use.
+func newTestSyncerWithQualityProfiles(t *testing.T) (*ListSyncer, *db.ImportListRepo, *db.QualityProfileRepo) {
+	t.Helper()
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+	importLists := db.NewImportListRepo(database)
+	authors := db.NewAuthorRepo(database)
+	books := db.NewBookRepo(database)
+	profiles := db.NewQualityProfileRepo(database)
+	return New(importLists, authors, books), importLists, profiles
+}
+
+// seedQualityProfile inserts a named profile and returns it.
+func seedQualityProfile(t *testing.T, ctx context.Context, profiles *db.QualityProfileRepo, name, cutoff string) *models.QualityProfile {
+	t.Helper()
+	p := &models.QualityProfile{
+		Name:   name,
+		Cutoff: cutoff,
+		Items:  []models.QualityItem{{Quality: cutoff, Allowed: true}},
+	}
+	if err := profiles.Create(ctx, p); err != nil {
+		t.Fatalf("seed quality profile %q: %v", name, err)
+	}
+	return p
+}
+
+// TestSyncOne_NewAuthorInheritsListQualityProfile is the #1781 regression: an
+// import list carries a quality profile (the per-list picker writes
+// ImportList.QualityProfileID), but ensureAuthor never passed it on. Every
+// list-synced author landed with a NULL quality_profile_id, so
+// ResolveAuthorQualityProfile returned nil and the format filter the user
+// configured on the list was silently inert for that author's whole catalogue.
+func TestSyncOne_NewAuthorInheritsListQualityProfile(t *testing.T) {
+	s, repo, profiles := newTestSyncerWithQualityProfiles(t)
+	ctx := context.Background()
+
+	audio := seedQualityProfile(t, ctx, profiles, "Audiobooks only", "audiobook")
+
+	il := testImportList("HC audiobooks", "hardcover", true)
+	il.QualityProfileID = &audio.ID
+	if err := repo.Create(ctx, &il); err != nil {
+		t.Fatalf("seed list: %v", err)
+	}
+	s.WithClientFactory(func(string) hardcoverClient {
+		return &fakeHardcoverClient{
+			lists: []hardcover.HCList{{ID: 11, Slug: il.URL, Name: il.Name}},
+			books: []models.Book{
+				{ForeignID: "hc:qp-book", Title: "Filtered Book", MetadataProvider: "hardcover",
+					Author: &models.Author{ForeignID: "hc:qp-author", Name: "Filtered Author", MetadataProvider: "hardcover"}},
+			},
+		}
+	})
+
+	if err := s.SyncOne(ctx, il.ID); err != nil {
+		t.Fatalf("SyncOne: %v", err)
+	}
+
+	created, err := s.authors.GetByAnyForeignID(ctx, "hc:qp-author")
+	if err != nil {
+		t.Fatalf("GetByAnyForeignID: %v", err)
+	}
+	if created == nil {
+		t.Fatal("expected the new author to be created")
+	}
+	if created.QualityProfileID == nil {
+		t.Fatal("new author QualityProfileID is nil, want the list's profile (#1781)")
+	}
+	if *created.QualityProfileID != audio.ID {
+		t.Errorf("new author QualityProfileID = %d, want %d (the list's profile)", *created.QualityProfileID, audio.ID)
+	}
+	// The column being set is only half the point: the grab and interactive
+	// search paths both read it back through ResolveAuthorQualityProfile, so
+	// assert the author now resolves to a real profile instead of "no filter".
+	resolved := db.ResolveAuthorQualityProfile(ctx, profiles, created)
+	if resolved == nil {
+		t.Fatal("ResolveAuthorQualityProfile returned nil for a list-synced author, want the list's profile")
+	}
+	if resolved.ID != audio.ID || resolved.Name != audio.Name {
+		t.Errorf("resolved profile = %d/%q, want %d/%q", resolved.ID, resolved.Name, audio.ID, audio.Name)
+	}
+}
+
+// TestSyncOne_ListWithoutQualityProfileLeavesAuthorUnfiltered pins the
+// deliberate non-behaviour: a list with no quality profile configured must
+// leave the author's profile unset rather than falling back to the seeded
+// id=1 row. Migration 025 backfills owner_user_id=1 onto pre-multi-user
+// profiles, so that row is one specific user's private profile on a tenanted
+// install and must never be handed to another user's list-synced authors.
+func TestSyncOne_ListWithoutQualityProfileLeavesAuthorUnfiltered(t *testing.T) {
+	s, repo, profiles := newTestSyncerWithQualityProfiles(t)
+	ctx := context.Background()
+
+	il := testImportList("HC unconfigured", "hardcover", true)
+	// QualityProfileID deliberately left nil.
+	if err := repo.Create(ctx, &il); err != nil {
+		t.Fatalf("seed list: %v", err)
+	}
+	s.WithClientFactory(func(string) hardcoverClient {
+		return &fakeHardcoverClient{
+			lists: []hardcover.HCList{{ID: 12, Slug: il.URL, Name: il.Name}},
+			books: []models.Book{
+				{ForeignID: "hc:noqp-book", Title: "Unfiltered Book", MetadataProvider: "hardcover",
+					Author: &models.Author{ForeignID: "hc:noqp-author", Name: "Unfiltered Author", MetadataProvider: "hardcover"}},
+			},
+		}
+	})
+
+	if err := s.SyncOne(ctx, il.ID); err != nil {
+		t.Fatalf("SyncOne: %v", err)
+	}
+
+	created, err := s.authors.GetByAnyForeignID(ctx, "hc:noqp-author")
+	if err != nil || created == nil {
+		t.Fatalf("created author not found: %v", err)
+	}
+	if created.QualityProfileID != nil {
+		t.Errorf("author QualityProfileID = %d, want nil (list configured none)", *created.QualityProfileID)
+	}
+	if got := db.ResolveAuthorQualityProfile(ctx, profiles, created); got != nil {
+		t.Errorf("ResolveAuthorQualityProfile = %+v, want nil (no filter)", got)
+	}
+}
+
+// TestSyncOne_ExistingAuthorKeepsItsQualityProfile guards the create-only rule:
+// re-syncing a list must not overwrite the profile on an author that already
+// exists, whether the user set it by hand or another list did.
+func TestSyncOne_ExistingAuthorKeepsItsQualityProfile(t *testing.T) {
+	s, repo, profiles := newTestSyncerWithQualityProfiles(t)
+	ctx := context.Background()
+
+	chosen := seedQualityProfile(t, ctx, profiles, "Author's own", "epub")
+	listProfile := seedQualityProfile(t, ctx, profiles, "List default", "audiobook")
+
+	existing := &models.Author{
+		ForeignID:        "hc:existing-author",
+		Name:             "Existing Author",
+		SortName:         "Author, Existing",
+		MetadataProvider: "hardcover",
+		QualityProfileID: &chosen.ID,
+	}
+	if err := s.authors.Create(ctx, existing); err != nil {
+		t.Fatalf("seed author: %v", err)
+	}
+
+	il := testImportList("HC resync", "hardcover", true)
+	il.QualityProfileID = &listProfile.ID
+	if err := repo.Create(ctx, &il); err != nil {
+		t.Fatalf("seed list: %v", err)
+	}
+	s.WithClientFactory(func(string) hardcoverClient {
+		return &fakeHardcoverClient{
+			lists: []hardcover.HCList{{ID: 13, Slug: il.URL, Name: il.Name}},
+			books: []models.Book{
+				{ForeignID: "hc:resync-book", Title: "Resynced Book", MetadataProvider: "hardcover",
+					Author: &models.Author{ForeignID: "hc:existing-author", Name: "Existing Author", MetadataProvider: "hardcover"}},
+			},
+		}
+	})
+
+	if err := s.SyncOne(ctx, il.ID); err != nil {
+		t.Fatalf("SyncOne: %v", err)
+	}
+
+	got, err := s.authors.GetByAnyForeignID(ctx, "hc:existing-author")
+	if err != nil || got == nil {
+		t.Fatalf("existing author not found: %v", err)
+	}
+	if got.QualityProfileID == nil || *got.QualityProfileID != chosen.ID {
+		t.Errorf("existing author QualityProfileID = %v, want %d (unchanged)", got.QualityProfileID, chosen.ID)
+	}
+}
+
 // TestSyncOne_StampsListOwner is the hoxtonia-report regression: under
 // multi-user tenancy a list with an owner_user_id must stamp that owner onto
 // every book AND author it creates, so scheduler-synced content is scoped to

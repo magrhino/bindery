@@ -194,6 +194,16 @@ func (s *ListSyncer) syncList(ctx context.Context, il models.ImportList) error {
 		ownerID = *il.OwnerUserID
 	}
 
+	// Quality profile to stamp on every author this sync creates. A list already
+	// carries one (models.ImportList.QualityProfileID, set from the per-list
+	// picker), but the syncer used to drop it: authors it created landed with a
+	// NULL quality_profile_id, ResolveAuthorQualityProfile returned nil for them,
+	// and format enforcement was skipped for every book underneath — even on a
+	// list whose whole point was "audiobooks only" (#1781). Like ownerID it is
+	// applied on create only, so a re-synced list never overwrites a profile the
+	// user has since changed on the author.
+	qualityProfileID := il.QualityProfileID
+
 	// Index existing authors by normalized name so a Hardcover author already in
 	// the library under a different provider's foreign id (e.g. an OpenLibrary
 	// author imported via ABS) is reused instead of duplicated (#1223).
@@ -212,7 +222,7 @@ func (s *ListSyncer) syncList(ctx context.Context, il models.ImportList) error {
 		}
 
 		// Look up or create the author
-		authorID, err := s.ensureAuthor(ctx, &book, nameIndex, ownerID)
+		authorID, err := s.ensureAuthor(ctx, &book, nameIndex, ownerID, qualityProfileID)
 		if err != nil {
 			slog.Warn("failed to ensure author for book", "title", book.Title, "error", err)
 			continue
@@ -355,10 +365,11 @@ func uniqueAuthorByName(index map[string][]models.Author, name string) *models.A
 
 // ensureAuthor looks up the author by foreign ID, then by normalized name,
 // creating a minimal record only if neither matches. Returns the author's
-// database ID. ownerID (0 = global) is stamped only on a freshly created
-// author; a reused existing author keeps whatever owner it already had, so a
-// list never silently reassigns another user's — or a shared/global — author.
-func (s *ListSyncer) ensureAuthor(ctx context.Context, book *models.Book, nameIndex map[string][]models.Author, ownerID int64) (int64, error) {
+// database ID. ownerID (0 = global) and qualityProfileID (nil = the list has
+// none configured) are stamped only on a freshly created author; a reused
+// existing author keeps whatever owner and profile it already had, so a list
+// never silently reassigns another user's — or a shared/global — author.
+func (s *ListSyncer) ensureAuthor(ctx context.Context, book *models.Book, nameIndex map[string][]models.Author, ownerID int64, qualityProfileID *int64) (int64, error) {
 	if book.Author == nil {
 		return 0, fmt.Errorf("book %q has no author metadata", book.Title)
 	}
@@ -405,6 +416,24 @@ func (s *ListSyncer) ensureAuthor(ctx context.Context, book *models.Book, nameIn
 	if author.MetadataProfileID == nil {
 		def := models.DefaultMetadataProfileID
 		author.MetadataProfileID = &def
+	}
+	// Carry the list's own quality profile onto the author so the format filter
+	// the user configured on the list is actually enforced for its books
+	// (#1781). Copied by value: the same pointer is reused for every author in
+	// the sync, and each row must own its field.
+	//
+	// There is deliberately no fallback to the seeded id=1 profile when the list
+	// has none. Unlike metadata profiles, quality profiles are user-scoped:
+	// migration 025 backfills owner_user_id=1 onto every profile that predates
+	// multi-user, so on a tenanted install "profile 1" is one particular user's
+	// private profile, and stamping it here would hand it to authors created by
+	// somebody else's list. A list with no profile configured therefore still
+	// leaves this nil, which ResolveAuthorQualityProfile documents as "no format
+	// filter" — the same result as today, but now fixable from the list's
+	// settings instead of being unreachable.
+	if qualityProfileID != nil {
+		id := *qualityProfileID
+		author.QualityProfileID = &id
 	}
 
 	if err := s.authors.CreateForUser(ctx, author, ownerID); err != nil {
