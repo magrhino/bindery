@@ -13,11 +13,21 @@ import (
 )
 
 type SeriesRepo struct {
-	db *sql.DB
+	db   *sql.DB
+	exec dbExecutor
 }
 
 func NewSeriesRepo(db *sql.DB) *SeriesRepo {
-	return &SeriesRepo{db: db}
+	return &SeriesRepo{db: db, exec: db}
+}
+
+// WithTx returns a clone of this repo with its tx-aware methods (UnlinkBook)
+// routed through tx. See dbExecutor for the rationale: MaxOpenConns=1 means a
+// non-tx statement issued while a transaction is open deadlocks.
+func (r *SeriesRepo) WithTx(tx *sql.Tx) *SeriesRepo {
+	clone := *r
+	clone.exec = tx
+	return &clone
 }
 
 func (r *SeriesRepo) List(ctx context.Context) ([]models.Series, error) {
@@ -602,7 +612,7 @@ func (r *SeriesRepo) UpsertBookLink(ctx context.Context, seriesID, bookID int64,
 }
 
 func (r *SeriesRepo) UnlinkBook(ctx context.Context, seriesID, bookID int64) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM series_books WHERE series_id = ? AND book_id = ?`, seriesID, bookID)
+	_, err := r.exec.ExecContext(ctx, `DELETE FROM series_books WHERE series_id = ? AND book_id = ?`, seriesID, bookID)
 	if err != nil {
 		return fmt.Errorf("unlink book %d from series %d: %w", bookID, seriesID, err)
 	}

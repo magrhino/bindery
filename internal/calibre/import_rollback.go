@@ -26,7 +26,7 @@ type RollbackStats struct {
 
 // RollbackAction describes a single planned (or applied) entity action.
 // Action ∈ {restore_book, delete_book, restore_author, delete_author,
-// delete_edition, unlink_provenance, skip}.
+// delete_edition, unlink_series, unlink_provenance, skip}.
 type RollbackAction struct {
 	EntityType  string `json:"entityType"`
 	ExternalID  string `json:"externalId"`
@@ -150,6 +150,7 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 	editions := i.editions
 	provenance := i.provenance
 	runs := i.runs
+	series := i.series
 	var tx *sql.Tx
 	if !preview {
 		t, err := i.runs.BeginTx(ctx, nil)
@@ -162,6 +163,9 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 		editions = i.editions.WithTx(tx)
 		provenance = i.provenance.WithTx(tx)
 		runs = i.runs.WithTx(tx)
+		if series != nil {
+			series = series.WithTx(tx)
+		}
 		// Deferred Rollback no-ops after Commit (ErrTxDone) — safe to
 		// always defer it as the abort-on-failure path.
 		defer func() {
@@ -244,6 +248,45 @@ func (i *Importer) rollback(ctx context.Context, runID int64, preview bool) (*Ro
 		}
 
 		switch {
+		case entity.EntityType == entityTypeSeriesLink:
+			// Book-to-series memberships this run created (#1635). The
+			// series row itself is left alone — a shared series must
+			// survive a single-run rollback — so the only action is
+			// dropping the series_books row and its provenance.
+			_, seriesID, parsed := parseCalibreSeriesLinkExternalID(entity.ExternalID)
+			switch {
+			case entity.Outcome != outcomeCreated:
+				action.Action = "skip"
+				action.Reason = "series link was not created by this run"
+			case !ownedByRun:
+				action.Action = "skip"
+				action.Reason = "run is no longer the current provenance owner for this series link"
+			case series == nil:
+				action.Action = "skip"
+				action.Reason = "series repository not configured"
+			case !parsed:
+				action.Action = "skip"
+				action.Reason = "unparseable series link provenance key"
+			}
+			if action.Action == "skip" {
+				result.Stats.Skipped++
+				result.Actions = append(result.Actions, action)
+				continue
+			}
+			action.Action = "unlink_series"
+			result.Stats.ActionsPlanned++
+			if !preview {
+				if err := series.UnlinkBook(ctx, seriesID, entity.LocalID); err != nil {
+					rollbackErr = fmt.Errorf("unlink book %d from series %d: %w", entity.LocalID, seriesID, err)
+					continue
+				}
+				if err := provenance.DeleteByExternal(ctx, entity.SourceID, entity.EntityType, entity.ExternalID); err != nil {
+					rollbackErr = fmt.Errorf("unlink series link %s provenance: %w", entity.ExternalID, err)
+					continue
+				}
+				result.Stats.ProvenanceUnlinked++
+			}
+
 		case entity.EntityType == entityTypeEdition:
 			// Editions are append-only during Calibre import: when outcome
 			// is "created" we delete the row; otherwise (no other path
@@ -576,7 +619,8 @@ func rollbackDisplayName(ctx context.Context, books *db.BookRepo, authors *db.Au
 		return ""
 	}
 	switch entity.EntityType {
-	case entityTypeBook:
+	case entityTypeBook, entityTypeSeriesLink:
+		// A series link's local_id is the book, so both label the same way.
 		if books == nil {
 			return ""
 		}
@@ -613,19 +657,22 @@ func rollbackDisplayName(ctx context.Context, books *db.BookRepo, authors *db.Au
 	}
 }
 
-// rollbackEntityRank orders entities for rollback so children (editions) go
-// before parents (books, authors). This avoids leaving a dangling
-// edition→book FK while a book is being deleted/restored.
+// rollbackEntityRank orders entities for rollback so children (series links,
+// editions) go before parents (books, authors). This avoids leaving a dangling
+// edition→book FK while a book is being deleted/restored, and lets a series
+// link be unwound explicitly rather than disappearing with its book.
 func rollbackEntityRank(entity models.CalibreEntitySnapshot) int {
 	switch entity.EntityType {
-	case entityTypeEdition:
+	case entityTypeSeriesLink:
 		return 0
-	case entityTypeBook:
+	case entityTypeEdition:
 		return 1
-	case entityTypeAuthor:
+	case entityTypeBook:
 		return 2
-	default:
+	case entityTypeAuthor:
 		return 3
+	default:
+		return 4
 	}
 }
 

@@ -406,7 +406,16 @@ func (i *Importer) attachBookToSeries(ctx context.Context, runID int64, book *mo
 	if cs.Position > 0 {
 		position = strconv.FormatFloat(cs.Position, 'f', -1, 64)
 	}
-	if err := i.series.UpsertBookLink(ctx, series.ID, book.ID, position, true); err != nil {
+	// LinkBookIfMissing first so we learn whether this run actually created
+	// the membership. Only a link this run created may be unwound by a
+	// rollback — a membership the user (or an earlier run) already had must
+	// survive. When the link already existed, refresh position/primary the
+	// way UpsertBookLink always did.
+	created, err := i.series.LinkBookIfMissing(ctx, series.ID, book.ID, position, true)
+	if err == nil && !created {
+		err = i.series.UpsertBookLink(ctx, series.ID, book.ID, position, true)
+	}
+	if err != nil {
 		slog.Warn("calibre import: series link failed", "name", cs.Name, "book_id", book.ID, "error", err)
 		stats.SeriesFailures++
 		return
@@ -415,9 +424,14 @@ func (i *Importer) attachBookToSeries(ctx context.Context, runID int64, book *mo
 		// Record provenance so a rollback can unlink the book without
 		// orphaning the series. Series row deletion is best-effort: shared
 		// series should survive a single-book rollback, so we only record
-		// the link, not the series create.
-		i.upsertProvenance(ctx, runID, entityTypeSeriesLink,
-			calibreSeriesLinkExternalID(book.ID, series.ID), book.ID)
+		// the link, not the series create. The snapshot is what puts the
+		// link in rollback's work list, and it is only written when this run
+		// created the membership.
+		externalID := calibreSeriesLinkExternalID(book.ID, series.ID)
+		i.upsertProvenance(ctx, runID, entityTypeSeriesLink, externalID, book.ID)
+		if created {
+			i.recordCreateSnapshot(ctx, runID, entityTypeSeriesLink, externalID, book.ID)
+		}
 	}
 	stats.SeriesLinked++
 }
@@ -434,7 +448,32 @@ func calibreSeriesForeignID(name string) string {
 // link recorded during a Calibre import run. Combines both IDs so the
 // rollback layer can unwind the link even after the series ID is recycled.
 func calibreSeriesLinkExternalID(bookID, seriesID int64) string {
-	return "calibre:series-link:" + strconv.FormatInt(bookID, 10) + ":" + strconv.FormatInt(seriesID, 10)
+	return seriesLinkExternalIDPrefix + strconv.FormatInt(bookID, 10) + ":" + strconv.FormatInt(seriesID, 10)
+}
+
+const seriesLinkExternalIDPrefix = "calibre:series-link:"
+
+// parseCalibreSeriesLinkExternalID recovers the (bookID, seriesID) pair a
+// series-link provenance key was built from. Rollback needs the series ID,
+// which the provenance row's local_id (the book) does not carry.
+func parseCalibreSeriesLinkExternalID(externalID string) (bookID, seriesID int64, ok bool) {
+	rest, found := strings.CutPrefix(externalID, seriesLinkExternalIDPrefix)
+	if !found {
+		return 0, 0, false
+	}
+	bookPart, seriesPart, found := strings.Cut(rest, ":")
+	if !found {
+		return 0, 0, false
+	}
+	bookID, err := strconv.ParseInt(bookPart, 10, 64)
+	if err != nil || bookID <= 0 {
+		return 0, 0, false
+	}
+	seriesID, err = strconv.ParseInt(seriesPart, 10, 64)
+	if err != nil || seriesID <= 0 {
+		return 0, 0, false
+	}
+	return bookID, seriesID, true
 }
 
 // recordCreateSnapshot records a marker row for an entity that was newly
