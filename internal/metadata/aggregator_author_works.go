@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/vavallee/bindery/internal/concurrency"
 	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/models"
 )
@@ -262,12 +263,28 @@ func cloneBooks(books []models.Book) []models.Book {
 	return cloned
 }
 
+// authorWorkCoverEnrichConcurrency bounds the per-work enricher fan-out below.
+// This loop used to be strictly serial, so an author whose works mostly lack a
+// work-level cover — the normal case for OpenLibrary — spent one enricher
+// round trip per work, in sequence, before the sync loop had even started. On a
+// 65-work author that is 65 serial calls, and it is a large share of why an
+// author refresh could take an hour (#1888). Matches the pace used by the other
+// provider fan-outs (authorAutoSearchConcurrency, authorWorkSampleConcurrency).
+const authorWorkCoverEnrichConcurrency = 4
+
 func (a *Aggregator) enrichMissingAuthorWorkCovers(ctx context.Context, books []models.Book) {
+	// enrichBook writes only into the book it is handed and the enricher
+	// clients plus a.cache are goroutine-safe, so bounding the fan-out is a
+	// pure latency win: each index is touched by exactly one goroutine.
+	targets := make([]int, 0, len(books))
 	for i := range books {
 		if books[i].ImageURL == "" {
-			a.enrichBook(ctx, &books[i])
+			targets = append(targets, i)
 		}
 	}
+	concurrency.RunBounded(ctx, targets, authorWorkCoverEnrichConcurrency, func(ctx context.Context, i int) {
+		a.enrichBook(ctx, &books[i])
+	})
 	// Edition-cover fallback for the still-empty ones. enrichBook only consults
 	// work-level covers (enricher title search, cover-by-ISBN providers); a work
 	// whose cover lives only on an edition stays blank after it. When the primary

@@ -1096,7 +1096,7 @@ func TestFillMissingWorkLanguages_DerivesFromEditions(t *testing.T) {
 			Entries: langEntries("spa", "spa", "eng"),
 		}),
 	})
-	c.workLangCache = map[string]string{}
+	c.workSampleCache = map[string]workEditionSample{}
 
 	books := []models.Book{{ForeignID: "OLSPAW", Title: "Spanish-only Work"}}
 	filled := c.FillMissingWorkLanguages(context.Background(), books)
@@ -1116,7 +1116,7 @@ func TestFillMissingWorkLanguages_NoLanguageStaysUnknown(t *testing.T) {
 			Entries: langEntries("", ""),
 		}),
 	})
-	c.workLangCache = map[string]string{}
+	c.workSampleCache = map[string]workEditionSample{}
 
 	books := []models.Book{{ForeignID: "OLNOLANGW", Title: "No Language Work"}}
 	filled := c.FillMissingWorkLanguages(context.Background(), books)
@@ -1145,7 +1145,7 @@ func TestFillMissingWorkLanguages_BoundedAndCached(t *testing.T) {
 			return "{}"
 		},
 	})
-	c.workLangCache = map[string]string{}
+	c.workSampleCache = map[string]workEditionSample{}
 
 	books := []models.Book{
 		{ForeignID: "OLHASLANGW", Title: "Already English", Language: "eng"},
@@ -1184,7 +1184,7 @@ func TestFillMissingWorkLanguages_FetchErrorCachesMiss(t *testing.T) {
 		},
 		map[string]int{"/works/OLERRW/editions.json": http.StatusInternalServerError},
 	)
-	c.workLangCache = map[string]string{}
+	c.workSampleCache = map[string]workEditionSample{}
 
 	books := []models.Book{{ForeignID: "OLERRW", Title: "Flaky Work"}}
 	c.FillMissingWorkLanguages(context.Background(), books)
@@ -1230,7 +1230,7 @@ func TestFillMissingWorkCovers_DerivesFromEditions(t *testing.T) {
 			Entries: coverEntries(0, 8675309, 42),
 		}),
 	})
-	c.workCoverCache = map[string]string{}
+	c.workSampleCache = map[string]workEditionSample{}
 
 	books := []models.Book{{ForeignID: "OLNOCOVERW", Title: "Cover-less Work", MetadataProvider: "openlibrary"}}
 	filled := c.FillMissingWorkCovers(context.Background(), books)
@@ -1252,7 +1252,7 @@ func TestFillMissingWorkCovers_NoCoverStaysBlank(t *testing.T) {
 			return jsonStr(editionsResponse{Entries: coverEntries(0, 0)})
 		},
 	})
-	c.workCoverCache = map[string]string{}
+	c.workSampleCache = map[string]workEditionSample{}
 
 	books := []models.Book{{ForeignID: "OLNONEW", Title: "No Cover Anywhere", MetadataProvider: "openlibrary"}}
 	if filled := c.FillMissingWorkCovers(context.Background(), books); filled != 0 {
@@ -1284,7 +1284,7 @@ func TestFillMissingWorkCovers_SkipsNonOLAndCovered(t *testing.T) {
 			return "{}"
 		},
 	})
-	c.workCoverCache = map[string]string{}
+	c.workSampleCache = map[string]workEditionSample{}
 
 	books := []models.Book{
 		{ForeignID: "OLHASCOVERW", Title: "Already Has Cover", ImageURL: "http://x/y.jpg", MetadataProvider: "openlibrary"},
@@ -1323,7 +1323,7 @@ func TestFillMissingWorkCovers_FetchErrorCachesMiss(t *testing.T) {
 		},
 		map[string]int{"/works/OLERRW/editions.json": http.StatusInternalServerError},
 	)
-	c.workCoverCache = map[string]string{}
+	c.workSampleCache = map[string]workEditionSample{}
 
 	books := []models.Book{{ForeignID: "OLERRW", Title: "Flaky Work", MetadataProvider: "openlibrary"}}
 	c.FillMissingWorkCovers(context.Background(), books)

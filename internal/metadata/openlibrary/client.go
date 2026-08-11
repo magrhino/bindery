@@ -15,9 +15,11 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
+	"github.com/vavallee/bindery/internal/concurrency"
 	"github.com/vavallee/bindery/internal/httpsec"
 	"github.com/vavallee/bindery/internal/models"
 	"github.com/vavallee/bindery/internal/textutil"
@@ -34,23 +36,30 @@ const (
 	coverURL = "https://covers.openlibrary.org"
 )
 
-// editionLangSampleCap bounds how many editions we fetch per work when
-// deriving a work-level language from its editions. OpenLibrary works carry no
-// language of their own, so for the foreign-language filter (#891) we sample
-// the editions endpoint. The cap is deliberately small: the first handful of
-// editions is enough to establish the work's dominant language, and the
-// editions endpoint is expensive enough that OL throttles per-UA, so we keep
-// the round-trip cheap (limit=N) rather than paging the full edition list.
-const editionLangSampleCap = 5
+// editionSampleCap bounds how many editions we fetch per work when deriving
+// work-level fields from the edition list. Two derivations share this sample:
+// the work language (OpenLibrary works carry none of their own, so the
+// foreign-language filter has to sample editions — #891) and a missing cover
+// (OL attaches covers to editions far more consistently than to works —
+// #1748). The cap is deliberately small: the first handful of editions is
+// enough to establish the dominant language and holds the most-held printing's
+// cover, and the endpoint is expensive enough that OL throttles per-UA, so we
+// keep the round-trip cheap (limit=N) rather than paging the full edition list.
+//
+// The two derivations used to be separate samplers with separate caches, which
+// meant a work missing both language and cover cost TWO round trips to the
+// byte-identical URL. An author refresh runs both phases over the same work
+// list, so that doubled the pre-loop cost of every refresh (#1888).
+const editionSampleCap = 5
 
-// editionCoverSampleCap bounds how many editions we fetch per work when
-// backfilling a missing cover from the edition list. OpenLibrary attaches
-// covers to editions far more consistently than to works (#1748), so a work
-// whose own record has no cover often has editions that do. Bounded like the
-// language sampler above: the first handful of editions is where the
-// most-held printing (and its cover) sits, and the endpoint is throttled
-// per-UA, so we take limit=N rather than paging the whole list.
-const editionCoverSampleCap = 5
+// authorWorkSampleConcurrency bounds how many works are edition-sampled at
+// once. The sampling loops used to be strictly sequential, so a 65-work author
+// paid 65 serial OpenLibrary round trips per phase and a slow (or timing-out)
+// OL turned an author refresh into an hour of wall clock (#1888). Four in
+// flight is the pace the rest of the codebase already uses for provider
+// fan-out (authorAutoSearchConcurrency, seriesFillSearchConcurrency) and stays
+// well inside what a single browser would open against the same host.
+const authorWorkSampleConcurrency = 4
 
 // authorWorksPageSize is the per-request limit for the /authors/{id}/works
 // endpoint, and authorWorksMaxFetch bounds total pagination so an author with
@@ -61,31 +70,32 @@ const (
 	authorWorksMaxFetch = 2000
 )
 
+// workEditionSample is everything one edition-list sample derives for a work.
+// Both fields may be empty: an empty value is a real answer ("the sampled
+// editions carry no language / no cover") and is cached as such.
+type workEditionSample struct {
+	language string
+	cover    string
+}
+
 // Client implements the metadata.Provider interface for OpenLibrary.
 type Client struct {
 	http *http.Client
 
-	// workLangCache memoizes derived work-level languages keyed on work ID so a
-	// later refresh pass (or a second author sharing the work) doesn't re-hit
-	// the editions endpoint. An entry with value "" records a sample that
-	// yielded no language so we don't retry it within the process lifetime.
-	workLangMu    sync.Mutex
-	workLangCache map[string]string
-
-	// workCoverCache memoizes edition-sampled cover URLs keyed on work ID, so a
-	// refresh pass (or a second author sharing the work) doesn't re-hit the
-	// editions endpoint. An entry with value "" records a sample that yielded no
-	// cover so we don't retry it within the process lifetime.
-	workCoverMu    sync.Mutex
-	workCoverCache map[string]string
+	// workSampleCache memoizes the edition-derived (language, cover) pair keyed
+	// on work ID so a later refresh pass — or the second derivation in the same
+	// pass, or a second author sharing the work — doesn't re-hit the editions
+	// endpoint. A zero-valued entry records a sample that yielded neither, so we
+	// don't retry it within the process lifetime.
+	workSampleMu    sync.Mutex
+	workSampleCache map[string]workEditionSample
 }
 
 // New creates a new OpenLibrary client.
 func New() *Client {
 	return &Client{
-		http:           &http.Client{Timeout: 15 * time.Second, Transport: httpsec.DefaultProxyTransport()},
-		workLangCache:  map[string]string{},
-		workCoverCache: map[string]string{},
+		http:            &http.Client{Timeout: 15 * time.Second, Transport: httpsec.DefaultProxyTransport()},
+		workSampleCache: map[string]workEditionSample{},
 	}
 }
 
@@ -630,10 +640,16 @@ func (c *Client) GetEditions(ctx context.Context, bookForeignID string) ([]model
 // unknown-language fallback (#891).
 //
 // For each such book it fetches /works/{id}/editions.json?limit=N (N capped by
-// editionLangSampleCap) and takes the majority edition language. Results are
-// memoized per work ID so refresh passes don't re-fetch. The mutation is done
-// in place. Per-work fetch failures are logged at debug and leave Language=""
-// so the caller's unknown-language behavior still applies.
+// editionSampleCap) and takes the majority edition language. Results are
+// memoized per work ID so refresh passes — and the cover derivation, which
+// reads the same sample — don't re-fetch. The mutation is done in place.
+// Per-work fetch failures are logged at debug and leave Language="" so the
+// caller's unknown-language behavior still applies.
+//
+// Sampling runs authorWorkSampleConcurrency works at a time: each book is
+// written by exactly one goroutine and the sample cache is mutex-guarded, so
+// the fan-out is a pure latency win over the previous strictly-serial loop
+// (#1888).
 //
 // Callers should only invoke this when the active metadata profile actually
 // restricts language (allowed_languages != "any"); there is no point spending
@@ -641,39 +657,48 @@ func (c *Client) GetEditions(ctx context.Context, bookForeignID string) ([]model
 // It returns the number of books whose Language was populated from sampling so
 // callers can surface it in their filter-decision logs.
 func (c *Client) FillMissingWorkLanguages(ctx context.Context, books []models.Book) int {
-	filled := 0
+	targets := make([]int, 0, len(books))
 	for i := range books {
 		if books[i].Language != "" || books[i].ForeignID == "" {
 			continue
 		}
-		if lang := c.sampleWorkLanguage(ctx, books[i].ForeignID); lang != "" {
-			books[i].Language = lang
-			filled++
-		}
+		targets = append(targets, i)
 	}
-	return filled
+
+	var filled atomic.Int64
+	concurrency.RunBounded(ctx, targets, authorWorkSampleConcurrency, func(ctx context.Context, i int) {
+		if lang := c.sampleWorkEditions(ctx, books[i].ForeignID).language; lang != "" {
+			books[i].Language = lang
+			filled.Add(1)
+		}
+	})
+	return int(filled.Load())
 }
 
-// sampleWorkLanguage returns the dominant edition language for a work, or ""
-// when the editions can't be sampled or carry no language. Results (including
-// the empty result) are cached per work ID.
-func (c *Client) sampleWorkLanguage(ctx context.Context, workID string) string {
-	if lang, ok := c.cachedWorkLang(workID); ok {
-		return lang
+// sampleWorkEditions returns the language and cover derived from a work's first
+// editionSampleCap editions. Results (including the all-empty result) are cached
+// per work ID, so the language and cover derivations cost ONE round trip between
+// them rather than one each (#1888).
+func (c *Client) sampleWorkEditions(ctx context.Context, workID string) workEditionSample {
+	if sample, ok := c.cachedWorkSample(workID); ok {
+		return sample
 	}
 
-	u := fmt.Sprintf("%s/works/%s/editions.json?limit=%d", baseURL, workID, editionLangSampleCap)
+	u := fmt.Sprintf("%s/works/%s/editions.json?limit=%d", baseURL, workID, editionSampleCap)
 	var resp editionsResponse
 	if err := c.getJSON(ctx, u, &resp); err != nil {
-		slog.Debug("openlibrary: edition language sampling failed", "work", workID, "error", err)
+		slog.Debug("openlibrary: edition sampling failed", "work", workID, "error", err)
 		// Cache the miss so we don't retry a flaky/expensive call this run.
-		c.setCachedWorkLang(workID, "")
-		return ""
+		c.setCachedWorkSample(workID, workEditionSample{})
+		return workEditionSample{}
 	}
 
-	lang := majorityEditionLanguage(resp.Entries)
-	c.setCachedWorkLang(workID, lang)
-	return lang
+	sample := workEditionSample{
+		language: majorityEditionLanguage(resp.Entries),
+		cover:    firstEditionCover(resp.Entries),
+	}
+	c.setCachedWorkSample(workID, sample)
+	return sample
 }
 
 // majorityEditionLanguage returns the most common language across the sampled
@@ -703,23 +728,23 @@ func majorityEditionLanguage(entries []editionEntry) string {
 	return best
 }
 
-func (c *Client) cachedWorkLang(workID string) (string, bool) {
-	if c.workLangCache == nil {
-		return "", false
+func (c *Client) cachedWorkSample(workID string) (workEditionSample, bool) {
+	if c.workSampleCache == nil {
+		return workEditionSample{}, false
 	}
-	c.workLangMu.Lock()
-	defer c.workLangMu.Unlock()
-	lang, ok := c.workLangCache[workID]
-	return lang, ok
+	c.workSampleMu.Lock()
+	defer c.workSampleMu.Unlock()
+	sample, ok := c.workSampleCache[workID]
+	return sample, ok
 }
 
-func (c *Client) setCachedWorkLang(workID, lang string) {
-	if c.workLangCache == nil {
+func (c *Client) setCachedWorkSample(workID string, sample workEditionSample) {
+	if c.workSampleCache == nil {
 		return
 	}
-	c.workLangMu.Lock()
-	defer c.workLangMu.Unlock()
-	c.workLangCache[workID] = lang
+	c.workSampleMu.Lock()
+	defer c.workSampleMu.Unlock()
+	c.workSampleCache[workID] = sample
 }
 
 // FillMissingWorkCovers backfills a cover for any book that arrived with an
@@ -727,16 +752,18 @@ func (c *Client) setCachedWorkLang(workID, lang string) {
 // carry no cover even when their editions do (#1748); the /search.json and
 // /works enrichers only ever read the work-level cover, so those books reach
 // the UI with image_url="". For each such book it fetches
-// /works/{id}/editions.json?limit=N (N capped by editionCoverSampleCap) and
-// takes the first edition that has a cover. Results are memoized per work ID
-// (including misses) so refresh passes don't re-fetch. The mutation is in place.
+// /works/{id}/editions.json?limit=N (N capped by editionSampleCap) and takes
+// the first edition that has a cover. Results are memoized per work ID
+// (including misses) and shared with the language derivation, so a refresh that
+// runs both phases samples each work once (#1888). The mutation is in place and
+// runs authorWorkSampleConcurrency works at a time.
 //
 // Only OpenLibrary works are sampled: a book merged in from another provider
 // (Hardcover "hc:", DNB "dnb:", Audible "audible:") has no OL editions endpoint
 // and would 404, so it is skipped. It returns the number of books whose cover
 // was populated.
 func (c *Client) FillMissingWorkCovers(ctx context.Context, books []models.Book) int {
-	filled := 0
+	targets := make([]int, 0, len(books))
 	for i := range books {
 		if books[i].ImageURL != "" || books[i].ForeignID == "" {
 			continue
@@ -744,34 +771,17 @@ func (c *Client) FillMissingWorkCovers(ctx context.Context, books []models.Book)
 		if p := books[i].MetadataProvider; p != "" && p != "openlibrary" {
 			continue
 		}
-		if cover := c.sampleWorkCover(ctx, books[i].ForeignID); cover != "" {
+		targets = append(targets, i)
+	}
+
+	var filled atomic.Int64
+	concurrency.RunBounded(ctx, targets, authorWorkSampleConcurrency, func(ctx context.Context, i int) {
+		if cover := c.sampleWorkEditions(ctx, books[i].ForeignID).cover; cover != "" {
 			books[i].ImageURL = cover
-			filled++
+			filled.Add(1)
 		}
-	}
-	return filled
-}
-
-// sampleWorkCover returns the first edition cover URL for a work, or "" when
-// the editions can't be sampled or none carry a cover. Results (including the
-// empty result) are cached per work ID.
-func (c *Client) sampleWorkCover(ctx context.Context, workID string) string {
-	if cover, ok := c.cachedWorkCover(workID); ok {
-		return cover
-	}
-
-	u := fmt.Sprintf("%s/works/%s/editions.json?limit=%d", baseURL, workID, editionCoverSampleCap)
-	var resp editionsResponse
-	if err := c.getJSON(ctx, u, &resp); err != nil {
-		slog.Debug("openlibrary: edition cover sampling failed", "work", workID, "error", err)
-		// Cache the miss so we don't retry a flaky/expensive call this run.
-		c.setCachedWorkCover(workID, "")
-		return ""
-	}
-
-	cover := firstEditionCover(resp.Entries)
-	c.setCachedWorkCover(workID, cover)
-	return cover
+	})
+	return int(filled.Load())
 }
 
 // firstEditionCover returns the cover URL of the first edition that has one, in
@@ -784,25 +794,6 @@ func firstEditionCover(entries []editionEntry) string {
 		}
 	}
 	return ""
-}
-
-func (c *Client) cachedWorkCover(workID string) (string, bool) {
-	if c.workCoverCache == nil {
-		return "", false
-	}
-	c.workCoverMu.Lock()
-	defer c.workCoverMu.Unlock()
-	cover, ok := c.workCoverCache[workID]
-	return cover, ok
-}
-
-func (c *Client) setCachedWorkCover(workID, cover string) {
-	if c.workCoverCache == nil {
-		return
-	}
-	c.workCoverMu.Lock()
-	defer c.workCoverMu.Unlock()
-	c.workCoverCache[workID] = cover
 }
 
 // GetSubjectBooks fetches the top books for an OpenLibrary subject.
