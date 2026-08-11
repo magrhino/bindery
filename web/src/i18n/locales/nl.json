@@ -104,7 +104,8 @@
     "unmonitored": "Niet gemonitord",
     "deleteConfirm": "Deze auteur en al zijn/haar boeken verwijderen?",
     "deleteWithFilesConfirm": "Deze auteur, {{total}} boek(en) EN {{withFiles}} bestand(en)/map(pen) op schijf verwijderen?\n\nDit kan niet ongedaan worden gemaakt.",
-    "bulkDeleteConfirm": "{{count}} auteur(s) en al hun boeken verwijderen?"
+    "bulkDeleteConfirm": "{{count}} auteur(s) en al hun boeken verwijderen?",
+    "sortByColumn": "Sorteren op {{column}}"
   },
   "books": {
     "title": "Boeken",
@@ -135,7 +136,8 @@
     "setAudiobook": "🎧 Instellen als luisterboek",
     "mediaEbook": "📖 E-boek",
     "mediaAudiobook": "🎧 Luisterboek",
-    "mediaBoth": "📖🎧 Beide"
+    "mediaBoth": "📖🎧 Beide",
+    "sortByColumn": "Sorteren op {{column}}"
   },
   "wanted": {
     "title": "Gewenst",

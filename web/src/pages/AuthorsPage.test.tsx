@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import AuthorsPage from './AuthorsPage'
@@ -42,6 +42,10 @@ vi.mock('react-i18next', () => ({
         'authors.sortAZ': 'A-Z',
         'authors.sortZA': 'Z-A',
         'authors.sortRecent': 'Recent',
+        'authors.colName': 'Name',
+        'authors.colBooks': 'Books',
+        'authors.colRating': 'Rating',
+        'authors.colMonitored': 'Monitored',
         'authors.filterMonitored': 'Monitored:',
         'authors.filterAll': 'All',
         'authors.filterMonitoredOnly': 'Monitored',
@@ -379,5 +383,89 @@ describe('AuthorsPage', () => {
     // checkmark is visible instead of white-on-white.
     expect(checkbox).toBeChecked()
     expect(checkbox.className).not.toContain('bg-white/80')
+  })
+})
+
+// The Authors half of #1349. The issue is "Sortable column headers +
+// unmonitored/unwanted filter in Books & Authors views"; the Books half shipped
+// in v1.28.0 and this side never did. Name, Books, Rating and Monitored were
+// plain <th> elements, and the backend accepted only az/za/recent, so there was
+// no way to order the list by anything but name or recency.
+describe('AuthorsPage — sortable column headers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // The table (and therefore its headers) only renders with rows; an empty
+    // list shows the empty state instead.
+    vi.mocked(api.listAuthors).mockResolvedValue({
+      items: [
+        {
+          id: 1, authorName: 'Ann', foreignAuthorId: 'OL_A', monitored: true,
+          averageRating: 4, imageUrl: '', statistics: { bookCount: 2, availableBookCount: 0, wantedBookCount: 0 },
+        },
+      ] as never,
+      total: 1, limit: 100, offset: 0,
+    })
+    localStorage.setItem('bindery.view.authors', 'table')
+  })
+
+  afterEach(() => {
+    localStorage.clear()
+  })
+
+  it('sends the whitelisted sort key for each column, and flips on a second click', async () => {
+    render(
+      <MemoryRouter>
+        <AuthorsPage />
+      </MemoryRouter>,
+    )
+    await screen.findByRole('columnheader', { name: 'Books' })
+
+    // Scope to the column header: "Monitored" is also the label of a filter
+    // chip, so a bare role+name lookup is ambiguous. Re-query before each click
+    // too — SortableHeader is declared in the component body, so React remounts
+    // the header cells on every render and a captured node goes stale.
+    const click = (name: string) =>
+      fireEvent.click(within(screen.getByRole('columnheader', { name })).getByRole('button'))
+    const sorts = () =>
+      vi.mocked(api.listAuthors).mock.calls.map(c => (c[0] as { sort?: string }).sort)
+
+    click('Books')
+    await waitFor(() => expect(sorts()).toContain('books-asc'))
+    click('Books')
+    await waitFor(() => expect(sorts()).toContain('books-desc'))
+
+    click('Rating')
+    await waitFor(() => expect(sorts()).toContain('rating-asc'))
+
+    click('Monitored')
+    await waitFor(() => expect(sorts()).toContain('monitored-asc'))
+
+    // Name reuses the keys the existing toolbar buttons already send, so the
+    // header and the A-Z / Z-A buttons cannot disagree.
+    click('Name')
+    await waitFor(() => expect(sorts()).toContain('az'))
+  })
+
+  it('renders the book count from the server instead of an em dash', async () => {
+    vi.mocked(api.listAuthors).mockResolvedValue({
+      items: [
+        {
+          id: 1, authorName: 'Prolific', foreignAuthorId: 'OL_P', monitored: true,
+          averageRating: 4, imageUrl: '', statistics: { bookCount: 12, availableBookCount: 0, wantedBookCount: 0 },
+        },
+      ] as never,
+      total: 1, limit: 100, offset: 0,
+    })
+
+    render(
+      <MemoryRouter>
+        <AuthorsPage />
+      </MemoryRouter>,
+    )
+
+    // Before the backend populated Statistics on the list path this cell was
+    // always "—", because the field is `json:"statistics,omitempty"` and no
+    // code ever set it on a row read back from SQLite.
+    expect(await screen.findByText('12')).toBeInTheDocument()
   })
 })

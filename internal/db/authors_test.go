@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -829,5 +831,242 @@ func TestMigration074_BackfillsBookOwnerFromAuthor(t *testing.T) {
 	}
 	if got, ok := ownerOf("B_ALREADY"); !ok || got != bob.ID {
 		t.Errorf("already-owned book owner = %d (set=%v), want bob %d untouched", got, ok, bob.ID)
+	}
+}
+
+// TestListPageFiltered_PopulatesBookCount pins the Books column on the Authors
+// page, which rendered "—" for every author before #1349's second half.
+//
+// The frontend reads `author.statistics?.bookCount`, but ListPageFiltered
+// selected only authorSelectCols — which has no count — and nothing else on the
+// list path ever set Author.Statistics. It is a `*AuthorStats` with
+// `json:"statistics,omitempty"`, so a nil pointer is simply omitted from the
+// response and the column falls back to its em dash. The column has been inert
+// for as long as it has existed.
+func TestListPageFiltered_PopulatesBookCount(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	authors := NewAuthorRepo(database)
+	books := NewBookRepo(database)
+
+	prolific := &models.Author{ForeignID: "OL_P", Name: "Prolific", SortName: "Prolific"}
+	if err := authors.Create(ctx, prolific); err != nil {
+		t.Fatal(err)
+	}
+	silent := &models.Author{ForeignID: "OL_S", Name: "Silent", SortName: "Silent"}
+	if err := authors.Create(ctx, silent); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		b := &models.Book{
+			ForeignID: fmt.Sprintf("OL_P_B%d", i), AuthorID: prolific.ID,
+			Title: fmt.Sprintf("Book %d", i), SortTitle: fmt.Sprintf("book %d", i),
+			Status: models.BookStatusWanted,
+		}
+		if err := books.Create(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	page, _, err := authors.ListPageFiltered(ctx, AuthorListFilter{}, 50, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, a := range page {
+		if a.Statistics == nil {
+			t.Fatalf("author %q has nil Statistics — the Books column renders an em dash for this row", a.Name)
+		}
+		counts[a.Name] = a.Statistics.BookCount
+	}
+	if counts["Prolific"] != 3 {
+		t.Errorf("Prolific book count = %d, want 3", counts["Prolific"])
+	}
+	// An author with no books must report 0, not a missing Statistics pointer —
+	// "0" and "unknown" are different things on screen.
+	if counts["Silent"] != 0 {
+		t.Errorf("Silent book count = %d, want 0", counts["Silent"])
+	}
+}
+
+// TestListPageFiltered_BookCountIsOwnerScoped keeps the derived count inside the
+// same tenancy boundary as the rows it decorates. An unscoped COUNT would let
+// one user infer how much another user's author holds — the same class of leak
+// as #1872, and free to avoid since the predicate is already known here.
+func TestListPageFiltered_BookCountIsOwnerScoped(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	users := NewUserRepo(database)
+	alice, err := users.Create(ctx, "alice", "h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := users.Create(ctx, "bob", "h")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	authors := NewAuthorRepo(database)
+	// A shared (NULL-owned) author, the pre-multi-user shape, visible to both.
+	shared := &models.Author{ForeignID: "OL_SH", Name: "Shared", SortName: "Shared"}
+	if err := authors.Create(ctx, shared); err != nil {
+		t.Fatal(err)
+	}
+
+	insertBook := func(foreignID string, owner any) {
+		t.Helper()
+		if _, err := database.ExecContext(ctx,
+			`INSERT INTO books (foreign_id, author_id, title, sort_title, status, owner_user_id, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, 'wanted', ?, datetime('now'), datetime('now'))`,
+			foreignID, shared.ID, foreignID, foreignID, owner); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertBook("B_ALICE", alice.ID)
+	insertBook("B_BOB", bob.ID)
+	insertBook("B_SHARED", nil)
+
+	countFor := func(userID int64) int {
+		t.Helper()
+		page, _, err := authors.ListPageFiltered(ctx, AuthorListFilter{UserID: userID}, 50, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page) != 1 || page[0].Statistics == nil {
+			t.Fatalf("expected one author with statistics, got %d", len(page))
+		}
+		return page[0].Statistics.BookCount
+	}
+
+	// Own book + the shared one; never the other user's.
+	if got := countFor(alice.ID); got != 2 {
+		t.Errorf("alice sees %d books, want 2 (hers + the shared one)", got)
+	}
+	if got := countFor(bob.ID); got != 2 {
+		t.Errorf("bob sees %d books, want 2 (his + the shared one)", got)
+	}
+	// Unscoped (admin / API key) sees everything.
+	if got := countFor(0); got != 3 {
+		t.Errorf("unscoped count = %d, want 3", got)
+	}
+}
+
+// TestListPageFiltered_ColumnHeaderSorts covers the Authors half of #1349: the
+// Books, Rating and Monitored columns had no sort at all, in either direction.
+func TestListPageFiltered_ColumnHeaderSorts(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	authors := NewAuthorRepo(database)
+	books := NewBookRepo(database)
+
+	seed := func(name string, rating float64, monitored bool, bookCount int) {
+		t.Helper()
+		a := &models.Author{
+			ForeignID: "OL_" + name, Name: name, SortName: name,
+			AverageRating: rating, Monitored: monitored,
+		}
+		if err := authors.Create(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+		for i := range bookCount {
+			b := &models.Book{
+				ForeignID: fmt.Sprintf("OL_%s_B%d", name, i), AuthorID: a.ID,
+				Title: fmt.Sprintf("%s %d", name, i), SortTitle: fmt.Sprintf("%s %d", name, i),
+				Status: models.BookStatusWanted,
+			}
+			if err := books.Create(ctx, b); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	seed("Ann", 4.5, true, 1)
+	seed("Bea", 2.0, false, 3)
+	seed("Cal", 3.0, true, 2)
+
+	names := func(sort string) []string {
+		t.Helper()
+		page, _, err := authors.ListPageFiltered(ctx, AuthorListFilter{Sort: sort}, 50, 0)
+		if err != nil {
+			t.Fatalf("sort %q: %v", sort, err)
+		}
+		out := make([]string, 0, len(page))
+		for _, a := range page {
+			out = append(out, a.Name)
+		}
+		return out
+	}
+
+	for _, tc := range []struct {
+		sort string
+		want []string
+	}{
+		{"books-asc", []string{"Ann", "Cal", "Bea"}},
+		{"books-desc", []string{"Bea", "Cal", "Ann"}},
+		{"rating-asc", []string{"Bea", "Cal", "Ann"}},
+		{"rating-desc", []string{"Ann", "Cal", "Bea"}},
+		// Ties on the monitored flag fall back to sort_key, so Ann precedes Cal.
+		{"monitored-asc", []string{"Bea", "Ann", "Cal"}},
+		{"monitored-desc", []string{"Ann", "Cal", "Bea"}},
+		// Unknown keys must not error or reorder unpredictably.
+		{"nonsense", []string{"Ann", "Bea", "Cal"}},
+	} {
+		if got := names(tc.sort); !slices.Equal(got, tc.want) {
+			t.Errorf("sort %q = %v, want %v", tc.sort, got, tc.want)
+		}
+	}
+}
+
+// TestListPageFiltered_TiedSortIsStableAcrossPages guards the tiebreaker on the
+// new sorts. Book counts and the monitored flag are heavily non-unique; without
+// a stable secondary key SQLite may return ties in any order, and a paginated
+// list then drops and repeats rows between pages.
+func TestListPageFiltered_TiedSortIsStableAcrossPages(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	authors := NewAuthorRepo(database)
+	// Six authors, all monitored, all with zero books: every sort key ties.
+	for _, n := range []string{"Fay", "Eve", "Dot", "Cal", "Bea", "Ann"} {
+		if err := authors.Create(ctx, &models.Author{
+			ForeignID: "OL_" + n, Name: n, SortName: n, Monitored: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, sort := range []string{"books-asc", "monitored-desc", "rating-asc"} {
+		var paged []string
+		for offset := 0; offset < 6; offset += 2 {
+			page, _, err := authors.ListPageFiltered(ctx, AuthorListFilter{Sort: sort}, 2, offset)
+			if err != nil {
+				t.Fatalf("sort %q offset %d: %v", sort, offset, err)
+			}
+			for _, a := range page {
+				paged = append(paged, a.Name)
+			}
+		}
+		want := []string{"Ann", "Bea", "Cal", "Dot", "Eve", "Fay"}
+		if !slices.Equal(paged, want) {
+			t.Errorf("sort %q paged 2-at-a-time = %v, want %v (a repeat or a gap here is a lost author)", sort, paged, want)
+		}
 	}
 }

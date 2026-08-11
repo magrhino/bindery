@@ -116,7 +116,8 @@
     "unmonitored": "Hindi binabantayan",
     "deleteConfirm": "Tanggalin ang may-akdang ito at lahat ng kanilang mga libro?",
     "deleteWithFilesConfirm": "Tanggalin ang may-akdang ito, {{total}} (na) libro, AT {{withFiles}} (na) file/folder sa disk?\n\nHindi na ito maibabalik.",
-    "bulkDeleteConfirm": "Tanggalin ang {{count}} (na) may-akda at lahat ng kanilang mga libro?"
+    "bulkDeleteConfirm": "Tanggalin ang {{count}} (na) may-akda at lahat ng kanilang mga libro?",
+    "sortByColumn": "Ayusin ayon sa {{column}}"
   },
   "books": {
     "title": "Mga Libro",
@@ -152,7 +153,8 @@
     "exclude": "Ibukod",
     "unexclude": "Alisin sa pagbukod",
     "excluded": "Ibinukod",
-    "showExcluded": "Ipakita ang mga ibinukod"
+    "showExcluded": "Ipakita ang mga ibinukod",
+    "sortByColumn": "Ayusin ayon sa {{column}}"
   },
   "wanted": {
     "title": "Hinahangad",

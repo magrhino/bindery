@@ -116,7 +116,8 @@
     "unmonitored": "No monitorizado",
     "deleteConfirm": "¿Eliminar este autor y todos sus libros?",
     "deleteWithFilesConfirm": "¿Eliminar este autor, {{total}} libro(s) Y {{withFiles}} archivo(s)/carpeta(s) del disco?\n\nEsta acción no se puede deshacer.",
-    "bulkDeleteConfirm": "¿Eliminar {{count}} autor(es) y todos sus libros?"
+    "bulkDeleteConfirm": "¿Eliminar {{count}} autor(es) y todos sus libros?",
+    "sortByColumn": "Ordenar por {{column}}"
   },
   "books": {
     "title": "Libros",
@@ -152,7 +153,8 @@
     "exclude": "Excluir",
     "unexclude": "Incluir",
     "excluded": "Excluido",
-    "showExcluded": "Mostrar excluidos"
+    "showExcluded": "Mostrar excluidos",
+    "sortByColumn": "Ordenar por {{column}}"
   },
   "wanted": {
     "title": "Buscados",

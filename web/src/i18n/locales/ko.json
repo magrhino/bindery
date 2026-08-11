@@ -144,7 +144,8 @@
     "deleteConfirm": "이 저자와 모든 도서를 삭제할까요?",
     "deleteWithFilesConfirm": "이 저자, {{total}}권의 도서, 그리고 디스크의 {{withFiles}}개 파일/폴더를 삭제할까요?\n\n이 작업은 되돌릴 수 없습니다.",
     "bulkDeleteConfirm": "{{count}}명의 저자와 모든 도서를 삭제할까요?",
-    "bulkRefreshMetadata": "메타데이터 새로고침"
+    "bulkRefreshMetadata": "메타데이터 새로고침",
+    "sortByColumn": "{{column}} 기준 정렬"
   },
   "authorDetail": {
     "description": {
@@ -204,7 +205,8 @@
     "exclude": "제외",
     "unexclude": "제외 해제",
     "excluded": "제외됨",
-    "showExcluded": "제외된 항목 보기"
+    "showExcluded": "제외된 항목 보기",
+    "sortByColumn": "{{column}} 기준 정렬"
   },
   "wanted": {
     "title": "찾는 중",

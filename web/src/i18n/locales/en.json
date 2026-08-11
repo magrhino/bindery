@@ -194,7 +194,8 @@
     "bulkApplyMonitorModeToExistingHint": "Otherwise this only affects books discovered in future refreshes.",
     "bulkSetMonitorModeApply": "Apply monitor mode",
     "bulkSetMonitorModeFailed": "Bulk monitor mode update failed",
-    "bulkSetMonitorModePartial": "Monitor mode was not updated for author {{id}}: {{error}}"
+    "bulkSetMonitorModePartial": "Monitor mode was not updated for author {{id}}: {{error}}",
+    "sortByColumn": "Sort by {{column}}"
   },
   "authorDetail": {
     "description": {
@@ -300,7 +301,8 @@
     "exclude": "Exclude",
     "unexclude": "Un-exclude",
     "excluded": "Excluded",
-    "showExcluded": "Show excluded"
+    "showExcluded": "Show excluded",
+    "sortByColumn": "Sort by {{column}}"
   },
   "wanted": {
     "title": "Wanted",

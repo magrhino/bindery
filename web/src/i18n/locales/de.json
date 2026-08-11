@@ -104,7 +104,8 @@
     "unmonitored": "Nicht überwacht",
     "deleteConfirm": "Diesen Autor und alle seine Bücher löschen?",
     "deleteWithFilesConfirm": "Diesen Autor, {{total}} Buch/Bücher UND {{withFiles}} Datei(en)/Ordner auf der Festplatte löschen?\n\nDies kann nicht rückgängig gemacht werden.",
-    "bulkDeleteConfirm": "{{count}} Autor(en) und alle ihre Bücher löschen?"
+    "bulkDeleteConfirm": "{{count}} Autor(en) und alle ihre Bücher löschen?",
+    "sortByColumn": "Nach {{column}} sortieren"
   },
   "books": {
     "title": "Bücher",
@@ -135,7 +136,8 @@
     "setAudiobook": "🎧 Als Hörbuch setzen",
     "mediaEbook": "📖 E-Book",
     "mediaAudiobook": "🎧 Hörbuch",
-    "mediaBoth": "📖🎧 Beides"
+    "mediaBoth": "📖🎧 Beides",
+    "sortByColumn": "Nach {{column}} sortieren"
   },
   "wanted": {
     "title": "Gesucht",

@@ -116,7 +116,8 @@
     "unmonitored": "Tidak dipantau",
     "deleteConfirm": "Hapus penulis ini beserta semua bukunya?",
     "deleteWithFilesConfirm": "Hapus penulis ini, {{total}} buku, DAN {{withFiles}} berkas/folder di disk?\n\nTindakan ini tidak dapat dibatalkan.",
-    "bulkDeleteConfirm": "Hapus {{count}} penulis beserta semua bukunya?"
+    "bulkDeleteConfirm": "Hapus {{count}} penulis beserta semua bukunya?",
+    "sortByColumn": "Urutkan menurut {{column}}"
   },
   "books": {
     "title": "Buku",
@@ -152,7 +153,8 @@
     "exclude": "Kecualikan",
     "unexclude": "Batalkan kecualikan",
     "excluded": "Dikecualikan",
-    "showExcluded": "Tampilkan yang dikecualikan"
+    "showExcluded": "Tampilkan yang dikecualikan",
+    "sortByColumn": "Urutkan menurut {{column}}"
   },
   "wanted": {
     "title": "Dicari",

@@ -104,7 +104,8 @@
     "unmonitored": "Non surveillé",
     "deleteConfirm": "Supprimer cet auteur et tous ses livres ?",
     "deleteWithFilesConfirm": "Supprimer cet auteur, {{total}} livre(s) ET {{withFiles}} fichier(s)/dossier(s) sur le disque ?\n\nCette action est irréversible.",
-    "bulkDeleteConfirm": "Supprimer {{count}} auteur(s) et tous leurs livres ?"
+    "bulkDeleteConfirm": "Supprimer {{count}} auteur(s) et tous leurs livres ?",
+    "sortByColumn": "Trier par {{column}}"
   },
   "books": {
     "title": "Livres",
@@ -135,7 +136,8 @@
     "setAudiobook": "🎧 Définir livre audio",
     "mediaEbook": "📖 Livre numérique",
     "mediaAudiobook": "🎧 Livre audio",
-    "mediaBoth": "📖🎧 Les deux"
+    "mediaBoth": "📖🎧 Les deux",
+    "sortByColumn": "Trier par {{column}}"
   },
   "wanted": {
     "title": "Recherchés",

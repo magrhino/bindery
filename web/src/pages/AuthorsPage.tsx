@@ -15,7 +15,14 @@ import SetupChecklist from '../components/SetupChecklist'
 import { btn, btnSize } from '../components/buttons'
 import Switch from '../components/Switch'
 
-type SortMode = 'az' | 'za' | 'recent'
+// 'az' | 'za' sort by name and back the existing toolbar buttons; the rest are
+// the column-header sorts (#1349), whitelisted server-side by authorSortOrder.
+type SortMode =
+  | 'az' | 'za'
+  | 'recent'
+  | 'books-asc' | 'books-desc'
+  | 'rating-asc' | 'rating-desc'
+  | 'monitored-asc' | 'monitored-desc'
 type MonitoredFilter = '' | 'monitored' | 'unmonitored'
 
 export default function AuthorsPage() {
@@ -279,6 +286,33 @@ export default function AuthorsPage() {
   const sortBtnCls = (active: boolean) =>
     `px-3 py-1 rounded-md text-xs font-medium transition-colors ${active ? 'bg-slate-300 dark:bg-zinc-700 text-slate-900 dark:text-white' : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/50 dark:hover:bg-zinc-800/50'}`
 
+  // Column-header sorting, mirroring BooksPage: first click ascending, a second
+  // click on the same column flips to descending. Both keys are whitelisted
+  // server-side, so an unknown value can only ever fall back to the name sort.
+  const toggleSort = (asc: SortMode, desc: SortMode) =>
+    setSort(prev => (prev === asc ? desc : asc))
+
+  const SortableHeader = ({ label, asc, desc }: { label: string; asc: SortMode; desc: SortMode }) => {
+    const active = sort === asc || sort === desc
+    const arrow = sort === asc ? '▲' : '▼'
+    return (
+      <th className="text-left px-3 py-2 text-xs font-medium uppercase">
+        <button
+          type="button"
+          onClick={() => toggleSort(asc, desc)}
+          aria-label={label}
+          title={t('authors.sortByColumn', { column: label, defaultValue: 'Sort by {{column}}' })}
+          className={`inline-flex items-center gap-0.5 uppercase transition-colors cursor-pointer select-none ${active ? 'text-slate-900 dark:text-white' : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white'}`}
+        >
+          {label}
+          {active
+            ? <span aria-hidden="true">{arrow}</span>
+            : <span aria-hidden="true" className="opacity-40">↕</span>}
+        </button>
+      </th>
+    )
+  }
+
   return (
     <div className={selectedIds.size > 0 ? 'pb-16' : ''}>
       <div className="flex items-center justify-between mb-4">
@@ -395,10 +429,10 @@ export default function AuthorsPage() {
                       title="Select all on this page"
                     />
                   </th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">{t('authors.colName')}</th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">{t('authors.colBooks')}</th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">{t('authors.colRating')}</th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">{t('authors.colMonitored')}</th>
+                  <SortableHeader label={t('authors.colName')} asc="az" desc="za" />
+                  <SortableHeader label={t('authors.colBooks')} asc="books-asc" desc="books-desc" />
+                  <SortableHeader label={t('authors.colRating')} asc="rating-asc" desc="rating-desc" />
+                  <SortableHeader label={t('authors.colMonitored')} asc="monitored-asc" desc="monitored-desc" />
                   <th className="px-3 py-2" />
                 </tr>
               </thead>

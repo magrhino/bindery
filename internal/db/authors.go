@@ -112,8 +112,10 @@ type AuthorListFilter struct {
 	Search string
 	// Monitored, when non-nil, restricts to authors with that monitored flag.
 	Monitored *bool
-	// Sort is one of "az" (sort_name asc, default), "za" (sort_name desc), or
-	// "recent" (created_at desc). Unknown values fall back to "az".
+	// Sort is one of "az" (sort_name asc, default), "za" (sort_name desc),
+	// "recent" (created_at desc), or one of the column-header sorts added for
+	// #1349: "books-asc"/"books-desc", "rating-asc"/"rating-desc",
+	// "monitored-asc"/"monitored-desc". Unknown values fall back to "az".
 	Sort string
 }
 
@@ -132,12 +134,28 @@ func escapeLike(s string) string {
 // Ø…) sorting after "Z" (#1347). sort_name is the tiebreaker for a stable order
 // when two folded keys collide. The "recent" sort keys on created_at (a
 // timestamp) and is unaffected.
+// The column-header sorts (#1349) all carry `sort_key ASC` as a tiebreaker:
+// book counts, ratings and the monitored flag are heavily non-unique, and
+// without a stable secondary key SQLite is free to return ties in any order,
+// which makes a paginated list drop and repeat rows between pages.
 func authorSortOrder(sort string) string {
 	switch sort {
 	case "za":
 		return "sort_key DESC, sort_name COLLATE NOCASE DESC"
 	case "recent":
 		return "created_at DESC, id DESC"
+	case "books-asc":
+		return "book_count ASC, sort_key ASC"
+	case "books-desc":
+		return "book_count DESC, sort_key ASC"
+	case "rating-asc":
+		return "average_rating ASC, sort_key ASC"
+	case "rating-desc":
+		return "average_rating DESC, sort_key ASC"
+	case "monitored-asc":
+		return "monitored ASC, sort_key ASC"
+	case "monitored-desc":
+		return "monitored DESC, sort_key ASC"
 	default:
 		return "sort_key ASC, sort_name COLLATE NOCASE ASC"
 	}
@@ -196,10 +214,30 @@ func (r *AuthorRepo) ListPageFiltered(ctx context.Context, f AuthorListFilter, l
 		return nil, 0, fmt.Errorf("count authors: %w", err)
 	}
 
+	// book_count is a correlated subquery rather than a stored column so it
+	// cannot drift from the books table. It serves two purposes: the Authors
+	// list renders it as the Books column (which showed "—" for every author
+	// before this, because nothing ever populated Author.Statistics on a row
+	// read back from the database), and "books-asc"/"books-desc" order by it.
+	//
+	// Scoped to the same rows the caller may see. An unscoped COUNT would let a
+	// user infer how many books another user's author has — a small leak, but
+	// the same class as the one #1872 closed, and free to avoid here. NULL-owned
+	// books stay visible to everyone, matching listAuthorsByUser.
+	bookCountExpr := "(SELECT COUNT(*) FROM books b WHERE b.author_id = authors.id) AS book_count"
+	var selectArgs []any
+	if f.UserID != 0 {
+		bookCountExpr = "(SELECT COUNT(*) FROM books b WHERE b.author_id = authors.id" +
+			" AND (b.owner_user_id = ? OR b.owner_user_id IS NULL)) AS book_count"
+		selectArgs = append(selectArgs, f.UserID)
+	}
+
 	//nolint:gosec // query is built only from static columns, a parameterised WHERE, and a whitelisted ORDER BY (authorSortOrder); all user values are bound via args
-	listQuery := "SELECT " + authorSelectCols + " FROM authors" + where +
+	listQuery := "SELECT " + authorSelectCols + ", " + bookCountExpr + " FROM authors" + where +
 		" ORDER BY " + authorSortOrder(f.Sort) + " LIMIT ? OFFSET ?"
-	pageArgs := append(append([]any{}, args...), limit, offset)
+	// Order matters: the subquery's placeholder sits in the SELECT list, ahead
+	// of every WHERE placeholder.
+	pageArgs := append(append(append([]any{}, selectArgs...), args...), limit, offset)
 
 	rows, err := r.db.QueryContext(ctx, listQuery, pageArgs...)
 	if err != nil {
@@ -209,10 +247,12 @@ func (r *AuthorRepo) ListPageFiltered(ctx context.Context, f AuthorListFilter, l
 
 	var authors []models.Author
 	for rows.Next() {
-		a, err := scanAuthor(rows)
+		var bookCount int
+		a, err := scanAuthorFrom(trailingScanner{s: rows, extra: []any{&bookCount}})
 		if err != nil {
 			return nil, 0, err
 		}
+		a.Statistics = &models.AuthorStats{BookCount: bookCount}
 		authors = append(authors, a)
 	}
 	if err := rows.Err(); err != nil {
@@ -775,6 +815,18 @@ func scanAuthor(rows *sql.Rows) (models.Author, error) {
 
 func scanAuthorRow(row *sql.Row) (models.Author, error) {
 	return scanAuthorFrom(row)
+}
+
+// trailingScanner lets a query select the standard author columns plus extra
+// derived ones without duplicating scanAuthorFrom's 22-destination list, which
+// would then be free to drift from authorSelectCols on the next column added.
+type trailingScanner struct {
+	s     rowScanner
+	extra []any
+}
+
+func (t trailingScanner) Scan(dest ...any) error {
+	return t.s.Scan(append(dest, t.extra...)...)
 }
 
 func scanAuthorFrom(s rowScanner) (models.Author, error) {
