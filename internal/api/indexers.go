@@ -405,6 +405,14 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 		} else {
 			dbg = ebookDbg
 		}
+		// The merged panel describes one search over both category trees, so
+		// the Query summary reports the book's media type. Whichever leg the
+		// merge happened to start from, its per-format criteria would read as
+		// "only ebooks were searched" (#1636) while the indexer rows below it
+		// list both the 7xxx and 3xxx queries.
+		if dbg != nil {
+			dbg.Query.MediaType = book.MediaType
+		}
 	} else {
 		results, dbg = h.searcher.SearchBookWithDebug(r.Context(), idxs, crit)
 	}

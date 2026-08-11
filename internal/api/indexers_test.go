@@ -490,6 +490,123 @@ func TestSearchBook_DualFormat_ParallelDispatch(t *testing.T) {
 	}
 }
 
+// debugSearcher mirrors the real searcher's debug payload: each per-format
+// leg echoes back the criteria it was called with, including the narrowed
+// MediaType and the category set for that format.
+type debugSearcher struct{}
+
+func (debugSearcher) SearchBookWithDebug(_ context.Context, _ []models.Indexer, c indexer.MatchCriteria) ([]newznab.SearchResult, *indexer.SearchDebug) {
+	cats := []int{7020}
+	if c.MediaType == models.MediaTypeAudiobook {
+		cats = []int{3030}
+	}
+	return nil, &indexer.SearchDebug{
+		Query: indexer.SearchQueryDebug{
+			Title:     c.Title,
+			Author:    c.Author,
+			MediaType: c.MediaType,
+		},
+		Indexers: []indexer.IndexerDebug{{
+			IndexerName: "MyAnonamouse",
+			Enabled:     true,
+			Categories:  cats,
+		}},
+	}
+}
+
+func (debugSearcher) SearchQuery(_ context.Context, _ []models.Indexer, _ string) []newznab.SearchResult {
+	return nil
+}
+
+// TestSearchBook_DualFormat_DebugReportsBothMediaType covers the reporting
+// half of #1636: a media_type=both book is searched once per format, and the
+// merged debug panel used to inherit whichever leg it merged from, so the
+// Query summary read "ebook" for a search that also queried the audiobook
+// categories listed in the very same panel.
+func TestSearchBook_DualFormat_DebugReportsBothMediaType(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	ctx := context.Background()
+
+	authorRepo := db.NewAuthorRepo(database)
+	author := &models.Author{
+		ForeignID: "OL3A", Name: "Mark Manson", SortName: "Manson, Mark",
+		MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+
+	bookRepo := db.NewBookRepo(database)
+	book := &models.Book{
+		Title: "The Subtle Art", ForeignID: "OL3M",
+		AuthorID: author.ID, MediaType: models.MediaTypeBoth, Monitored: true,
+	}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewIndexerHandler(
+		db.NewIndexerRepo(database),
+		bookRepo,
+		authorRepo,
+		db.NewMetadataProfileRepo(database),
+		debugSearcher{},
+		db.NewSettingsRepo(database),
+		db.NewBlocklistRepo(database),
+	)
+
+	rec := httptest.NewRecorder()
+	req := withURLParam(
+		httptest.NewRequest(http.MethodGet, "/indexer/book/1/search", nil),
+		"id", strconv.FormatInt(book.ID, 10),
+	)
+	h.SearchBook(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Debug struct {
+			Query struct {
+				MediaType string `json:"mediaType"`
+			} `json:"query"`
+			Indexers []struct {
+				Categories []int `json:"categories"`
+			} `json:"indexers"`
+		} `json:"debug"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if got := resp.Debug.Query.MediaType; got != models.MediaTypeBoth {
+		t.Errorf("debug query mediaType: got %q, want %q", got, models.MediaTypeBoth)
+	}
+
+	// Guard the premise: the summary may only say "both" because both
+	// category trees were actually queried.
+	var sawEbookCats, sawAudioCats bool
+	for _, idx := range resp.Debug.Indexers {
+		for _, c := range idx.Categories {
+			switch c {
+			case 7020:
+				sawEbookCats = true
+			case 3030:
+				sawAudioCats = true
+			}
+		}
+	}
+	if !sawEbookCats || !sawAudioCats {
+		t.Errorf("expected both ebook and audiobook categories in the merged debug, got %+v", resp.Debug.Indexers)
+	}
+}
+
 // TestSearchBook_QualityProfileAnnotatesDisallowedFormat covers the
 // interactive half of #1693.
 //
