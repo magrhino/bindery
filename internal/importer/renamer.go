@@ -504,17 +504,40 @@ func dirContains(dir, p string) bool {
 // same-path move (ReorgStatusNoop) before it ever reaches these primitives.
 func checkDestNotInsideSource(op, src, dst string) error {
 	rsrc, rdst := resolveForContainment(src), resolveForContainment(dst)
-	if rsrc == rdst {
-		return nil
+	if nested(rsrc, rdst) || nested(strings.ToLower(rsrc), strings.ToLower(rdst)) {
+		return fmt.Errorf("cannot %s %q into %q: %w; choose a destination that is not nested under the source folder", op, src, dst, ErrDestInsideSource)
 	}
-	rel, err := filepath.Rel(rsrc, rdst)
+	return nil
+}
+
+// nested reports whether dst lies strictly inside src, comparing on path
+// component boundaries.
+//
+// Called twice by checkDestNotInsideSource: once on the resolved paths and once
+// lowercased. The filesystem decides what "same directory" means and this code
+// cannot see which one it is standing on — on APFS or a Windows bind mount
+// /library/Author and /library/author are one directory, so a template that
+// differs from the source only in case produces exactly the nesting the guard
+// exists to refuse, and the exact comparison walks straight past it.
+//
+// EvalSymlinks does not normalise case, so resolving does not cover this.
+//
+// On a case-sensitive filesystem the extra pass costs one thing: a move between
+// two genuinely distinct directories whose paths differ only in case is
+// refused. That is a pathological library layout, and refusing it is the safe
+// direction — the alternative is filling the disk.
+func nested(src, dst string) bool {
+	if src == dst {
+		// Not nesting. A same-path move is a distinct case with nothing to do,
+		// reported by the callers' existing "destination already exists" check
+		// and by the reorganize layer as a noop.
+		return false
+	}
+	rel, err := filepath.Rel(src, dst)
 	if err != nil {
-		return nil // different volumes: cannot be nested
+		return false // different volumes: cannot be nested
 	}
-	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return nil
-	}
-	return fmt.Errorf("cannot %s %q into %q: %w; choose a destination that is not nested under the source folder", op, src, dst, ErrDestInsideSource)
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // resolveForContainment returns p in absolute, symlink-resolved form for the

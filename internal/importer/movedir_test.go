@@ -74,3 +74,39 @@ func mustWrite(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+// The filesystem decides what "same directory" means and checkDestNotInsideSource
+// cannot see which one it is standing on. On APFS or a Windows bind mount
+// /library/Author and /library/author are one directory, so a destination
+// differing from the source only in case is the nesting this guard exists to
+// refuse — and EvalSymlinks does not normalise case, so resolving misses it.
+func TestDestInsideSourceIsCaughtAcrossCase(t *testing.T) {
+	for _, tc := range []struct {
+		name, src, dst string
+		wantErr        bool
+	}{
+		{"exact nesting", "/library/Author", "/library/Author/Series/Title", true},
+		{"case-only difference", "/library/Author", "/library/author/Series/Title", true},
+		{"upper source, lower dest", "/Library/AUTHOR", "/library/author/Title", true},
+
+		// Must stay allowed: these are not containment, in any case-folding.
+		{"same path", "/library/Author", "/library/Author", false},
+		{"same path, case-only", "/library/Author", "/library/author", false},
+		{"sibling", "/library/Author", "/library/Authors", false},
+		{"sibling, case-only", "/library/Author", "/library/AUTHORS", false},
+		{"parent", "/library/Author/Book", "/library/Author", false},
+		{"unrelated", "/library/A", "/other/B", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkDestNotInsideSource("move", tc.src, tc.dst)
+			if tc.wantErr && !errors.Is(err, ErrDestInsideSource) {
+				t.Errorf("checkDestNotInsideSource(%q, %q) = %v, want ErrDestInsideSource",
+					tc.src, tc.dst, err)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("checkDestNotInsideSource(%q, %q) refused a legal move: %v",
+					tc.src, tc.dst, err)
+			}
+		})
+	}
+}
