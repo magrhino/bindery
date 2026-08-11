@@ -143,6 +143,7 @@ type Scheduler struct {
 	aliases         *db.AuthorAliasRepo     // optional; used for non-latin author matching
 	profiles        *db.MetadataProfileRepo // optional; applies profile language filters to auto-grab
 	qualityProfiles *db.QualityProfileRepo  // optional; enforces the profile's allowed formats on auto-grab (#1693)
+	editions        *db.EditionRepo         // optional; supplies the book ISBN the ranker's exact-match bonus needs (#1724)
 	calibreSyncer   CalibreSyncer           // optional; nil if Calibre is not configured
 	recommender     RecommendationEngine    // optional; generates recommendations
 	// operatorUserID resolves the user the recommendation job writes under.
@@ -244,6 +245,13 @@ func (s *Scheduler) WithAliases(aliases *db.AuthorAliasRepo) {
 // before Start.
 func (s *Scheduler) WithMetadataProfiles(profiles *db.MetadataProfileRepo) {
 	s.profiles = profiles
+}
+
+// WithEditions attaches the edition repo so auto-grab can populate
+// MatchCriteria.ISBN from the book's editions (#1724). Must be called
+// before Start.
+func (s *Scheduler) WithEditions(editions *db.EditionRepo) {
+	s.editions = editions
 }
 
 // WithStoragePaths attaches the process-level download roots used when sending
@@ -596,6 +604,13 @@ func (s *Scheduler) searchAndGrabFormat(ctx context.Context, book models.Book, m
 	}
 	if book.ReleaseDate != nil {
 		crit.Year = book.ReleaseDate.Year()
+	}
+	if s.editions != nil {
+		if eds, err := s.editions.ListByBook(ctx, book.ID); err != nil {
+			slog.Warn("failed to load editions for search ISBN", "book_id", book.ID, "error", err)
+		} else {
+			crit.ISBN = indexer.CriteriaISBN(&book, eds)
+		}
 	}
 
 	results := s.searcher.SearchBook(ctx, idxs, crit)

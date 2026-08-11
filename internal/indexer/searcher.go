@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/vavallee/bindery/internal/indexer/newznab"
+	"github.com/vavallee/bindery/internal/isbnutil"
 	"github.com/vavallee/bindery/internal/models"
 )
 
@@ -68,6 +69,58 @@ type MatchCriteria struct {
 	MediaType        string   // models.MediaTypeEbook or models.MediaTypeAudiobook
 	AllowedLanguages []string // from author's MetadataProfile; empty = no filter
 	AuthorAliases    []string // alternate names (e.g. latin-script romanisations for non-latin authors)
+}
+
+// CriteriaISBN picks the ISBN to put in MatchCriteria.ISBN for a book, given
+// that book's edition rows. Callers that skip it leave MatchCriteria.ISBN
+// empty and the exact-match bonus in scoreResult can never fire (#1724).
+//
+// The returned value is digits-only ISBN-13 — the same shape ParseRelease
+// produces — because a release name can only ever yield an ISBN-13 (the
+// parser's regex requires a 978/979 prefix). An edition recorded with only an
+// isbn_10 is converted rather than dropped, so those books still match.
+//
+// A book can have many editions and MatchCriteria carries one ISBN, so the
+// book's selected edition wins when it has one; otherwise the first edition
+// with a usable ISBN does, in the order the caller supplied.
+//
+// Book.ISBNs is deliberately not consulted: it is transport-only metadata
+// filled in by providers during ingestion and is never read back out of the
+// books table, so it is always empty on a book loaded from the database.
+func CriteriaISBN(book *models.Book, editions []models.Edition) string {
+	if book == nil {
+		return ""
+	}
+	first := ""
+	for _, e := range editions {
+		isbn := editionISBN13(e)
+		if isbn == "" {
+			continue
+		}
+		if book.SelectedEditionID != nil && e.ID == *book.SelectedEditionID {
+			return isbn
+		}
+		if first == "" {
+			first = isbn
+		}
+	}
+	return first
+}
+
+// editionISBN13 returns the edition's ISBN in ISBN-13 form, preferring the
+// isbn_13 column and falling back to a converted isbn_10.
+func editionISBN13(e models.Edition) string {
+	if e.ISBN13 != nil {
+		if v := isbnutil.ToISBN13(*e.ISBN13); v != "" {
+			return v
+		}
+	}
+	if e.ISBN10 != nil {
+		if v := isbnutil.ToISBN13(*e.ISBN10); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // makeClient returns a (possibly cached) newznab client for the given

@@ -23,9 +23,27 @@ import (
 type mockIndexerSearcher struct {
 	ebookResults []newznab.SearchResult
 	audioResults []newznab.SearchResult
+
+	// SearchBook runs the ebook and audiobook legs of a dual-format book
+	// concurrently, so both goroutines land here. mu guards the recorded
+	// criteria; without it the race detector flags the write and the value
+	// read back is whichever leg happened to finish last.
+	mu       sync.Mutex
+	lastCrit indexer.MatchCriteria
+}
+
+// criteria returns the criteria from the most recent call, safe to read after
+// the handler has returned.
+func (m *mockIndexerSearcher) criteria() indexer.MatchCriteria {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastCrit
 }
 
 func (m *mockIndexerSearcher) SearchBookWithDebug(_ context.Context, _ []models.Indexer, c indexer.MatchCriteria) ([]newznab.SearchResult, *indexer.SearchDebug) {
+	m.mu.Lock()
+	m.lastCrit = c
+	m.mu.Unlock()
 	switch c.MediaType {
 	case models.MediaTypeEbook:
 		return m.ebookResults, nil
@@ -706,5 +724,68 @@ func TestSearchBook_QualityProfileAnnotatesDisallowedFormat(t *testing.T) {
 		if r.GUID == "pdf1" && r.Rejection == "" {
 			t.Error("a disallowed format must carry a rejection reason the UI can show")
 		}
+	}
+}
+
+// Interactive search must carry the book's ISBN into MatchCriteria, or the
+// ISBN exact-match bonus in the ranker can never fire (#1724). The edition
+// here records only an isbn_10, which is the form the release side never
+// produces, so the criteria has to come out converted to ISBN-13.
+func TestSearchBook_PopulatesISBNFromEdition(t *testing.T) {
+	// A release name the parser accepts, carrying the ISBN-13 of the same
+	// edition the book stores as an ISBN-10.
+	const releaseTitle = "Dune.Frank.Herbert.9780441172719.epub"
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	ctx := context.Background()
+	authorRepo := db.NewAuthorRepo(database)
+	author := &models.Author{ForeignID: "OL1A", Name: "Frank Herbert", SortName: "Herbert, Frank", MetadataProvider: "openlibrary", Monitored: true}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	bookRepo := db.NewBookRepo(database)
+	book := &models.Book{Title: "Dune", ForeignID: "OL1M", AuthorID: author.ID, MediaType: models.MediaTypeEbook, Monitored: true}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	editionRepo := db.NewEditionRepo(database)
+	isbn10 := "0-441-17271-7"
+	if err := editionRepo.Upsert(ctx, &models.Edition{
+		ForeignID: "OL1E", BookID: book.ID, Title: "Dune", ISBN10: &isbn10,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &mockIndexerSearcher{ebookResults: []newznab.SearchResult{{GUID: "r1", Title: releaseTitle}}}
+	h := NewIndexerHandler(
+		db.NewIndexerRepo(database), bookRepo, authorRepo,
+		db.NewMetadataProfileRepo(database), mock,
+		db.NewSettingsRepo(database), db.NewBlocklistRepo(database),
+	).WithEditions(editionRepo)
+
+	rec := httptest.NewRecorder()
+	req := withURLParam(
+		httptest.NewRequest(http.MethodGet, "/indexer/book/1/search", nil),
+		"id", strconv.FormatInt(book.ID, 10),
+	)
+	h.SearchBook(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// The criteria the handler built must be the same string the release
+	// parser pulls out of a matching release name — that equality is the
+	// whole point of the bonus, and is what was missing.
+	want := indexer.ParseRelease(releaseTitle).ISBN
+	if want == "" {
+		t.Fatal("test setup: release title must parse to a non-empty ISBN")
+	}
+	if got := mock.criteria().ISBN; got != want {
+		t.Errorf("search criteria ISBN = %q, want %q (the ISBN parsed from a matching release)", got, want)
 	}
 }

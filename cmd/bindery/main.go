@@ -451,6 +451,7 @@ func main() {
 	sched.WithAliases(authorAliasRepo)
 	sched.WithMetadataProfiles(metadataProfileRepo)
 	sched.WithQualityProfiles(qualityProfileRepo)
+	sched.WithEditions(editionRepo)
 	sched.WithDelayProfiles(delayProfileRepo)
 	sched.WithPendingReleases(pendingReleaseRepo)
 	sched.WithStoragePaths(cfg.DownloadDir, cfg.AudiobookDownloadDir)
@@ -555,7 +556,8 @@ func main() {
 		WithLifetimeCtx(appCtx)
 	indexerHandler := api.NewIndexerHandler(indexerRepo, bookRepo, authorRepo, metadataProfileRepo, idxSearcher, settingsRepo, blocklistRepo).
 		WithAliases(authorAliasRepo).
-		WithQualityProfiles(qualityProfileRepo)
+		WithQualityProfiles(qualityProfileRepo).
+		WithEditions(editionRepo)
 	downloadHealth := downloader.NewHealthStore().WithNotifier(notif)
 	if clients, err := dlClientRepo.List(ctxBoot); err == nil {
 		downloader.RefreshDownloadClientHealthAsync(context.Background(), bgJobs, downloadHealth, clients, cfg.DownloadDir, cfg.AudiobookDownloadDir)

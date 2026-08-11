@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -58,7 +59,10 @@ type IndexerHandler struct {
 	// qualityProfiles is optional; when set, the author's allowed-formats list
 	// annotates interactive search results (#1693).
 	qualityProfiles *db.QualityProfileRepo
-	lastDebug       *lastDebugStore
+	// editions is optional; when set, the book's edition ISBNs feed the
+	// ISBN exact-match bonus in the ranker (#1724).
+	editions  *db.EditionRepo
+	lastDebug *lastDebugStore
 }
 
 func NewIndexerHandler(indexers *db.IndexerRepo, books *db.BookRepo, authors *db.AuthorRepo, profiles *db.MetadataProfileRepo, searcher indexerSearcher, settings *db.SettingsRepo, blocklist *db.BlocklistRepo) *IndexerHandler {
@@ -85,6 +89,13 @@ func (h *IndexerHandler) WithAliases(aliases *db.AuthorAliasRepo) *IndexerHandle
 // spec for real, because auto-grab has no human in the loop.
 func (h *IndexerHandler) WithQualityProfiles(qp *db.QualityProfileRepo) *IndexerHandler {
 	h.qualityProfiles = qp
+	return h
+}
+
+// WithEditions attaches the edition repo so interactive search can populate
+// MatchCriteria.ISBN from the book's editions (#1724).
+func (h *IndexerHandler) WithEditions(editions *db.EditionRepo) *IndexerHandler {
+	h.editions = editions
 	return h
 }
 
@@ -351,6 +362,13 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 	}
 	if book.ReleaseDate != nil {
 		crit.Year = book.ReleaseDate.Year()
+	}
+	if h.editions != nil {
+		if eds, err := h.editions.ListByBook(r.Context(), book.ID); err != nil {
+			slog.Warn("failed to load editions for search ISBN", "book_id", book.ID, "error", err)
+		} else {
+			crit.ISBN = indexer.CriteriaISBN(book, eds)
+		}
 	}
 
 	// For dual-format books (media_type='both'), run one search per format so
