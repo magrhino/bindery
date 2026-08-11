@@ -2754,3 +2754,91 @@ func TestToBook_ContributionRoleSelection(t *testing.T) {
 		})
 	}
 }
+
+// TestSearchBooks_SkipsNarratorCreditedFirst is the #1892 regression test.
+//
+// #1733 stopped Hardcover filing books under their narrator, but only on the
+// GraphQL book queries. hcSearchContribution carried no `contribution` field, so
+// every search-sourced credit decoded with an empty role — which
+// isAuthorContributionRole reads as "this is the author" — and the first entry
+// won. Hardcover lists the narrator first on plenty of audiobook-bearing works,
+// so the pre-#1733 behaviour survived on the search path.
+//
+// The document below is the real shape, captured from api.hardcover.app for
+// "Blackflame" (the case #1879 verified): Travis Baldree carries
+// `"contribution": "Narrator"` and is listed FIRST, while Will Wight, the actual
+// author, has no `contribution` key at all. Sampling three more works
+// (Project Hail Mary, God Emperor of Dune, The Way of Kings) showed the primary
+// author's field either absent or explicit null, never the string "Author" —
+// both decode to "" here, which is what isAuthorContributionRole already accepts.
+func TestSearchBooks_SkipsNarratorCreditedFirst(t *testing.T) {
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		assertSearchRequest(t, r, "Book", "Blackflame")
+		data := map[string]interface{}{
+			"search": map[string]interface{}{
+				"results": map[string]interface{}{
+					"found": 1,
+					"hits": []map[string]interface{}{
+						{
+							"document": map[string]interface{}{
+								"id":    260147,
+								"title": "Blackflame",
+								"slug":  "blackflame",
+								"contributions": []map[string]interface{}{
+									{
+										"author":       map[string]interface{}{"id": 254153, "name": "Travis Baldree", "slug": "travis-baldree"},
+										"contribution": "Narrator",
+									},
+									// No "contribution" key, exactly as the API returns it.
+									{"author": map[string]interface{}{"id": 235980, "name": "Will Wight", "slug": "will-wight"}},
+								},
+								"contribution_types": []string{"Narrator", "Author"},
+								"author_names":       []string{"Travis Baldree", "Will Wight"},
+							},
+						},
+					},
+				},
+			},
+		}
+		return gqlResponse(t, http.StatusOK, data), nil
+	})
+
+	books, err := c.SearchBooks(context.Background(), "Blackflame")
+	if err != nil {
+		t.Fatalf("SearchBooks: %v", err)
+	}
+	if len(books) != 1 {
+		t.Fatalf("expected 1 book, got %d", len(books))
+	}
+	if books[0].Author == nil {
+		t.Fatal("book has no author")
+	}
+	if got := books[0].Author.Name; got != "Will Wight" {
+		t.Errorf("Author = %q, want %q — the narrator is credited first and won", got, "Will Wight")
+	}
+}
+
+// TestSearchBooks_ExplicitNullContributionIsAnAuthor covers the other primary-author
+// shape the live API returns: `"contribution": null` rather than the key being
+// absent. Both must decode to the empty role, or a single-author book resolved
+// through search would end up with no author at all.
+func TestSearchBooks_ExplicitNullContributionIsAnAuthor(t *testing.T) {
+	encoded := `{"found":1,"hits":[{"document":{"id":"312460","title":"God Emperor of Dune","slug":"god-emperor-of-dune",` +
+		`"contributions":[{"author":{"id":9,"name":"Frank Herbert","slug":"frank-herbert"},"contribution":null}],` +
+		`"contribution_types":["Author"],"author_names":["Frank Herbert"]}}]}`
+	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+		data := map[string]interface{}{"search": map[string]interface{}{"results": encoded}}
+		return gqlResponse(t, http.StatusOK, data), nil
+	})
+
+	books, err := c.SearchBooks(context.Background(), "Dune")
+	if err != nil {
+		t.Fatalf("SearchBooks: %v", err)
+	}
+	if len(books) != 1 {
+		t.Fatalf("expected 1 book, got %d", len(books))
+	}
+	if books[0].Author == nil || books[0].Author.Name != "Frank Herbert" {
+		t.Errorf("Author = %+v, want Frank Herbert — a null role is the author, not a rejected credit", books[0].Author)
+	}
+}

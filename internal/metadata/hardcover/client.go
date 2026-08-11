@@ -813,6 +813,20 @@ type hcBookSearchDocument struct {
 
 type hcSearchContribution struct {
 	Author hcAuthorSearchDocument `json:"author"`
+	// Contribution is the credit role, the same free-text field the GraphQL
+	// book queries carry. #1733 filtered on it there but not here, because the
+	// Typesense document shape is not published and guessing a field name that
+	// decodes to empty would have silently kept the old behaviour while looking
+	// like coverage.
+	//
+	// Confirmed against api.hardcover.app: the field is `contribution`, and on
+	// the primary author it is either absent or explicit null — never the string
+	// "Author" — which is exactly what isAuthorContributionRole already treats as
+	// an author. Both shapes decode to "" here. The role IS spelled out for
+	// non-authors ("Narrator"). A parallel top-level `contribution_types` array
+	// does name the primary author explicitly, but it is a separate list that has
+	// to be index-matched to this one, so the per-entry field is the safer source.
+	Contribution string `json:"contribution"`
 }
 
 func parseAuthorSearchResults(raw json.RawMessage) []hcAuthor {
@@ -934,7 +948,15 @@ func bookSearchDocumentToBook(doc hcBookSearchDocument) (hcBook, bool) {
 	for _, contribution := range doc.Contributions {
 		author, ok := authorSearchDocumentToAuthor(contribution.Author)
 		if ok {
-			book.Contributions = append(book.Contributions, hcContribution{Author: author})
+			// Carry the role through. Dropping it left every search-sourced
+			// contribution with an empty role, which authorContribution reads as
+			// "is an author", so the first credit won — and Hardcover lists the
+			// narrator first on plenty of audiobook-bearing works. That is the
+			// pre-#1733 behaviour surviving on the search path (#1892).
+			book.Contributions = append(book.Contributions, hcContribution{
+				Author:       author,
+				Contribution: contribution.Contribution,
+			})
 		}
 	}
 	return book, true
