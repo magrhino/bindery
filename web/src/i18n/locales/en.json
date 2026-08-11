@@ -220,6 +220,18 @@
       "selectAll": "Select all",
       "deselectAll": "Deselect all"
     },
+    "lastSync": {
+      "heading": "Last refresh skipped {{count}} of this author’s {{total}} works",
+      "language": "{{count}} skipped by the language filter (allowed: {{languages}})",
+      "unknownFail": "Works the metadata provider reported no language for were skipped too, because this author’s metadata profile is set to reject unknown languages.",
+      "junk": "{{count}} skipped as untitled provider records",
+      "mediaType": "{{count}} skipped as the wrong format for your default media type",
+      "examples": "For example: {{titles}}",
+      "sampleUnknownLanguage": "{{title}} (no language)",
+      "anyLanguage": "any",
+      "settingsLink": "Metadata profile settings",
+      "completedAt": "Refreshed {{when}}"
+    },
     "booksHeading": "Books",
     "filteredCount": "{{shown}} of {{total}}",
     "groupBySeries": "Group by series",

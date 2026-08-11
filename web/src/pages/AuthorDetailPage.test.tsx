@@ -807,3 +807,67 @@ describe('AuthorDetailPage — toolbar and stats', () => {
     await waitFor(() => expect(seen).toBe('/book/7'))
   })
 })
+
+// #1889: books dropped by the metadata-profile filters were invisible — a Debug
+// log line per book, nothing on the page. An author whose catalogue was mostly
+// filtered away looked exactly like an author who wrote three books.
+describe('AuthorDetailPage — last sync outcome', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    installLocalStorageMock()
+    vi.mocked(api.listAuthorSeries).mockResolvedValue([])
+  })
+
+  it('reports the books the last refresh skipped, and why', async () => {
+    renderAuthorDetailPage([makeBook({ id: 1, title: 'Bears Discover Fire', status: 'imported' })], 'grid', {
+      lastSync: {
+        completedAt: '2026-08-11T12:00:00Z',
+        total: 66,
+        added: 1,
+        skippedLanguage: 65,
+        skippedJunk: 0,
+        skippedMediaType: 0,
+        allowedLanguages: ['eng'],
+        unknownLanguageFail: true,
+        skippedLanguageSample: [
+          { title: 'Les Ours', language: 'fre' },
+          { title: 'Untitled Work', language: '' },
+        ],
+      },
+    })
+
+    const notice = await screen.findByTestId('author-sync-notice')
+    expect(notice).toHaveTextContent('Last refresh skipped 65 of this author’s 66 works')
+    expect(notice).toHaveTextContent('65 skipped by the language filter (allowed: eng)')
+    // The unknown-language half of the filter is the part that surprises
+    // people, so it is named rather than folded into the count.
+    expect(notice).toHaveTextContent(/reject unknown languages/)
+    expect(notice).toHaveTextContent('Les Ours (fre)')
+    expect(notice).toHaveTextContent('Untitled Work (no language)')
+    expect(within(notice).getByRole('link', { name: 'Metadata profile settings' })).toHaveAttribute(
+      'href',
+      '/settings?tab=metadata',
+    )
+  })
+
+  it('stays silent when the last refresh skipped nothing', async () => {
+    renderAuthorDetailPage([makeBook({ id: 1, title: 'Only Book', status: 'imported' })], 'grid', {
+      lastSync: {
+        completedAt: '2026-08-11T12:00:00Z',
+        total: 1,
+        added: 1,
+        skippedLanguage: 0,
+        skippedJunk: 0,
+        skippedMediaType: 0,
+      },
+    })
+    await screen.findByRole('heading', { name: 'Only Book' })
+    expect(screen.queryByTestId('author-sync-notice')).toBeNull()
+  })
+
+  it('stays silent when the server reports no sync at all', async () => {
+    renderAuthorDetailPage([makeBook({ id: 1, title: 'Only Book', status: 'imported' })])
+    await screen.findByRole('heading', { name: 'Only Book' })
+    expect(screen.queryByTestId('author-sync-notice')).toBeNull()
+  })
+})

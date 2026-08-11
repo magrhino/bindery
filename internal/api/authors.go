@@ -56,6 +56,11 @@ type AuthorHandler struct {
 	// goroutines do not outlive the process. Falls back to
 	// context.Background() when not set; see #846 and recommendations.go.
 	lifetimeCtx context.Context
+
+	// syncSummaries records what each catalogue sync added and dropped so the
+	// detail endpoint can report it instead of leaving the drops to a Debug
+	// log line nobody reads (#1889).
+	syncSummaries authorSyncSummaries
 }
 
 func NewAuthorHandler(authors *db.AuthorRepo, aliases *db.AuthorAliasRepo, books *db.BookRepo, series *db.SeriesRepo, meta *metadata.Aggregator, settings *db.SettingsRepo, profiles *db.MetadataProfileRepo, searcher BookSearcher) *AuthorHandler {
@@ -273,6 +278,11 @@ func (h *AuthorHandler) Get(w http.ResponseWriter, r *http.Request) {
 			author.MonitoredSeriesIDs = ids
 		}
 	}
+
+	// Attach the last catalogue sync's outcome (#1889). No extra scoping is
+	// needed: this hangs off the author the ownership guard above already
+	// cleared, so a non-owner gets the 404 and never reaches the counts.
+	author.LastSync = h.syncSummaries.get(id)
 
 	proxyAuthorImages(author)
 	cleanAuthorDescription(author)
@@ -1183,6 +1193,10 @@ func (h *AuthorHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, err)
 		return
 	}
+	// Drop the sync accounting with the row (#1889) — author ids are reused by
+	// SQLite's rowid allocation, and a re-added author must not inherit the
+	// deleted one's skip counts.
+	h.syncSummaries.forget(id)
 
 	// The author's books (and their book_files rows) were cascade-deleted above,
 	// so excludeBookID=0 makes the ownership guard skip any path still tracked by
@@ -1599,6 +1613,11 @@ func (h *AuthorHandler) fetchAuthorBooks(author *models.Author, autoSearch bool,
 	strictMediaType := h.resolveDefaultMediaTypeStrict(ctx)
 
 	var added, skippedLang, skippedJunk, skippedMediaType int
+	// Names of the first few language-rejected works, reported to the user
+	// alongside the count (#1889): "65 books skipped" is alarming, but it is
+	// the titles and their language codes that tell them whether the profile
+	// is set the way they meant.
+	var skippedLangSample []models.AuthorSyncSkippedBook
 	for _, b := range books {
 		b.AuthorID = author.ID
 		// Apply the caller-provided default media type when the provider
@@ -1647,6 +1666,9 @@ func (h *AuthorHandler) fetchAuthorBooks(author *models.Author, autoSearch bool,
 		// unknown_language_behavior (pass by default; see #232).
 		if !models.IsLanguageAllowed(b.Language, allowedLangs, unknownFail) {
 			skippedLang++
+			if len(skippedLangSample) < authorSyncSkippedSampleLimit {
+				skippedLangSample = append(skippedLangSample, models.AuthorSyncSkippedBook{Title: b.Title, Language: b.Language})
+			}
 			slog.Debug("skipping non-allowed-language book", "title", b.Title, "language", b.Language, "allowed", allowedLangs, "edition_sampled", langSampled)
 			continue
 		}
@@ -1829,7 +1851,38 @@ func (h *AuthorHandler) fetchAuthorBooks(author *models.Author, autoSearch bool,
 		}
 	}
 	runBookSearches(ctx, h.searcher, searchQueue, authorAutoSearchConcurrency)
-	slog.Info("author books synced", "author", author.Name, "added", added, "skipped_language", skippedLang, "skipped_junk", skippedJunk, "skipped_media_type", skippedMediaType, "total", len(books))
+
+	// Publish the run's accounting so the author page can say what happened to
+	// the works that never became books (#1889). Recorded for every sync, not
+	// just ones that dropped something: "nothing was filtered out" is the
+	// answer to "where are my books?" as often as a count is.
+	summary := models.AuthorSyncSummary{
+		CompletedAt:           time.Now().UTC(),
+		Total:                 len(books),
+		Added:                 added,
+		SkippedLanguage:       skippedLang,
+		SkippedJunk:           skippedJunk,
+		SkippedMediaType:      skippedMediaType,
+		AllowedLanguages:      allowedLangs,
+		UnknownLanguageFail:   unknownFail,
+		SkippedLanguageSample: skippedLangSample,
+	}
+	h.syncSummaries.record(author.ID, summary)
+
+	// Same line, louder when the run dropped something. A refresh that quietly
+	// discards most of an author's catalogue is not routine Info-level news,
+	// and Info is the default level the in-app log view captures — a reporter
+	// running rootless couldn't reach the Debug per-book lines at all.
+	logArgs := []any{
+		"author", author.Name, "added", added,
+		"skipped_language", skippedLang, "skipped_junk", skippedJunk, "skipped_media_type", skippedMediaType,
+		"total", len(books),
+	}
+	if summary.SkippedTotal() > 0 {
+		slog.Warn("author books synced", logArgs...)
+		return
+	}
+	slog.Info("author books synced", logArgs...)
 }
 
 // reparentMisattachedBook re-links existing to the author being synced when

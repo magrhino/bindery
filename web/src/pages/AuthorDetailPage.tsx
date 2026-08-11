@@ -18,6 +18,7 @@ import Switch from '../components/Switch'
 import CoverPlaceholder from '../components/CoverPlaceholder'
 import MoreMenu from '../components/MoreMenu'
 import Section from '../components/Section'
+import AuthorSyncNotice from '../components/AuthorSyncNotice'
 
 type MediaFilter = '' | 'ebook' | 'audiobook'
 // 'excluded' folds in what used to be a separate "Show excluded" checkbox. It
@@ -875,6 +876,10 @@ export default function AuthorDetailPage() {
           {error}
         </div>
       )}
+
+      {/* Books the last sync dropped, right above the list they are missing
+          from (#1889). Renders nothing when nothing was filtered out. */}
+      <AuthorSyncNotice sync={author.lastSync} />
 
       <Section
         bare

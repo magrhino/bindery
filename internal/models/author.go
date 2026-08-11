@@ -57,10 +57,65 @@ type Author struct {
 	// pinned to when MonitorMode == AuthorMonitorModeSeries (#810). Populated
 	// by the author Get handler so the edit modal can preselect chips.
 	MonitoredSeriesIDs []int64 `json:"monitoredSeriesIds,omitempty"`
+	// LastSync reports what the most recent catalogue sync did with the works
+	// the provider returned (#1889). Populated by the author Get handler from
+	// an in-process record, so it is absent until this process has synced the
+	// author at least once.
+	LastSync *AuthorSyncSummary `json:"lastSync,omitempty"`
 
 	// Transient: populated from the metadata provider during add/refresh; not stored in DB.
 	// Used to seed author_aliases so non-latin primary names get latin-script alternates.
 	AlternateNames []string `json:"-"`
+}
+
+// AuthorSyncSummary is the outcome of one catalogue sync: how many of the
+// provider's works became books, and how many were dropped by which filter.
+//
+// It exists because the drops were invisible (#1889). The allowed-languages
+// filter logged one Debug line per rejected work and the run's totals landed in
+// a single Info line, so an author whose catalogue was mostly filtered away
+// looked exactly like an author who only ever wrote a few books — one reporter
+// lost 65 books from a single author and only found out by going looking in the
+// logs, which a rootless container does not even hand them.
+type AuthorSyncSummary struct {
+	CompletedAt time.Time `json:"completedAt"`
+	// Total is the number of works the providers returned, before filtering.
+	Total            int `json:"total"`
+	Added            int `json:"added"`
+	SkippedLanguage  int `json:"skippedLanguage"`
+	SkippedJunk      int `json:"skippedJunk"`
+	SkippedMediaType int `json:"skippedMediaType"`
+	// AllowedLanguages is the language set the run actually applied, so the UI
+	// can name the setting that did the dropping rather than making the user
+	// guess which profile the author is on. Empty means "no language filter".
+	AllowedLanguages []string `json:"allowedLanguages,omitempty"`
+	// UnknownLanguageFail records the profile's unknown_language_behavior, the
+	// half of the filter that surprises people: with it on, every work the
+	// provider gave no language for is dropped too.
+	UnknownLanguageFail bool `json:"unknownLanguageFail,omitempty"`
+	// SkippedLanguageSample is the first few titles the language filter
+	// dropped, capped so a prolific author's rejected tail can't bloat the
+	// author payload. Enough to recognise whether the profile is set the way
+	// the user meant.
+	SkippedLanguageSample []AuthorSyncSkippedBook `json:"skippedLanguageSample,omitempty"`
+}
+
+// AuthorSyncSkippedBook is one dropped work, named so the user can tell a
+// mis-set filter from a correctly-set one.
+type AuthorSyncSkippedBook struct {
+	Title string `json:"title"`
+	// Language is the code the provider reported, empty when it reported none
+	// (the unknown-language case).
+	Language string `json:"language"`
+}
+
+// SkippedTotal is the number of provider works this sync dropped for any
+// reason. Zero means nothing was filtered out.
+func (s *AuthorSyncSummary) SkippedTotal() int {
+	if s == nil {
+		return 0
+	}
+	return s.SkippedLanguage + s.SkippedJunk + s.SkippedMediaType
 }
 
 // AuthorProviderFromForeignID returns the metadata provider implied by a

@@ -46,6 +46,31 @@ GET    /api/v1/author/{id}/aliases                list merged-in alias rows
 POST   /api/v1/author/{id}/merge                  merge another author into this one
 ```
 
+`GET /api/v1/author/{id}` includes a `lastSync` object when this Bindery process
+has synced the author's catalogue since it started — what the provider returned
+and what each filter dropped, so a catalogue that was filtered down is
+distinguishable from an author who wrote that few books:
+
+```json
+{
+  "lastSync": {
+    "completedAt": "2026-08-11T12:00:00Z",
+    "total": 66,
+    "added": 1,
+    "skippedLanguage": 65,
+    "skippedJunk": 0,
+    "skippedMediaType": 0,
+    "allowedLanguages": ["eng"],
+    "unknownLanguageFail": true,
+    "skippedLanguageSample": [{ "title": "Les Ours", "language": "fre" }]
+  }
+}
+```
+
+It is held in memory, not stored, so it is absent after a restart until the
+author is synced again. `skippedLanguageSample` is capped at a few titles; the
+counts are exact.
+
 `POST /api/v1/author/{id}/relink-upstream` may be called without a body for
 automatic upstream matching. Manual relink can send:
 

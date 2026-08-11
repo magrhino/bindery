@@ -30,6 +30,35 @@ export interface Author {
   // Populated by the author Get response when monitorMode === 'series' (#810).
   // The Update endpoint accepts an updated array via UpdateAuthorRequest.
   monitoredSeriesIds?: number[]
+  // What the last catalogue sync did with the provider's works (#1889).
+  // Absent until the server has synced this author since it last started.
+  lastSync?: AuthorSyncSummary
+}
+
+// AuthorSyncSummary reports how many provider works became books on the last
+// refresh and how many each filter dropped. Books removed by the
+// allowed-languages filter used to leave no trace outside a Debug log line, so
+// a catalogue that had been filtered down to a handful looked identical to an
+// author who only wrote a handful (#1889).
+export interface AuthorSyncSummary {
+  completedAt: string
+  total: number
+  added: number
+  skippedLanguage: number
+  skippedJunk: number
+  skippedMediaType: number
+  // The language set the run applied, and whether it also rejected works the
+  // provider reported no language for. Empty means no language filter.
+  allowedLanguages?: string[]
+  unknownLanguageFail?: boolean
+  // The first few dropped titles, capped server-side.
+  skippedLanguageSample?: AuthorSyncSkippedBook[]
+}
+
+export interface AuthorSyncSkippedBook {
+  title: string
+  // Empty when the provider reported no language for the work.
+  language: string
 }
 
 export interface AuthorAlias {
