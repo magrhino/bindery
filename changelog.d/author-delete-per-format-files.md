@@ -1,2 +1,0 @@
-### Fixed
-- **Deleting an author with "delete files" now removes every tracked file** — the sweep enumerated only the legacy `file_path` column, so a book's ebook/audiobook files tracked in `book_files` (multi-format books, audiobook folders) and any excluded book's files were left orphaned on disk. It now walks `book_files` per book (falling back to the per-format/legacy columns) and includes excluded books, matching the single-book delete path.
