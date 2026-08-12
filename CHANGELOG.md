@@ -6,8 +6,17 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 ## [v1.30.3] — 2026-08-12
 
-Three fixes, all of them things Bindery was doing repeatedly and silently: work
-it had already done, requests it had already been refused, and a field it was
+Six fixes. Three of them are one story: a book's media type records what Bindery
+was told to go and fetch, but the book detail page was using it to decide what
+to show you about the files already on disk. A book can legally hold both an
+ebook and an audiobook, and when the two disagreed the page put an Audiobook
+badge next to an epub's path, gave the second file no surface at all, and —
+the part worth upgrading for — offered a Delete button that removed both
+formats while naming one of them. The File section is now a list of what is
+actually there, and every delete says exactly which paths it will remove.
+
+The other three are things Bindery was doing repeatedly and silently: work it
+had already done, requests it had already been refused, and a field it was
 confidently reporting wrong.
 
 The one most likely to be felt is the author refresh. Before queuing a search
@@ -27,6 +36,80 @@ ever read when the provider had supplied nothing.
 
 ### Fixed
 
+- **The book detail page now lists every file on the book, and a delete can no
+  longer remove a format you were not shown**
+  ([#1948](https://github.com/vavallee/bindery/pull/1948)) — `media_type`
+  records acquisition intent, what search and monitoring are told to hunt for.
+  `book_files` records inventory, what is on disk. The File section rendered
+  inventory through the intent value, so any file outside the declared type was
+  invisible to display but still included in destruction. A book marked
+  `audiobook` that also held an epub showed a 🎧 Audiobook badge (from the media
+  type) next to the epub's path (from the legacy `file_path` column, which was
+  kept ebook-first regardless of media type); the audiobook itself had no row at
+  all, because the format switcher only appeared for books already marked
+  dual-format; Download sent no format and served the epub; and Delete file sent
+  a format-less `DELETE`, which enumerates every registered file and removes
+  both formats, while the dialog named one path and described it as the other
+  format's. The badge and the path came from different sources, and the
+  confirmation and the request disagreed.
+
+  The section is now a list built from the files themselves, grouped by format,
+  each group badged by its own format and nothing hidden behind the declared
+  type. Download and Delete live on the format group and are always scoped to
+  it, which is the honest unit: both endpoints act on every file of that format,
+  plus, for delete, the same-name sibling sweep. The confirmation dialog lists
+  every path the request will remove and is built from the same state the
+  request is, so the two cannot drift apart again. A format-less delete is still
+  available but only as an explicit **Delete all files** action, and its dialog
+  lists every path across both formats. **Fix match** now moves the file whose
+  row you opened rather than whichever format the switcher was on, and the
+  switcher is gone: hiding one format behind it is what made a registered file
+  invisible in the first place. Books that predate the `book_files` migration
+  and were never re-imported still render from the legacy columns.
+
+  Two smaller things fell out of the same work. A new per-file **Forget this
+  file** action drops a stale path from Bindery's records without touching disk
+  — the database-only mode added in
+  [#1692](https://github.com/vavallee/bindery/issues/1692) had no interface at
+  all until now, which is what you want when a file has already been moved or
+  removed elsewhere and the old path is still being reported. And the media
+  badge was a two-way ebook/audiobook check, so a dual-format book displayed as
+  "📖 Ebook"; it now renders both.
+- **A book holding both formats now declares itself dual-format**
+  ([#1946](https://github.com/vavallee/bindery/pull/1946)) — the display fix
+  above makes the page correct whatever the media type says, but the media type
+  was also simply wrong, and it is what search and monitoring read. When both an
+  ebook and an audiobook are registered against a book, its media type is now
+  widened to `both` on the next file event, because a file on disk settles the
+  question of what the book is. This is driven by inventory and is deliberately
+  independent of the metadata-driven widening pinned in
+  [#1732](https://github.com/vavallee/bindery/issues/1732): that pin exists
+  because Hardcover lists an audio edition for most popular titles, so widening
+  from metadata alone was widening on a claim. Here the audiobook is already
+  imported. Widening only ever fires when both files are present, so it cannot
+  flip a book back to wanted or start a download. Affected books heal on their
+  next import, delete, rename, or library reorganize; nothing runs at upgrade.
+
+  Two related corrections ride along. The legacy `file_path` column, which is
+  what the format-less download endpoint and OPDS serve, now prefers the path
+  matching the book's media type instead of always taking the ebook. And the
+  book list's `mediaType=both` filter now works: the `ebook` and `audiobook`
+  filters deliberately include dual-format books, so neither of them isolated
+  them, and the literal value `both` fell through unhandled and returned the
+  entire library. The Books page has a **📖🎧 Both** button to match.
+- **Editing an unmonitored book no longer starts a download**
+  ([#1947](https://github.com/vavallee/bindery/pull/1947)) — the book update
+  endpoint fires an immediate indexer search whenever a book crosses into
+  `wanted`: a status edit, a "Delete file", or a media-type change that exposes
+  a format it does not have
+  ([#1148](https://github.com/vavallee/bindery/issues/1148)). The only thing
+  guarding that was the global auto-grab kill-switch, so widening a book to
+  dual-format grabbed the missing format even when the book was explicitly
+  unmonitored — the one per-book control for "keep track of this, do not go and
+  get it". It now honours `monitored`. The status still changes and the book
+  still appears on the Wanted page; only the search is suppressed, and it runs
+  as normal once you monitor the book. The twelve-hour wanted scan already
+  honoured this, so nothing there changes.
 - **An author sync no longer walks the entire library once per new book**
   ([#1888](https://github.com/vavallee/bindery/issues/1888),
   [#1929](https://github.com/vavallee/bindery/issues/1929)) — before queuing a
