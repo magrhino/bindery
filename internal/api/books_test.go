@@ -941,6 +941,86 @@ func TestBookUpdate_MediaTypeChangeReevaluatesStatus(t *testing.T) {
 	}
 }
 
+// TestBookUpdate_NoSearchWhenUnmonitored is the counterpart to
+// TestBookUpdate_MediaTypeChangeReevaluatesStatus: the same transition on an
+// unmonitored book must record the change without grabbing anything.
+//
+// This hook was gated only on the global autoGrab kill-switch, so widening a
+// book to 'both' fired an immediate search regardless of Monitored — the one
+// per-book control a user has for "track this, don't fetch it". The status
+// must still flip: unmonitored suppresses the search, not the bookkeeping.
+func TestBookUpdate_NoSearchWhenUnmonitored(t *testing.T) {
+	searcher := newMockBookSearcher()
+	h, books, author, ctx := bookFixtureWithSearcher(t, searcher)
+
+	book := &models.Book{
+		ForeignID: "B-UNMON", AuthorID: author.ID, Title: "Unmonitored Dual", SortTitle: "unmonitored dual",
+		Status: models.BookStatusWanted, MediaType: models.MediaTypeAudiobook,
+		Genres: []string{}, MetadataProvider: "openlibrary", Monitored: false,
+	}
+	if err := books.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	if err := books.AddBookFile(ctx, book.ID, models.MediaTypeAudiobook, "/audiobooks/unmon.m4b"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := books.GetByID(ctx, book.ID); got == nil || got.Status != models.BookStatusImported {
+		t.Fatalf("precondition: expected imported audiobook, got %+v", got)
+	}
+
+	body := bytes.NewBufferString(`{"mediaType":"both"}`)
+	req := withURLParam(httptest.NewRequest(http.MethodPut, "/api/v1/book/"+strconv.FormatInt(book.ID, 10), body), "id", strconv.FormatInt(book.ID, 10))
+	rec := httptest.NewRecorder()
+	h.Update(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	got, err := books.GetByID(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != models.BookStatusWanted {
+		t.Errorf("status should still flip to wanted (the ebook is missing), got %q", got.Status)
+	}
+	if got.MediaType != models.MediaTypeBoth {
+		t.Errorf("mediaType should be both, got %q", got.MediaType)
+	}
+	searcher.assertNoCall(t, 100*time.Millisecond)
+}
+
+// TestBookUpdate_FiresSearchWhenMonitoredIsRestored pins the other direction:
+// the Monitored gate must not swallow searches for books that are monitored.
+// Without this, deleting the gate's condition entirely would still pass
+// TestBookUpdate_NoSearchWhenUnmonitored's sibling assertions.
+func TestBookUpdate_FiresSearchWhenMonitoredIsRestored(t *testing.T) {
+	searcher := newMockBookSearcher()
+	h, books, author, ctx := bookFixtureWithSearcher(t, searcher)
+
+	book := &models.Book{
+		ForeignID: "B-REMON", AuthorID: author.ID, Title: "Remonitored", SortTitle: "remonitored",
+		Status: "imported", MediaType: models.MediaTypeEbook,
+		Genres: []string{}, MetadataProvider: "openlibrary", Monitored: false,
+	}
+	if err := books.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	// Monitor and flip to wanted in the same request: the gate reads the
+	// post-patch value, so this must search.
+	body := bytes.NewBufferString(`{"status":"wanted","monitored":true}`)
+	req := withURLParam(httptest.NewRequest(http.MethodPut, "/api/v1/book/"+strconv.FormatInt(book.ID, 10), body), "id", strconv.FormatInt(book.ID, 10))
+	rec := httptest.NewRecorder()
+	h.Update(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	if call := searcher.waitForCall(t, time.Second); call.ID != book.ID {
+		t.Errorf("searcher called with wrong book id: got %d, want %d", call.ID, book.ID)
+	}
+}
+
 // staticRootLister is a RootLister stub that returns a fixed set of root
 // folder paths without touching a database. Used by the path-containment
 // tests so they don't have to wire a real RootFolderRepo.

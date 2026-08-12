@@ -565,7 +565,15 @@ func (h *BookHandler) Update(w http.ResponseWriter, r *http.Request) {
 	// searcher to keep tests that don't wire it nil-safe. Detach the request
 	// context so the search outlives the HTTP response but keeps any
 	// request-scoped values.
-	if h.searcher != nil && book.Status == models.BookStatusWanted && oldStatus != models.BookStatusWanted {
+	//
+	// Monitored is checked here because this hook is the one place a status
+	// transition grabs without the caller asking for a search. Widening a
+	// book to 'both' exposes a missing format and immediately downloads it;
+	// unmonitoring is the only way a user can say "record this, don't fetch
+	// it", and it was being ignored. The 12h wanted scan already filters on
+	// monitored (ListPageFiltered adds `AND books.monitored = 1` for the
+	// wanted status), so this closes the gap rather than opening a new one.
+	if h.searcher != nil && book.Monitored && book.Status == models.BookStatusWanted && oldStatus != models.BookStatusWanted {
 		b := *book
 		bgCtx := h.bgCtx()
 		// Respect the global auto-grab kill-switch.
