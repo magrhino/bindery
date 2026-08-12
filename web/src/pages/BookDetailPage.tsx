@@ -58,6 +58,67 @@ function languageName(code?: string): string | null {
   return LANGUAGE_NAMES[code.toLowerCase()] ?? code
 }
 
+/** One on-disk file, labelled by its own format rather than the book's. */
+type FileRow = {
+  format: 'ebook' | 'audiobook'
+  path: string
+  sizeBytes?: number
+  /** Backed by a book_files row, so `?path=` deregister will resolve it. */
+  tracked: boolean
+}
+
+// fileRows lists every file registered against the book, each labelled by its
+// OWN book_files.format.
+//
+// This page used to render the file section through book.mediaType, which
+// records acquisition intent, not inventory. A book declaring 'audiobook'
+// while also holding an epub showed an Audiobook badge next to the epub's
+// path, gave the audiobook row no surface at all, and — because a
+// non-dual-format book sent no ?format= — offered a Delete button that
+// removed BOTH formats while displaying one path.
+//
+// The fallback covers rows that predate the book_files migration (028) and
+// were never re-imported. The legacy single file_path carries no format, so
+// its shape has to be inferred; the server stats it (a directory is an
+// audiobook bundle, see legacyPathForFormat in internal/api/files.go), which
+// the browser cannot do, so the book's media type is the best proxy here.
+// Those rows are not `tracked`: deregister resolves paths against book_files
+// and 404s for anything absent.
+function fileRows(book: Book): FileRow[] {
+  if (book.bookFiles && book.bookFiles.length > 0) {
+    return book.bookFiles.map(f => ({
+      format: f.format,
+      path: f.path,
+      sizeBytes: f.sizeBytes,
+      tracked: true,
+    }))
+  }
+
+  const rows: FileRow[] = []
+  if (book.ebookFilePath) rows.push({ format: 'ebook', path: book.ebookFilePath, tracked: false })
+  if (book.audiobookFilePath) rows.push({ format: 'audiobook', path: book.audiobookFilePath, tracked: false })
+  if (rows.length === 0 && book.filePath) {
+    rows.push({
+      format: book.mediaType === 'audiobook' ? 'audiobook' : 'ebook',
+      path: book.filePath,
+      tracked: false,
+    })
+  }
+  return rows
+}
+
+// groupRowsByFormat buckets the rows into the format groups the delete and
+// download endpoints actually operate on. Both take ?format=, which covers
+// EVERY row of that format (plus, for delete, the same-stem sibling sweep),
+// so the group — not the row — is the honest unit for those two actions.
+// Ebook first, matching the server's format-less resolution order.
+function groupRowsByFormat(rows: FileRow[]): { format: 'ebook' | 'audiobook'; rows: FileRow[] }[] {
+  const formats: ('ebook' | 'audiobook')[] = ['ebook', 'audiobook']
+  return formats
+    .map(format => ({ format, rows: rows.filter(r => r.format === format) }))
+    .filter(g => g.rows.length > 0)
+}
+
 
 // Small coloured dot for a history row, by event type.
 const eventDotColors: Record<string, string> = {
@@ -180,16 +241,25 @@ export default function BookDetailPage() {
   const [asinDraft, setAsinDraft] = useState('')
   const [enriching, setEnriching] = useState(false)
   const [deletingFile, setDeletingFile] = useState(false)
+  const [deregistering, setDeregistering] = useState(false)
   const [deletingBook, setDeletingBook] = useState(false)
   const [togglingExclude, setTogglingExclude] = useState(false)
   const [showRebind, setShowRebind] = useState(false)
-  const [showFixMatch, setShowFixMatch] = useState(false)
   const [showRename, setShowRename] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
   const [showDeleteBook, setShowDeleteBook] = useState(false)
+  // The file the Fix match modal will move, chosen per row: a mislabelled
+  // book's "active" file was the wrong one to offer.
+  const [fixMatchRow, setFixMatchRow] = useState<FileRow | null>(null)
+  // The pending disk deletion. `format` undefined means every file on the
+  // book; `paths` is exactly what the dialog shows, so the confirmation and
+  // the request can never disagree.
+  const [deleteTarget, setDeleteTarget] = useState<
+    { format?: 'ebook' | 'audiobook'; paths: string[] } | null
+  >(null)
+  // The pending DB-only deregistration (#1692).
+  const [deregisterTarget, setDeregisterTarget] = useState<FileRow | null>(null)
   const pathClipboard = useClipboardCopy()
-  // For dual-format books, which format the file section is acting on.
-  const [activeFormat, setActiveFormat] = useState<'ebook' | 'audiobook'>('ebook')
   // Series membership for the meta row. series_books has been populated since
   // v0.7.0 but this page never surfaced it.
   const [series, setSeries] = useState<{ title: string; position: string }[]>([])
@@ -326,42 +396,46 @@ export default function BookDetailPage() {
     }
   }
 
-  const deleteFile = async (format?: 'ebook' | 'audiobook') => {
-    if (!book) return
-    const hasEbook = !!book.ebookFilePath
-    const hasAudiobook = !!book.audiobookFilePath
-    const hasLegacy = !!book.filePath && !hasEbook && !hasAudiobook
-    if (!hasEbook && !hasAudiobook && !hasLegacy) return
-
-    // Count files being deleted from book_files for accurate dialog copy.
-    const relevantFiles = book.bookFiles?.filter(f => !format || f.format === format) ?? []
-    const fileCount = relevantFiles.length
-
-    let label: string
-    let pathSummary: string
-    if (format === 'ebook' && hasEbook) {
-      label = fileCount > 1 ? `${fileCount} ebook files` : 'the ebook file'
-      pathSummary = relevantFiles.map(f => f.path).join('\n') || book.ebookFilePath
-    } else if (format === 'audiobook' && hasAudiobook) {
-      label = 'the audiobook folder'
-      pathSummary = book.audiobookFilePath
-    } else {
-      label = book.mediaType === 'audiobook' ? 'the audiobook folder' : 'this file'
-      pathSummary = book.filePath
-    }
-    if (!window.confirm(`Permanently delete ${label} from disk?\n\n${pathSummary}\n\nAny sibling files with the same name (different format) will also be removed.\n\nThe book record stays; it will flip back to "wanted".`)) return
+  // deleteFile runs the confirmed deletion described by `deleteTarget`.
+  //
+  // The query params are built from the target so the request can never be
+  // wider than what the dialog listed. A format-less DELETE enumerates every
+  // book_files row for the book, which is only correct for the explicit
+  // "delete all files" action.
+  const deleteFile = async () => {
+    if (!book || !deleteTarget) return
     setDeletingFile(true)
     setError(null)
     try {
-      const params = format ? `?format=${format}` : ''
+      const params = deleteTarget.format ? `?format=${deleteTarget.format}` : ''
       const updated = await api.deleteBookFile(book.id, params)
       setBook(updated)
+      setDeleteTarget(null)
       const h = await api.listHistory({ bookId: book.id }).then(p => p.items).catch(() => events)
       setEvents(h)
     } catch (e) {
       setError(e instanceof Error ? e.message : t('bookDetail.deleteFailed'))
     } finally {
       setDeletingFile(false)
+    }
+  }
+
+  // deregisterFile drops one book_files row and touches nothing on disk
+  // (#1692) — the tool for a stale path left behind when a file moved.
+  const deregisterFile = async () => {
+    if (!book || !deregisterTarget) return
+    setDeregistering(true)
+    setError(null)
+    try {
+      const updated = await api.deleteBookFile(book.id, `?path=${encodeURIComponent(deregisterTarget.path)}`)
+      setBook(updated)
+      setDeregisterTarget(null)
+      const h = await api.listHistory({ bookId: book.id }).then(p => p.items).catch(() => events)
+      setEvents(h)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t('bookDetail.deleteFailed'))
+    } finally {
+      setDeregistering(false)
     }
   }
 
@@ -414,15 +488,11 @@ export default function BookDetailPage() {
   if (!book) return <div className="text-slate-600 dark:text-zinc-500">{t('bookDetail.notFound')}</div>
 
   const mt: MediaType = book.mediaType || 'ebook'
-  const isDual = mt === 'both'
-  // The format the file section + actions + search apply to.
-  const fmt: 'ebook' | 'audiobook' = isDual ? activeFormat : (mt === 'audiobook' ? 'audiobook' : 'ebook')
 
-  // Resolve the file path for the currently active format.
-  const activePath = isDual
-    ? (fmt === 'ebook' ? book.ebookFilePath : book.audiobookFilePath)
-    : (book.filePath || book.ebookFilePath || book.audiobookFilePath)
-  const hasActiveFile = !!activePath
+  // Display truth is the file inventory, never the declared media type.
+  const rows = fileRows(book)
+  const groups = groupRowsByFormat(rows)
+  const hasAnyFile = rows.length > 0
 
   const lang = languageName(book.language)
   const publishedDate = book.releaseDate
@@ -437,16 +507,10 @@ export default function BookDetailPage() {
         ? t('bookDetail.searchBothIndexers')
         : t('bookDetail.searchEbookIndexers')
 
-  const downloadHref = isDual
-    ? `${BINDERY_BASE}/api/v1/book/${book.id}/file?format=${fmt}`
-    : `${BINDERY_BASE}/api/v1/book/${book.id}/file`
-
-  const formatButtonCls = (active: boolean) =>
-    `px-3 py-1 text-xs font-medium border ${
-      active
-        ? 'bg-emerald-600 border-emerald-600 text-white'
-        : 'bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 border-slate-300 dark:border-zinc-700 hover:bg-slate-300 dark:hover:bg-zinc-700'
-    }`
+  // Always format-scoped: the format-less endpoint falls back to the legacy
+  // file_path, which on a mislabelled book points at the other format.
+  const downloadHref = (format: 'ebook' | 'audiobook') =>
+    `${BINDERY_BASE}/api/v1/book/${book.id}/file?format=${format}`
 
   return (
     // One width shared with AuthorDetailPage. These two pages used to disagree
@@ -627,89 +691,122 @@ export default function BookDetailPage() {
       <Section title={t('bookDetail.fileHeading')}>
         <div>
           <div className="grid grid-cols-[92px_1fr] gap-x-4 gap-y-3 text-sm items-center">
-            <span className="text-xs text-slate-500 dark:text-zinc-500">{t('bookDetail.formatLabel')}</span>
-            {isDual ? (
-              <div className="inline-flex rounded overflow-hidden w-fit" role="group" aria-label={t('bookDetail.formatLabel')}>
-                <button
-                  type="button"
-                  onClick={() => setActiveFormat('ebook')}
-                  aria-pressed={fmt === 'ebook'}
-                  title={book.ebookFilePath ? t('bookDetail.formatOnDisk') : t('bookDetail.formatNotOnDisk')}
-                  className={`${formatButtonCls(fmt === 'ebook')} rounded-l`}
-                >
-                  <span aria-hidden>📖</span> {t('common.ebook')}
-                  {book.ebookFilePath && <span aria-hidden className="ml-1">✓</span>}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveFormat('audiobook')}
-                  aria-pressed={fmt === 'audiobook'}
-                  title={book.audiobookFilePath ? t('bookDetail.formatOnDisk') : t('bookDetail.formatNotOnDisk')}
-                  className={`${formatButtonCls(fmt === 'audiobook')} rounded-r -ml-px`}
-                >
-                  <span aria-hidden>🎧</span> {t('common.audiobook')}
-                  {book.audiobookFilePath && <span aria-hidden className="ml-1">✓</span>}
-                </button>
-              </div>
-            ) : (
-              <span className="w-fit">
-                <MediaBadge type={fmt} />
-              </span>
-            )}
-
-            <span className="text-xs text-slate-500 dark:text-zinc-500">{t('bookDetail.pathLabel')}</span>
-            <span className="flex items-center gap-2 min-w-0">
-              {hasActiveFile ? (
-                <>
-                  <code
-                    className="font-mono text-xs text-slate-500 dark:text-zinc-500 truncate"
-                    title={activePath}
-                  >
-                    {activePath}
-                  </code>
-                  <button
-                    type="button"
-                    onClick={() => copyPath(activePath)}
-                    className="shrink-0 text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-200 text-xs border border-slate-300 dark:border-zinc-700 rounded px-1.5 py-0.5"
-                    aria-label={t('bookDetail.copyPath')}
-                  >
-                    <span aria-hidden>⧉</span> {pathClipboard.status === 'copied' ? t('bookDetail.copied') : t('bookDetail.copy')}
-                  </button>
-                </>
-              ) : (
-                <span className="text-xs text-slate-500 dark:text-zinc-500">{t('bookDetail.noFile')}</span>
-              )}
+            {/* The declared media type is what search and monitoring hunt for.
+                It is labelled as intent because the files below may disagree
+                with it, and when they do the files are the truth. */}
+            <span className="text-xs text-slate-500 dark:text-zinc-500">{t('bookDetail.wantedFormatLabel')}</span>
+            <span className="w-fit">
+              <MediaBadge type={mt} />
             </span>
-            {pathClipboard.status === 'manual' && (
-              <div className="col-start-2">
-                <ClipboardManualFallback text={pathClipboard.manualText} />
-              </div>
-            )}
           </div>
 
-          <div className="mt-4 pt-4 border-t border-slate-200 dark:border-zinc-800 flex flex-wrap items-center gap-2">
-            <a
-              href={downloadHref}
-              className={`${actionBtnCls} ${hasActiveFile ? '' : 'opacity-40 pointer-events-none'}`}
-              aria-disabled={!hasActiveFile}
-            >
-              {t('bookDetail.download')}
-            </a>
+          {hasAnyFile ? (
+            <div className="mt-4 space-y-4">
+              {groups.map(group => (
+                <div
+                  key={group.format}
+                  className="border border-slate-200 dark:border-zinc-800 rounded"
+                  data-testid={`file-group-${group.format}`}
+                >
+                  <div className="px-3 py-2 flex flex-wrap items-center gap-2 border-b border-slate-200 dark:border-zinc-800">
+                    <MediaBadge type={group.format} />
+                    <span className="text-xs text-slate-500 dark:text-zinc-500">
+                      {t('bookDetail.fileCount', { count: group.rows.length })}
+                    </span>
+                    <a
+                      href={downloadHref(group.format)}
+                      className={`ml-auto ${actionBtnCls}`}
+                      title={t('bookDetail.downloadFormatHint')}
+                    >
+                      {t('bookDetail.download')}
+                    </a>
+                    {/* Ghost-danger, not solid red. Deleting the file is
+                        reversible by re-downloading; solid red stays reserved
+                        for "Delete book + files" in the Danger zone, which is
+                        not. Always ?format=-scoped, so the sibling format
+                        survives. */}
+                    <button
+                      type="button"
+                      onClick={() => setDeleteTarget({ format: group.format, paths: group.rows.map(r => r.path) })}
+                      disabled={deletingFile || deregistering || deletingBook}
+                      className={`${btn.danger} ${btnSize.md}`}
+                    >
+                      <span aria-hidden>🗑 </span>
+                      {t('bookDetail.deleteFile')}
+                    </button>
+                  </div>
+
+                  <ul>
+                    {group.rows.map(row => (
+                      <li
+                        key={row.path}
+                        className="px-3 py-2 flex items-center gap-2 min-w-0 border-t first:border-t-0 border-slate-100 dark:border-zinc-900"
+                      >
+                        <code
+                          className="font-mono text-xs text-slate-500 dark:text-zinc-500 truncate"
+                          title={row.path}
+                        >
+                          {row.path}
+                        </code>
+                        {!!row.sizeBytes && (
+                          <span className="shrink-0 text-xs text-slate-400 dark:text-zinc-600">
+                            {formatSize(row.sizeBytes)}
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => copyPath(row.path)}
+                          className="ml-auto shrink-0 text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-200 text-xs border border-slate-300 dark:border-zinc-700 rounded px-1.5 py-0.5"
+                          aria-label={t('bookDetail.copyPath')}
+                        >
+                          <span aria-hidden>⧉</span> {pathClipboard.status === 'copied' ? t('bookDetail.copied') : t('bookDetail.copy')}
+                        </button>
+                        <MoreMenu
+                          label={t('common.more', 'More')}
+                          buttonClassName="shrink-0 text-xs border border-slate-300 dark:border-zinc-700 rounded px-1.5 py-0.5 text-slate-500 dark:text-zinc-400"
+                          items={[
+                            {
+                              label: t('bookDetail.fixMatch.button', 'Fix match'),
+                              title: t('bookDetail.fixMatch.hint', 'Move this file to a different book'),
+                              disabled: deletingFile || deregistering || deletingBook,
+                              onSelect: () => setFixMatchRow(row),
+                            },
+                            {
+                              label: t('bookDetail.deregister.button'),
+                              title: row.tracked
+                                ? t('bookDetail.deregister.hint')
+                                : t('bookDetail.deregister.untracked'),
+                              disabled: !row.tracked || deletingFile || deregistering || deletingBook,
+                              onSelect: () => setDeregisterTarget(row),
+                            },
+                          ]}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-4 text-xs text-slate-500 dark:text-zinc-500">{t('bookDetail.noFile')}</p>
+          )}
+
+          {pathClipboard.status === 'manual' && (
+            <div className="mt-2">
+              <ClipboardManualFallback text={pathClipboard.manualText} />
+            </div>
+          )}
+
+          <div
+            className="mt-4 pt-4 border-t border-slate-200 dark:border-zinc-800 flex flex-wrap items-center gap-2"
+            data-testid="file-section-actions"
+          >
             <button type="button" onClick={() => setShowRebind(true)} className={actionBtnCls}>
               {t('bookDetail.rebind')}
             </button>
-            <button
-              type="button"
-              onClick={() => setShowFixMatch(true)}
-              disabled={!hasActiveFile || deletingFile || deletingBook}
-              className={actionBtnCls}
-              title={t('bookDetail.fixMatch.hint', 'Move this file to a different book')}
-            >
-              {t('bookDetail.fixMatch.button', 'Fix match')}
-            </button>
             {/* Exclude and Rename files are the rarely-reached ones; keeping
-                them visible pushed Delete file out to the row's far edge and
-                made the whole row read as equally weighted. */}
+                them visible pushed the destructive action out to the row's far
+                edge and made the whole row read as equally weighted. */}
             <MoreMenu
               label={t('common.more', 'More')}
               buttonClassName={actionBtnCls}
@@ -727,23 +824,20 @@ export default function BookDetailPage() {
                 {
                   label: t('bookDetail.renameFiles.button', 'Rename files'),
                   title: t('bookDetail.renameFiles.hint', 'Move this book’s files to match the current naming template'),
-                  disabled: !(book.ebookFilePath || book.audiobookFilePath) || deletingFile || deletingBook,
+                  disabled: !hasAnyFile || deletingFile || deregistering || deletingBook,
                   onSelect: () => setShowRename(true),
+                },
+                {
+                  // The only caller allowed to send a format-less DELETE.
+                  // Kept out of the per-group controls so the wide delete is
+                  // always a deliberate, separately-labelled choice.
+                  label: t('bookDetail.deleteAllFiles.button'),
+                  title: t('bookDetail.deleteAllFiles.hint'),
+                  disabled: !hasAnyFile || deletingFile || deregistering || deletingBook,
+                  onSelect: () => setDeleteTarget({ paths: rows.map(r => r.path) }),
                 },
               ]}
             />
-            {/* Ghost-danger, not solid red. Deleting the file is reversible by
-                re-downloading; solid red stays reserved for "Delete book +
-                files" in the Danger zone, which is not. */}
-            <button
-              type="button"
-              onClick={() => deleteFile(isDual ? fmt : undefined)}
-              disabled={deletingFile || deletingBook || !hasActiveFile}
-              className={`ml-auto ${btn.danger} ${btnSize.md}`}
-            >
-              <span aria-hidden>🗑 </span>
-              {deletingFile ? t('bookDetail.deletingFile') : t('bookDetail.deleteFile')}
-            </button>
           </div>
 
           {book.excluded && (
@@ -902,16 +996,66 @@ export default function BookDetailPage() {
         />
       )}
 
-      {showFixMatch && hasActiveFile && (
+      {fixMatchRow && (
         <FixMatchModal
           sourceBookId={book.id}
-          path={activePath}
-          format={fmt}
-          onClose={() => setShowFixMatch(false)}
+          path={fixMatchRow.path}
+          format={fixMatchRow.format}
+          onClose={() => setFixMatchRow(null)}
           onReassigned={targetId => {
-            setShowFixMatch(false)
+            setFixMatchRow(null)
             navigate(`/book/${targetId}`)
           }}
+        />
+      )}
+
+      {/* The dialog lists every path the request will remove. The old
+          window.confirm named a single path derived from the book's media
+          type while a format-less DELETE removed every file on the book. */}
+      {deleteTarget && (
+        <ConfirmDialog
+          title={deleteTarget.format
+            ? t('bookDetail.deleteFilesTitle', { format: t(`common.${deleteTarget.format}`) })
+            : t('bookDetail.deleteAllFiles.button')}
+          body={
+            <div className="space-y-2">
+              <p>{t('bookDetail.deleteFilesBody', { count: deleteTarget.paths.length })}</p>
+              <ul className="space-y-1">
+                {deleteTarget.paths.map(p => (
+                  <li key={p} className="font-mono text-xs break-all text-slate-700 dark:text-zinc-300">
+                    {p}
+                  </li>
+                ))}
+              </ul>
+              <p>{t('bookDetail.deleteFilesSiblingNote')}</p>
+              <p>{t('bookDetail.deleteFilesStatusNote')}</p>
+            </div>
+          }
+          acknowledgeLabel={t('bookDetail.deleteAcknowledge')}
+          confirmLabel={t('bookDetail.deleteFilesConfirm')}
+          confirmingLabel={t('bookDetail.deletingFile')}
+          confirming={deletingFile}
+          onConfirm={deleteFile}
+          onClose={() => setDeleteTarget(null)}
+        />
+      )}
+
+      {deregisterTarget && (
+        <ConfirmDialog
+          title={t('bookDetail.deregister.button')}
+          body={
+            <div className="space-y-2">
+              <p>{t('bookDetail.deregister.body')}</p>
+              <p className="font-mono text-xs break-all text-slate-700 dark:text-zinc-300">
+                {deregisterTarget.path}
+              </p>
+            </div>
+          }
+          acknowledgeLabel={t('bookDetail.deregister.acknowledge')}
+          confirmLabel={t('bookDetail.deregister.confirm')}
+          confirming={deregistering}
+          onConfirm={deregisterFile}
+          onClose={() => setDeregisterTarget(null)}
         />
       )}
 

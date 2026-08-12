@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import BookDetailPage, { SearchResultsSection } from './BookDetailPage'
 import { api } from '../api/client'
-import type { Author, Book, Download, HistoryEvent, Indexer, SearchResult } from '../api/client'
+import type { Author, Book, BookFile, Download, HistoryEvent, Indexer, SearchResult } from '../api/client'
 import en from '../i18n/locales/en.json'
 
 // Resolve a dotted i18n key against the real English locale, applying the
@@ -111,6 +111,17 @@ function makeBook(overrides: Partial<Book> = {}): Book {
     excluded: false,
     language: 'en',
     author,
+    ...overrides,
+  }
+}
+
+function makeFile(overrides: Partial<BookFile> & { id: number }): BookFile {
+  return {
+    bookId: 42,
+    format: 'ebook',
+    path: '/library/book.epub',
+    sizeBytes: 0,
+    createdAt: '2026-05-01T12:00:00Z',
     ...overrides,
   }
 }
@@ -330,11 +341,13 @@ describe('BookDetailPage — header & metadata', () => {
 })
 
 describe('BookDetailPage — file section actions', () => {
-  it('renders a download link for a single-format book with a file', async () => {
+  // Always ?format=-scoped now: the format-less endpoint falls back to the
+  // legacy file_path, which on a mislabelled book points at the other format.
+  it('renders a format-scoped download link for a single-format book', async () => {
     vi.mocked(api.getBook).mockResolvedValue(makeBook({ filePath: '/library/book.epub' }))
     renderBookDetailPage()
     const download = await screen.findByRole('link', { name: 'Download' })
-    expect(download).toHaveAttribute('href', '/api/v1/book/42/file')
+    expect(download).toHaveAttribute('href', '/api/v1/book/42/file?format=ebook')
   })
 
   it('shows the format badge for a single-format book', async () => {
@@ -358,30 +371,105 @@ describe('BookDetailPage — file section actions', () => {
     await waitFor(() => expect(api.toggleExcluded).toHaveBeenCalledWith(42))
   })
 
-  it('keeps Download, Re-bind and Fix match on the row itself', async () => {
+  it('keeps Download and Delete on the format group, Re-bind on the section', async () => {
     vi.mocked(api.getBook).mockResolvedValue(makeBook({ filePath: '/library/book.epub' }))
     renderBookDetailPage()
-    expect(await screen.findByRole('link', { name: 'Download' })).toBeInTheDocument()
+    const group = within(await screen.findByTestId('file-group-ebook'))
+    expect(group.getByRole('link', { name: 'Download' })).toBeInTheDocument()
+    expect(group.getByRole('button', { name: /Delete file/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Re-bind' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Fix match' })).toBeInTheDocument()
-    // …and the overflow ones off it, until the menu is opened.
+    // …and the overflow ones off the row, until a menu is opened.
     expect(screen.queryByRole('button', { name: 'Exclude' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Rename files' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Fix match' })).toBeNull()
   })
 
-  it('opens the rename-files modal from the More menu', async () => {
+  it('opens the rename-files modal from the section More menu', async () => {
     vi.mocked(api.getBook).mockResolvedValue(makeBook({ ebookFilePath: '/library/book.epub' }))
     renderBookDetailPage()
-    fireEvent.click(await screen.findByRole('button', { name: /More/ }))
+    const actions = within(await screen.findByTestId('file-section-actions'))
+    fireEvent.click(actions.getByRole('button', { name: /More/ }))
     expect(await screen.findByRole('menuitem', { name: 'Rename files' })).toBeEnabled()
   })
 
-  it('deletes a file via api.deleteBookFile after confirmation', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+  it('scopes the group delete to that format after confirmation', async () => {
     vi.mocked(api.getBook).mockResolvedValue(makeBook({ filePath: '/library/book.epub' }))
     renderBookDetailPage()
-    fireEvent.click(await screen.findByRole('button', { name: /Delete file/ }))
+    const group = within(await screen.findByTestId('file-group-ebook'))
+    fireEvent.click(group.getByRole('button', { name: /Delete file/ }))
+    // ConfirmDialog gates the confirm button behind the acknowledgement.
+    fireEvent.click(await screen.findByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete from disk' }))
+    await waitFor(() => expect(api.deleteBookFile).toHaveBeenCalledWith(42, '?format=ebook'))
+  })
+
+  // The dialog must name every path the request will remove: the old
+  // window.confirm printed one path derived from the book's media type while
+  // a format-less DELETE removed every file on the book.
+  it('lists every path the pending delete will remove', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(
+      makeBook({
+        bookFiles: [
+          makeFile({ id: 1, format: 'ebook', path: '/library/book.epub' }),
+          makeFile({ id: 2, format: 'ebook', path: '/library/book.mobi' }),
+        ],
+      }),
+    )
+    renderBookDetailPage()
+    const group = within(await screen.findByTestId('file-group-ebook'))
+    fireEvent.click(group.getByRole('button', { name: /Delete file/ }))
+
+    const dialog = await screen.findByText(/Permanently delete 2 file/)
+    expect(dialog).toBeInTheDocument()
+    const body = dialog.parentElement as HTMLElement
+    expect(within(body).getByText('/library/book.epub')).toBeInTheDocument()
+    expect(within(body).getByText('/library/book.mobi')).toBeInTheDocument()
+  })
+
+  it('sends a format-less delete only from the explicit delete-all action', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(
+      makeBook({
+        mediaType: 'both',
+        bookFiles: [
+          makeFile({ id: 1, format: 'ebook', path: '/library/book.epub' }),
+          makeFile({ id: 2, format: 'audiobook', path: '/library/book-audio' }),
+        ],
+      }),
+    )
+    renderBookDetailPage()
+    const actions = within(await screen.findByTestId('file-section-actions'))
+    fireEvent.click(actions.getByRole('button', { name: /More/ }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete all files' }))
+    fireEvent.click(await screen.findByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete from disk' }))
     await waitFor(() => expect(api.deleteBookFile).toHaveBeenCalledWith(42, ''))
+  })
+
+  it('deregisters a single row by path without touching disk', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(
+      makeBook({
+        bookFiles: [makeFile({ id: 1, format: 'ebook', path: '/library/stale copy.epub' })],
+      }),
+    )
+    renderBookDetailPage()
+    const group = within(await screen.findByTestId('file-group-ebook'))
+    fireEvent.click(group.getByRole('button', { name: /More/ }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Forget this file' }))
+    fireEvent.click(await screen.findByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: 'Forget file' }))
+    await waitFor(() =>
+      expect(api.deleteBookFile).toHaveBeenCalledWith(42, '?path=%2Flibrary%2Fstale%20copy.epub'),
+    )
+  })
+
+  // Legacy rows predate migration 028 and have no book_files entry, so
+  // deregister would 404 against a path the server cannot resolve.
+  it('disables deregister for untracked legacy rows', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(makeBook({ filePath: '/library/legacy.epub' }))
+    renderBookDetailPage()
+    const group = within(await screen.findByTestId('file-group-ebook'))
+    fireEvent.click(group.getByRole('button', { name: /More/ }))
+    expect(await screen.findByRole('menuitem', { name: 'Forget this file' })).toBeDisabled()
   })
 
   it('copies the file path to the clipboard', async () => {
@@ -494,58 +582,100 @@ describe('BookDetailPage — media type selector', () => {
 })
 
 describe('BookDetailPage — dual-format book', () => {
-  it('renders a format switcher for a two-format book', async () => {
+  it('renders one group per format, both visible at once', async () => {
     vi.mocked(api.getBook).mockResolvedValue(
       makeBook({
         mediaType: 'both',
-        ebookFilePath: '/library/book.epub',
-        audiobookFilePath: '/library/book-audio',
+        bookFiles: [
+          makeFile({ id: 1, format: 'ebook', path: '/library/book.epub' }),
+          makeFile({ id: 2, format: 'audiobook', path: '/library/book-audio' }),
+        ],
       }),
     )
     renderBookDetailPage()
 
-    const ebookBtn = await screen.findByRole('button', { name: /Ebook/ })
-    const audioBtn = screen.getByRole('button', { name: /Audiobook/ })
-    expect(ebookBtn).toHaveAttribute('aria-pressed', 'true')
-    expect(audioBtn).toHaveAttribute('aria-pressed', 'false')
-
-    // The path shown follows the active format.
-    expect(screen.getByText('/library/book.epub')).toBeInTheDocument()
-    fireEvent.click(audioBtn)
-    expect(await screen.findByText('/library/book-audio')).toBeInTheDocument()
+    // No switcher: hiding one format behind a toggle is what made a
+    // registered file invisible in the first place.
+    expect(await screen.findByText('/library/book.epub')).toBeInTheDocument()
+    expect(screen.getByText('/library/book-audio')).toBeInTheDocument()
+    expect(screen.getByTestId('file-group-ebook')).toBeInTheDocument()
+    expect(screen.getByTestId('file-group-audiobook')).toBeInTheDocument()
   })
 
-  it('marks which formats are on disk in the switcher', async () => {
+  it('scopes each group download and delete to its own format', async () => {
     vi.mocked(api.getBook).mockResolvedValue(
       makeBook({
         mediaType: 'both',
-        ebookFilePath: '/library/book.epub',
-        audiobookFilePath: '',
+        bookFiles: [
+          makeFile({ id: 1, format: 'ebook', path: '/library/book.epub' }),
+          makeFile({ id: 2, format: 'audiobook', path: '/library/book-audio' }),
+        ],
       }),
     )
     renderBookDetailPage()
 
-    const ebookBtn = await screen.findByRole('button', { name: /Ebook/ })
-    const audioBtn = screen.getByRole('button', { name: /Audiobook/ })
-    expect(ebookBtn).toHaveAttribute('title', 'On disk')
-    expect(ebookBtn).toHaveTextContent('✓')
-    expect(audioBtn).toHaveAttribute('title', 'Not downloaded')
-    expect(audioBtn).not.toHaveTextContent('✓')
+    const audio = within(await screen.findByTestId('file-group-audiobook'))
+    expect(audio.getByRole('link', { name: 'Download' })).toHaveAttribute(
+      'href',
+      '/api/v1/book/42/file?format=audiobook',
+    )
+    fireEvent.click(audio.getByRole('button', { name: /Delete file/ }))
+    fireEvent.click(await screen.findByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete from disk' }))
+    await waitFor(() => expect(api.deleteBookFile).toHaveBeenCalledWith(42, '?format=audiobook'))
   })
 
-  it('deletes the active format file for a dual-format book', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+  // The live specimen from the bug report: media_type says audiobook, but
+  // book_files holds an epub too. Both files must be visible, each badged by
+  // its own format — not by the book's.
+  it('shows a file whose format disagrees with the declared media type', async () => {
     vi.mocked(api.getBook).mockResolvedValue(
       makeBook({
-        mediaType: 'both',
-        ebookFilePath: '/library/book.epub',
-        audiobookFilePath: '/library/book-audio',
+        mediaType: 'audiobook',
+        bookFiles: [
+          makeFile({ id: 1, format: 'audiobook', path: '/library/redshirts-audio' }),
+          makeFile({ id: 2, format: 'ebook', path: '/library/redshirts.epub' }),
+        ],
       }),
     )
     renderBookDetailPage()
 
-    fireEvent.click(await screen.findByRole('button', { name: /Delete file/ }))
+    expect(await screen.findByText('/library/redshirts.epub')).toBeInTheDocument()
+    expect(screen.getByText('/library/redshirts-audio')).toBeInTheDocument()
+
+    const ebookGroup = within(screen.getByTestId('file-group-ebook'))
+    expect(ebookGroup.getByTestId('badge-ebook')).toBeInTheDocument()
+    // The epub's own group must delete only the epub.
+    fireEvent.click(ebookGroup.getByRole('button', { name: /Delete file/ }))
+    fireEvent.click(await screen.findByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete from disk' }))
     await waitFor(() => expect(api.deleteBookFile).toHaveBeenCalledWith(42, '?format=ebook'))
+  })
+
+  it('renders legacy per-format paths when book_files is empty', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(
+      makeBook({
+        mediaType: 'both',
+        ebookFilePath: '/library/legacy.epub',
+        audiobookFilePath: '/library/legacy-audio',
+      }),
+    )
+    renderBookDetailPage()
+
+    expect(await screen.findByText('/library/legacy.epub')).toBeInTheDocument()
+    expect(screen.getByText('/library/legacy-audio')).toBeInTheDocument()
+  })
+
+  // The legacy single file_path carries no format. The server infers it by
+  // stat-ing the path; the browser cannot, so the media type is the proxy.
+  it('labels a legacy single file_path by the book media type', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(
+      makeBook({ mediaType: 'audiobook', filePath: '/library/legacy-audio' }),
+    )
+    renderBookDetailPage()
+
+    expect(await screen.findByTestId('file-group-audiobook')).toBeInTheDocument()
+    expect(screen.queryByTestId('file-group-ebook')).toBeNull()
   })
 })
 
