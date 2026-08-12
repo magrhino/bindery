@@ -36,7 +36,7 @@ export default function BooksPage() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState('')
-  const [mediaFilter, setMediaFilter] = useState<'' | 'ebook' | 'audiobook'>('')
+  const [mediaFilter, setMediaFilter] = useState<'' | 'ebook' | 'audiobook' | 'both'>('')
   const [monitoredFilter, setMonitoredFilter] = useState<MonitoredFilter>(() => {
     try {
       const v = localStorage.getItem('bindery.filter.books.monitored')
@@ -217,6 +217,9 @@ export default function BooksPage() {
         <button onClick={() => setMediaFilter('')} className={sortBtnCls(mediaFilter === '')}>{t('common.all')}</button>
         <button onClick={() => setMediaFilter('ebook')} className={sortBtnCls(mediaFilter === 'ebook')}>📖 {t('common.ebook')}</button>
         <button onClick={() => setMediaFilter('audiobook')} className={sortBtnCls(mediaFilter === 'audiobook')}>🎧 {t('common.audiobook')}</button>
+        {/* The Ebook/Audiobook filters deliberately include dual-format books,
+            so neither one isolates them; this does. */}
+        <button onClick={() => setMediaFilter('both')} className={sortBtnCls(mediaFilter === 'both')}>📖🎧 {t('common.both')}</button>
 
         <span className="text-xs text-slate-600 dark:text-zinc-500 mx-2 self-center">{t('books.filterMonitored', 'Monitored:')}</span>
         <button onClick={() => setMonitoredFilter('')} className={sortBtnCls(monitoredFilter === '')}>{t('books.filterAll', 'All')}</button>

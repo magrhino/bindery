@@ -295,6 +295,11 @@ func (r *BookRepo) ListPageFiltered(ctx context.Context, f BookListFilter, limit
 		where += " AND (books.media_type IN ('ebook','both') OR books.media_type IS NULL OR books.media_type = '')"
 	case "audiobook":
 		where += " AND books.media_type IN ('audiobook','both')"
+	case "both":
+		// Exact match, unlike the two cases above: those deliberately include
+		// dual-format books ("show me everything with an ebook"), whereas
+		// filtering *for* 'both' is only useful if it isolates them.
+		where += " AND books.media_type = 'both'"
 	}
 	// Monitored is a separate column from status; the parameterised equality is a
 	// cheap scan (no dedicated index — the WHERE is already narrowed by excluded=0
@@ -650,6 +655,30 @@ func (r *BookRepo) UpdateBookFilePath(ctx context.Context, fileID, bookID int64,
 	return r.refreshBookStatus(ctx, bookID)
 }
 
+// legacyFilePathFor picks the value for the legacy books.file_path column,
+// preferring the path that matches the book's own media type. An
+// audiobook-only book whose file_path pointed at a stray ebook is what made
+// the formatless download endpoint serve the wrong format.
+//
+// Callers coming from refreshBookStatus can no longer reach the first arm
+// (inventory widening turns any book holding both paths into 'both' before
+// this runs, and with one path every arm agrees), so it is pinned by its own
+// unit test rather than through refreshBookStatus. It is kept because the
+// column's contract is "the path this book's media type describes", and that
+// should not silently depend on the widening staying unconditional.
+func legacyFilePathFor(mediaType, ebookPath, audiobookPath string) string {
+	switch {
+	case mediaType == models.MediaTypeAudiobook && audiobookPath != "":
+		return audiobookPath
+	case ebookPath != "":
+		return ebookPath
+	case audiobookPath != "":
+		return audiobookPath
+	default:
+		return ""
+	}
+}
+
 // refreshBookStatus recomputes the aggregate status for a book from its
 // current book_files rows and updates both the status and legacy columns.
 // It queries book_files directly so the result is always authoritative,
@@ -681,6 +710,20 @@ func (r *BookRepo) refreshBookStatus(ctx context.Context, bookID int64) error {
 	b.EbookFilePath = ebookPath
 	b.AudiobookFilePath = audiobookPath
 
+	// Inventory-driven widening: media_type records acquisition intent, but a
+	// file on disk makes that intent moot. Without this, a book carrying both
+	// formats in book_files while declaring one of them renders every file
+	// through the declared type — the wrong badge, the wrong download, and a
+	// delete dialog naming one path while the handler removes both.
+	//
+	// Deliberately NOT gated on the #1732 media-type pin: that pin guards
+	// Hardcover *hydration* (bookhydrate.Options.MediaTypePinned), which
+	// widened books from metadata alone — "this work has an audio edition
+	// somewhere". Here the audiobook is already imported.
+	if ebookPath != "" && audiobookPath != "" && b.MediaType != models.MediaTypeBoth {
+		b.MediaType = models.MediaTypeBoth
+	}
+
 	// Derive status from which formats still need files.
 	if !b.NeedsEbook() && !b.NeedsAudiobook() {
 		b.Status = models.BookStatusImported
@@ -688,14 +731,8 @@ func (r *BookRepo) refreshBookStatus(ctx context.Context, bookID int64) error {
 		b.Status = models.BookStatusWanted
 	}
 
-	// Keep legacy file_path column in sync with the first available file path.
-	if ebookPath != "" {
-		b.FilePath = ebookPath
-	} else if audiobookPath != "" {
-		b.FilePath = audiobookPath
-	} else {
-		b.FilePath = ""
-	}
+	// Keep legacy file_path column in sync.
+	b.FilePath = legacyFilePathFor(b.MediaType, ebookPath, audiobookPath)
 
 	return r.Update(ctx, b)
 }

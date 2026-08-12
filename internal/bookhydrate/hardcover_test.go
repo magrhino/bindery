@@ -545,3 +545,57 @@ func TestHydrateHardcoverEditionsReturnsFetchErrorAsBestEffort(t *testing.T) {
 		t.Fatalf("unexpected mutation after fetch failure: result=%+v book=%+v", result, book)
 	}
 }
+
+// TestHydrateHardcoverEditionsRespectsMediaTypePin guards the #1732 boundary
+// against the inventory-driven widening added to refreshBookStatus: that
+// widening fires when a second format is already imported, this one fires on
+// metadata alone ("the work has an audio edition somewhere", true of most
+// popular titles). The two must stay independent — a pinned ebook book must
+// not become 'both' just because Hardcover lists an audiobook edition.
+func TestHydrateHardcoverEditionsRespectsMediaTypePin(t *testing.T) {
+	for _, pinned := range []bool{true, false} {
+		name := "unpinned widens"
+		if pinned {
+			name = "pinned stays ebook"
+		}
+		t.Run(name, func(t *testing.T) {
+			books, editions, book, ctx := newHydrateBook(t, "hc:pinned-book", "hardcover", models.MediaTypeEbook)
+			audioASIN := "b333333333"
+
+			result := HydrateHardcoverEditions(ctx, Options{
+				Book:     book,
+				Provider: "hardcover",
+				Editions: editions,
+				Books:    books,
+				FetchEditions: func(context.Context, string) ([]models.Edition, error) {
+					return []models.Edition{{
+						ForeignID: "hc:audio-pin",
+						Title:     "Audio",
+						ASIN:      &audioASIN,
+						Format:    "Audiobook",
+						Monitored: true,
+					}}, nil
+				},
+				MediaTypePinned: pinned,
+			})
+			if result.Err != nil {
+				t.Fatalf("hydrate err = %v", result.Err)
+			}
+
+			want := models.MediaTypeBoth
+			if pinned {
+				want = models.MediaTypeEbook
+			}
+			if book.MediaType != want {
+				t.Errorf("MediaType = %q, want %q (pinned=%v)", book.MediaType, want, pinned)
+			}
+			stored, err := books.GetByID(ctx, book.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.MediaType != want {
+				t.Errorf("persisted MediaType = %q, want %q (pinned=%v)", stored.MediaType, want, pinned)
+			}
+		})
+	}
+}
