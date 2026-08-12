@@ -341,13 +341,36 @@ describe('BookDetailPage — header & metadata', () => {
 })
 
 describe('BookDetailPage — file section actions', () => {
-  // Always ?format=-scoped now: the format-less endpoint falls back to the
-  // legacy file_path, which on a mislabelled book points at the other format.
+  // ?format=-scoped whenever the row carries a real format: the format-less
+  // endpoint falls back to the legacy file_path, which on a mislabelled book
+  // points at the other format.
   it('renders a format-scoped download link for a single-format book', async () => {
-    vi.mocked(api.getBook).mockResolvedValue(makeBook({ filePath: '/library/book.epub' }))
+    vi.mocked(api.getBook).mockResolvedValue(
+      makeBook({ bookFiles: [makeFile({ id: 1, format: 'ebook', path: '/library/book.epub' })] }),
+    )
     renderBookDetailPage()
     const download = await screen.findByRole('link', { name: 'Download' })
     expect(download).toHaveAttribute('href', '/api/v1/book/42/file?format=ebook')
+  })
+
+  // The bare legacy file_path row's format is only the media-type proxy; the
+  // server resolves ?format= against the path's on-disk shape, and the two
+  // can disagree (a book declared audiobook whose file_path is an epub would
+  // 404 on download and 400 on delete). Format-less is exact here because the
+  // row only exists when it is the book's only file.
+  it('goes format-less for the bare legacy file_path row', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(
+      makeBook({ mediaType: 'audiobook', filePath: '/library/legacy-thing' }),
+    )
+    renderBookDetailPage()
+    const download = await screen.findByRole('link', { name: 'Download' })
+    expect(download).toHaveAttribute('href', '/api/v1/book/42/file')
+
+    const group = within(screen.getByTestId('file-group-audiobook'))
+    fireEvent.click(group.getByRole('button', { name: /Delete file/ }))
+    fireEvent.click(await screen.findByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete from disk' }))
+    await waitFor(() => expect(api.deleteBookFile).toHaveBeenCalledWith(42, ''))
   })
 
   it('shows the format badge for a single-format book', async () => {
@@ -378,10 +401,28 @@ describe('BookDetailPage — file section actions', () => {
     expect(group.getByRole('link', { name: 'Download' })).toBeInTheDocument()
     expect(group.getByRole('button', { name: /Delete file/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Re-bind' })).toBeInTheDocument()
+    // One file → nothing to disambiguate, so Fix match stays at the surface.
+    expect(screen.getByRole('button', { name: 'Fix match' })).toBeInTheDocument()
     // …and the overflow ones off the row, until a menu is opened.
     expect(screen.queryByRole('button', { name: 'Exclude' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Rename files' })).toBeNull()
+  })
+
+  it('moves Fix match into the row menus once there are several files', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(
+      makeBook({
+        bookFiles: [
+          makeFile({ id: 1, format: 'ebook', path: '/library/book.epub' }),
+          makeFile({ id: 2, format: 'ebook', path: '/library/book.mobi' }),
+        ],
+      }),
+    )
+    renderBookDetailPage()
+    await screen.findByTestId('file-group-ebook')
     expect(screen.queryByRole('button', { name: 'Fix match' })).toBeNull()
+    // Each row menu is distinctly named, not N anonymous "More" buttons.
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for book.mobi' }))
+    expect(await screen.findByRole('menuitem', { name: 'Fix match' })).toBeEnabled()
   })
 
   it('opens the rename-files modal from the section More menu', async () => {
@@ -393,7 +434,9 @@ describe('BookDetailPage — file section actions', () => {
   })
 
   it('scopes the group delete to that format after confirmation', async () => {
-    vi.mocked(api.getBook).mockResolvedValue(makeBook({ filePath: '/library/book.epub' }))
+    vi.mocked(api.getBook).mockResolvedValue(
+      makeBook({ bookFiles: [makeFile({ id: 1, format: 'ebook', path: '/library/book.epub' })] }),
+    )
     renderBookDetailPage()
     const group = within(await screen.findByTestId('file-group-ebook'))
     fireEvent.click(group.getByRole('button', { name: /Delete file/ }))
@@ -650,6 +693,66 @@ describe('BookDetailPage — dual-format book', () => {
     fireEvent.click(await screen.findByRole('checkbox'))
     fireEvent.click(screen.getByRole('button', { name: 'Delete from disk' }))
     await waitFor(() => expect(api.deleteBookFile).toHaveBeenCalledWith(42, '?format=ebook'))
+  })
+
+  // The old format switcher told you a wanted format was "Not downloaded";
+  // the list must too, or the missing half of a dual-format book vanishes.
+  it('shows a Not downloaded placeholder for a wanted format with no file', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(
+      makeBook({
+        mediaType: 'both',
+        bookFiles: [makeFile({ id: 1, format: 'ebook', path: '/library/book.epub' })],
+      }),
+    )
+    renderBookDetailPage()
+
+    const audio = within(await screen.findByTestId('file-group-audiobook'))
+    expect(audio.getByText('Not downloaded')).toBeInTheDocument()
+    // A placeholder offers no actions — nothing to download or delete.
+    expect(audio.queryByRole('link', { name: 'Download' })).toBeNull()
+    expect(audio.queryByRole('button', { name: /Delete file/ })).toBeNull()
+    // The format that IS on disk renders normally next to it.
+    expect(within(screen.getByTestId('file-group-ebook')).getByText('/library/book.epub')).toBeInTheDocument()
+  })
+
+  it('renders no placeholder for a format the book does not want', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(
+      makeBook({
+        mediaType: 'ebook',
+        bookFiles: [makeFile({ id: 1, format: 'ebook', path: '/library/book.epub' })],
+      }),
+    )
+    renderBookDetailPage()
+    await screen.findByTestId('file-group-ebook')
+    expect(screen.queryByTestId('file-group-audiobook')).toBeNull()
+  })
+
+  it('keeps the plain no-file line when nothing at all is on disk', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(makeBook({ mediaType: 'both' }))
+    renderBookDetailPage()
+    expect(await screen.findByText('No file on disk')).toBeInTheDocument()
+    expect(screen.queryByTestId('file-group-ebook')).toBeNull()
+    expect(screen.queryByTestId('file-group-audiobook')).toBeNull()
+  })
+
+  it('marks only the clicked row as Copied', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(
+      makeBook({
+        bookFiles: [
+          makeFile({ id: 1, format: 'ebook', path: '/library/book.epub' }),
+          makeFile({ id: 2, format: 'ebook', path: '/library/book.mobi' }),
+        ],
+      }),
+    )
+    renderBookDetailPage()
+    await screen.findByTestId('file-group-ebook')
+
+    const copyButtons = screen.getAllByRole('button', { name: /Copy file path/ })
+    expect(copyButtons).toHaveLength(2)
+    fireEvent.click(copyButtons[0])
+    await waitFor(() => expect(copyButtons[0]).toHaveTextContent('Copied'))
+    expect(copyButtons[1]).toHaveTextContent('Copy')
+    expect(copyButtons[1]).not.toHaveTextContent('Copied')
   })
 
   it('renders legacy per-format paths when book_files is empty', async () => {

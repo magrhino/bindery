@@ -721,6 +721,11 @@ func (r *BookRepo) refreshBookStatus(ctx context.Context, bookID int64) error {
 	// widened books from metadata alone — "this work has an audio edition
 	// somewhere". Here the audiobook is already imported.
 	if ebookPath != "" && audiobookPath != "" && b.MediaType != models.MediaTypeBoth {
+		// Log it: this changes a user-visible field the user may have set
+		// themselves, and a silent flip has no answer to "why did my book
+		// become dual-format".
+		slog.Info("widened media_type from on-disk inventory",
+			"book_id", b.ID, "title", b.Title, "from", b.MediaType, "to", models.MediaTypeBoth)
 		b.MediaType = models.MediaTypeBoth
 	}
 

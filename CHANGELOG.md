@@ -64,8 +64,14 @@ ever read when the provider had supplied nothing.
   lists every path across both formats. **Fix match** now moves the file whose
   row you opened rather than whichever format the switcher was on, and the
   switcher is gone: hiding one format behind it is what made a registered file
-  invisible in the first place. Books that predate the `book_files` migration
-  and were never re-imported still render from the legacy columns.
+  invisible in the first place. One thing the switcher did carry is kept: a
+  format the book wants but has no file for still shows as **Not downloaded**,
+  so a dual-format book with one file on hand says which half it is still
+  waiting on. Books that predate the `book_files` migration and were never
+  re-imported still render from the legacy columns, and because that legacy
+  single path carries no format of its own, its Download and Delete deal with
+  it as the book's only file rather than guessing a format the server might
+  disagree with.
 
   Two smaller things fell out of the same work. A new per-file **Forget this
   file** action drops a stale path from Bindery's records without touching disk

@@ -58,6 +58,12 @@ function languageName(code?: string): string | null {
   return LANGUAGE_NAMES[code.toLowerCase()] ?? code
 }
 
+/** Final path segment, for labelling row-level controls. */
+function baseName(path: string): string {
+  const parts = path.replace(/[/\\]+$/, '').split(/[/\\]/)
+  return parts[parts.length - 1] || path
+}
+
 /** One on-disk file, labelled by its own format rather than the book's. */
 type FileRow = {
   format: 'ebook' | 'audiobook'
@@ -65,6 +71,15 @@ type FileRow = {
   sizeBytes?: number
   /** Backed by a book_files row, so `?path=` deregister will resolve it. */
   tracked: boolean
+  /**
+   * The bare legacy file_path row: no book_files entry, no per-format legacy
+   * column, so the format above is only the media-type proxy. The server
+   * resolves format-scoped requests against this row by stat-ing the path's
+   * shape, which can contradict the proxy (a book declared 'audiobook' whose
+   * file_path is an epub), so this row's Download and Delete go format-less —
+   * safe, because this row only exists when it is the book's ONLY file.
+   */
+  legacyUntyped?: boolean
 }
 
 // fileRows lists every file registered against the book, each labelled by its
@@ -102,6 +117,7 @@ function fileRows(book: Book): FileRow[] {
       format: book.mediaType === 'audiobook' ? 'audiobook' : 'ebook',
       path: book.filePath,
       tracked: false,
+      legacyUntyped: true,
     })
   }
   return rows
@@ -112,11 +128,21 @@ function fileRows(book: Book): FileRow[] {
 // EVERY row of that format (plus, for delete, the same-stem sibling sweep),
 // so the group — not the row — is the honest unit for those two actions.
 // Ebook first, matching the server's format-less resolution order.
-function groupRowsByFormat(rows: FileRow[]): { format: 'ebook' | 'audiobook'; rows: FileRow[] }[] {
+//
+// A format the book wants but holds no file for is included as an EMPTY group
+// (only while some other file exists — a book with nothing on disk keeps the
+// plain "no file" line). The old format switcher marked missing formats with
+// "Not downloaded"; dropping the switcher without this lost the only per-format
+// answer to "which one am I still waiting on".
+function groupRowsByFormat(
+  rows: FileRow[],
+  mediaType: MediaType,
+): { format: 'ebook' | 'audiobook'; rows: FileRow[] }[] {
   const formats: ('ebook' | 'audiobook')[] = ['ebook', 'audiobook']
+  const wanted = (f: string) => mediaType === f || mediaType === 'both'
   return formats
     .map(format => ({ format, rows: rows.filter(r => r.format === format) }))
-    .filter(g => g.rows.length > 0)
+    .filter(g => g.rows.length > 0 || (rows.length > 0 && wanted(g.format)))
 }
 
 
@@ -260,6 +286,8 @@ export default function BookDetailPage() {
   // The pending DB-only deregistration (#1692).
   const [deregisterTarget, setDeregisterTarget] = useState<FileRow | null>(null)
   const pathClipboard = useClipboardCopy()
+  // The row whose Copy was clicked — the hook's status is shared across rows.
+  const [copiedPath, setCopiedPath] = useState<string | null>(null)
   // Series membership for the meta row. series_books has been populated since
   // v0.7.0 but this page never surfaced it.
   const [series, setSeries] = useState<{ title: string; position: string }[]>([])
@@ -480,7 +508,10 @@ export default function BookDetailPage() {
     }
   }
 
+  // Remember WHICH path was copied: the hook's status is shared, so without
+  // this every row's copy button flipped to "Copied" together.
   const copyPath = async (path: string) => {
+    setCopiedPath(path)
     await pathClipboard.copy(path)
   }
 
@@ -491,7 +522,7 @@ export default function BookDetailPage() {
 
   // Display truth is the file inventory, never the declared media type.
   const rows = fileRows(book)
-  const groups = groupRowsByFormat(rows)
+  const groups = groupRowsByFormat(rows, mt)
   const hasAnyFile = rows.length > 0
 
   const lang = languageName(book.language)
@@ -507,10 +538,18 @@ export default function BookDetailPage() {
         ? t('bookDetail.searchBothIndexers')
         : t('bookDetail.searchEbookIndexers')
 
-  // Always format-scoped: the format-less endpoint falls back to the legacy
-  // file_path, which on a mislabelled book points at the other format.
-  const downloadHref = (format: 'ebook' | 'audiobook') =>
-    `${BINDERY_BASE}/api/v1/book/${book.id}/file?format=${format}`
+  // Format-scoped whenever the rows carry a real format: the format-less
+  // endpoint falls back to the legacy file_path, which on a mislabelled book
+  // points at the other format. The one exception is the bare legacy
+  // file_path row (see FileRow.legacyUntyped): its displayed format is only a
+  // proxy, the server resolves ?format= against the path's on-disk shape, and
+  // the two can disagree — so that row's group goes format-less, which is
+  // exact because the row only exists when it is the book's only file.
+  const groupIsUntyped = (g: { rows: FileRow[] }) => g.rows.some(r => r.legacyUntyped)
+  const downloadHref = (group: { format: 'ebook' | 'audiobook'; rows: FileRow[] }) =>
+    groupIsUntyped(group)
+      ? `${BINDERY_BASE}/api/v1/book/${book.id}/file`
+      : `${BINDERY_BASE}/api/v1/book/${book.id}/file?format=${group.format}`
 
   return (
     // One width shared with AuthorDetailPage. These two pages used to disagree
@@ -708,82 +747,110 @@ export default function BookDetailPage() {
                   className="border border-slate-200 dark:border-zinc-800 rounded"
                   data-testid={`file-group-${group.format}`}
                 >
-                  <div className="px-3 py-2 flex flex-wrap items-center gap-2 border-b border-slate-200 dark:border-zinc-800">
-                    <MediaBadge type={group.format} />
-                    <span className="text-xs text-slate-500 dark:text-zinc-500">
-                      {t('bookDetail.fileCount', { count: group.rows.length })}
-                    </span>
-                    <a
-                      href={downloadHref(group.format)}
-                      className={`ml-auto ${actionBtnCls}`}
-                      title={t('bookDetail.downloadFormatHint')}
-                    >
-                      {t('bookDetail.download')}
-                    </a>
-                    {/* Ghost-danger, not solid red. Deleting the file is
-                        reversible by re-downloading; solid red stays reserved
-                        for "Delete book + files" in the Danger zone, which is
-                        not. Always ?format=-scoped, so the sibling format
-                        survives. */}
-                    <button
-                      type="button"
-                      onClick={() => setDeleteTarget({ format: group.format, paths: group.rows.map(r => r.path) })}
-                      disabled={deletingFile || deregistering || deletingBook}
-                      className={`${btn.danger} ${btnSize.md}`}
-                    >
-                      <span aria-hidden>🗑 </span>
-                      {t('bookDetail.deleteFile')}
-                    </button>
-                  </div>
-
-                  <ul>
-                    {group.rows.map(row => (
-                      <li
-                        key={row.path}
-                        className="px-3 py-2 flex items-center gap-2 min-w-0 border-t first:border-t-0 border-slate-100 dark:border-zinc-900"
-                      >
-                        <code
-                          className="font-mono text-xs text-slate-500 dark:text-zinc-500 truncate"
-                          title={row.path}
+                  {group.rows.length === 0 ? (
+                    // A format the book wants but has no file for. The old
+                    // format switcher carried this ("Not downloaded"); the
+                    // list has to say it too or the missing half of a
+                    // dual-format book simply vanishes.
+                    <div className="px-3 py-2 flex flex-wrap items-center gap-2">
+                      <MediaBadge type={group.format} />
+                      <span className="text-xs text-slate-500 dark:text-zinc-500">
+                        {t('bookDetail.formatNotOnDisk')}
+                      </span>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="px-3 py-2 flex flex-wrap items-center gap-2 border-b border-slate-200 dark:border-zinc-800">
+                        <MediaBadge type={group.format} />
+                        <span className="text-xs text-slate-500 dark:text-zinc-500">
+                          {t('bookDetail.fileCount', { count: group.rows.length })}
+                        </span>
+                        <a
+                          href={downloadHref(group)}
+                          className={`ml-auto ${actionBtnCls}`}
+                          title={t('bookDetail.downloadFormatHint')}
                         >
-                          {row.path}
-                        </code>
-                        {!!row.sizeBytes && (
-                          <span className="shrink-0 text-xs text-slate-400 dark:text-zinc-600">
-                            {formatSize(row.sizeBytes)}
-                          </span>
-                        )}
+                          {t('bookDetail.download')}
+                        </a>
+                        {/* Ghost-danger, not solid red. Deleting the file is
+                            reversible by re-downloading; solid red stays
+                            reserved for "Delete book + files" in the Danger
+                            zone, which is not. ?format=-scoped so the sibling
+                            format survives — except the bare legacy row,
+                            whose proxy format the server may contradict; that
+                            one goes format-less, exact because it is the only
+                            file (see FileRow.legacyUntyped). */}
                         <button
                           type="button"
-                          onClick={() => copyPath(row.path)}
-                          className="ml-auto shrink-0 text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-200 text-xs border border-slate-300 dark:border-zinc-700 rounded px-1.5 py-0.5"
-                          aria-label={t('bookDetail.copyPath')}
+                          onClick={() => setDeleteTarget({
+                            format: groupIsUntyped(group) ? undefined : group.format,
+                            paths: group.rows.map(r => r.path),
+                          })}
+                          disabled={deletingFile || deregistering || deletingBook}
+                          className={`${btn.danger} ${btnSize.md}`}
                         >
-                          <span aria-hidden>⧉</span> {pathClipboard.status === 'copied' ? t('bookDetail.copied') : t('bookDetail.copy')}
+                          <span aria-hidden>🗑 </span>
+                          {group.rows.length > 1 ? t('bookDetail.deleteFiles') : t('bookDetail.deleteFile')}
                         </button>
-                        <MoreMenu
-                          label={t('common.more', 'More')}
-                          buttonClassName="shrink-0 text-xs border border-slate-300 dark:border-zinc-700 rounded px-1.5 py-0.5 text-slate-500 dark:text-zinc-400"
-                          items={[
-                            {
-                              label: t('bookDetail.fixMatch.button', 'Fix match'),
-                              title: t('bookDetail.fixMatch.hint', 'Move this file to a different book'),
-                              disabled: deletingFile || deregistering || deletingBook,
-                              onSelect: () => setFixMatchRow(row),
-                            },
-                            {
-                              label: t('bookDetail.deregister.button'),
-                              title: row.tracked
-                                ? t('bookDetail.deregister.hint')
-                                : t('bookDetail.deregister.untracked'),
-                              disabled: !row.tracked || deletingFile || deregistering || deletingBook,
-                              onSelect: () => setDeregisterTarget(row),
-                            },
-                          ]}
-                        />
-                      </li>
-                    ))}
-                  </ul>
+                      </div>
+
+                      <ul>
+                        {group.rows.map(row => (
+                          <li
+                            key={row.path}
+                            className="px-3 py-2 flex items-center gap-2 min-w-0 border-t first:border-t-0 border-slate-100 dark:border-zinc-900"
+                          >
+                            <code
+                              className="font-mono text-xs text-slate-500 dark:text-zinc-500 truncate"
+                              title={row.path}
+                            >
+                              {row.path}
+                            </code>
+                            {!!row.sizeBytes && (
+                              <span className="shrink-0 text-xs text-slate-400 dark:text-zinc-600">
+                                {formatSize(row.sizeBytes)}
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => copyPath(row.path)}
+                              className="ml-auto shrink-0 text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-200 text-xs border border-slate-300 dark:border-zinc-700 rounded px-1.5 py-0.5"
+                              aria-label={t('bookDetail.copyPath')}
+                            >
+                              <span aria-hidden>⧉</span>{' '}
+                              {pathClipboard.status === 'copied' && copiedPath === row.path
+                                ? t('bookDetail.copied')
+                                : t('bookDetail.copy')}
+                            </button>
+                            <MoreMenu
+                              label={t('common.more', 'More')}
+                              // Distinct name per row: N menus all announced
+                              // as "More" are indistinguishable to a screen
+                              // reader.
+                              ariaLabel={t('bookDetail.rowMore', { name: baseName(row.path) })}
+                              buttonClassName="shrink-0 text-xs border border-slate-300 dark:border-zinc-700 rounded px-1.5 py-0.5 text-slate-500 dark:text-zinc-400"
+                              items={[
+                                {
+                                  label: t('bookDetail.fixMatch.button', 'Fix match'),
+                                  title: t('bookDetail.fixMatch.hint', 'Move this file to a different book'),
+                                  disabled: deletingFile || deregistering || deletingBook,
+                                  onSelect: () => setFixMatchRow(row),
+                                },
+                                {
+                                  label: t('bookDetail.deregister.button'),
+                                  title: row.tracked
+                                    ? t('bookDetail.deregister.hint')
+                                    : t('bookDetail.deregister.untracked'),
+                                  disabled: !row.tracked || deletingFile || deregistering || deletingBook,
+                                  onSelect: () => setDeregisterTarget(row),
+                                },
+                              ]}
+                            />
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
                 </div>
               ))}
             </div>
@@ -804,6 +871,20 @@ export default function BookDetailPage() {
             <button type="button" onClick={() => setShowRebind(true)} className={actionBtnCls}>
               {t('bookDetail.rebind')}
             </button>
+            {/* With exactly one file there is nothing to disambiguate, so keep
+                Fix match at the surface it used to live on instead of one
+                level down in the row menu. Multi-file books pick per row. */}
+            {rows.length === 1 && (
+              <button
+                type="button"
+                onClick={() => setFixMatchRow(rows[0])}
+                disabled={deletingFile || deregistering || deletingBook}
+                className={actionBtnCls}
+                title={t('bookDetail.fixMatch.hint', 'Move this file to a different book')}
+              >
+                {t('bookDetail.fixMatch.button', 'Fix match')}
+              </button>
+            )}
             {/* Exclude and Rename files are the rarely-reached ones; keeping
                 them visible pushed the destructive action out to the row's far
                 edge and made the whole row read as equally weighted. */}
@@ -1031,7 +1112,9 @@ export default function BookDetailPage() {
               <p>{t('bookDetail.deleteFilesStatusNote')}</p>
             </div>
           }
-          acknowledgeLabel={t('bookDetail.deleteAcknowledge')}
+          // File deletes are recoverable by re-downloading, so the book
+          // delete's "cannot be undone" acknowledgement would overstate.
+          acknowledgeLabel={t('bookDetail.deleteFilesAcknowledge')}
           confirmLabel={t('bookDetail.deleteFilesConfirm')}
           confirmingLabel={t('bookDetail.deletingFile')}
           confirming={deletingFile}

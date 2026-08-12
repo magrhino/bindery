@@ -24,12 +24,19 @@ export interface MoreMenuItem {
 export default function MoreMenu({
   items,
   label,
+  ariaLabel,
   className = '',
   buttonClassName = `${btn.secondary} ${btnSize.md}`,
 }: {
   items: MoreMenuItem[]
   /** Accessible name for the trigger, e.g. "More actions". */
   label: string
+  /**
+   * Distinct accessible name when several menus share a visible label — a
+   * page listing N file rows otherwise exposes N buttons all named "More",
+   * indistinguishable to a screen reader. Falls back to `label`.
+   */
+  ariaLabel?: string
   className?: string
   buttonClassName?: string
 }) {
@@ -132,6 +139,7 @@ export default function MoreMenu({
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-label={ariaLabel}
         aria-controls={open ? menuId : undefined}
         onClick={() => (open ? close(false) : openAt('first'))}
         onKeyDown={onTriggerKeyDown}
@@ -145,7 +153,7 @@ export default function MoreMenu({
         <div
           id={menuId}
           role="menu"
-          aria-label={label}
+          aria-label={ariaLabel ?? label}
           onKeyDown={onMenuKeyDown}
           className="absolute right-0 z-20 mt-1 min-w-44 rounded-md border border-slate-300 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-900 py-1"
         >
