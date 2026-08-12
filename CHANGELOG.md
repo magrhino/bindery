@@ -4,6 +4,115 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
+## [v1.30.3] — 2026-08-12
+
+Three fixes, all of them things Bindery was doing repeatedly and silently: work
+it had already done, requests it had already been refused, and a field it was
+confidently reporting wrong.
+
+The one most likely to be felt is the author refresh. Before queuing a search
+for each book it creates, the sync checked whether the file was already on disk,
+and that check walked the entire library — once per book. On local disk the OS
+caches the directory tree and it hides; on a NAS mount it does not, and a
+65-book refresh spent close to an hour doing nothing but re-reading the same
+directories. It now walks each library root once per refresh.
+
+The other two came from users noticing something odd and looking closer. An
+indexer that answers "request limit reached, retry in 485 minutes" was being
+asked again on the very next search, and every search for the following eight
+hours, because nothing recorded what it had said. And a book whose file was
+Spanish displayed as English forever, because the language shown came from the
+metadata provider's description of the *work* and the file's own tag was only
+ever read when the provider had supplied nothing.
+
+### Fixed
+
+- **An author sync no longer walks the entire library once per new book**
+  ([#1888](https://github.com/vavallee/bindery/issues/1888),
+  [#1929](https://github.com/vavallee/bindery/issues/1929)) — before queuing a
+  search for each book it creates, the sync checks whether the file already
+  exists on disk, and that check did a full recursive walk of every library
+  root, per book. A sync that added 65 books walked the whole library 65 times.
+  On local disk the OS caches the directory tree and the cost hides; on an NFS
+  or SMB mount every walk is real network round trips per directory entry, and
+  at a few dozen seconds per walk this alone accounts for the reported
+  hour-long refresh. The sync now takes one snapshot of the library per
+  refresh: each root is walked once, on first use, and every per-book check is
+  answered from memory with the same matching rules as before — same root
+  selection per media type, same author-folder pre-filter, same title and
+  author comparison, in the same order. The walk also now honours cancellation,
+  which it previously ignored, so deleting an author mid-refresh stops the
+  filesystem work instead of letting it run to completion. One-off checks
+  (adding a single book, series add, recommendations) keep their per-call walk
+  and see the library exactly as it is at that moment; only files copied in by
+  hand while a refresh is mid-flight are invisible to that refresh's snapshot,
+  and the next refresh sees them.
+- **A rate-limited indexer is left alone until it says to come back**
+  ([#1934](https://github.com/vavallee/bindery/issues/1934)) — when an indexer
+  answers a search with a Newznab 500 (`Request limit reached. Retry in 485
+  minutes.`) Bindery used to record nothing, so the next search and every search
+  for the following eight hours sent it another request it had already refused.
+  The rate-limit classification existed but was consulted only inside a single
+  search, to stop the query cascade falling through to lower tiers. The retry
+  hint is now parsed out of the indexer's own message and that indexer is
+  skipped until the deadline passes, across the scheduled wanted scan, on-add
+  and bulk searches, and interactive search alike — they share one searcher, so
+  a limit hit by one is respected by all of them. An indexer that gives no hint
+  gets an hour; a parsed hint is clamped to between a minute and a day so a
+  malformed or absurd value cannot bench an indexer indefinitely. Editing the
+  indexer clears the hold immediately, so a new API key or a different account
+  takes effect on the next search rather than waiting out a lockout that
+  belonged to the old configuration. Interactive search reports the held indexer
+  as skipped with the deadline in the Search details panel, in the same place
+  the original error appeared, rather than dropping it from the list.
+
+  Two related gaps are deliberately untouched here and tracked separately:
+  authentication failures (a suspended account, a revoked key) get no cooldown,
+  because they never heal on a timer and a user who fixes their key must see it
+  work immediately — those need visibility and a notification
+  ([#1935](https://github.com/vavallee/bindery/issues/1935)) — and auto-grab
+  still decides from whatever indexers answered without recording that the
+  others were unreachable
+  ([#1936](https://github.com/vavallee/bindery/issues/1936)). The cooldown is
+  held in memory, so a restart costs one refused request per indexer per search
+  before it re-learns the limit, which is exactly the old behaviour and never
+  worse.
+- **A book whose file is in a different language than the catalogue says now
+  gets corrected on import**
+  ([#1933](https://github.com/vavallee/bindery/issues/1933)) — the language on a
+  book page came from the metadata provider, which describes the abstract
+  *work*, not the file you actually hold. The embedded `dc:language` tag was
+  read only when the provider had supplied nothing at all, so a Spanish EPUB
+  imported against an English OpenLibrary record displayed "English"
+  indefinitely, with the release name buried in a history row the only hint
+  otherwise. The tag is now read on every EPUB import and, when it disagrees
+  with the stored value, the file wins: a work has editions in many languages,
+  but the file on disk is one specific edition and is the thing you open. The
+  correction is recorded as a **Language Corrected** history event showing both
+  codes, so "why does my English book read as Spanish" has an answer in the
+  place you would look for it rather than only in a log line.
+
+  Precedence is user, then file, then provider. A language you set by hand locks
+  the field, and a locked field is left alone — the EPUB is not even opened.
+  Filling a language the catalogue never had is unchanged and stays silent: it
+  is a gap being filled, not a disagreement, and OpenLibrary routinely supplies
+  no work-level language at all. Comparison normalises both sides first, so a
+  provider's `en` against a file's `eng` is not mistaken for a conflict, and
+  nothing is written when an import fails — a book that never landed must not
+  rewrite its own catalogue entry.
+
+### Internal
+
+- **Race guard on the metadata test doubles**
+  ([#1924](https://github.com/vavallee/bindery/issues/1924)) — `mockProvider`'s
+  call recorders were written from several goroutines once the author refresh
+  started fanning out, which the race detector caught intermittently. Test-only;
+  no runtime behaviour changes.
+- **Base image digests bumped** for the `telemetry-server` and `discord-stats`
+  helper containers ([#1925](https://github.com/vavallee/bindery/pull/1925),
+  [#1926](https://github.com/vavallee/bindery/pull/1926)). The Bindery image
+  itself is unchanged.
+
 ## [v1.30.2] — 2026-08-11
 
 A maintenance release, and most of it is the same shape: something that had
