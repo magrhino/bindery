@@ -1692,6 +1692,18 @@ func detectDownloadFormat(files []string) string {
 	return models.MediaTypeEbook
 }
 
+// audiobookSupplementExts lists the ebook extensions an audiobook release ships
+// as SUPPLEMENTS rather than as an ebook edition: a chapter/companion PDF, a
+// liner-notes or info .txt/.rtf, occasionally a comic archive. None of them is a
+// text-ebook container, so when one sits in a folder that also holds audio it is
+// material belonging to the audiobook, not the book's ebook file. Real ebook
+// containers (.epub, .mobi, .azw3, .fb2, .djvu, …) are deliberately absent —
+// an epub beside an audiobook IS the ebook edition and must still reconcile
+// (#1957).
+var audiobookSupplementExts = map[string]bool{
+	".pdf": true, ".txt": true, ".rtf": true, ".cbz": true, ".cbr": true,
+}
+
 // videoExtensions lists common video container extensions. None of these are
 // book files, so a download whose largest file carries one is a movie/TV
 // release regardless of what smaller files ride along (#1591).
@@ -1964,6 +1976,25 @@ func pathUnderDir(path, dir string) bool {
 	return err == nil && !strings.HasPrefix(rel, "..")
 }
 
+// bookFormatClaim identifies one (book, media format) slot claimed during a
+// single library-scan pass. book_files rows are per-format, so a book can
+// legitimately take one ebook file and one audiobook file in the same pass.
+//
+// Two files of the SAME format claiming one book stays blocked as a matching
+// POLICY, not a data-integrity rule: BookFileRepo.Add is INSERT OR IGNORE and
+// book_files is UNIQUE on path alone, so a second same-format file appends a
+// row rather than overwriting anything (migration 028 exists precisely so
+// "multi-file downloads (epub + mobi + pdf) are all recorded"). The guard is
+// there because the title tier is fuzzy: at JW >= 0.85 several distinct files
+// can match one book, and attaching them all would quietly bury the mistake
+// inside a book's file list instead of surfacing it in Unmatched. Deliberate
+// multi-format sets still arrive through the import path, which knows the files
+// belong together; the scanner is guessing (#1957).
+type bookFormatClaim struct {
+	bookID int64
+	format string
+}
+
 // scanBook is the precomputed per-book data the library-scan reconciliation
 // loop needs. Hoisting normalizeTitle into this struct makes it run once per
 // book instead of once per (file, book) pair — see ScanLibrary.
@@ -2138,6 +2169,18 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 		}
 	}
 
+	// audioDirs holds every folder the walk found an audio file in, tracked or
+	// not. It is what tells a supplement PDF apart from a real ebook edition:
+	// see audiobookSupplementExts and the file loop below. Computed from
+	// foundFiles rather than inline so the answer never depends on walk order
+	// (the .pdf can be reached before the .m4b that explains it).
+	audioDirs := make(map[string]bool)
+	for _, p := range foundFiles {
+		if detectDownloadFormat([]string{p}) == models.MediaTypeAudiobook {
+			audioDirs[filepath.Clean(filepath.Dir(p))] = true
+		}
+	}
+
 	// Build author name and full-author caches for the reconciliation loop.
 	// authorMap is needed for the path-under-library-dir constraint check.
 	authorNames := make(map[int64]string)
@@ -2150,11 +2193,22 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 	}
 
 	// reconciledBooks prevents a single DB book from being matched to more
-	// than one file in the same scan pass. allBooks is loaded once and is
-	// never mutated in-memory, so without this guard a loose titleMatch could
-	// assign the same book to multiple files — last write wins, overwriting
-	// the correct earlier assignment.
-	reconciledBooks := make(map[int64]bool)
+	// than one file OF THE SAME FORMAT in the same scan pass. allBooks is
+	// loaded once and is never mutated in-memory, so without this guard a loose
+	// titleMatch would attach every file whose title fuzzy-matches the same book
+	// to that book. Nothing is overwritten when that happens — book_files rows
+	// are additive (see bookFormatClaim) — but a scan that silently hangs five
+	// same-format files off one book is worse than reporting the extras as
+	// unmatched, where the user can see and correct them.
+	//
+	// Keying on (book, format) rather than the bare book ID is what lets a
+	// dual-format folder attach both editions in ONE pass (#1957). AddBookFile
+	// is per-format: an epub and an m4b sitting side by side are two different
+	// rows on the same book, not a conflict. The old bare-ID guard claimed the
+	// book for whichever file the walk reached first and sent the other to
+	// Unmatched, so users had to run a second full scan — which then only
+	// worked if the second file's author/title parse survived (#1956).
+	reconciledBooks := make(map[bookFormatClaim]bool)
 
 	// Precompute per-book reconciliation data once. The title tier previously
 	// called normalizeTitle(book.Title) inside the per-file loop — a pure,
@@ -2252,6 +2306,74 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 		return set
 	}
 
+	// resolveAuthors picks the author set the title tier searches for a file,
+	// and reports which author string produced it.
+	//
+	// The parsed author (embedded tag when present, folder otherwise) is tried
+	// first, so well-tagged releases keep the #303 behaviour. When it matches
+	// NO catalogue author the file used to be unmatchable: authorMatch requires
+	// every significant token of the parsed author to be a token of the
+	// catalogue author's name, so an Audible-style contributor list — "Álvaro
+	// Enrigue, Natasha Wimmer - translator, Gabriel Porras", author plus
+	// translator plus narrator — can never match, and it had already overwritten
+	// the folder author that would have (#1956). Two fallbacks, in order:
+	//
+	//   1. the folder-derived author, which a {Author}/{Title}/ library resolves
+	//      correctly and which the tag overwrote;
+	//   2. the credited names in the list, for layouts with no author folder.
+	//
+	// A fallback is used only when it matches at least one author, so a file
+	// whose author simply isn't in the library still reports the parsed value.
+	//
+	// Tier 2 unions EVERY credited name that matches a catalogue author instead
+	// of trusting the first one. A contributor list carries no evidence about
+	// which credit the book is catalogued under: for "Bill Clinton, James
+	// Patterson" (catalogued under Patterson, both in the library) taking the
+	// first name searched only Clinton's books, so the right book wasn't even a
+	// candidate and any Clinton title within the fuzzy gate could take the file.
+	// With the union the correct book is always reachable and title similarity
+	// decides between them.
+	resolveAuthors := func(parsedAuthor, layoutAuthor string) (map[int64]bool, string) {
+		set := matchingAuthors(parsedAuthor)
+		if set == nil || len(set) > 0 {
+			return set, parsedAuthor
+		}
+		if layoutAuthor != "" && layoutAuthor != parsedAuthor {
+			if altSet := matchingAuthors(layoutAuthor); len(altSet) > 0 {
+				slog.Debug("library scan: parsed author matched no catalogue author, falling back",
+					"parsedAuthor", parsedAuthor, "using", layoutAuthor)
+				return altSet, layoutAuthor
+			}
+		}
+		var union map[int64]bool
+		var used []string
+		for _, alt := range contributorCandidates(parsedAuthor) {
+			if alt == parsedAuthor {
+				continue
+			}
+			altSet := matchingAuthors(alt)
+			if len(altSet) == 0 {
+				continue
+			}
+			if union == nil {
+				// A fresh map: matchingAuthors' results are memoised and must
+				// not be mutated.
+				union = make(map[int64]bool, len(altSet))
+			}
+			for id := range altSet {
+				union[id] = true
+			}
+			used = append(used, alt)
+		}
+		if len(union) > 0 {
+			alt := strings.Join(used, ", ")
+			slog.Debug("library scan: parsed author matched no catalogue author, falling back",
+				"parsedAuthor", parsedAuthor, "using", alt)
+			return union, alt
+		}
+		return set, parsedAuthor
+	}
+
 	var unmatchedFiles []unmatchedFile
 	var reconciled, unmatched, alreadyTracked, tagReadFailed int
 
@@ -2262,7 +2384,7 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 	var titleCand []int // reused candidate-index scratch
 	tryReconcileTitle := func(sb *scanBook, path, cleanPath, normParsed, detectedFmt string) bool {
 		b := sb.book
-		if reconciledBooks[b.ID] {
+		if reconciledBooks[bookFormatClaim{b.ID, detectedFmt}] {
 			return false
 		}
 		// Length gate: Jaro-Winkler is bounded above by 0.8 + 0.2·(minLen/
@@ -2300,7 +2422,7 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 			// this book — count them as tracked, not unmatched.
 			trackedPaths[filepath.Clean(filepath.Dir(cleanPath))] = true
 		}
-		reconciledBooks[b.ID] = true
+		reconciledBooks[bookFormatClaim{b.ID, detectedFmt}] = true
 		reconciled++
 		return true
 	}
@@ -2311,7 +2433,33 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 		// files_found always equals reconciled + unmatched + already_tracked
 		// (#1436).
 		cleanPath := filepath.Clean(path)
-		if trackedPaths[cleanPath] || trackedPaths[filepath.Clean(filepath.Dir(cleanPath))] {
+		detectedFmt := detectDownloadFormat([]string{path})
+		// The parent-directory entry in trackedPaths stands for "the sibling
+		// TRACKS of a tracked audiobook", so only an audio file may be absorbed
+		// by it. An ebook sharing that folder is a separate format on a
+		// possibly different book, and swallowing it as already-tracked hid
+		// every epub sitting next to an attached audiobook from the scan
+		// (#1957) — the mirror image of the one-format-per-pass claim below.
+		if trackedPaths[cleanPath] ||
+			(detectedFmt == models.MediaTypeAudiobook && trackedPaths[filepath.Clean(filepath.Dir(cleanPath))]) {
+			alreadyTracked++
+			continue
+		}
+		// An audiobook release routinely ships a chapter PDF, liner notes, or a
+		// stray .txt beside its audio. Those carry ebook extensions, so
+		// detectDownloadFormat calls them "ebook" and the tiers below would
+		// happily attach "Project Hail Mary.pdf" as the EBOOK FILE of the book
+		// whose m4b sits next to it — a 'both' book missing its ebook is a
+		// reconcile candidate by design (#1148), and the title fuzzy-matches at
+		// 1.0. Before the parent-directory narrowing above they were absorbed as
+		// already-tracked; keep that outcome for supplement-class files, decided
+		// by folder context rather than extension alone so a PDF-only or
+		// comics-only library still reconciles normally.
+		if detectedFmt == models.MediaTypeEbook &&
+			audiobookSupplementExts[strings.ToLower(filepath.Ext(cleanPath))] &&
+			audioDirs[filepath.Clean(filepath.Dir(cleanPath))] {
+			slog.Debug("library scan: treating file as an audiobook supplement",
+				"path", path, "reason", "ebook-extension file in a folder that holds audio")
 			alreadyTracked++
 			continue
 		}
@@ -2322,10 +2470,11 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 		// an "Author - Title" / "Title - Author" filename — the scan must not
 		// assume a single filename order (#754).
 		parsed := ParseFilename(path)
-		var layoutTitle string
+		var layoutTitle, layoutAuthor string
 		if a, t, ok := authorTitleFromLayout(path, s.libraryDir, s.audiobookDir); ok {
 			if a != "" {
 				parsed.Author = a
+				layoutAuthor = a
 			}
 			if t != "" {
 				parsed.Title = t
@@ -2351,6 +2500,12 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 				if tags.Title != "" && (layoutTitle == "" || !looksLikeChapterTitle(tags.Title)) {
 					parsed.Title = tags.Title
 				}
+				// The tag author still wins (#303), but it no longer DESTROYS
+				// the folder-derived author: layoutAuthor is kept as a fallback
+				// for the author tier below, because Audible-style contributor
+				// lists ("Author, X - translator, Narrator") match no catalogue
+				// author and used to leave such files permanently unmatched
+				// (#1956).
 				if tags.Author != "" {
 					parsed.Author = tags.Author
 				}
@@ -2362,11 +2517,10 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 
 		// Search existing books for a match: ASIN takes priority over fuzzy title+author.
 		matched := false
-		detectedFmt := detectDownloadFormat([]string{path})
 		if parsed.ASIN != "" {
 			for _, sb := range asinIndex[parsed.ASIN] {
 				b := sb.book
-				if reconciledBooks[b.ID] {
+				if reconciledBooks[bookFormatClaim{b.ID, detectedFmt}] {
 					continue
 				}
 				// File must live under the candidate book's effective library root.
@@ -2385,7 +2539,7 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 				if detectedFmt == models.MediaTypeAudiobook {
 					trackedPaths[filepath.Clean(filepath.Dir(cleanPath))] = true
 				}
-				reconciledBooks[b.ID] = true
+				reconciledBooks[bookFormatClaim{b.ID, detectedFmt}] = true
 				reconciled++
 				matched = true
 				break
@@ -2401,7 +2555,8 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 			// their books (booksByAuthor), iterated in library order. A nil set
 			// means the parsed author is empty/initials-only — authorMatch then
 			// accepts any author, so every wanted book is a candidate.
-			if authorSet := matchingAuthors(parsed.Author); authorSet == nil {
+			authorSet, _ := resolveAuthors(parsed.Author, layoutAuthor)
+			if authorSet == nil {
 				for i := range wantedBooks {
 					if tryReconcileTitle(&wantedBooks[i], path, cleanPath, normParsed, detectedFmt) {
 						matched = true
@@ -2428,7 +2583,7 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 			if seriesErr != nil {
 				slog.Warn("library scan: series position lookup error",
 					"series", parsed.Series, "position", parsed.SeriesNumber, "error", seriesErr)
-			} else if book != nil && !reconciledBooks[book.ID] {
+			} else if book != nil && !reconciledBooks[bookFormatClaim{book.ID, detectedFmt}] {
 				effDir := s.effectiveLibraryDir(ctx, authorMap[book.AuthorID])
 				if pathUnderDir(path, effDir) {
 					if err := s.books.AddBookFile(ctx, book.ID, detectedFmt, path); err != nil {
@@ -2440,7 +2595,7 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 						if detectedFmt == models.MediaTypeAudiobook {
 							trackedPaths[filepath.Clean(filepath.Dir(cleanPath))] = true
 						}
-						reconciledBooks[book.ID] = true
+						reconciledBooks[bookFormatClaim{book.ID, detectedFmt}] = true
 						reconciled++
 						matched = true
 					}
@@ -2449,7 +2604,34 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 		}
 
 		if !matched {
-			slog.Debug("library scan: unmatched file", "path", path, "parsedTitle", parsed.Title, "parsedAuthor", parsed.Author)
+			// Record WHY the file didn't match. The UI used to tell every user
+			// with an all-unmatched scan to refresh the author's book catalogue,
+			// which is only ever right for one of these three cases (#1958).
+			reason := unmatchedReasonNoTitleMatch
+			if parsed.Title == "" {
+				// The title tier was skipped entirely — don't blame a title
+				// match that never happened.
+				reason = unmatchedReasonNoTitleParsed
+			}
+			authorSet, matchAuthor := resolveAuthors(parsed.Author, layoutAuthor)
+			if authorSet != nil {
+				if len(authorSet) == 0 {
+					reason = unmatchedReasonAuthorNotInLibrary
+				} else {
+					candidates := 0
+					for id := range authorSet {
+						candidates += len(booksByAuthor[id])
+					}
+					if candidates == 0 {
+						reason = unmatchedReasonNoCandidateBooks
+					}
+				}
+			}
+			// matchAuthor is the author string the matcher actually used — it
+			// differs from parsedAuthor when a #1956 fallback fired, which is
+			// exactly what a support log needs to show.
+			slog.Debug("library scan: unmatched file", "path", path, "parsedTitle", parsed.Title,
+				"parsedAuthor", parsed.Author, "matchAuthor", matchAuthor, "reason", reason)
 			unmatched++
 			// Collect up to 1000 unmatched entries for UI display
 			if len(unmatchedFiles) < 1000 {
@@ -2457,6 +2639,7 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 					Path:         path,
 					ParsedTitle:  parsed.Title,
 					ParsedAuthor: parsed.Author,
+					Reason:       reason,
 				})
 			}
 		}
@@ -2550,11 +2733,39 @@ func isReconcileCandidate(b *models.Book) bool {
 	return true
 }
 
+// Reasons a scanned file stayed unmatched, persisted with each unmatched entry
+// so the UI can give advice that fits the actual failure instead of always
+// blaming the author's book catalogue (#1958). These strings are a wire
+// contract with the frontend — add cases, don't rename them.
+const (
+	// unmatchedReasonAuthorNotInLibrary: the parsed author matched no author in
+	// the library at all, so no book could even be considered. The file's tags
+	// or folder name are the thing to look at — refreshing an author cannot
+	// help. This is the case that cost the #1958 reporter two weeks.
+	unmatchedReasonAuthorNotInLibrary = "author_not_in_library"
+	// unmatchedReasonNoCandidateBooks: the author matched, but has no book that
+	// the scan can attach a file to (no books at all, or every book already has
+	// its files on disk). Populating the author's catalogue is the right advice
+	// here — this is #875's case.
+	unmatchedReasonNoCandidateBooks = "no_candidate_books"
+	// unmatchedReasonNoTitleMatch: candidate books existed but no title cleared
+	// the fuzzy-match gate (or the file sits outside the author's library root).
+	unmatchedReasonNoTitleMatch = "no_title_match"
+	// unmatchedReasonNoTitleParsed: nothing in the path parsed as a title, so
+	// the title tier never ran. Reporting no_title_match here told the user "no
+	// book by that author matched this title" when there was no title to match
+	// — the file needs renaming, not a catalogue refresh.
+	unmatchedReasonNoTitleParsed = "no_title_parsed"
+)
+
 // unmatchedFile represents a file that could not be reconciled during library scan.
 type unmatchedFile struct {
 	Path         string `json:"path"`
 	ParsedTitle  string `json:"parsed_title"`
 	ParsedAuthor string `json:"parsed_author"`
+	// Reason is one of the unmatchedReason* constants. Omitted when empty so
+	// results written before this field existed keep parsing unchanged.
+	Reason string `json:"reason,omitempty"`
 }
 
 // writeScanError persists a failed-scan result so the UI reflects the failure
