@@ -481,7 +481,8 @@ func main() {
 		WithTokenSource(func(ctx context.Context) string {
 			return api.GetHardcoverAPIToken(ctx, settingsRepo)
 		}).
-		WithAudiobookEnricher(metaAgg)
+		WithAudiobookEnricher(metaAgg).
+		WithJobs(bgJobs) // drain a manual "Sync now" on shutdown (#1854)
 	sched.WithHardcoverSyncer(hcSyncer)
 	sched.WithLogRepo(logRepo, cfg.LogRetentionDays)
 
@@ -991,6 +992,7 @@ func main() {
 			r.Put("/importlist/{id}", importListHandler.Update)
 			r.Delete("/importlist/{id}", importListHandler.Delete)
 			r.Post("/importlist/{id}/sync", importListHandler.Sync)
+			r.Get("/importlist/sync/status", importListHandler.SyncStatus)
 
 			r.Get("/importlistexclusion", importListHandler.ListExclusions)
 			r.Post("/importlistexclusion", importListHandler.CreateExclusion)
