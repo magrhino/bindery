@@ -92,6 +92,8 @@ Bindery is **MIT** and statically links its Go dependencies, so every module bec
 - Permissive (MIT, BSD, Apache-2.0, ISC, MPL-2.0) is fine. Apache-2.0 additionally requires shipping the dependency's `NOTICE`.
 - `THIRD_PARTY_LICENSES.md` is generated and **CI fails on drift** — regenerate it when dependencies change instead of editing it by hand.
 
+Dependency licences constrain what the binary may **link**. A separate question is what a deployment may **do with the data** Bindery fetches at runtime — Hardcover, for one, excludes aggregated user ratings from commercial use. That is recorded in [docs/third-party-data.md](docs/third-party-data.md).
+
 The trap worth knowing about: the *arr projects are GPL-3.0, so their dependency choices are safe for them and not for us. `github.com/creditx/go-fuzzywuzzy` (GPL-3.0) reached shipped MIT binaries this way, and the obvious alternative port carries the same licence.
 
 ### Credentials & secrets

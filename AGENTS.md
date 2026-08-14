@@ -108,4 +108,5 @@ Non-Claude agents that can't auto-load `SKILL.md` files should read the bodies u
 - Deployment / env vars / upgrade path: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 - Roadmap and out-of-scope list: [docs/ROADMAP.md](docs/ROADMAP.md)
 - Auth modes (multiuser / OIDC / proxy): [docs/multi-user.md](docs/multi-user.md), [docs/auth-oidc.md](docs/auth-oidc.md), [docs/auth-proxy.md](docs/auth-proxy.md)
+- Third-party data terms (Hardcover, OpenLibrary, Audible): [docs/third-party-data.md](docs/third-party-data.md)
 - Vulnerability disclosure: [SECURITY.md](SECURITY.md)
