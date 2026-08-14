@@ -676,6 +676,9 @@
       "componentPlaceholder": "Component",
       "searchPlaceholder": "Search messages",
       "clearFilters": "Clear filters",
+      "download": "Download",
+      "downloadHint": "Download the entries matching the current filters as a text file",
+      "downloadNote": "Download saves the entries matching the filters the table is showing as a plain-text file you can attach to a bug report. Large exports are capped; the file says so in its footer when that happens.",
       "page": "Page {{page}}"
     },
     "general": {
@@ -742,6 +745,7 @@
       "storageHealthMissing": "Missing",
       "storageHealthReadOnly": "Not writable",
       "storageHealthChecking": "Checking…",
+      "importModeHardlinkWarning": "⚠ Hardlink is selected, but this setup can't hardlink — imports will copy instead (slower and uses double the disk). Put the download folder and library on the same filesystem/volume, or switch to Auto.",
       "storageHardlinkOk": "Downloads and library share a filesystem — completed downloads are hardlinked into the library (instant, no extra disk).",
       "storageHardlinkWarning": "Downloads and library are on different filesystems — imports will copy files instead of hardlinking (slower and uses double the disk). Put both on the same volume to enable hardlinks.",
       "library": "Library",

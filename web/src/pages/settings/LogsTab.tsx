@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, LogEntry } from '../../api/client'
+import { api, LogEntry, LogQuery } from '../../api/client'
 import SaveButton from './SaveButton'
 import Toggle from './Toggle'
 import { useSaveResult } from './useSaveResult'
@@ -10,6 +10,15 @@ function formatBackupSize(bytes: number): string {
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)))
   return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`
+}
+
+// <input type="datetime-local"> produces "2026-08-12T14:03" — no zone, which
+// the API's RFC3339 parse rejects, so the range was silently ignored. The
+// picker means local time, so interpret it here and send a real instant.
+function toRFC3339(local: string): string | undefined {
+  if (!local) return undefined
+  const d = new Date(local)
+  return isNaN(d.getTime()) ? undefined : d.toISOString()
 }
 
 function formatRelativeTime(iso: string): string {
@@ -47,13 +56,27 @@ export default function LogsTab() {
   const [deletingBackup, setDeletingBackup] = useState<string | null>(null)
   const [backupLabel, setBackupLabel] = useState('')
 
-  const fetchLogs = (page = 0) => {
+  // The filter set currently applied on screen. The list request and the
+  // download link are built from the same object so the exported file always
+  // matches what the table is showing (#1903).
+  const filterParams = (): LogQuery => ({
+    level: logFilter !== 'all' ? logFilter : undefined,
+    component: logComponent || undefined,
+    from: toRFC3339(logFrom),
+    to: toRFC3339(logTo),
+    q: logSearch || undefined,
+  })
+
+  // appliedFilters is the filter set the CURRENT table contents were fetched
+  // with. The download link is built from it, not from the live inputs: typing
+  // a component and clicking Download without pressing Search used to produce a
+  // file filtered differently from the screen (#1903).
+  const [appliedFilters, setAppliedFilters] = useState<LogQuery>({})
+
+  const fetchLogs = (page = 0, params: LogQuery = filterParams()) => {
+    setAppliedFilters(params)
     api.getLogs({
-      level: logFilter !== 'all' ? logFilter : undefined,
-      component: logComponent || undefined,
-      from: logFrom || undefined,
-      to: logTo || undefined,
-      q: logSearch || undefined,
+      ...params,
       limit: logPageSize,
       offset: page * logPageSize,
     }).then(entries => {
@@ -133,7 +156,10 @@ export default function LogsTab() {
           {(['all', 'debug', 'info', 'warn', 'error'] as const).map(f => (
             <button
               key={f}
-              onClick={() => { setLogFilter(f); fetchLogs(0) }}
+              // The level goes in explicitly: fetchLogs closes over the state
+              // from before setLogFilter, so it would otherwise fetch (and
+              // advertise) the previously selected level.
+              onClick={() => { setLogFilter(f); fetchLogs(0, { ...filterParams(), level: f !== 'all' ? f : undefined }) }}
               className={`px-2.5 py-1 rounded font-medium transition-colors ${logFilter === f
                 ? f === 'error' ? 'bg-red-600 text-white'
                   : f === 'warn' ? 'bg-amber-500 text-white'
@@ -188,6 +214,7 @@ export default function LogsTab() {
           <span className="text-slate-500 dark:text-zinc-500">{t('settings.logs.from')}</span>
           <input
             type="datetime-local"
+            aria-label={t('settings.logs.from')}
             value={logFrom}
             onChange={e => setLogFrom(e.target.value)}
             className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-2 py-1 text-xs"
@@ -197,6 +224,7 @@ export default function LogsTab() {
           <span className="text-slate-500 dark:text-zinc-500">{t('settings.logs.to')}</span>
           <input
             type="datetime-local"
+            aria-label={t('settings.logs.to')}
             value={logTo}
             onChange={e => setLogTo(e.target.value)}
             className="bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-2 py-1 text-xs"
@@ -225,12 +253,24 @@ export default function LogsTab() {
         <button
           onClick={() => {
             setLogFrom(''); setLogTo(''); setLogComponent(''); setLogSearch(''); setLogFilter('all')
-            setTimeout(() => fetchLogs(0), 0)
+            fetchLogs(0, {})
           }}
           className="px-2 py-1 rounded border border-slate-300 dark:border-zinc-700 text-slate-500 dark:text-zinc-500 text-xs"
         >
           {t('settings.logs.clearFilters')}
         </button>
+        {/* Download the filtered logs as a text file (#1903). A plain anchor:
+            the session cookie authenticates it and the server supplies the
+            timestamped filename, so there is nothing to do in JS. */}
+        <a
+          href={api.logExportURL(appliedFilters)}
+          download
+          data-testid="download-logs"
+          title={t('settings.logs.downloadHint')}
+          className="px-2 py-1 rounded border border-slate-300 dark:border-zinc-700 text-slate-500 dark:text-zinc-500 text-xs hover:text-slate-900 dark:hover:text-white"
+        >
+          ⬇ {t('settings.logs.download')}
+        </a>
       </div>
 
       {/* Log output */}
@@ -307,7 +347,7 @@ export default function LogsTab() {
       </div>
 
       <p className="text-xs text-slate-500 dark:text-zinc-600 mt-2">
-        {t('settings.logs.persistNote')}
+        {t('settings.logs.persistNote')} {t('settings.logs.downloadNote')}
       </p>
 
       {/* Log retention */}
