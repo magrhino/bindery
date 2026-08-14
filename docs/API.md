@@ -238,6 +238,15 @@ Bindery serves an OPDS 1.2 catalogue at `/opds/`:
 - `/opds/series` and `/opds/series/{id}` — by series
 - `/opds/book/{id}` — book entry
 - `/opds/book/{id}/file` — download the book file
+- `/opds/images?url=<encoded>` — cover images, cached locally
+
+Cover links in the feed point at `/opds/images` rather than at the metadata
+provider, so reading apps fetch every cover from your instance. It is the same
+handler and the same `<dataDir>/image-cache/` the web UI uses via
+`/api/v1/images`, mounted a second time inside `/opds` because that route
+requires a session cookie or the API key and reading apps authenticate with
+HTTP Basic. See [third-party-data.md](third-party-data.md) for why covers are
+served this way.
 
 OPDS authenticates via HTTP Basic — any username, API key as the password. KOReader, Moon+ Reader, Aldiko, and other OPDS-capable apps work out of the box.
 

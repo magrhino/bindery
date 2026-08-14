@@ -348,6 +348,12 @@ Apache-2.0 dependencies carry, and is included in the release archives and at
 dependency set, so run it in the same PR whenever you add, drop, or bump a
 dependency.
 
+Dependency licences govern what the binary may link. What a deployment may do
+with the *data* Bindery fetches at runtime is a separate question, and
+**[docs/third-party-data.md](docs/third-party-data.md)** records it per source —
+including that a commercial deployment has to exclude the aggregated Hardcover
+ratings. Self-hosting for yourself is unaffected.
+
 ## Disclaimer
 
 Bindery is not affiliated with or endorsed by Readarr, Audible, Amazon, Goodreads, Calibre, or Prowlarr. All trademarks are the property of their respective owners.
