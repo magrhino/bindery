@@ -4,6 +4,286 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
+## [v1.31.0] — 2026-08-14
+
+Two things in this release could take the whole process down, and neither
+needed anyone to do something unusual to trigger it.
+
+**A malicious torrent file could kill Bindery.** The walk that reads a
+torrent's infohash recursed once per level of nesting with no limit, so a
+crafted `.torrent` of deeply nested lists exhausted the stack. That is not a
+recoverable panic — the process dies, the container restarts, the grab retries,
+and it dies again. The file only has to be about 36 MB, comfortably inside the
+size Bindery will fetch, and it arrives from whichever indexer answered the
+search. Nesting is now capped; a real torrent nests three or four deep.
+
+**And a background job could do the same.** Every tracked job — Audiobookshelf
+import, Grimmory, manual library scan, the startup syncs — ran without a panic
+handler. Any one of them hitting an unexpected nil took the whole process with
+it rather than failing on its own. That hole had been there the entire time and
+was only found because the Hardcover sync moved out from behind the web
+server's handler, which had been quietly absorbing it.
+
+**The Go toolchain moved to 1.26.6** for six standard library advisories,
+including one in the XML decoder that is the same class of bug as the torrent
+one above: unbounded recursion on input from somewhere else. Bindery parses
+indexer XML with it.
+
+**Bindery was also shipping GPL-licensed code inside MIT binaries.** A fuzzy
+string-matching library used for series title comparison is GPL-3.0, and Go
+links everything statically, so every release binary and container image was a
+combined work that could not honestly be offered under the licence in the
+repository. That code has been replaced with an implementation that produces
+the same scores — verified across nineteen thousand real title pairs, with no
+matching decision changing anywhere — and carries no licence of its own. Every
+release now also ships `THIRD_PARTY_LICENSES.md`, which had been missing
+entirely, and CI fails if it drifts out of date.
+
+---
+
+**The part most likely to be felt** is quieter, and it is three separate bugs
+that happened to land in one user's log file.
+
+Bindery decided a torrent was finished by looking only for reasons to say yes.
+A freshly added torrent reports 100% for a moment, before the client has worked
+out what it is actually downloading, and that alone was enough. So the import
+ran about fifteen seconds after the grab, against a folder the download had not
+created yet — and if you run qBittorrent with a separate incomplete directory,
+it never would, because the data was somewhere else. The three import retries
+then spent themselves in forty-five seconds, well inside any real download, and
+the download was failed for good. The error blamed your path mapping, which was
+one of three things it could have been and the wrong one here.
+
+During those doomed retries a second bug fired: if the same book's audiobook
+finished importing in the meantime, the still-pending ebook grab was marked
+imported and abandoned, because the check for "is this already in my library"
+looked at the book rather than at the format slot the download was filling.
+Nothing failed and nothing retried, because from Bindery's side the chain had
+ended successfully. If you have books stuck missing one format for no visible
+reason, that is the likely explanation.
+
+And once a download had been failed this way you could not simply grab it
+again — the release stayed claimed by the dead row and every attempt came back
+"already grabbed" with nothing to click. A blocked download now releases its
+claim, retries no longer burn attempts when there is nothing on disk to import,
+and a download whose files never appear ends up visibly blocked with a message
+naming the path rather than silently stuck forever.
+
+**Library scans understand dual-format folders.** Several bugs stacked into one
+very stubborn symptom: an audiobook that would not attach no matter how many
+times you scanned. A scan claimed a book the moment any one file matched it, so
+a folder holding an epub and an m4b attached one and left the other for the
+next scan. The "already tracked" shortcut for an audiobook's sibling tracks was
+absorbing every file in the folder, including the ebook. And an m4b whose Artist
+tag carries a contributor list — the author plus their translator and narrator,
+which is simply how Audible tags things — had that tag overwrite the author your
+folder names had already resolved correctly, leaving a string no author in your
+library could ever match. Those files came back Unmatched on every single scan,
+forever. When a file still does not match, the Unmatched table now records why,
+per file, instead of giving everyone the same advice to go refresh an author who
+was never the problem.
+
+**Imports also stopped failing on long non-ASCII titles.** A Japanese, Chinese,
+Korean, Russian, Greek or heavily accented title of roughly 83 characters could
+kill an import with "file name too long", because the path limit counted
+characters while filesystems count bytes and one CJK character is three or four
+of them.
+
+**Adding one book adds one book.** Authors → Add Book created the author and
+then quietly pulled in their entire bibliography behind it, which for one
+reporter turned 75 books into over 500. Refreshing an author did the same even
+with monitoring off. A refresh now refreshes in place, and the author page says
+how many works it declined to add and why. An author with no books at all is
+still populated, so bulk Refresh keeps repairing imports that landed an author
+without a catalogue — but an author you deliberately emptied stays empty. Telling
+those two apart needed a new column, so this release carries a schema migration
+(`075_author_catalogue_populated`); it applies at startup and needs nothing from
+you.
+
+**Hardcover "Sync now" finishes.** It used to run inside the web request, so the
+server's own sixty-second timeout cut it off partway; on a 1,660-book shelf that
+meant roughly a third of the books imported and the rest died. It never
+announced any of this. The sync is a background job now, the button answers
+straight away, and the import list row shows progress and result. The nightly
+cadence, hardcoded since it shipped, is a setting.
+
+**rTorrent and ruTorrent are supported** as a download client alongside
+qBittorrent, Transmission and Deluge, over both the HTTP XML-RPC endpoint that
+ruTorrent and seedbox panels expose and rTorrent's own SCGI socket. Two protocol
+limits are documented rather than papered over: rTorrent has no per-torrent
+ratio limit over XML-RPC, so per-indexer seed-ratio overrides are ignored, and
+"remove with data" deletes from Bindery's side because rTorrent leaves the files
+in place by design.
+
+Riding along, three things that exist mostly to make the next bug report easier:
+logs download as a plain text file from Settings → Logs, filtered exactly the way
+the screen was filtered and with keys and tokens redacted, so people on rootless
+containers can attach them without a shell. Picking Hardlink on a setup that
+cannot hardlink now says so inline where you make the choice, which is the usual
+ending of "hardlinks are broken" support threads. And the `…` in the pager is a
+dropdown instead of decoration, so page 30 of 40 is one click rather than
+thirty. While wiring the first of those up it turned out the date pickers in the
+Logs tab had been sending a timestamp the API could not parse, so narrowing a
+log search by date had been doing nothing at all.
+
+### Added
+
+- **rTorrent / ruTorrent download client** (#1618) — rTorrent is now a first-class download client alongside qBittorrent, Transmission and Deluge: grabbing (magnet and `.torrent`), live queue status, label handling via `d.custom1`, import of completed torrents using rTorrent's own file list, removal with or without the data, and a Test button that checks both the connection and whether Bindery can actually read where rTorrent writes. Both transports work: the HTTP(S) XML-RPC endpoint ruTorrent and seedbox panels expose (`/RPC2`, or `/plugins/rpc/rpc.php`), and rTorrent's native SCGI listener over TCP or a unix socket for plain installs — set the URL Base to `scgi://`, `scgi://host:port`, or `scgi:///path/to/socket`. Two protocol limits are documented in QUICKSTART: per-indexer seed-ratio overrides are ignored (rTorrent has no per-torrent ratio limit over XML-RPC), and "remove with data" deletes the files from Bindery's side because `d.erase` leaves them on disk by design — resolving the path through the client's remap or the global `BINDERY_DOWNLOAD_PATH_REMAP`, and refusing anything reached through a symlink or resolving to a mount root. A seeding torrent whose tracker is grumpy shows as seeding rather than an error, and the client form warns when an `scgi://` URL Base means the username, password or Use SSL you filled in will be ignored.
+
+- **Download logs from the UI** (#1903) — a **Download** button next to *Clear filters* in `Settings → Logs` saves the entries matching the current filters as a plain-text file (`bindery-logs-<timestamp>.txt`) you can attach to a bug report, no container shell needed. The file records which filters were actually applied, one entry per line; API keys, tokens and line breaks are stripped from every part of the line, and an export stops at 50,000 entries and says so. On installs with no persistent log store the file names the filters it could not apply instead of implying it honoured them. Admin-only, like the rest of the Logs tab.
+
+- **Configurable Hardcover list sync interval** (#1848) — the Hardcover import-list sync no longer runs on a hardcoded 24h cadence. Settings → General now has a "Hardcover list sync interval" picker (1h to 7 days, 24h default), validated server-side and applied on the next restart like the wanted-search interval.
+
+- **Jump straight to a page in long lists** (#2010) — the `…` in the pager was inert, so reaching page 30 of a 40-page Books or Authors list meant clicking Next thirty times. Each `…` is now a dropdown listing exactly the pages it hides, so any page is one click away. Every paginated screen shares the component, so Wanted, History, Queue, Blocklist and the Logs tab get it too.
+
+- **Third-party license attribution ships with every artifact** (#1989) — the new
+  `THIRD_PARTY_LICENSES.md` lists every Go module linked into the binary and every
+  npm package embedded in the web UI, reproduces the NOTICE files carried by the
+  Apache-2.0 dependencies (`coreos/go-oidc` and the four Prometheus modules), and
+  includes each distinct license text once. It is included in the release archives
+  and copied into the container image at `/THIRD_PARTY_LICENSES.md`, alongside
+  `/LICENSE`. The file is generated by `make licenses`, and CI fails the build if a
+  dependency change lands without regenerating it.
+
+- **Privacy policy** — `PRIVACY.md` documents the telemetry ping in one place:
+  what the payload contains, that IP addresses are used only for rate limiting
+  and never stored or logged, the retention windows (60 days for install rows,
+  400 for the activity ledger, aggregates indefinitely), the GDPR legal basis,
+  and how to have an install row deleted. Nothing about telemetry behaviour
+  changed — this documents what the code already does.
+
+- **Contributions now carry a Developer Certificate of Origin sign-off** — every
+  commit in a pull request needs a `Signed-off-by` trailer matching its author,
+  added automatically by `git commit -s`. The DCO is a one-line assertion that
+  you wrote the change and may submit it under Bindery's MIT licence; there is
+  no CLA, no form, and no transfer of rights. `CONTRIBUTING.md` now also states
+  explicitly that contributions are accepted under the same MIT licence Bindery
+  ships under. A new `DCO / Sign-off` check enforces this on pull requests,
+  exempting merge commits, bot commits, and anything authored before
+  2026-08-20 — so the PRs already open are unaffected.
+
+### Changed
+
+- **GPL-3.0 dependency removed from the release binaries** (#1988) — series and
+  title matching used `github.com/creditx/go-fuzzywuzzy`, which is licensed
+  GPL-3.0. Because Go links statically, every published binary and every
+  `ghcr.io/vavallee/bindery` image was a combined work with that code while
+  `LICENSE` and the README offered MIT, which is not a licence we could grant
+  for the combined work. Anyone redistributing Bindery on the stated MIT terms
+  was exposed. The four similarity ratios are now a first-party implementation
+  with no new dependency, so the binaries are genuinely MIT again.
+
+  Match quality is unaffected: three of the four metrics reproduce the previous
+  scores exactly, and across 19,306 pairs of real series and book titles no pair
+  crossed any of the score thresholds that decide whether books are linked,
+  deduplicated or created.
+
+- **OPDS reading apps now fetch covers from Bindery, not from the metadata
+  provider** — the catalogue feed emitted the provider's own image URL, so every
+  KOReader or Moon+ Reader client hot-linked Hardcover's CDN directly, once per
+  client, with none of the local caching the web UI has had since the image
+  proxy shipped. Covers now come from `/opds/images`, the same handler and the
+  same `<dataDir>/image-cache/` the browser uses, which is also what Hardcover's
+  API rules require of any deployment that isn't a personal one. The new
+  `docs/third-party-data.md` records those rules, including that a commercial
+  deployment must exclude `average_rating` and `ratings_count` because they are
+  aggregated user ratings rather than facts about a book.
+
+- **"Monitor newly discovered books" → *Don't add them*** (#1815) — the setting that used to add refresh-discovered works as unmonitored rows now doesn't add them at all, which is what the people asking for it were describing. Library imports (Calibre, Audiobookshelf) already set it on every author they create — so for an imported library the first "Refresh metadata" now updates the books you have and adds no catalogue. Turn *Monitor newly discovered books* back on for an author whose full bibliography you do want.
+
+- **The unmatched-files hint now tells you what actually failed** (#1958) — when
+  files are found but nothing matches, Bindery used to give one answer: populate
+  the author's book catalogue and refresh the author. That is right for exactly
+  one of the four ways a file can miss. The scan now records a reason per file
+  and shows it in the Unmatched files table, and when the parsed author matches
+  no author in your library at all the hint names that author and points at the
+  file's tags and folder name instead of sending you to refresh an author who
+  was never the problem. A file whose name and tags yield no title at all now
+  says so instead of claiming no book matched a title that was never there.
+
+### Fixed
+
+- **Downloads no longer fail to import while they are still downloading** (#1884) — with qBittorrent's temp/incomplete directory enabled, a grab could be declared "download completed" a fraction of a second after being sent, imported against a final save path qBittorrent had not created yet, and permanently failed about a minute later with a `PathRemap` error against a path mapping that was perfectly correct. A just-added torrent briefly reports 100% progress, and the completion check accepted any single signal like that with nothing to corroborate it; qBittorrent's own state and its outstanding-bytes counter now override it, so nothing is imported until the client says the payload is complete and in place.
+
+- **The import retry budget is no longer spent on downloads that have nothing to import** (#1884) — three attempts fifteen seconds apart could never outlast a real download, so one early misfire permanently blocked a healthy grab. A retry is now only counted when the files are actually on this host; a download waiting on files stays visible in the Queue with the real reason and imports itself the moment they appear. The budget for genuine failures went from 3 attempts to 5, which also gives the startup sweep for interrupted imports two more attempts before it gives up on a download.
+
+- **A download whose files never turn up is no longer stuck in the Queue forever** (#1884) — waiting costs no retry attempts, so a download the client keeps calling complete while nothing is on disk would have waited indefinitely: no automatic path would touch it, and re-grabbing the release was refused. After about thirty minutes of finding nothing it is now marked **Import blocked** with a message naming the path it checked and what to do about it, which both re-enables **Retry import** and lets you grab the release again.
+
+- **"Download path not found" no longer blames PathRemap** (#1884) — the message asserted a path-mapping problem, which sent a reporter auditing a mapping that was correct while the real cause was that the download had not finished. It now states what was missing and lists the three things that actually cause it: the download still finishing, the files having been moved or deleted, and a genuine mount mismatch.
+
+- **A deleted book's leftover torrent no longer produces three opaque import failures** (#1955) — the download client's file list describes what the *torrent* contains, not what is on disk, so a torrent whose files were moved into the library or deleted with the book still reported them. Bindery believed it had files to work with and failed deep inside the import instead of saying the files were gone. Files the client lists are now checked against the filesystem first.
+
+- **"Already grabbed" no longer traps a release with a blocked download** (#1955) — after an import was terminally blocked, every Grab of that release answered `already grabbed` with no way forward from the search page. A blocked download now releases the release for a fresh grab (reusing the same Queue row), and every other "already grabbed" refusal names the state the existing download is in and where to act on it.
+
+- **Importing one format no longer abandons the other format's download** (#1885) — on a book tracked for both an ebook and an audiobook, the "book already in library" short-circuit compared against the whole book row, so an audiobook that imported while the ebook torrent was still downloading marked the ebook download as imported and dropped it silently. The check is now scoped to the format slot the download is actually filling; when the format can't be determined it no longer short-circuits at all, so the download follows the normal retry path and the missing format stays eligible for a re-search.
+
+- **An audiobook that ships with a PDF booklet is no longer treated as an ebook** (#1885) — release parsing keeps the first format token it recognises, and it looks for ebook formats first, so a title like *(Unabridged) [M4B + PDF]* was recorded as a PDF. On a book tracked for both formats that let an audiobook grab close itself out against the already-imported ebook. Which slot a download is filling is now decided from every format the release names, and a release naming both with nothing to tell them apart is treated as unknown rather than guessed.
+
+- **A dual-format folder now attaches both files in one library scan** (#1957) —
+  a scan claimed a book the moment any one file matched it, so a folder holding
+  `Title.epub` and `Title.m4b` attached one and left the other in Unmatched
+  until you ran a second full scan. Claims are now per format, which is how
+  book files are stored anyway. Two files of the *same* format still can't both
+  claim one book. An ebook sitting next to an already-attached audiobook is no
+  longer skipped as "already tracked" either — that shortcut now only absorbs
+  the audiobook's own sibling tracks, plus the supplement files an audiobook
+  release ships (a companion PDF, liner notes, a stray `.txt`), which are never
+  attached as the book's ebook edition. A PDF in a folder with no audio in it is
+  still an ebook.
+
+- **Audiobooks tagged with a contributor list now match on library scan** (#1956)
+  — an m4b whose Artist tag names the author plus their translator and narrator
+  ("Álvaro Enrigue, Natasha Wimmer - translator, Gabriel Porras") could never
+  reconcile: the tag replaced the author your `Author/Title/` folders had
+  already resolved correctly, and no author in your library matches a whole
+  contributor list, so the file returned to Unmatched on every scan. The tag is
+  still preferred when it matches, but it no longer destroys the folder author
+  — when the tag matches nobody, the scan falls back to the folder author and
+  then to the credited names in the list — every one of them that matches an
+  author you have, so a book catalogued under the second name is still found.
+
+- **Books with long non-ASCII titles no longer fail to import** (#1982) — a
+  Japanese, Chinese, Korean, Russian, Greek or heavily accented title of roughly
+  83 characters or more could kill the import with "file name too long". The
+  importer was limiting each name to 200 *characters*, but filesystems count
+  *bytes*, and one CJK character is three or four of them. The limit is now 200
+  bytes, cut on a character boundary so a name never ends in half a character.
+  Titles in plain ASCII are unaffected — nothing already in your library gets
+  renamed.
+
+- **Adding one book no longer imports the author's back catalogue** (#1816) — Authors → Add Book created the author and then quietly pulled their entire bibliography in behind it ("my collection just went from 75 imported books to over 500"). The picked book is now the only book added. When the provider's book endpoint fails, the fallback asks the author endpoint for that one work rather than the whole catalogue — and, like the direct add it stands in for, it is not vetoed by the strict media-type policy or the metadata profile's language filter, which used to make an explicitly-picked audiobook or translation impossible to add.
+
+- **A metadata refresh no longer grows the library behind your back** (#1815) — refreshing an author with monitoring off, or with *Monitor newly discovered books* set to don't add them, updated the covers, ratings, genres and series links of the books you have and then inserted every other work the author ever wrote. It now refreshes in place and adds nothing; the author page reports how many works it declined to add and why. An author who has never been populated is still filled in, so bulk **Refresh metadata** keeps repairing imports that landed an author without a catalogue — but an author whose books you deleted, or excluded, stays as you left them. Migration `075_author_catalogue_populated` adds the column that tells those two cases apart.
+
+- **Hardcover "Sync now" no longer stops at 60 seconds** (#1854) — a manual list sync ran inside the HTTP request, so the server's request timeout cut it off partway: on a 1,660-book shelf that meant roughly a third of the books imported and the rest lost to `context deadline exceeded`. The sync now starts as a background job and the endpoint answers immediately; the import list row shows the run's progress and its result, and one sync runs at a time. Shutting the server down stops an in-flight sync at the next book rather than letting it race the database closing, so the run ends early and reports `context canceled` instead of recording a successful sync it did not finish.
+
+- **A panicking background job no longer takes the whole process down** (#1967) — every tracked job (Audiobookshelf import, Grimmory, manual library scan, the startup syncs) ran without a panic handler, so an unexpected nil anywhere inside one killed the server rather than failing that job. Jobs now recover, record the failure against the job row with its stack in the log, and leave everything else running. The gap only became visible when the Hardcover sync moved out from behind the HTTP handler that had been absorbing it.
+
+- **Import Mode now warns when Hardlink can't hardlink** (#1720) — picking **Hardlink** on a setup where the download folder and library are on different filesystems used to look like it worked while imports quietly fell back to copying; the usual cause is separate Docker volume mounts that look like sibling paths. The selector now shows the amber warning and the specific reason inline under the mode buttons, where the choice is made, instead of only in the Storage section further down. **Auto** is unaffected — it already picks per download.
+
+- **Hybrid v1/v2 magnet links are no longer refused** — a magnet listing its `urn:btmh:` topic before `urn:btih:` read as having no infohash at all, so rTorrent refused the grab outright and qBittorrent could not recover the hash from an "already present" reply. Every `xt` topic is now examined.
+
+- **Log date-range filters were silently ignored** (#1903) — the From/To pickers in `Settings → Logs` sent a zone-less timestamp the API couldn't parse, so narrowing the range did nothing. They now send a real instant in your local time zone.
+
+- **A To-only log date range produced a file that didn't match the table** (#1903) — setting only *To* left the on-screen table unbounded below while the download covered just the hour before *To*. The export now defaults its range on the same condition the table does.
+
+### Security
+
+- **A malicious torrent file could crash Bindery** — the bencode walk that
+  extracts a torrent's infohash recursed once per nesting level with no bound,
+  so a crafted `.torrent` of deeply nested lists exhausted the goroutine stack
+  and took the whole process down. A stack overflow is not a recoverable panic,
+  so the container restarted and the grab retried into another crash. Nesting is
+  now capped at 64 levels (a real torrent nests 3-4) and an over-nested file is
+  refused like any other malformed payload. Reachable from any indexer serving
+  the response to a grab.
+
+- **Go toolchain updated to 1.26.6** — picks up fixes for six Go standard
+  library advisories affecting `net/http`, `crypto/tls`, `net/url`,
+  `encoding/xml` and `encoding/asn1` (GO-2026-6218, GO-2026-6090, GO-2026-6089,
+  GO-2026-6088, GO-2026-5972, GO-2026-5026). Applies to the release binaries and
+  the Docker image alike.
+
 ## [v1.30.4] — 2026-08-13
 
 One fix, and it is the reason to upgrade straight away: v1.30.1 through v1.30.3
