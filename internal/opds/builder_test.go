@@ -468,3 +468,84 @@ func mustHaveRel(t *testing.T, links []Link, rel, href string) {
 		t.Errorf("rel=%s href = %q, want %q", rel, l.Href, href)
 	}
 }
+
+// --- cover links ---------------------------------------------------------------
+
+const hardcoverCover = "https://assets.hardcover.app/covers/9781473/xyz.png"
+
+// coverLinks returns the image and thumbnail hrefs of the first entry in the
+// feed for book 11, which the tests below give a remote cover URL.
+func coverLinks(t *testing.T, cfg Config) (image, thumb Link) {
+	t.Helper()
+	books, authors, series := fixture()
+	for i := range books.all {
+		if books.all[i].ID == 11 {
+			books.all[i].ImageURL = hardcoverCover
+		}
+	}
+	b := NewBuilder(cfg, books, authors, series)
+	f, err := b.BuildBook(context.Background(), "http://host:8787", 11, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Entries) != 1 {
+		t.Fatalf("entries = %d", len(f.Entries))
+	}
+	for _, l := range f.Entries[0].Links {
+		switch l.Rel {
+		case RelImage:
+			image = l
+		case RelThumbnail:
+			thumb = l
+		}
+	}
+	if image.Href == "" || thumb.Href == "" {
+		t.Fatalf("no cover links in entry: %+v", f.Entries[0].Links)
+	}
+	return image, thumb
+}
+
+// The feed used to emit the provider's CDN URL directly, so every reading app
+// hot-linked Hardcover. Their API rules require a non-personal deployment to
+// host cover images itself, and Bindery already caches them on disk for the
+// web UI. CoverURL is how the OPDS half reaches that cache.
+func TestBookEntry_CoverURLRewritesBothImageLinks(t *testing.T) {
+	rewrite := func(raw string) string { return "/opds/images?url=" + raw }
+	image, thumb := coverLinks(t, Config{CoverURL: rewrite})
+
+	want := "/opds/images?url=" + hardcoverCover
+	if image.Href != want {
+		t.Errorf("image href = %q, want %q", image.Href, want)
+	}
+	if thumb.Href != want {
+		t.Errorf("thumbnail href = %q, want %q", thumb.Href, want)
+	}
+}
+
+// The MIME type has to come from the stored URL. The rewritten form ends in
+// /opds/images and carries the real extension inside a query parameter, where
+// guessImageType cannot see it — typing off the rewritten URL would report
+// every cover as image/jpeg, including this PNG.
+func TestBookEntry_CoverTypeComesFromTheOriginalURL(t *testing.T) {
+	image, thumb := coverLinks(t, Config{CoverURL: func(string) string { return "/opds/images?url=encoded" }})
+
+	if image.Type != "image/png" {
+		t.Errorf("image type = %q, want image/png", image.Type)
+	}
+	if thumb.Type != "image/png" {
+		t.Errorf("thumbnail type = %q, want image/png", thumb.Type)
+	}
+}
+
+// A nil CoverURL is the zero-value Config, which embedders without an HTTP
+// layer use. It must leave the stored URL alone rather than panicking.
+func TestBookEntry_NilCoverURLLeavesTheStoredURL(t *testing.T) {
+	image, thumb := coverLinks(t, Config{})
+
+	if image.Href != hardcoverCover {
+		t.Errorf("image href = %q, want the stored URL %q", image.Href, hardcoverCover)
+	}
+	if thumb.Href != hardcoverCover {
+		t.Errorf("thumbnail href = %q, want the stored URL %q", thumb.Href, hardcoverCover)
+	}
+}

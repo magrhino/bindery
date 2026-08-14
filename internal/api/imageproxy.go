@@ -312,6 +312,24 @@ func ProxyImageURL(raw string) string {
 	return imageProxyBase + "/api/v1/images?url=" + url.QueryEscape(raw)
 }
 
+// OPDSImageURL is ProxyImageURL for the OPDS catalogue: same handler, same
+// on-disk cache, different mount point.
+//
+// The feed cannot use /api/v1/images. That route sits behind auth.Middleware,
+// which accepts a session cookie or the global API key but not HTTP Basic —
+// and Basic is how reading apps authenticate. Pointing the feed at it would
+// 401 every KOReader on a password-protected install, and the workaround
+// (embedding ?apikey= in every cover link) would publish an unconditionally
+// admin credential to every device that caches the feed. /opds/images is the
+// same ImageProxyHandler mounted inside the OPDS group so it inherits
+// OPDSAuth instead.
+func OPDSImageURL(raw string) string {
+	if raw == "" || strings.HasPrefix(raw, "/") {
+		return raw
+	}
+	return imageProxyBase + "/opds/images?url=" + url.QueryEscape(raw)
+}
+
 // proxyAuthorImages rewrites ImageURL on an author and all its embedded books.
 // Mutates in place — callers own the struct and it is not shared with the DB layer.
 func proxyAuthorImages(a *models.Author) {

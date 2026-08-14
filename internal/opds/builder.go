@@ -52,6 +52,18 @@ type Config struct {
 	// PageSize is the number of entries per page on paginated feeds
 	// (authors list, series list). Defaults to 50 when ≤ 0.
 	PageSize int
+	// CoverURL rewrites a book's stored cover URL into the URL the OPDS
+	// client should fetch instead. Bindery caches covers locally and serves
+	// them from /opds/images, so reading apps fetch from this instance rather
+	// than hot-linking the metadata provider's CDN — which Hardcover's API
+	// rules require of any non-personal deployment (docs/third-party-data.md).
+	//
+	// nil leaves cover URLs untouched, which is what the builder's own tests
+	// and any embedder without an HTTP layer want. The link's MIME type is
+	// always derived from the *original* URL, since the rewritten one carries
+	// the file extension in a query parameter where guessImageType can't see
+	// it.
+	CoverURL func(string) string
 }
 
 // Builder assembles OPDS feeds from the three repositories. It has no
@@ -411,9 +423,16 @@ func (b *Builder) bookEntry(base string, bk models.Book, author *models.Author) 
 		}}
 	}
 	if bk.ImageURL != "" {
+		href := bk.ImageURL
+		if b.cfg.CoverURL != nil {
+			href = b.cfg.CoverURL(bk.ImageURL)
+		}
+		// Typed from the stored URL, not from href: the proxied form ends in
+		// /opds/images and hides the real extension inside ?url=.
+		mime := guessImageType(bk.ImageURL)
 		e.Links = append(e.Links,
-			Link{Rel: RelImage, Href: bk.ImageURL, Type: guessImageType(bk.ImageURL)},
-			Link{Rel: RelThumbnail, Href: bk.ImageURL, Type: guessImageType(bk.ImageURL)},
+			Link{Rel: RelImage, Href: href, Type: mime},
+			Link{Rel: RelThumbnail, Href: href, Type: mime},
 		)
 	}
 	if bk.FilePath != "" && bk.Status == models.BookStatusImported {

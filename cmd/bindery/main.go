@@ -1087,11 +1087,22 @@ func main() {
 	// OPDS 1.2 catalogue — KOReader / Moon+ Reader / Aldiko speak this
 	// natively. Sits on its own auth path (Basic + API key + session) so
 	// headless reading devices don't need cookies.
-	opdsBuilder := opds.NewBuilder(opds.Config{Title: "Bindery", PageSize: 50}, bookRepo, authorRepo, seriesRepo)
+	opdsBuilder := opds.NewBuilder(opds.Config{
+		Title:    "Bindery",
+		PageSize: 50,
+		// Serve covers from this instance rather than hot-linking the
+		// metadata provider's CDN — see api.OPDSImageURL and
+		// docs/third-party-data.md.
+		CoverURL: api.OPDSImageURL,
+	}, bookRepo, authorRepo, seriesRepo)
 	opdsHandler := api.NewOPDSHandler(opdsBuilder, bookRepo, fileHandler)
 	r.Route("/opds", func(r chi.Router) {
 		r.Use(api.OPDSAuth(authProvider, userRepo, loginLimiter))
 		r.Get("/", opdsHandler.Root)
+		// Cover images, same handler and same <dataDir>/image-cache as
+		// /api/v1/images. Mounted here so it inherits OPDSAuth (Basic), which
+		// is the only credential a reading app has.
+		r.Get("/images", imageProxyHandler.Serve)
 		r.Get("/authors", opdsHandler.Authors)
 		r.Get("/authors/{id}", opdsHandler.Author)
 		r.Get("/series", opdsHandler.Series)

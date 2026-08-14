@@ -335,3 +335,37 @@ func TestProxyImageURL(t *testing.T) {
 		}
 	}
 }
+
+// TestOPDSImageURL covers the OPDS variant of the same helper. It must produce
+// the /opds mount rather than /api/v1, because the API route is behind
+// auth.Middleware, which does not accept the HTTP Basic credentials reading
+// apps use.
+func TestOPDSImageURL(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"/already/relative", "/already/relative"},
+		{"https://assets.hardcover.app/covers/x.png", "/opds/images?url=https%3A%2F%2Fassets.hardcover.app%2Fcovers%2Fx.png"},
+	}
+	for _, tc := range cases {
+		if got := OPDSImageURL(tc.in); got != tc.want {
+			t.Errorf("OPDSImageURL(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// The URL-base prefix (BINDERY_URL_BASE) applies to OPDS cover links too —
+// #974 was exactly this class of bug for the web UI, where a subpath deploy
+// produced links that resolved above the mount point and 404'd.
+func TestOPDSImageURL_HonoursURLBase(t *testing.T) {
+	SetImageProxyBase("/bindery")
+	t.Cleanup(func() { SetImageProxyBase("") })
+
+	got := OPDSImageURL("https://assets.hardcover.app/covers/x.png")
+	want := "/bindery/opds/images?url=https%3A%2F%2Fassets.hardcover.app%2Fcovers%2Fx.png"
+	if got != want {
+		t.Errorf("OPDSImageURL under /bindery = %q, want %q", got, want)
+	}
+}
