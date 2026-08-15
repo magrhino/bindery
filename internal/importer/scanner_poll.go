@@ -852,6 +852,10 @@ func (s *Scanner) checkRtorrentDownloads(ctx context.Context, client *models.Dow
 			s.tryImportRtorrent(ctx, &dl, downloadPath, bookFiles)
 		case t.Complete && dl.Status == models.StateImportFailed && dl.ImportRetryCount < importRetryLimit:
 			downloadPath, bookFiles := s.rtorrentImportSources(ctx, rt, client, t)
+			if !importSourcePresent(downloadPath, bookFiles) {
+				s.skipImportRetry(ctx, &dl, downloadPath)
+				continue
+			}
 			slog.Info("retrying failed import", "title", dl.Title, "path", downloadPath,
 				"attempt", dl.ImportRetryCount+1, "limit", importRetryLimit, "files", len(bookFiles))
 			if err := s.downloads.IncrementImportRetryCount(ctx, dl.ID); err != nil {

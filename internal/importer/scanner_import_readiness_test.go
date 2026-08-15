@@ -606,3 +606,94 @@ func TestCheckQbittorrentDownloads_ManualRetryResetsTheSkipStreak(t *testing.T) 
 			"after %d polls (%q)", importSkipLimit-1, got.ErrorMessage)
 	}
 }
+
+// TestCheckRtorrentDownloads_MissingPayloadDoesNotExhaustRetries is the
+// rTorrent half of the #1884 readiness rule.
+//
+// Every other poller already refused to spend a retry attempt on a download
+// whose files are not on disk; rTorrent's retry branch was added without the
+// guard, so the one client that missed it burned all five attempts on polls
+// that could not have imported anything, then blocked the download terminally.
+//
+// The shape here is the reporter's: the client is healthy and honest — the
+// torrent is complete and f.multicall enumerates its file — and the file simply
+// is not there.
+func TestCheckRtorrentDownloads_MissingPayloadDoesNotExhaustRetries(t *testing.T) {
+	const (
+		hash     = "7c1d2e3f405162738495a6b7c8d9e0f1a2b3c4d5"
+		guid     = "guid-readiness-rtorrent"
+		fileName = "the-book.epub"
+	)
+	// rtorrentMatrixHandler serves this directory as both base_path and
+	// directory, and enumerates fileName inside it. The directory exists and
+	// stays empty, which is the case the guard is about: a path Bindery can
+	// resolve, with nothing importable at it.
+	directory := t.TempDir()
+
+	f := newDispatchFixture(t)
+	srv := httptest.NewServer(rtorrentMatrixHandler(t, hash, directory))
+	t.Cleanup(srv.Close)
+
+	client := f.createClient(t, &models.DownloadClient{
+		Name: "rtorrent-readiness", Type: "rtorrent", Username: "u", Password: "p", Category: "books",
+	}, srv.URL)
+	torrentHash := hash
+	f.createDownload(t, &models.Download{
+		GUID: guid, Title: "the-book", Status: models.StateImportFailed,
+		Protocol: "torrent", TorrentID: &torrentHash, DownloadClientID: &client.ID,
+	})
+
+	// More polls than the retry budget. Under the old branch every one of them
+	// counted, and the download was out of attempts before this loop ended.
+	for i := 0; i < importRetryLimit+3; i++ {
+		f.scanner.CheckDownloads(f.ctx)
+	}
+
+	got, err := f.downloads.GetByGUID(f.ctx, guid)
+	if err != nil {
+		t.Fatalf("get download: %v", err)
+	}
+	if got.ImportRetryCount != 0 {
+		t.Errorf("#1884: %d retry attempts spent on a download with nothing on disk to import, want 0",
+			got.ImportRetryCount)
+	}
+	if got.Status == models.StateImportBlocked {
+		t.Fatalf("download terminally blocked after %d polls with status %q (%q); "+
+			"importSkipLimit is %d, so it must stay retryable this early",
+			importRetryLimit+3, got.Status, got.ErrorMessage, importSkipLimit)
+	}
+	if got.Status != models.StateImportFailed {
+		t.Fatalf("status = %q, want %q — the download must stay retryable",
+			got.Status, models.StateImportFailed)
+	}
+	if h := f.allHandoffs(); len(h) != 0 {
+		t.Errorf("importer boundary called %d times for a download with no source on disk: %+v", len(h), h)
+	}
+
+	// The file appears — re-downloaded, or a remap corrected. The skipped polls
+	// must have cost nothing: the next one imports, spending the first attempt.
+	if err := os.WriteFile(filepath.Join(directory, fileName), []byte("epub"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.scanner.CheckDownloads(f.ctx)
+
+	got, err = f.downloads.GetByGUID(f.ctx, guid)
+	if err != nil {
+		t.Fatalf("get download: %v", err)
+	}
+	if got.ImportRetryCount != 1 {
+		t.Errorf("ImportRetryCount = %d after the file returned, want exactly the one real retry",
+			got.ImportRetryCount)
+	}
+	handoffs := f.allHandoffs()
+	if len(handoffs) != 1 {
+		t.Fatalf("importer boundary called %d times once the file was present, want 1: %+v",
+			len(handoffs), handoffs)
+	}
+	if handoffs[0].clientType != "rtorrent" {
+		t.Errorf("handoff came from the %q poller, want rtorrent", handoffs[0].clientType)
+	}
+	if want := filepath.Join(directory, fileName); len(handoffs[0].files) != 1 || handoffs[0].files[0] != want {
+		t.Errorf("handoff files = %v, want [%s]", handoffs[0].files, want)
+	}
+}
