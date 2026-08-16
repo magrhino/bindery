@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vavallee/bindery/internal/auth"
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/httpsec"
 	"github.com/vavallee/bindery/internal/indexer"
@@ -605,6 +606,36 @@ func (debugSearcher) SearchBookWithDebug(_ context.Context, _ []models.Indexer, 
 
 func (debugSearcher) SearchQuery(_ context.Context, _ []models.Indexer, _ string) []newznab.SearchResult {
 	return nil
+}
+
+// TestLastSearchDebug_IsScopedToCaller verifies one authenticated user cannot
+// read another user's search audit trail (#1859).
+func TestLastSearchDebug_IsScopedToCaller(t *testing.T) {
+	h := &IndexerHandler{lastDebug: &lastDebugStore{}}
+	const (
+		aliceID int64 = 101
+		bobID   int64 = 202
+	)
+	h.lastDebug.set(aliceID, &indexer.SearchDebug{Query: indexer.SearchQueryDebug{Title: "Alice's private search"}})
+
+	aliceRec := httptest.NewRecorder()
+	aliceReq := httptest.NewRequest(http.MethodGet, "/search/last-debug", nil).
+		WithContext(auth.WithUserID(context.Background(), aliceID))
+	h.LastSearchDebug(aliceRec, aliceReq)
+	if aliceRec.Code != http.StatusOK || !strings.Contains(aliceRec.Body.String(), "Alice's private search") {
+		t.Fatalf("alice response = %d %s, want her debug payload", aliceRec.Code, aliceRec.Body.String())
+	}
+
+	bobRec := httptest.NewRecorder()
+	bobReq := httptest.NewRequest(http.MethodGet, "/search/last-debug", nil).
+		WithContext(auth.WithUserID(context.Background(), bobID))
+	h.LastSearchDebug(bobRec, bobReq)
+	if bobRec.Code != http.StatusNotFound {
+		t.Fatalf("bob response = %d %s, want 404 without Bob debug", bobRec.Code, bobRec.Body.String())
+	}
+	if strings.Contains(bobRec.Body.String(), "Alice's private search") {
+		t.Fatalf("bob response leaked Alice's debug payload: %s", bobRec.Body.String())
+	}
 }
 
 // TestSearchBook_DualFormat_DebugReportsBothMediaType covers the reporting

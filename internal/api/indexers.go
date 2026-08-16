@@ -19,25 +19,27 @@ import (
 	"github.com/vavallee/bindery/internal/telemetry"
 )
 
-// lastDebugStore holds the audit trail from the most recent SearchBook run.
-// Only the single latest entry is kept — the debug panel surfaces "what
-// happened on the last search", not a history. Handler calls come from
-// different goroutines, so access is mutex-guarded.
+// lastDebugStore holds each caller's most recent SearchBook audit trail. The
+// debug panel surfaces "what happened on my last search", not a history.
+// Handler calls come from different goroutines, so access is mutex-guarded.
 type lastDebugStore struct {
-	mu  sync.RWMutex
-	dbg *indexer.SearchDebug
+	mu     sync.RWMutex
+	byUser map[int64]*indexer.SearchDebug
 }
 
-func (s *lastDebugStore) set(d *indexer.SearchDebug) {
+func (s *lastDebugStore) set(userID int64, d *indexer.SearchDebug) {
 	s.mu.Lock()
-	s.dbg = d
+	if s.byUser == nil {
+		s.byUser = make(map[int64]*indexer.SearchDebug)
+	}
+	s.byUser[userID] = d
 	s.mu.Unlock()
 }
 
-func (s *lastDebugStore) get() *indexer.SearchDebug {
+func (s *lastDebugStore) get(userID int64) *indexer.SearchDebug {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.dbg
+	return s.byUser[userID]
 }
 
 // indexerSearcher is the subset of indexer.Searcher used by IndexerHandler.
@@ -515,7 +517,7 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 	// Remember the most recent debug payload so the UI can re-fetch it
 	// (e.g. after a page reload) without having to re-run the search.
 	if dbg != nil {
-		h.lastDebug.set(dbg)
+		h.lastDebug.set(auth.UserIDFromContext(r.Context()), dbg)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -524,11 +526,11 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// LastSearchDebug returns the audit trail captured during the most recent
-// SearchBook invocation on this bindery instance, or 404 if no search has
-// run yet.
+// LastSearchDebug returns the caller's most recent SearchBook audit trail, or
+// 404 if that caller has not run a search yet. User ID 0 retains the shared
+// behavior for API-key, disabled-auth, and local-only requests.
 func (h *IndexerHandler) LastSearchDebug(w http.ResponseWriter, r *http.Request) {
-	dbg := h.lastDebug.get()
+	dbg := h.lastDebug.get(auth.UserIDFromContext(r.Context()))
 	if dbg == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no search has run yet"})
 		return
