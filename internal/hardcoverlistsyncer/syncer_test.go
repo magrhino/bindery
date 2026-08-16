@@ -237,6 +237,74 @@ func TestSyncOne_ListMediaTypeOverridesDerived(t *testing.T) {
 	}
 }
 
+// TestSyncOne_ComplementaryListMediaTypesMerge verifies that the same
+// Hardcover work on an ebook list and an audiobook list becomes one wanted
+// dual-format book rather than the second list being silently skipped (#2035).
+func TestSyncOne_ComplementaryListMediaTypesMerge(t *testing.T) {
+	s, repo := newTestSyncer(t)
+	ctx := context.Background()
+	enricher := &recordingEnricher{}
+	s.WithAudiobookEnricher(enricher)
+
+	ebookList := testImportList("Ebooks", "hardcover", true)
+	ebookList.URL = "ebooks"
+	ebookList.MediaType = models.MediaTypeEbook
+	if err := repo.Create(ctx, &ebookList); err != nil {
+		t.Fatalf("seed ebook list: %v", err)
+	}
+	audiobookList := testImportList("Audiobooks", "hardcover", true)
+	audiobookList.URL = "audiobooks"
+	audiobookList.MediaType = models.MediaTypeAudiobook
+	if err := repo.Create(ctx, &audiobookList); err != nil {
+		t.Fatalf("seed audiobook list: %v", err)
+	}
+
+	s.WithClientFactory(func(string) hardcoverClient {
+		return &fakeHardcoverClient{
+			lists: []hardcover.HCList{
+				{ID: 1, Slug: ebookList.URL, Name: ebookList.Name},
+				{ID: 2, Slug: audiobookList.URL, Name: audiobookList.Name},
+			},
+			books: []models.Book{{
+				ForeignID:        "hc:dual-format",
+				Title:            "Dual Format Book",
+				MetadataProvider: "hardcover",
+				MediaType:        models.MediaTypeBoth,
+				ASIN:             "B123DUAL",
+				Author: &models.Author{
+					ForeignID:        "hc:dual-author",
+					Name:             "Dual Author",
+					MetadataProvider: "hardcover",
+				},
+			}},
+		}
+	})
+
+	if err := s.SyncOne(ctx, ebookList.ID); err != nil {
+		t.Fatalf("sync ebook list: %v", err)
+	}
+	if err := s.SyncOne(ctx, audiobookList.ID); err != nil {
+		t.Fatalf("sync audiobook list: %v", err)
+	}
+
+	got, err := s.books.GetByForeignID(ctx, "hc:dual-format")
+	if err != nil || got == nil {
+		t.Fatalf("merged book not found: %v", err)
+	}
+	if got.MediaType != models.MediaTypeBoth {
+		t.Fatalf("media type = %q, want both", got.MediaType)
+	}
+	if got.Status != models.BookStatusWanted || !got.Monitored {
+		t.Fatalf("merged book = %+v, want monitored wanted book", got)
+	}
+	if got.ASIN != "B123DUAL" {
+		t.Fatalf("ASIN = %q, want audiobook ASIN from the complementary list", got.ASIN)
+	}
+	if got.Narrator != "Recorded Narrator" || len(enricher.calls) != 1 {
+		t.Fatalf("merged book narrator = %q, enrichment calls = %v; want persisted audio enrichment", got.Narrator, enricher.calls)
+	}
+}
+
 // TestSyncOne_ListMediaTypeUnsetKeepsDerived confirms an unset list MediaType
 // leaves the source-derived media type untouched (backwards compatible).
 func TestSyncOne_ListMediaTypeUnsetKeepsDerived(t *testing.T) {

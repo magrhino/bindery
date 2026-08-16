@@ -485,9 +485,32 @@ func (s *ListSyncer) syncList(ctx context.Context, il models.ImportList) error {
 			continue
 		}
 
-		// Skip if already tracked
+		// A work can be on separate ebook and audiobook lists. Reconcile the
+		// effective list formats before skipping the second occurrence so both
+		// lists produce one dual-format wanted book (#2035).
+		effectiveMediaType := book.MediaType
+		if il.MediaType != "" {
+			effectiveMediaType = il.MediaType
+		}
+
+		// Skip if already tracked, except to widen complementary list formats.
 		existing, _ := s.books.GetByForeignID(ctx, book.ForeignID)
 		if existing != nil {
+			if shouldWidenMediaType(existing.MediaType, effectiveMediaType) {
+				existing.MediaType = models.MediaTypeBoth
+				// The ebook-pinned pass clears the audiobook ASIN. Preserve the
+				// audio identifier when the complementary pass supplies it.
+				if (effectiveMediaType == models.MediaTypeAudiobook || effectiveMediaType == models.MediaTypeBoth) && book.ASIN != "" {
+					existing.ASIN = book.ASIN
+				}
+				if err := s.books.Update(ctx, existing); err != nil {
+					slog.Warn("hardcover list sync: failed to widen tracked book media type", "title", book.Title, "error", err)
+					countStat(func(st *SyncStats) { st.Failed++ })
+					continue
+				}
+				s.enrichAudiobook(ctx, existing)
+				slog.Info("widened book media type from hardcover lists", "title", existing.Title, "book_id", existing.ID)
+			}
 			slog.Debug("book already tracked, skipping", "title", book.Title, "foreignID", book.ForeignID)
 			countStat(func(st *SyncStats) { st.Skipped++ })
 			continue
@@ -524,10 +547,10 @@ func (s *ListSyncer) syncList(ctx context.Context, il models.ImportList) error {
 		// Hardcover-derived media type (most works report both editions, so
 		// without this an "Audiobooks" and an "Ebooks" list yield identical
 		// media types). Applied on create only — books that already exist are
-		// skipped above, so two single-format lists never combine into "both"
-		// and a manually-set media type survives re-sync.
+		// except for complementary single-format lists, which are widened above;
+		// a manually-set media type otherwise survives re-sync.
 		if il.MediaType != "" {
-			book.MediaType = il.MediaType
+			book.MediaType = effectiveMediaType
 			// The list response may have carried an audiobook ASIN (#1694).
 			// A list pinned to a non-audio format must not keep it, matching
 			// the pre-existing rule that an ebook-pinned book never takes the
@@ -553,23 +576,32 @@ func (s *ListSyncer) syncList(ctx context.Context, il models.ImportList) error {
 		countStat(func(st *SyncStats) { st.Imported++ })
 		slog.Info("imported book from hardcover list", "title", book.Title, "author_id", authorID)
 
-		// The list response can carry an audiobook ASIN inline (#1694). When
-		// it does, run the same Audnex enrichment the per-book edition
-		// hydration used to trigger on ASIN promotion — narrator, refined
-		// duration, summary — then persist. Failures are logged and skipped:
-		// enrichment is best-effort and must not block the import loop.
-		if s.enricher != nil && book.ASIN != "" {
-			if err := s.enricher.EnrichAudiobook(ctx, &book); err != nil {
-				slog.Debug("audiobook enrichment skipped", "title", book.Title, "asin", book.ASIN, "error", err)
-			} else if err := s.books.Update(ctx, &book); err != nil {
-				slog.Warn("failed to persist enriched book", "title", book.Title, "error", err)
-			}
-		}
+		s.enrichAudiobook(ctx, &book)
 
 		s.linkSeriesRefs(ctx, &book)
 	}
 
 	return nil
+}
+
+// enrichAudiobook applies the best-effort Audnex enrichment for an ASIN that
+// arrived inline from a Hardcover list, then persists its mutations.
+func (s *ListSyncer) enrichAudiobook(ctx context.Context, book *models.Book) {
+	if s.enricher == nil || book.ASIN == "" {
+		return
+	}
+	if err := s.enricher.EnrichAudiobook(ctx, book); err != nil {
+		slog.Debug("audiobook enrichment skipped", "title", book.Title, "asin", book.ASIN, "error", err)
+	} else if err := s.books.Update(ctx, book); err != nil {
+		slog.Warn("failed to persist enriched book", "title", book.Title, "error", err)
+	}
+}
+
+// shouldWidenMediaType reports whether the two list formats request opposite
+// halves of the same work. An already-dual or unknown format is left alone.
+func shouldWidenMediaType(existing, incoming string) bool {
+	return (existing == models.MediaTypeEbook && incoming == models.MediaTypeAudiobook) ||
+		(existing == models.MediaTypeAudiobook && incoming == models.MediaTypeEbook)
 }
 
 // linkSeriesRefs persists each Hardcover SeriesRef into the series table and
