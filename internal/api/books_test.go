@@ -746,6 +746,187 @@ func TestBookDeleteFile_FormatScopedAudiobookKeepsEbook(t *testing.T) {
 	}
 }
 
+// TestBookDeleteFile_AudiobookFolderKeepsEbookInside is the #2052 data-loss
+// guard. Audiobook imports register the destination *folder* in book_files, so
+// the format-scoped delete lands on a directory. That branch used to be an
+// unconditional os.RemoveAll, which took the ebook sitting in the same folder
+// with it — and left the ebook's book_files row behind, so it still showed in
+// the UI and 404'd on download.
+func TestBookDeleteFile_AudiobookFolderKeepsEbookInside(t *testing.T) {
+	h, books, _, author, ctx := bookFixture(t)
+
+	// One shared folder, the layout #1959 asks to make the default.
+	dir := filepath.Join(t.TempDir(), "Test Author", "Shared Book")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	m4b := filepath.Join(dir, "Shared Book.m4b")
+	epub := filepath.Join(dir, "Shared Book.epub")
+	cover := filepath.Join(dir, "cover.jpg")
+	for _, p := range []string{m4b, epub, cover} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	book := &models.Book{
+		ForeignID: "B-SHAREDDIR", AuthorID: author.ID, Title: "Shared Book", SortTitle: "shared book",
+		Status: models.BookStatusImported, Genres: []string{}, MediaType: models.MediaTypeBoth,
+		MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := books.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	// The audiobook row is the folder — what importer.Scanner records via
+	// SetFormatFilePath(destDir).
+	if err := books.AddBookFile(ctx, book.ID, models.MediaTypeAudiobook, dir); err != nil {
+		t.Fatalf("AddBookFile(audiobook dir): %v", err)
+	}
+	if err := books.AddBookFile(ctx, book.ID, models.MediaTypeEbook, epub); err != nil {
+		t.Fatalf("AddBookFile(epub): %v", err)
+	}
+
+	req := withURLParam(
+		httptest.NewRequest(http.MethodDelete, "/api/v1/book/"+strconv.FormatInt(book.ID, 10)+"/file?format=audiobook", nil),
+		"id", strconv.FormatInt(book.ID, 10))
+	rec := httptest.NewRecorder()
+	h.DeleteFile(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	if _, err := os.Stat(epub); err != nil {
+		t.Fatalf("ebook inside the audiobook folder was destroyed — data loss (#2052): %v", err)
+	}
+	if _, err := os.Stat(m4b); !os.IsNotExist(err) {
+		t.Errorf("audiobook file should be removed, stat err=%v", err)
+	}
+	// The ebook is still there, so its artwork is still wanted.
+	if _, err := os.Stat(cover); err != nil {
+		t.Errorf("cover should survive while a book file remains in the folder, stat err=%v", err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Errorf("folder should survive while it still holds the ebook, stat err=%v", err)
+	}
+
+	// The ebook row must still be registered, and it must still point at a
+	// file that exists — the two halves that disagreed in the report.
+	files, err := books.ListFiles(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Format != models.MediaTypeEbook || files[0].Path != epub {
+		t.Errorf("expected the ebook row to survive alone, got %+v", files)
+	}
+}
+
+// TestBookDeleteFile_AudiobookFolderRemovedWhenAloneInIt is the other half of
+// #2052: scoping the delete must not turn a whole-folder audiobook delete into
+// a partial one that strands the folder and its artwork.
+func TestBookDeleteFile_AudiobookFolderRemovedWhenAloneInIt(t *testing.T) {
+	h, books, _, author, ctx := bookFixture(t)
+
+	dir := filepath.Join(t.TempDir(), "Test Author", "Audio Only")
+	if err := os.MkdirAll(filepath.Join(dir, "Disc 1"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{
+		filepath.Join(dir, "cover.jpg"),
+		filepath.Join(dir, "Audio Only.cue"),
+		filepath.Join(dir, "Disc 1", "01.mp3"),
+		filepath.Join(dir, "Disc 1", "02.mp3"),
+	} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	book := &models.Book{
+		ForeignID: "B-AUDIOONLY", AuthorID: author.ID, Title: "Audio Only", SortTitle: "audio only",
+		Status: models.BookStatusImported, Genres: []string{}, MediaType: models.MediaTypeAudiobook,
+		MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := books.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	if err := books.AddBookFile(ctx, book.ID, models.MediaTypeAudiobook, dir); err != nil {
+		t.Fatalf("AddBookFile(audiobook dir): %v", err)
+	}
+
+	req := withURLParam(
+		httptest.NewRequest(http.MethodDelete, "/api/v1/book/"+strconv.FormatInt(book.ID, 10)+"/file?format=audiobook", nil),
+		"id", strconv.FormatInt(book.ID, 10))
+	rec := httptest.NewRecorder()
+	h.DeleteFile(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("audiobook folder should be gone when nothing else was in it, stat err=%v", err)
+	}
+}
+
+// TestBookDeleteFile_AudiobookFolderKeepsAnotherBooksFile is the #1368 guard
+// applied to the directory branch. safeRemoveBookPath only ever checked the
+// tracked path itself for other-book ownership, so a RemoveAll could take a
+// different book's file that happened to live under the folder.
+func TestBookDeleteFile_AudiobookFolderKeepsAnotherBooksFile(t *testing.T) {
+	h, books, _, author, ctx := bookFixture(t)
+
+	dir := filepath.Join(t.TempDir(), "Test Author", "Omnibus")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	mine := filepath.Join(dir, "Omnibus.m4b")
+	theirs := filepath.Join(dir, "Book Two.m4b")
+	for _, p := range []string{mine, theirs} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	other := &models.Book{
+		ForeignID: "B-OTHER", AuthorID: author.ID, Title: "Book Two", SortTitle: "book two",
+		Status: models.BookStatusImported, Genres: []string{}, MediaType: models.MediaTypeAudiobook,
+		MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := books.Create(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	if err := books.AddBookFile(ctx, other.ID, models.MediaTypeAudiobook, theirs); err != nil {
+		t.Fatalf("AddBookFile(other): %v", err)
+	}
+
+	book := &models.Book{
+		ForeignID: "B-OMNIBUS", AuthorID: author.ID, Title: "Omnibus", SortTitle: "omnibus",
+		Status: models.BookStatusImported, Genres: []string{}, MediaType: models.MediaTypeAudiobook,
+		MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := books.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	if err := books.AddBookFile(ctx, book.ID, models.MediaTypeAudiobook, dir); err != nil {
+		t.Fatalf("AddBookFile(audiobook dir): %v", err)
+	}
+
+	req := withURLParam(
+		httptest.NewRequest(http.MethodDelete, "/api/v1/book/"+strconv.FormatInt(book.ID, 10)+"/file?format=audiobook", nil),
+		"id", strconv.FormatInt(book.ID, 10))
+	rec := httptest.NewRecorder()
+	h.DeleteFile(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	if _, err := os.Stat(theirs); err != nil {
+		t.Fatalf("another book's file under the folder was destroyed (#1368): %v", err)
+	}
+	if _, err := os.Stat(mine); !os.IsNotExist(err) {
+		t.Errorf("this book's audiobook file should be removed, stat err=%v", err)
+	}
+}
+
 // TestListWanted returns only wanted-status books — the Wanted page query.
 func TestListWanted(t *testing.T) {
 	h, books, _, author, ctx := bookFixture(t)

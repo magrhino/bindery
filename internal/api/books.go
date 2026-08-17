@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -861,22 +862,26 @@ func (h *BookHandler) deregisterBookFile(w http.ResponseWriter, r *http.Request,
 // removeBookPathScoped deletes a file or directory at p. Audiobooks are stored
 // as folders (multi-part mp3/m4b + cover + cue); ebooks are single files.
 //
-// For single files it also sweeps sibling files in the same directory that
-// share the same basename (stem) — this handles dual-format downloads where
-// epub + mobi land in one folder. The sweep is scoped by `format`:
+// Both branches are scoped by `format`:
 //
-//   - format == ""         — sweep every same-stem recognised book file
+//   - format == ""         — remove every recognised book file
 //     (used for full-book deletes where every format goes anyway).
-//   - format == "ebook"    — sweep only same-stem *ebook* siblings; the
-//     audiobook sibling (.m4b/.mp3/...) is left intact.
-//   - format == "audiobook"— sweep only same-stem *audiobook* siblings; the
-//     ebook sibling is left intact.
+//   - format == "ebook"    — remove only *ebook* files; audiobook files
+//     (.m4b/.mp3/...) are left intact.
+//   - format == "audiobook"— remove only *audiobook* files; ebook files are
+//     left intact.
 //
-// This prevents a `?format=ebook` delete from also destroying the audiobook
-// that happens to share a stem in the same folder.
+// For single files the scope is a same-stem sibling sweep of the parent
+// directory — this handles dual-format downloads where epub + mobi land in one
+// folder. For directories it is a recursive walk (see removeBookDirScoped).
+//
+// `ownedByOther`, when non-nil, reports that a path is still registered in
+// book_files to a different book and must not be unlinked (#1368). It is
+// consulted for every file this function touches, not only the tracked path
+// the caller passed in.
 //
 // Returns nil if the path no longer exists — the net state is the same.
-func removeBookPathScoped(p, format string) error {
+func removeBookPathScoped(p, format string, ownedByOther func(string) bool) error {
 	info, err := os.Stat(p)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -885,7 +890,7 @@ func removeBookPathScoped(p, format string) error {
 		return err
 	}
 	if info.IsDir() {
-		return os.RemoveAll(p)
+		return removeBookDirScoped(p, format, ownedByOther)
 	}
 
 	// Sweep sibling book files with the same stem in the parent directory.
@@ -911,8 +916,12 @@ func removeBookPathScoped(p, format string) error {
 			if !strings.EqualFold(s, stem) {
 				continue
 			}
-			if rmErr := os.Remove(filepath.Join(parent, n)); rmErr != nil && !os.IsNotExist(rmErr) { // #nosec G304 G703 -- parent + stem both from importer-sanitized DB row; #865 plans defense-in-depth root-check
-				slog.Warn("book delete: failed to remove sibling file", "path", filepath.Join(parent, n), "error", rmErr)
+			sibling := filepath.Join(parent, n)
+			if ownedByOther != nil && ownedByOther(sibling) {
+				continue
+			}
+			if rmErr := os.Remove(sibling); rmErr != nil && !os.IsNotExist(rmErr) { // #nosec G304 G703 -- parent + stem both from importer-sanitized DB row; #865 plans defense-in-depth root-check
+				slog.Warn("book delete: failed to remove sibling file", "path", sibling, "error", rmErr)
 			}
 		}
 	} else {
@@ -928,6 +937,86 @@ func removeBookPathScoped(p, format string) error {
 		_ = os.Remove(parent) // #nosec G304 G703 -- parent = filepath.Dir of importer-sanitized DB row; #865 plans defense-in-depth root-check
 	}
 	return nil
+}
+
+// removeBookDirScoped removes the book files under dir that belong to `format`,
+// leaving anything of the other format in place.
+//
+// This used to be an unconditional os.RemoveAll(dir), which silently ignored
+// the format filter. Audiobook imports register the destination *folder* in
+// book_files (importer.Scanner, SetFormatFilePath with destDir), so deleting
+// the audiobook of a book whose ebook lived in the same folder destroyed the
+// ebook too — and left the ebook's book_files row behind, so it kept showing in
+// the UI and 404'd on download (#2052). The unconditional sweep could also take
+// a *different* book's file that happened to sit under the folder, which is the
+// failure #1368 was written to prevent.
+//
+// Sidecars (cover art, .cue, .opf, .nfo) are not book files and are only
+// removed once no book file survives anywhere under dir — while a book of the
+// other format is still there, its artwork is still wanted. The directory tree
+// itself is removed only when nothing is left in it.
+func removeBookDirScoped(dir, format string, ownedByOther func(string) bool) error {
+	// Pass 1: format-matching book files.
+	kept := 0
+	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !importer.IsBookFile(d.Name()) {
+			return nil // sidecar — pass 2 decides
+		}
+		if !sweepMatchesFormat(d.Name(), format) {
+			kept++ // a book file of the format we were told not to touch
+			return nil
+		}
+		if ownedByOther != nil && ownedByOther(path) {
+			kept++
+			return nil
+		}
+		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) { // #nosec G304 G703 -- path is under an importer-sanitized DB row; #865 plans defense-in-depth root-check
+			slog.Warn("book delete: failed to remove file in book folder", "path", path, "error", rmErr)
+			kept++
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return walkErr
+	}
+	if kept > 0 {
+		// Something in here still belongs to somebody. Leave the sidecars and
+		// the folder alone.
+		return nil
+	}
+
+	// Pass 2: no book file survives, so the leftovers are this book's sidecars.
+	walkErr = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if ownedByOther != nil && ownedByOther(path) {
+			kept++
+			return nil
+		}
+		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) { // #nosec G304 G703 -- path is under an importer-sanitized DB row; #865 plans defense-in-depth root-check
+			slog.Warn("book delete: failed to remove sidecar in book folder", "path", path, "error", rmErr)
+			kept++
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return walkErr
+	}
+	if kept > 0 {
+		return nil
+	}
+	// Only (possibly nested) empty directories remain.
+	return os.RemoveAll(dir)
 }
 
 // sweepMatchesFormat reports whether the sibling file `name` belongs to the

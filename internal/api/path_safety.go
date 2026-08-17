@@ -262,20 +262,32 @@ func safeRemoveBookPath(ctx context.Context, roots *LibraryRoots, owner bookFile
 	// file. Fail safe — if ownership can't be determined, skip the disk delete
 	// (the DB row is going away regardless; a stranded path is recoverable, a
 	// deleted file is not).
-	if owner != nil {
-		otherOwns, ownErr := owner.PathOwnedByOtherBook(ctx, p, excludeBookID)
+	//
+	// The same predicate is handed to removeBookPathScoped so it applies to
+	// every file that sweep reaches — same-stem siblings, and the contents of an
+	// audiobook folder — not only the tracked path passed in here. Checking p
+	// alone left the children of a directory delete unguarded (#2052).
+	ownedByOther := func(path string) bool {
+		if owner == nil {
+			return false
+		}
+		otherOwns, ownErr := owner.PathOwnedByOtherBook(ctx, path, excludeBookID)
 		if ownErr != nil {
-			fields := append([]any{"path", p, "operation", "book_file_delete", "error", ownErr}, logFields...)
+			fields := append([]any{"path", path, "operation", "book_file_delete", "error", ownErr}, logFields...)
 			slog.Warn("path ownership: could not verify book_files ownership; skipping disk delete", fields...)
-			return true, nil
+			return true
 		}
 		if otherOwns {
-			fields := append([]any{"path", p, "operation", "book_file_delete"}, logFields...)
+			fields := append([]any{"path", path, "operation", "book_file_delete"}, logFields...)
 			slog.Warn("path ownership: file still tracked by another book; skipping disk delete", fields...)
-			return true, nil
+			return true
 		}
+		return false
 	}
-	return false, removeBookPathScoped(p, format)
+	if ownedByOther(p) {
+		return true, nil
+	}
+	return false, removeBookPathScoped(p, format, ownedByOther)
 }
 
 // bookFileOwner reports whether an on-disk path is still registered in

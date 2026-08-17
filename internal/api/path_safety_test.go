@@ -178,3 +178,192 @@ func TestLibraryRoots_NoConfigurationFallsOpen(t *testing.T) {
 		t.Error("no roots configured: Contains must fall open to preserve legacy behaviour")
 	}
 }
+
+// mustWrite creates path (and its parents) with placeholder contents.
+func mustWrite(t *testing.T, path string) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// TestRemoveBookDirScoped drives the directory branch directly. Handler-level
+// tests cover the reported #2052 flow; this covers the decision table without
+// building a database fixture per case.
+func TestRemoveBookDirScoped(t *testing.T) {
+	tests := []struct {
+		name    string
+		files   []string // relative to the book folder
+		format  string
+		owned   map[string]bool // relative paths another book still tracks
+		gone    []string
+		kept    []string
+		dirGone bool
+	}{
+		{
+			name:   "audiobook delete keeps the ebook and its cover",
+			files:  []string{"Book.m4b", "Book.epub", "cover.jpg"},
+			format: "audiobook",
+			gone:   []string{"Book.m4b"},
+			kept:   []string{"Book.epub", "cover.jpg"},
+		},
+		{
+			name:   "ebook delete keeps the audio files and their cover",
+			files:  []string{"Book.epub", "Book.mobi", "Disc 1/01.mp3", "cover.jpg"},
+			format: "ebook",
+			gone:   []string{"Book.epub", "Book.mobi"},
+			kept:   []string{"Disc 1/01.mp3", "cover.jpg"},
+		},
+		{
+			name:    "audiobook delete clears sidecars and the folder when nothing else is in it",
+			files:   []string{"Disc 1/01.mp3", "Disc 2/01.mp3", "cover.jpg", "Book.cue"},
+			format:  "audiobook",
+			gone:    []string{"Disc 1/01.mp3", "Disc 2/01.mp3", "cover.jpg", "Book.cue"},
+			dirGone: true,
+		},
+		{
+			name:    "unscoped delete takes everything",
+			files:   []string{"Book.epub", "Book.m4b", "cover.jpg"},
+			format:  "",
+			gone:    []string{"Book.epub", "Book.m4b", "cover.jpg"},
+			dirGone: true,
+		},
+		{
+			name:   "a file another book tracks is left behind, and keeps the folder alive",
+			files:  []string{"Book.m4b", "Other Book.m4b", "cover.jpg"},
+			format: "audiobook",
+			owned:  map[string]bool{"Other Book.m4b": true},
+			gone:   []string{"Book.m4b"},
+			kept:   []string{"Other Book.m4b", "cover.jpg"},
+		},
+		{
+			// The guard must hold on the whole-book/author-delete path too,
+			// where sweepMatchesFormat matches everything.
+			name:   "an unscoped delete still leaves another book's file alone",
+			files:  []string{"Book.epub", "Book.m4b", "Other Book.m4b", "cover.jpg"},
+			format: "",
+			owned:  map[string]bool{"Other Book.m4b": true},
+			gone:   []string{"Book.epub", "Book.m4b"},
+			kept:   []string{"Other Book.m4b", "cover.jpg"},
+		},
+		{
+			name:   "an unknown format filter removes nothing",
+			files:  []string{"Book.m4b", "Book.epub"},
+			format: "graphicnovel",
+			kept:   []string{"Book.m4b", "Book.epub"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "Author", "Book")
+			for _, rel := range tc.files {
+				mustWrite(t, filepath.Join(dir, filepath.FromSlash(rel)))
+			}
+			ownedByOther := func(p string) bool {
+				rel, err := filepath.Rel(dir, p)
+				if err != nil {
+					return false
+				}
+				return tc.owned[filepath.ToSlash(rel)]
+			}
+
+			if err := removeBookDirScoped(dir, tc.format, ownedByOther); err != nil {
+				t.Fatalf("removeBookDirScoped: %v", err)
+			}
+
+			for _, rel := range tc.gone {
+				if exists(filepath.Join(dir, filepath.FromSlash(rel))) {
+					t.Errorf("%s should have been removed", rel)
+				}
+			}
+			for _, rel := range tc.kept {
+				if !exists(filepath.Join(dir, filepath.FromSlash(rel))) {
+					t.Errorf("%s should have survived", rel)
+				}
+			}
+			if got := exists(dir); got == tc.dirGone {
+				t.Errorf("folder exists = %v, want %v", got, !tc.dirGone)
+			}
+		})
+	}
+}
+
+// TestRemoveBookDirScoped_NilPredicate covers the callers that have no
+// book_files repo to consult: with no ownership predicate the sweep proceeds.
+func TestRemoveBookDirScoped_NilPredicate(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "Book")
+	mustWrite(t, filepath.Join(dir, "Book.m4b"))
+
+	if err := removeBookDirScoped(dir, "audiobook", nil); err != nil {
+		t.Fatalf("removeBookDirScoped: %v", err)
+	}
+	if exists(dir) {
+		t.Error("folder should be gone")
+	}
+}
+
+// stubOwner lets the ownership guard be driven without a database.
+type stubOwner struct {
+	owned map[string]bool
+	err   error
+}
+
+func (s stubOwner) PathOwnedByOtherBook(_ context.Context, path string, _ int64) (bool, error) {
+	if s.err != nil {
+		return false, s.err
+	}
+	return s.owned[path], nil
+}
+
+// TestSafeRemoveBookPath_OwnershipErrorFailsSafe covers the deliberate
+// fail-closed branch: if ownership can't be established, the disk delete is
+// skipped. A stranded path is recoverable; a deleted file is not.
+func TestSafeRemoveBookPath_OwnershipErrorFailsSafe(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "Book")
+	m4b := mustWrite(t, filepath.Join(dir, "Book.m4b"))
+
+	skipped, err := safeRemoveBookPath(context.Background(), nil,
+		stubOwner{err: os.ErrPermission}, 1, dir, "audiobook")
+	if err != nil {
+		t.Fatalf("safeRemoveBookPath: %v", err)
+	}
+	if !skipped {
+		t.Error("expected skipped=true when ownership can't be verified")
+	}
+	if !exists(m4b) {
+		t.Error("file should survive an unverifiable ownership check")
+	}
+}
+
+// TestSafeRemoveBookPath_SiblingOwnedByAnotherBook is the file branch of the
+// same guard: the same-stem sweep must not take a sibling another book tracks.
+func TestSafeRemoveBookPath_SiblingOwnedByAnotherBook(t *testing.T) {
+	dir := t.TempDir()
+	target := mustWrite(t, filepath.Join(dir, "Book.epub"))
+	sibling := mustWrite(t, filepath.Join(dir, "Book.mobi"))
+
+	skipped, err := safeRemoveBookPath(context.Background(), nil,
+		stubOwner{owned: map[string]bool{sibling: true}}, 1, target, "ebook")
+	if err != nil {
+		t.Fatalf("safeRemoveBookPath: %v", err)
+	}
+	if skipped {
+		t.Error("the targeted file was not owned by another book; expected skipped=false")
+	}
+	if exists(target) {
+		t.Error("targeted file should be removed")
+	}
+	if !exists(sibling) {
+		t.Error("a sibling another book tracks must survive the stem sweep")
+	}
+}
