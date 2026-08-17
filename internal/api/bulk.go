@@ -178,6 +178,9 @@ func (h *BulkHandler) AuthorsBulk(w http.ResponseWriter, r *http.Request) {
 		MonitorMode                string  `json:"monitorMode"`
 		MonitorLatestCount         *int    `json:"monitorLatestCount"`
 		ApplyMonitorModeToExisting bool    `json:"applyMonitorModeToExisting"`
+		// Optional. Omitted leaves each author's existing value alone, so the
+		// bulk action stays additive for callers that predate it (#2065).
+		MonitorNewItems *string `json:"monitorNewItems"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -224,6 +227,14 @@ func (h *BulkHandler) AuthorsBulk(w http.ResponseWriter, r *http.Request) {
 		if req.MonitorLatestCount != nil && *req.MonitorLatestCount <= 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "monitorLatestCount must be a positive integer"})
 			return
+		}
+		if req.MonitorNewItems != nil {
+			v := strings.TrimSpace(*req.MonitorNewItems)
+			if !models.IsAuthorMonitorNewItemsValid(v) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "monitorNewItems must be 'all' or 'none'"})
+				return
+			}
+			req.MonitorNewItems = &v
 		}
 	}
 
@@ -314,7 +325,7 @@ func (h *BulkHandler) AuthorsBulk(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		case "set_monitor_mode":
-			if err := h.setAuthorMonitorMode(r.Context(), id, req.MonitorMode, req.MonitorLatestCount, req.ApplyMonitorModeToExisting); err != nil {
+			if err := h.setAuthorMonitorMode(r.Context(), id, req.MonitorMode, req.MonitorLatestCount, req.MonitorNewItems, req.ApplyMonitorModeToExisting); err != nil {
 				resp.Results[key] = bulkItemResult{Error: err.Error()}
 				continue
 			}
@@ -528,7 +539,19 @@ func (h *BulkHandler) setAuthorMonitored(ctx context.Context, id int64, monitore
 	return h.authors.Update(ctx, author)
 }
 
-func (h *BulkHandler) setAuthorMonitorMode(ctx context.Context, id int64, mode string, latestCount *int, applyExisting bool) error {
+// setAuthorMonitorMode writes the author's monitor mode and, when the caller
+// supplied one, its monitor-new-items policy.
+//
+// The two are deliberately independent fields, not one derived from the other.
+// MonitorMode decides which books get monitored; MonitorNewItems decides
+// whether a refresh may create rows for books it has just discovered
+// (authorAcceptsDiscoveredBooks). Mode "none" with new items allowed is the
+// supported "list the whole catalogue, monitor none of it" setup that #1290's
+// Hardcover-list authors rely on, so setting mode alone must not imply either
+// value for the other field. Before #2065 the bulk path had no way to write
+// MonitorNewItems at all, which is why a library-wide "None" still pulled in
+// back-catalogues on the next refresh.
+func (h *BulkHandler) setAuthorMonitorMode(ctx context.Context, id int64, mode string, latestCount *int, newItems *string, applyExisting bool) error {
 	author, err := h.authors.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -543,6 +566,14 @@ func (h *BulkHandler) setAuthorMonitorMode(ctx context.Context, id int64, mode s
 			return fmt.Errorf("monitorLatestCount must be a positive integer")
 		}
 		author.MonitorLatestCount = *latestCount
+	}
+	if newItems != nil {
+		// Already validated at the request boundary for the only current
+		// caller; kept so a future one can't write an unvalidated value.
+		if !models.IsAuthorMonitorNewItemsValid(*newItems) {
+			return fmt.Errorf("monitorNewItems must be 'all' or 'none'")
+		}
+		author.MonitorNewItems = *newItems
 	}
 	if err := h.authors.Update(ctx, author); err != nil {
 		return err

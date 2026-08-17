@@ -192,6 +192,8 @@
     "bulkSetMonitorModeCount": "Selected authors: {{count}}",
     "bulkApplyMonitorModeToExisting": "Apply monitor mode to existing books",
     "bulkApplyMonitorModeToExistingHint": "Otherwise this only affects books discovered in future refreshes.",
+    "bulkMonitorNewItemsUnchanged": "Leave unchanged",
+    "bulkMonitorNewItemsHint": "Separate from monitor mode: this decides whether a refresh may add books it discovers at all. Monitor mode “None” on its own still lets the back-catalogue in, unmonitored.",
     "bulkSetMonitorModeApply": "Apply monitor mode",
     "bulkSetMonitorModeFailed": "Bulk monitor mode update failed",
     "bulkSetMonitorModePartial": "Monitor mode was not updated for author {{id}}: {{error}}",

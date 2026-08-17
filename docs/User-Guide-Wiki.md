@@ -154,6 +154,12 @@ Two settings decide whether an author add stays a trickle or becomes a flood:
   have. Library imports (Calibre, ABS) set *Don't add them* on the authors they
   create, because those catalogues are partial by design.
 
+These two are independent, and monitor mode *None* is not a substitute for the
+second one: it means "list the catalogue, monitor none of it", so a refresh
+still adds the discovered books, just unmonitored. To stop them arriving at
+all, set **Monitor new items** to *Don't add them*. Both settings can be
+changed for many authors at once from Authors → select → **Set monitor mode**.
+
 The Books page shows the **whole catalogue** — monitored or not. "Why are
 there books here I never asked for?" is rule 2: unmonitored means "won't
 grab", not "won't list". Select the ones you never want and **Exclude** them.

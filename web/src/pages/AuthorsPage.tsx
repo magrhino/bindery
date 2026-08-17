@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { api, Author, AuthorBulkMonitorMode, MediaType, AuthorRefreshStatus } from '../api/client'
+import { api, Author, AuthorBulkMonitorMode, MediaType, MonitorNewItems, AuthorRefreshStatus } from '../api/client'
 import AddAuthorModal from '../components/AddAuthorModal'
 import AddBookModal from '../components/AddBookModal'
 import MergeAuthorsModal from '../components/MergeAuthorsModal'
@@ -42,6 +42,9 @@ export default function AuthorsPage() {
   const [bulkMonitorMode, setBulkMonitorMode] = useState<AuthorBulkMonitorMode>('none')
   const [bulkMonitorLatestCount, setBulkMonitorLatestCount] = useState(1)
   const [bulkApplyMonitorModeToExisting, setBulkApplyMonitorModeToExisting] = useState(true)
+  // '' = leave each author's existing value alone, which is what this dialog
+  // did before it could write the field at all (#2065).
+  const [bulkMonitorNewItems, setBulkMonitorNewItems] = useState<MonitorNewItems | ''>('')
   const [bulkMonitorModeError, setBulkMonitorModeError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -238,6 +241,7 @@ export default function AuthorsPage() {
     setBulkMonitorMode('none')
     setBulkMonitorLatestCount(1)
     setBulkApplyMonitorModeToExisting(true)
+    setBulkMonitorNewItems('')
     setBulkMonitorModeError(null)
     setShowMonitorModeBulk(true)
   }
@@ -256,6 +260,7 @@ export default function AuthorsPage() {
       const result = await api.bulkSetAuthorMonitorMode([...selectedIds], bulkMonitorMode, {
         monitorLatestCount: bulkMonitorMode === 'latest' ? bulkMonitorLatestCount : undefined,
         applyMonitorModeToExisting: bulkApplyMonitorModeToExisting,
+        monitorNewItems: bulkMonitorNewItems === '' ? undefined : bulkMonitorNewItems,
       })
       const failed = Object.entries(result.results).find(([, item]) => !item.ok)
       if (failed) {
@@ -601,6 +606,25 @@ export default function AuthorsPage() {
                   <option value="latest">{t('monitorMode.latest', 'Latest only')}</option>
                   <option value="none">{t('monitorMode.none', 'None')}</option>
                 </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-600 dark:text-zinc-400 mb-1" htmlFor="bulk-monitor-new-items">
+                  {t('editAuthorModal.monitorNewItems', 'Monitor newly discovered books')}
+                </label>
+                <select
+                  id="bulk-monitor-new-items"
+                  value={bulkMonitorNewItems}
+                  onChange={e => setBulkMonitorNewItems(e.target.value as MonitorNewItems | '')}
+                  disabled={bulkBusy}
+                  className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+                >
+                  <option value="">{t('authors.bulkMonitorNewItemsUnchanged', 'Leave unchanged')}</option>
+                  <option value="all">{t('monitorNewItems.all', 'Follow monitor mode')}</option>
+                  <option value="none">{t('monitorNewItems.none', 'Don’t add them')}</option>
+                </select>
+                <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">
+                  {t('authors.bulkMonitorNewItemsHint', 'Separate from monitor mode: this decides whether a refresh may add books it discovers at all. Monitor mode “None” on its own still lets the back-catalogue in, unmonitored.')}
+                </p>
               </div>
               {bulkMonitorMode === 'latest' && (
                 <div>

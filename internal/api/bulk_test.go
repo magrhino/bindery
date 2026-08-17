@@ -311,6 +311,80 @@ func TestAuthorsBulk_SetMonitorMode(t *testing.T) {
 	}
 }
 
+// TestAuthorsBulk_SetMonitorNewItems covers #2065: the bulk dialog had no way
+// to write monitor_new_items, so a library-wide "None" left every author still
+// accepting newly-discovered books on the next refresh.
+func TestAuthorsBulk_SetMonitorNewItems(t *testing.T) {
+	h, authors, _, author, ctx := bulkFixture(t)
+
+	// The fixture author starts on the defaults (mode "all", new items "all"),
+	// so both assertions below are real transitions rather than no-ops.
+	author.MonitorMode = models.AuthorMonitorModeAll
+	author.MonitorNewItems = models.AuthorMonitorNewItemsAll
+	if err := authors.Update(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+
+	body := fmt.Sprintf(`{"ids":[%d],"action":"set_monitor_mode","monitorMode":"none","monitorNewItems":"none"}`, author.ID)
+	rec := postBulk(t, h.AuthorsBulk, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	got, err := authors.GetByID(ctx, author.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MonitorNewItems != models.AuthorMonitorNewItemsNone {
+		t.Errorf("monitorNewItems = %q, want none — the author still accepts discovered books (#2065)", got.MonitorNewItems)
+	}
+	if got.MonitorMode != models.AuthorMonitorModeNone {
+		t.Errorf("monitorMode = %q, want none", got.MonitorMode)
+	}
+	if authorAcceptsDiscoveredBooks(got) {
+		t.Error("author still accepts newly-discovered books after a bulk set to none")
+	}
+}
+
+// TestAuthorsBulk_SetMonitorModeLeavesNewItemsAlone is the compatibility half:
+// omitting monitorNewItems must not change it. Monitor mode "none" with new
+// items allowed is the supported "list the catalogue, monitor none of it"
+// setup (#1290), so writing one field must never imply the other.
+func TestAuthorsBulk_SetMonitorModeLeavesNewItemsAlone(t *testing.T) {
+	h, authors, _, author, ctx := bulkFixture(t)
+
+	author.MonitorNewItems = models.AuthorMonitorNewItemsAll
+	if err := authors.Update(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+
+	body := fmt.Sprintf(`{"ids":[%d],"action":"set_monitor_mode","monitorMode":"none"}`, author.ID)
+	rec := postBulk(t, h.AuthorsBulk, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	got, err := authors.GetByID(ctx, author.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MonitorNewItems != models.AuthorMonitorNewItemsAll {
+		t.Errorf("monitorNewItems = %q, want all — an omitted field must not be rewritten", got.MonitorNewItems)
+	}
+}
+
+// TestAuthorsBulk_SetMonitorNewItemsInvalid rejects a value the single-author
+// handler would also reject, rather than storing it and normalising later.
+func TestAuthorsBulk_SetMonitorNewItemsInvalid(t *testing.T) {
+	h, _, _, author, _ := bulkFixture(t)
+
+	body := fmt.Sprintf(`{"ids":[%d],"action":"set_monitor_mode","monitorMode":"none","monitorNewItems":"sometimes"}`, author.ID)
+	rec := postBulk(t, h.AuthorsBulk, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAuthorsBulk_SetMonitorModeLatest_AppliesToExistingBooks(t *testing.T) {
 	h, authors, books, author, ctx := bulkFixture(t)
 
