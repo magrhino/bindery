@@ -7,10 +7,10 @@ services, and writes to the local filesystem. We take reports seriously.
 
 Only the latest minor release receives security fixes. Older minors do not.
 
-| Version | Supported |
-| ------- | --------- |
-| 1.15.x  | Yes       |
-| < 1.15  | No        |
+| Version                                                              | Supported |
+| -------------------------------------------------------------------- | --------- |
+| Latest minor ([Releases](https://github.com/vavallee/bindery/releases)) | Yes       |
+| Anything older                                                         | No        |
 
 ## Reporting a vulnerability
 
