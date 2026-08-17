@@ -515,9 +515,35 @@ describe('AuthorDetailPage', () => {
     fireEvent.click(excludeBtn)
 
     await waitFor(() => {
-      expect(api.bulkActionBooks).toHaveBeenCalledWith([101, 102], 'exclude')
+      expect(api.bulkActionBooks).toHaveBeenCalledWith([101, 102], 'exclude', undefined)
     })
     confirmSpy.mockRestore()
+  })
+
+  // #2066: the author page's book list had no media-type bulk action at all,
+  // so correcting several mistagged titles under one author meant editing each
+  // book or leaving the page for the global Books view.
+  it('bulk-sets media type from the author page book list', async () => {
+    vi.mocked(api.bulkActionBooks).mockResolvedValue({
+      results: { '301': { ok: true }, '302': { ok: true } },
+    })
+    renderAuthorDetailPage(
+      [
+        makeBook({ id: 301, title: 'Mistagged One', status: 'wanted' }),
+        makeBook({ id: 302, title: 'Mistagged Two', status: 'wanted' }),
+      ],
+      'table',
+    )
+
+    await screen.findByText('Mistagged One')
+    fireEvent.click(within(rowForTitle('Mistagged One')).getByRole('checkbox'))
+    fireEvent.click(within(rowForTitle('Mistagged Two')).getByRole('checkbox'))
+
+    fireEvent.click(await screen.findByRole('button', { name: '📖🎧 Set Both' }))
+
+    await waitFor(() => {
+      expect(api.bulkActionBooks).toHaveBeenCalledWith([301, 302], 'set_media_type', 'both')
+    })
   })
 
   it('surfaces partial-failure summary when some bulk actions fail', async () => {
@@ -651,7 +677,7 @@ describe('AuthorDetailPage', () => {
     expect(await screen.findByText('1 selected')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Monitor' }))
-    await waitFor(() => expect(api.bulkActionBooks).toHaveBeenCalledWith([401], 'monitor'))
+    await waitFor(() => expect(api.bulkActionBooks).toHaveBeenCalledWith([401], 'monitor', undefined))
   })
 
   it('groups books by series with a Standalone group when the toggle is on', async () => {

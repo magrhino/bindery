@@ -308,6 +308,7 @@
     "downloadFile": "Download file",
     "setEbook": "📖 Set Ebook",
     "setAudiobook": "🎧 Set Audiobook",
+    "setBoth": "📖🎧 Set Both",
     "mediaEbook": "📖 Ebook",
     "mediaAudiobook": "🎧 Audiobook",
     "mediaBoth": "📖🎧 Both",

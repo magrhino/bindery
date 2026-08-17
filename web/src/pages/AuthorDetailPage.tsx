@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { api, Author, AuthorAlias, Book, BookBulkAction, Series } from '../api/client'
+import { api, Author, AuthorAlias, Book, BookBulkAction, MediaType, Series } from '../api/client'
 import ViewToggle from '../components/ViewToggle'
 import { bookStatusBadge } from '../components/bookStatus'
 import MergeAuthorsModal from '../components/MergeAuthorsModal'
@@ -315,14 +315,14 @@ export default function AuthorDetailPage() {
   // endpoint. The handler returns 200 with per-id outcomes even when some
   // rows fail (stale IDs, missing books) — surface the first error inline
   // so the user knows partial success happened without burying it.
-  const runBulk = async (action: BookBulkAction, actionLabel: string, confirmMsg?: string) => {
+  const runBulk = async (action: BookBulkAction, actionLabel: string, confirmMsg?: string, mediaType?: MediaType) => {
     if (selected.size === 0) return
     if (confirmMsg && !confirm(confirmMsg)) return
     setBulkBusy(true)
     setError(null)
     try {
       const ids = Array.from(selected)
-      const res = await api.bulkActionBooks(ids, action)
+      const res = await api.bulkActionBooks(ids, action, mediaType)
       let okCount = 0
       let firstError = ''
       for (const id of ids) {
@@ -1005,6 +1005,21 @@ export default function AuthorDetailPage() {
         actions={[
           { label: t('authorDetail.bulk.monitor'), onClick: () => runBulk('monitor', t('authorDetail.bulk.monitor')) },
           { label: t('authorDetail.bulk.unmonitor'), onClick: () => runBulk('unmonitor', t('authorDetail.bulk.unmonitor')) },
+          // Media-type corrections are author-scoped work in practice — a sync
+          // mistags several titles under one author — so they belong here as
+          // well as on the global Books view (#2066).
+          {
+            label: t('books.setEbook'),
+            onClick: () => runBulk('set_media_type', t('books.setEbook'), undefined, 'ebook'),
+          },
+          {
+            label: t('books.setAudiobook'),
+            onClick: () => runBulk('set_media_type', t('books.setAudiobook'), undefined, 'audiobook'),
+          },
+          {
+            label: t('books.setBoth'),
+            onClick: () => runBulk('set_media_type', t('books.setBoth'), undefined, 'both'),
+          },
           {
             label: t('authorDetail.bulk.exclude'),
             variant: 'caution',

@@ -841,6 +841,42 @@ func TestBooksBulk_SetMediaType_Ebook(t *testing.T) {
 	}
 }
 
+// TestBooksBulk_SetMediaType_Both covers #2066: 'both' was rejected here even
+// though AuthorsBulk accepted it and setBookMediaType is media-type agnostic,
+// so a batch of dual-format books could only be corrected one at a time.
+func TestBooksBulk_SetMediaType_Both(t *testing.T) {
+	h, _, books, author, ctx := bulkFixture(t)
+
+	ebookOnly := mustCreateBook(t, books, ctx, &models.Book{
+		ForeignID: "B_MT_BOTH_1", AuthorID: author.ID, Title: "Owned In Both",
+		SortTitle: "owned in both", Status: models.BookStatusWanted,
+		MediaType: models.MediaTypeEbook,
+		Genres:    []string{}, MetadataProvider: "openlibrary", Monitored: true,
+	})
+	audioOnly := mustCreateBook(t, books, ctx, &models.Book{
+		ForeignID: "B_MT_BOTH_2", AuthorID: author.ID, Title: "Also Owned In Both",
+		SortTitle: "also owned in both", Status: models.BookStatusWanted,
+		MediaType: models.MediaTypeAudiobook,
+		Genres:    []string{}, MetadataProvider: "openlibrary", Monitored: true,
+	})
+
+	body := fmt.Sprintf(`{"ids":[%d,%d],"action":"set_media_type","mediaType":"both"}`, ebookOnly.ID, audioOnly.ID)
+	rec := postBulk(t, h.BooksBulk, body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	for _, id := range []int64{ebookOnly.ID, audioOnly.ID} {
+		got, err := books.GetByID(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.MediaType != models.MediaTypeBoth {
+			t.Errorf("book %d: media type = %q, want both", id, got.MediaType)
+		}
+	}
+}
+
 func TestBooksBulk_SetMediaType_Invalid(t *testing.T) {
 	h, _, books, author, ctx := bulkFixture(t)
 

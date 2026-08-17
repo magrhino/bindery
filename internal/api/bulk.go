@@ -379,7 +379,8 @@ func (h *BulkHandler) fanOutSearches(books []models.Book) {
 // BooksBulk handles POST /api/v1/book/bulk.
 //
 // Supported actions: "monitor", "unmonitor", "delete", "search", "set_media_type", "exclude".
-// For "set_media_type" the body must also include "mediaType": "ebook"|"audiobook".
+// For "set_media_type" the body must also include "mediaType":
+// "ebook"|"audiobook"|"both".
 // "exclude" sets the book's excluded flag to true so it disappears from author
 // lists and is blocked from re-import on the next OL sync — mirrors the
 // single-book PUT /book/:id/exclude path but skips the toggle semantics
@@ -406,9 +407,17 @@ func (h *BulkHandler) BooksBulk(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown action: " + req.Action})
 		return
 	}
-	if req.Action == "set_media_type" && req.MediaType != models.MediaTypeEbook && req.MediaType != models.MediaTypeAudiobook {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mediaType must be 'ebook' or 'audiobook'"})
-		return
+	// 'both' is accepted here for the same reason AuthorsBulk accepts it: a book
+	// owned in both formats is a first-class media type, and rejecting it left
+	// the Books bulk bar able to set either format but never the pair, so a
+	// batch correction had to be done one book at a time (#2066).
+	if req.Action == "set_media_type" {
+		switch req.MediaType {
+		case models.MediaTypeEbook, models.MediaTypeAudiobook, models.MediaTypeBoth:
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mediaType must be 'ebook', 'audiobook', or 'both'"})
+			return
+		}
 	}
 
 	resp := bulkResponse{Results: make(map[string]bulkItemResult, len(req.IDs))}

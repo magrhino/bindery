@@ -7,7 +7,7 @@ import BookStatusLegend from '../components/BookStatusLegend'
 import { useView } from '../components/useView'
 import GettingStartedGuidance from '../components/GettingStartedGuidance'
 import { useNeedsSetup } from '../components/useNeedsSetup'
-import { api, BINDERY_BASE, Book } from '../api/client'
+import { api, BINDERY_BASE, Book, MediaType } from '../api/client'
 import BulkActionBar from '../components/BulkActionBar'
 import Pagination from '../components/Pagination'
 import { useServerPagination } from '../components/usePagination'
@@ -115,7 +115,7 @@ export default function BooksPage() {
   const selectAllOnPage = () => setSelectedIds(new Set(books.map(b => b.id)))
   const clearSelection = () => setSelectedIds(new Set())
 
-  const runBulk = async (action: Parameters<typeof api.bulkActionBooks>[1], mediaType?: 'ebook' | 'audiobook') => {
+  const runBulk = async (action: Parameters<typeof api.bulkActionBooks>[1], mediaType?: MediaType) => {
     if (selectedIds.size === 0) return
     if (action === 'delete' && !confirm(t('books.deleteConfirm', { count: selectedIds.size }))) return
     setBulkBusy(true)
@@ -418,6 +418,7 @@ export default function BooksPage() {
           { label: t('common.search'), onClick: () => runBulk('search') },
           { label: t('books.setEbook'), onClick: () => runBulk('set_media_type', 'ebook') },
           { label: t('books.setAudiobook'), onClick: () => runBulk('set_media_type', 'audiobook') },
+          { label: t('books.setBoth'), onClick: () => runBulk('set_media_type', 'both') },
           { label: t('common.delete'), onClick: () => runBulk('delete'), variant: 'danger' },
         ]}
       />
