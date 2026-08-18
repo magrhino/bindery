@@ -1640,6 +1640,7 @@ func (h *AuthorHandler) fetchAuthorBooks(author *models.Author, opts catalogueSy
 	// Resolve the author's metadata profile (falling back to the seeded
 	// default) and parse its allowed_languages CSV. Nil means "no filter".
 	allowedLangs, unknownFail := h.resolveAllowedLanguages(ctx, author)
+	skipMissingDate := h.resolveSkipMissingDate(ctx, author)
 
 	// OpenLibrary works carry no work-level language; the search enricher only
 	// backfills it for indexed works, so a tail of works (often translations)
@@ -1824,12 +1825,18 @@ func (h *AuthorHandler) fetchAuthorBooks(author *models.Author, opts catalogueSy
 	// skippedExcluded is logged but deliberately kept out of AuthorSyncSummary:
 	// the author page's notice explains works the user did NOT expect to lose,
 	// and a book they excluded by hand is not one of them.
-	var added, skippedLang, skippedJunk, skippedMediaType, skippedNotAccepted, skippedExcluded int
+	var added, skippedLang, skippedJunk, skippedMediaType, skippedNotAccepted, skippedExcluded, skippedMissingDate int
 	// Names of the first few language-rejected works, reported to the user
 	// alongside the count (#1889): "65 books skipped" is alarming, but it is
 	// the titles and their language codes that tell them whether the profile
 	// is set the way they meant.
 	var skippedLangSample []models.AuthorSyncSkippedBook
+	// The first few date-rejected works, same reasoning and cap as
+	// skippedLangSample (#1889 established the pattern; requested again for
+	// this filter specifically in PR review, vavallee): a bare count doesn't
+	// say which books vanished, and Debug logs aren't reachable in a
+	// rootless container.
+	var skippedMissingDateSample []models.AuthorSyncSkippedBook
 	for _, b := range books {
 		b.AuthorID = author.ID
 		// Apply the caller-provided default media type when the provider
@@ -1880,6 +1887,31 @@ func (h *AuthorHandler) fetchAuthorBooks(author *models.Author, opts catalogueSy
 			continue
 		}
 
+		// Hoisted above the profile filters below (rather than left at its
+		// original position just before the update branch) so a filter that
+		// fires after this point can exempt a book the user already owns.
+		// Without this, a filtered-but-owned book never reaches the update
+		// branch: it keeps its files, but silently stops getting rating,
+		// genre and cover updates, and is reported as "skipped" on every
+		// subsequent sync even though the user is looking at it in their
+		// library (vavallee, PR review). SkipMissingDate screens works out
+		// of discovery — it must not also stop maintaining ones already
+		// accepted.
+		existing, _ := h.books.GetByForeignID(ctx, b.ForeignID)
+
+		// Filter works with no release date when the author's metadata profile
+		// has SkipMissingDate enabled. ReleaseDate is already merged in from
+		// the provider's work data by this point (aggregator_author_works.go),
+		// so this is a straight presence check, not a fetch.
+		if existing == nil && skipMissingDate && b.ReleaseDate == nil {
+			skippedMissingDate++
+			if len(skippedMissingDateSample) < authorSyncSkippedSampleLimit {
+				skippedMissingDateSample = append(skippedMissingDateSample, models.AuthorSyncSkippedBook{Title: b.Title})
+			}
+			slog.Debug("skipping work with no release date", "title", b.Title, "foreignId", b.ForeignID)
+			continue
+		}
+
 		// Filter by the author's metadata-profile allowed_languages.
 		// Books whose language is unknown honor the profile's
 		// unknown_language_behavior (pass by default; see #232).
@@ -1918,7 +1950,8 @@ func (h *AuthorHandler) fetchAuthorBooks(author *models.Author, opts catalogueSy
 
 		// Update ratings + genres on existing books, then skip further
 		// processing (we don't want to overwrite user state like status).
-		existing, _ := h.books.GetByForeignID(ctx, b.ForeignID)
+		// existing was resolved above, before the profile filters, so an
+		// owned book that trips one of them still reaches this branch.
 		if existing != nil {
 			changed := false
 			// GetByForeignID matches globally (foreign_id is UNIQUE across all
@@ -2114,16 +2147,18 @@ func (h *AuthorHandler) fetchAuthorBooks(author *models.Author, opts catalogueSy
 	// just ones that dropped something: "nothing was filtered out" is the
 	// answer to "where are my books?" as often as a count is.
 	summary := models.AuthorSyncSummary{
-		CompletedAt:           time.Now().UTC(),
-		Total:                 len(books),
-		Added:                 added,
-		SkippedLanguage:       skippedLang,
-		SkippedJunk:           skippedJunk,
-		SkippedMediaType:      skippedMediaType,
-		SkippedNotAccepted:    skippedNotAccepted,
-		AllowedLanguages:      allowedLangs,
-		UnknownLanguageFail:   unknownFail,
-		SkippedLanguageSample: skippedLangSample,
+		CompletedAt:              time.Now().UTC(),
+		Total:                    len(books),
+		Added:                    added,
+		SkippedLanguage:          skippedLang,
+		SkippedJunk:              skippedJunk,
+		SkippedMediaType:         skippedMediaType,
+		SkippedNotAccepted:       skippedNotAccepted,
+		SkippedMissingDate:       skippedMissingDate,
+		SkippedMissingDateSample: skippedMissingDateSample,
+		AllowedLanguages:         allowedLangs,
+		UnknownLanguageFail:      unknownFail,
+		SkippedLanguageSample:    skippedLangSample,
 	}
 	h.syncSummaries.record(author.ID, summary)
 
@@ -2135,13 +2170,14 @@ func (h *AuthorHandler) fetchAuthorBooks(author *models.Author, opts catalogueSy
 		"author", author.Name, "added", added,
 		"skipped_language", skippedLang, "skipped_junk", skippedJunk, "skipped_media_type", skippedMediaType,
 		"skipped_not_accepted", skippedNotAccepted, "skipped_excluded", skippedExcluded,
+		"skipped_missing_date", skippedMissingDate,
 		"total", len(books),
 	}
 	// The metadata filters dropping works is the surprising case and stays at
 	// Warn. The discovery-policy skip is not: the user configured it, the run
 	// already said so once at Info above, and a "Refresh all authors" pass
 	// over an ABS-imported library would otherwise emit one Warn per author.
-	if skippedLang+skippedJunk+skippedMediaType > 0 {
+	if skippedLang+skippedJunk+skippedMediaType+skippedMissingDate > 0 {
 		slog.Warn("author books synced", logArgs...)
 		return
 	}
@@ -3092,4 +3128,20 @@ func applyAuthorMajorityLanguageFallback(books []models.Book) {
 			books[i].Language = majorityLang
 		}
 	}
+}
+
+// resolveSkipMissingDate returns the author's effective metadata profile's
+// SkipMissingDate setting. Defaults to false (matches the setting's prior
+// no-op behavior) on any lookup failure, so an unresolvable profile never
+// turns into unexpected catalogue loss.
+func (h *AuthorHandler) resolveSkipMissingDate(ctx context.Context, author *models.Author) bool {
+	id := models.DefaultMetadataProfileID
+	if author.MetadataProfileID != nil {
+		id = *author.MetadataProfileID
+	}
+	p, err := h.profiles.GetByID(ctx, id)
+	if err != nil || p == nil {
+		return false
+	}
+	return p.SkipMissingDate
 }
