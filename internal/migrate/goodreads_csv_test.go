@@ -173,3 +173,28 @@ func TestGoodreadsAuthorFromLF(t *testing.T) {
 		}
 	}
 }
+
+// TestParseGoodreadsCSV_BOM covers #2075: a Goodreads export re-saved from a
+// spreadsheet app starts with a UTF-8 BOM, which would glue itself to the
+// first header cell and make the mandatory Title column unresolvable.
+func TestParseGoodreadsCSV_BOM(t *testing.T) {
+	const in = "\ufeffTitle,Author,Exclusive Shelf\n" +
+		"Project Hail Mary,Andy Weir,to-read\n"
+
+	rows, err := ParseGoodreadsCSV(strings.NewReader(in))
+	if err != nil {
+		t.Fatalf("ParseGoodreadsCSV: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1: %+v", len(rows), rows)
+	}
+	if rows[0].Title != "Project Hail Mary" {
+		t.Errorf("title = %q, want %q", rows[0].Title, "Project Hail Mary")
+	}
+	if rows[0].Author != "Andy Weir" {
+		t.Errorf("author = %q, want %q", rows[0].Author, "Andy Weir")
+	}
+	if rows[0].ExclusiveShelf != GoodreadsShelfToRead {
+		t.Errorf("shelf = %q, want %q", rows[0].ExclusiveShelf, GoodreadsShelfToRead)
+	}
+}

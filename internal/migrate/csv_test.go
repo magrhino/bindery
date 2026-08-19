@@ -159,6 +159,33 @@ func TestParseCSVRows(t *testing.T) {
 			},
 		},
 		{
+			// #2075: a spreadsheet app writes a UTF-8 BOM at the head of the
+			// file. Without stripping it the header cell reads "\ufeffname",
+			// misses the header check, and gets imported as an author.
+			name: "csv with BOM-prefixed header row skipped",
+			in:   "\ufeffname,monitored\nAndy Weir,true\nIsaac Asimov,false\n",
+			want: []csvRow{
+				{name: "Andy Weir", monitored: true},
+				{name: "Isaac Asimov", monitored: false},
+			},
+		},
+		{
+			// #2075: the bare-name branch has no header to skip, but the BOM
+			// still lands in the first name unless it is stripped before the
+			// first-line comma check picks a branch.
+			name: "bare-name list with BOM",
+			in:   "\ufeffAndy Weir\nN. K. Jemisin\n",
+			want: []csvRow{
+				{name: "Andy Weir", monitored: true},
+				{name: "N. K. Jemisin", monitored: true},
+			},
+		},
+		{
+			name: "BOM only",
+			in:   "\ufeff",
+			want: nil,
+		},
+		{
 			name: "empty input",
 			in:   "",
 			want: nil,

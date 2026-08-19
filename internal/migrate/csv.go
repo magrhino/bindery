@@ -4,6 +4,7 @@
 package migrate
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/csv"
@@ -148,6 +149,30 @@ type csvRow struct {
 	monitored bool
 }
 
+// utf8BOM is the UTF-8 encoding of U+FEFF. Excel, Google Sheets and Numbers all
+// write it at the head of a CSV they save as UTF-8, and it is not data: left in
+// place it becomes part of the first cell, so a header cell reads "\ufeffname"
+// and no longer matches the header names we skip on. The header row then gets
+// imported as if it were an author, and the resulting metadata search burns a
+// provider lookup on a name that does not exist (#2075).
+var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
+
+// stripBOM removes a single leading UTF-8 BOM. Only at the very start, and only
+// one: a BOM anywhere else is a legitimate (if odd) character in a cell.
+func stripBOM(b []byte) []byte {
+	return bytes.TrimPrefix(b, utf8BOM)
+}
+
+// skipBOM wraps a reader so a leading UTF-8 BOM is consumed before the caller
+// sees any bytes. For readers parsed as a stream rather than read whole.
+func skipBOM(reader io.Reader) io.Reader {
+	br := bufio.NewReader(reader)
+	if prefix, err := br.Peek(len(utf8BOM)); err == nil && bytes.Equal(prefix, utf8BOM) {
+		_, _ = br.Discard(len(utf8BOM))
+	}
+	return br
+}
+
 func parseCSVRows(reader io.Reader) ([]csvRow, error) {
 	// Read everything upfront. bufio.ReadLine returns a slice into its internal
 	// buffer; any subsequent read reuses that buffer and would corrupt the slice
@@ -157,6 +182,9 @@ func parseCSVRows(reader io.Reader) ([]csvRow, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read csv: %w", err)
 	}
+	// Strip before anything inspects the bytes, including the first-line comma
+	// check below, so both the CSV branch and the bare-name branch are covered.
+	all = stripBOM(all)
 	if len(all) == 0 {
 		return nil, nil
 	}

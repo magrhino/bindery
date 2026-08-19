@@ -65,7 +65,10 @@ func ParseGoodreadsCSV(reader io.Reader) ([]GoodreadsRow, error) {
 		return nil, errors.New("reader is nil")
 	}
 
-	cr := csv.NewReader(reader)
+	// Goodreads exports saved through a spreadsheet app carry a UTF-8 BOM, which
+	// would otherwise glue itself to the first header cell and make the Title
+	// column unresolvable (#2075).
+	cr := csv.NewReader(skipBOM(reader))
 	cr.FieldsPerRecord = -1 // tolerate ragged rows; we index by header
 	cr.LazyQuotes = true    // Goodreads descriptions occasionally contain stray quotes
 
