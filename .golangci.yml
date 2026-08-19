@@ -71,6 +71,25 @@ linters:
           - gosec
           - noctx
           - unused
+      # SA5011 fires on the standard table-test guard:
+      #
+      #   if got == nil {
+      #       t.Fatal("...")
+      #   }
+      #   if got.Field != want { ... }
+      #
+      # t.Fatal ends the test goroutine, so the dereference below it is
+      # unreachable, but staticcheck does not always model that and reports a
+      # possible nil dereference. It is environment-dependent: the same pinned
+      # golangci-lint v2.11.4 on the same Go 1.26.6 finds nothing locally with
+      # a cleared cache and six findings on CI. The pattern appears in roughly
+      # 77 test files, so suppressing the check in tests is the proportionate
+      # fix; rewriting every guard to carry a redundant return would churn the
+      # whole suite for an analyser quirk. Non-test code keeps SA5011.
+      - path: _test\.go
+        linters:
+          - staticcheck
+        text: "SA5011"
       # CORS middleware writes OPTIONS response headers and can't meaningfully
       # propagate a Write error.
       - path: cmd/bindery/main\.go
