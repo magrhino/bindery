@@ -4,6 +4,115 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
+## [v1.32.0] — 2026-08-19
+
+**Five metadata profile filters did nothing at all.** `skipPartBooks`,
+`skipMissingDate`, `minPopularity`, `minPages` and `skipMissingIsbn` each had a
+control in the UI, each saved its value, and not one of them was ever consulted
+while cataloguing an author. Setting them changed nothing, and there was no way
+to tell from the outside — the books they should have excluded simply arrived
+anyway. All five now filter, and the author page reports what each one dropped
+with sample titles, so a profile that is too aggressive is visible rather than
+something you infer from a book that never showed up. Books already in your
+library are exempt from every one of them: an owned book still reaches the
+update path and keeps getting its ratings, genres and cover refreshed, so
+turning a filter on cannot strip metadata from what you already have.
+
+**A clean install with no Hardcover token hammered Hardcover anyway.** A bulk
+CSV import of nineteen authors fired 447 Hardcover requests, of which 240 came
+back "unable to verify token" and the remaining 205 were throttled. Hardcover
+authenticates every query, search included, so not one of them could have
+succeeded. Only one of the client's queries checked for a token first. All of
+them do now, and an install without a token makes no Hardcover requests at all.
+Startup used to log `hardcover enrichment enabled` regardless; it now says
+`idle: no api token configured` when that is the truth.
+
+**And CSVs saved by Excel, Google Sheets or Numbers imported a stranger's
+library.** Those apps write a byte order mark at the start of the file, and it
+stuck to the first cell — so the header row stopped looking like a header, got
+imported as an author name, matched some unrelated person on OpenLibrary, and
+pulled in their entire catalogue. That is most of the rest of the request
+volume above, plus a bogus author in your library. Goodreads exports failed
+differently and more honestly: the mark made the Title column unfindable and
+the import refused to run.
+
+---
+
+**Upgrading from a version before 1.15 could fail to start**, with
+`no such column: books.excluded`. A column added years ago never landed on
+some databases, and every startup after that died on the first query touching
+it. It is restored automatically now.
+
+**Deleting one format no longer takes the other one with it.** Audiobook
+imports register the destination *folder*, so a `?format=audiobook` delete
+landed on a directory and removed all of it — including the ebook sitting
+beside the audio files. The ebook's database row survived, so the book went on
+advertising a file that was no longer there.
+
+### Added
+
+- **Hardcover can be promoted to the primary metadata provider** (#2040) — `metadata.primary_provider` now accepts `hardcover` alongside `openlibrary` (still the default) and `dnb`. Selecting it lets Hardcover's curated catalogue define what an author's book list is, instead of only enriching OpenLibrary's — which for English-language libraries means far fewer translated editions, omnibus bundles, alternate-title duplicates, and non-book entries landing in the wanted list. Requires a Hardcover API token: the selector stays disabled until one is saved, the setting is rejected without one, and a token removed out-of-band makes Bindery fall back to OpenLibrary with a warning at startup instead of failing every lookup. Changing the setting is safe for an existing library: the catalogue provider is chosen per author from the ID they are already linked to, so authors added under OpenLibrary keep syncing from OpenLibrary and are not duplicated. The new primary applies to authors added afterwards, and the settings screen now says so instead of only mentioning the restart.
+
+- **Bulk media-type editing gained a "Set Both" action, and works from the author page** (#2066) — the Books view's bulk bar could set Ebook or Audiobook but never the pair, because `POST /book/bulk` rejected `mediaType: "both"` even though the author-level bulk action accepted it and the underlying write is media-type agnostic. A batch of books owned in both formats had to be corrected one at a time from each book's edit page. `both` is now accepted, **📖🎧 Set Both** sits alongside the existing two buttons, and all three are also available on an author page's book list — where a media-type correction after a bad sync usually starts, and where the previous workaround (filter the global Books view by author) cost the author-scoped context the cleanup needs.
+
+- **Author sync reports what each filter dropped, with examples** (#2032) — `AuthorSyncSummary` carries a count and a sample of titles for every skip reason, and the author page's sync notice lists them. Previously a metadata profile could silently discard most of an author's catalogue and the only evidence was a shorter book list than you expected.
+
+### Changed
+
+- **Books that share a main title are no longer merged** (#2042) — the canonical title key used to stop at the first `": "`, so `Star Wars: A New Hope` and `Star Wars: The Empire Strikes Back` were one identity and an import could bind one onto the other. Distinct subtitles now mean distinct books; a subtitle only one source spells out still matches. Keys are recomputed automatically on the next start, so no action is needed; libraries already holding duplicates keep them, as merging existing rows remains a separate piece of work.
+
+- **Series Fill picks the best title match rather than the first** (#1969) — Fill now scans every existing candidate title and links the best-scoring one, not just the first past the confidence threshold. On a library where two different real books both clear the threshold against one catalogue title, the book Fill links can change from "whichever came first" to "whichever scores higher".
+
+### Fixed
+
+- **The five metadata profile filters that never filtered** (#1723) — `skipPartBooks`, `skipMissingDate`, `minPopularity`, `minPages` and `skipMissingIsbn` were each persisted and each ignored during cataloguing. All five now apply during author sync and refresh:
+  - *Part books* removes box sets, omnibuses, signed-copy cartons and slash-separated multi-title anthologies.
+  - *Missing date* removes works with no release date.
+  - *Minimum popularity* removes works below the ratings-count floor, exempting works that have not released yet and so cannot have accumulated any.
+  - *Minimum pages* and *missing ISBN* are checked against a real edition lookup. A work with no page data at all counts as unknown rather than zero and passes the floor either way.
+
+  The edition lookup runs only for works that survived every free filter, only when one of those two settings is on, and is batched across the survivors with bounded concurrency rather than fired one at a time — so a profile touching neither setting pays nothing, and one that enables them does not add a serial round-trip to author sync (#1929). Books already in your library are exempt from all five and keep receiving rating, genre and cover updates.
+
+- **Hardcover is no longer queried when no API token is configured** (#2075) — a bulk CSV author import on a fresh config fired hundreds of Hardcover requests that came back `401 Unable to verify token` and then `429 Throttled`, because only one of the client's queries checked for a token first. Every Hardcover query now short-circuits as "not configured" before any network call. Adding a token still takes effect immediately, with no restart.
+
+- **The Hardcover line in the startup log is honest** (#2075) — startup always logged `hardcover enrichment enabled`, even with no token configured. It now logs `hardcover enrichment idle: no api token configured` in that case.
+
+- **CSV imports of files saved by Excel, Google Sheets or Numbers** (#2075) — those apps put a byte order mark at the start of a UTF-8 CSV, and it used to stick to the first cell. The header row was no longer recognised as a header, so it was imported as if it were an author name, matched an unrelated person on OpenLibrary, and pulled in that stranger's whole catalogue — often hundreds of provider requests, rate limiting and a bogus author in your library. The mark is now stripped before parsing, for author CSVs (both the two-column and the plain name-per-line form) and for Goodreads exports, where it made the Title column unfindable and the import fail outright.
+
+- **Upgrades from before 1.15 no longer die on a missing column** (#1932) — the legacy-missing `books.excluded` column is restored automatically at startup instead of failing every query that touches it.
+
+- **Deleting one format no longer destroys the other format's file when both live in the same folder** (#2052) — audiobook imports register the destination *folder* in `book_files`, so a `?format=audiobook` delete landed on a directory. That branch was an unconditional `os.RemoveAll`, which discarded the format filter every other part of the delete path honours, and took the ebook sitting beside the audio files with it. The ebook's `book_files` row survived, so the book kept advertising a file that was no longer on disk and downloading it returned an error. The directory branch now walks the folder and removes only the files belonging to the format being deleted; cover art and other sidecars are removed once no book file of any format is left, and the folder itself only when nothing remains in it.
+
+- **A folder delete can no longer unlink a file another book still tracks** (#1368, surfaced by #2052) — the `book_files` ownership guard was applied only to the tracked path handed to the delete, so any file nested under a deleted folder was unguarded. The same check now runs for every file the sweep reaches, including same-stem siblings.
+
+- **Bulk "Set monitor mode" can now set whether authors accept newly discovered books** (#2065) — the dialog wrote `monitor_mode` and nothing else, so setting a whole library to *None* left every author still pulling in its back-catalogue on the next refresh. The two settings are independent, and the field was only reachable from the single-author edit form. The bulk dialog now carries a **Monitor newly discovered books** control alongside monitor mode, defaulting to *Leave unchanged* so an existing bulk action behaves as before. Mode *None* still does not imply it: that pairing is the supported "list the whole catalogue, monitor none of it" setup.
+
+- **Library scan no longer rejects audiobooks when `BINDERY_AUDIOBOOK_DIR` differs from the ebook root** (#2033) — the scan's reconcile tiers matched a file by ASIN, fuzzy title, or series position and then checked the candidate against the ebook root regardless of the file's format. With a separate audiobook root, every correctly matched audiobook failed that containment check and fell through to the generic `no_title_match` reason, so the scan reported that it could not identify files it had in fact identified. Each file is now checked against the root for its own format.
+
+- **Long titles and long authors together no longer fail the import with "file name too long"** (#2014) — the per-value cap added in #1982 limits each template field, but nothing limited the *name the template composes out of them*: with the shipped default `{Title} - {Author}.{ext}`, a title and an author each at the 200-byte field cap render a 408-byte filename and the write dies with `ENAMETOOLONG`, on plain ASCII. The rendered segment is now capped as a whole, and the budget reserves the bytes that get appended after it is rendered — the staging prefix, so a name that is legal at the final write can no longer fail earlier and more confusingly during staging, and the `" (2)"` collision suffix, so a name that just fits does not fail the second time the same title arrives. Trimming takes from the longest field first and never from the template's own text, so the extension, the `" - "` between title and author, `{Year}` and audiobook `Part NNN` all survive intact. Names already inside the budget are byte-for-byte unchanged, so existing libraries do not move.
+
+- **A metadata profile set to "English Only" no longer drops genuinely-English books whose language OpenLibrary never reported** — OpenLibrary's edition records commonly omit the `languages` field, which is a data gap, not a signal that a work is foreign-language. A work the edition-sample backfill could not resolve was previously treated identically to a confirmed non-English work by a profile set to reject unknowns. Author sync now checks whether one language clearly dominates the rest of that author's already-resolved catalogue in the same sync before giving up on an unresolved work, and applies it — most authors write predominantly in one language, so this catches the common case (a sparse-metadata author, not a mixed-language one) without any extra provider round-trips.
+
+- **Duplicate books from punctuation and subtitle disagreements** (#2042) — the canonical title key now folds apostrophes (`Poseidon's Arrow` and `Poseidons Arrow` are one book) and treats a colon as a separator rather than a truncation point (`Journey of the Pharaohs: Numa Files #17` matches the colon-less spelling), so a provider that punctuates differently from Calibre no longer creates a second `wanted` row beside a book you already own.
+
+- **Series Fill no longer lets a box-set or omnibus title satisfy a real book's slot** (#1969) — `TitleScore`'s substring-aware components score a target title fully contained in a much longer omnibus title as a perfect match, tying an actual exact-title match. Fill took the first title over the threshold rather than the best one, so an omnibus record could win that tie and get linked to a slot the real book should have filled, leaving the real book silently unmatched with no error surfaced. Fill now keeps the best-scoring candidate and breaks same-score ties with a boundary-aware match against a non-substring similarity score, falling back to title-length closeness only as a last resort.
+
+- **Grabs from API clients no longer fail with the indexer's 401** (#2039) — search and queue responses strip the indexer apikey out of `nzbUrl` and the grab handler puts it back from the `indexerId` the web UI sends along. A client that posts only `{guid, nzbUrl}` (scripts, `curl`, other API consumers) has no id to send, so the unsigned URL went to the download client and the indexer answered `401`. The key is now also recoverable from the configured indexer whose host matches the download URL.
+
+- **rTorrent downloads no longer burn their retry budget while the files are absent** (#1884) — every other download client stopped counting a retry attempt against a download whose files are not on this host, but rTorrent's retry branch was added without that guard, so the one client that missed it spent all five attempts on polls that could not have imported anything and then blocked the download terminally. It now waits like the others and imports the moment the files appear.
+
+- **Download client path warnings name your configured directories** (#1984) — a qBittorrent completed-downloads path that Bindery cannot see now reports Bindery's own configured ebook and audiobook directories alongside it, so the mismatch is legible without going to look them up.
+
+- **Hardcover list sync** (#2035) — the same work on an ebook list and an audiobook list now becomes one wanted dual-format book instead of two rows.
+
+- **Multi-user search debug** (#1859) — users can now access only their own most recent search details.
+
+### Security
+
+- **The grab response no longer echoes the indexer apikey back to the caller** (#2039) — the queue listing already stripped the shared indexer credential out of `nzbUrl`, but the grab response handed back the download URL that had just been signed, so a non-admin who grabbed a release read the key straight out of the reply. Indexer credentials are admin-only settings. The stored row keeps the key, so retries still reach the indexer authenticated.
+
+- **The pending releases list no longer exposes the indexer apikey** (#2039) — a release held back by a delay profile is stored as the raw indexer result, whose `nzbUrl` was already signed, and `GET /api/v1/pending` returned that blob verbatim in `releaseJson`. It is redacted now. The stored blob keeps the key so force-grab still re-sends a signed URL.
+
 ## [v1.31.0] — 2026-08-14
 
 Two things in this release could take the whole process down, and neither
