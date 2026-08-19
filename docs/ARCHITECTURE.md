@@ -17,13 +17,8 @@ Bindery is a single Go binary with the React frontend embedded via `go:embed`. T
     ▲                    ▲                    ▲
     │                    │                    │
 OpenLibrary    Google Books, Hardcover.app,   Audnex, Audible
-(default        DNB (enrichers)         (audiobook enrichment)
- primary)
+ (primary)         DNB (enrichers)        (audiobook enrichment)
 ```
-
-Exactly one provider is *primary* — it defines what an author's catalogue is.
-`metadata.primary_provider` selects OpenLibrary (default), DNB, or Hardcover
-(token required); every provider that isn't primary is wired as an enricher.
 
 ## Components
 
