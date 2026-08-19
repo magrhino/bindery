@@ -65,10 +65,24 @@ func gqlResponse(t *testing.T, statusCode int, data interface{}) *http.Response 
 	}
 }
 
+// mockClientToken is the token newMockClient sets. Every query method
+// short-circuits without one (see TestUnconfiguredClient_MakesNoRequests), so a
+// mock client needs a token to reach its transport at all.
+const mockClientToken = "hc-mock-token"
+
+// newUnconfiguredMockClient is newMockClient without a token, for the
+// unconfigured-provider guards.
+func newUnconfiguredMockClient(handler func(*http.Request) (*http.Response, error)) *Client {
+	return &Client{
+		http: &http.Client{Transport: &testTransport{handler: handler}},
+	}
+}
+
 // newMockClient creates a hardcover Client backed by a custom transport.
 func newMockClient(handler func(*http.Request) (*http.Response, error)) *Client {
 	return &Client{
-		http: &http.Client{Transport: &testTransport{handler: handler}},
+		http:  &http.Client{Transport: &testTransport{handler: handler}},
+		token: mockClientToken,
 	}
 }
 
@@ -739,7 +753,7 @@ func TestGetAuthorWorksByName_WithToken(t *testing.T) {
 
 func TestGetAuthorWorksByName_NoTokenSkipsRequest(t *testing.T) {
 	called := false
-	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+	c := newUnconfiguredMockClient(func(r *http.Request) (*http.Response, error) {
 		called = true
 		return gqlResponse(t, http.StatusOK, map[string]interface{}{}), nil
 	})
@@ -1757,7 +1771,7 @@ func TestWithToken(t *testing.T) {
 func TestGetUserWishlist_NoToken(t *testing.T) {
 	// Without a token, GetUserWishlist must return (nil, nil) without calling the API.
 	called := false
-	c := newMockClient(func(r *http.Request) (*http.Response, error) {
+	c := newUnconfiguredMockClient(func(r *http.Request) (*http.Response, error) {
 		called = true
 		return gqlResponse(t, http.StatusOK, map[string]interface{}{}), nil
 	})

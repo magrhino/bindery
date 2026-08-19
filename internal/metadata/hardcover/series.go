@@ -24,6 +24,9 @@ func (c *Client) SearchSeries(ctx context.Context, query string, limit int) ([]m
 	if limit <= 0 {
 		limit = 10
 	}
+	if c.authorizationToken(ctx) == "" {
+		return nil, metadata.ErrProviderNotConfigured
+	}
 	gql := `query SearchSeries($query: String!, $queryType: String!, $perPage: Int!) {
 		search(query: $query, query_type: $queryType, per_page: $perPage) {
 			ids
@@ -60,6 +63,9 @@ func (c *Client) SearchSeries(ctx context.Context, query string, limit int) ([]m
 
 // GetSeriesCatalog fetches the ordered books in a Hardcover series.
 func (c *Client) GetSeriesCatalog(ctx context.Context, foreignID string) (*metadata.SeriesCatalog, error) {
+	if c.authorizationToken(ctx) == "" {
+		return nil, metadata.ErrProviderNotConfigured
+	}
 	seriesID, err := hardcoverSeriesNumericID(foreignID)
 	if err != nil {
 		return nil, err

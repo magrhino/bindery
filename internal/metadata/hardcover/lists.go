@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
 )
 
@@ -133,6 +134,9 @@ func hcShelfStatusID(listID int) (int, bool) {
 // Did Not Finish). Built-in shelves always appear even when the user has no
 // custom lists, which was the root cause of the "No lists found" report.
 func (c *Client) GetUserLists(ctx context.Context) ([]HCList, error) {
+	if c.authorizationToken(ctx) == "" {
+		return nil, metadata.ErrProviderNotConfigured
+	}
 	gql := `query GetUserLists {
 		me {
 			want_to_read: user_books_aggregate(where: {status_id: {_eq: 1}}) {
@@ -211,6 +215,9 @@ func (c *Client) GetUserLists(ctx context.Context) ([]HCList, error) {
 // ("want-to-read", ...), so the username is what makes a saved list's
 // identity unique across accounts: (slug, account).
 func (c *Client) GetUsername(ctx context.Context) (string, error) {
+	if c.authorizationToken(ctx) == "" {
+		return "", metadata.ErrProviderNotConfigured
+	}
 	gql := `query GetUsername {
 		me {
 			username
@@ -245,6 +252,9 @@ func (a hcCountAggregate) count() int {
 // GetListBooks returns all books in the given list as Bindery models.
 // Negative listIDs refer to built-in Hardcover shelves (see hcBuiltinShelves).
 func (c *Client) GetListBooks(ctx context.Context, listID int) ([]models.Book, error) {
+	if c.authorizationToken(ctx) == "" {
+		return nil, metadata.ErrProviderNotConfigured
+	}
 	if statusID, ok := hcShelfStatusID(listID); ok {
 		return c.getShelfBooks(ctx, statusID)
 	}

@@ -281,8 +281,17 @@ func main() {
 	hcClient := hardcover.New().WithTokenSource(func(ctx context.Context) string {
 		return api.GetHardcoverAPIToken(ctx, settingsRepo)
 	})
+	// The enricher is registered whether or not a token is set: the token is
+	// read live per request through WithTokenSource, so configuring one later
+	// takes effect without a restart. Only the log line is conditional, so it
+	// no longer claims enrichment is running when every call will short-circuit
+	// as unconfigured (#2075).
 	enrichers = append(enrichers, hcClient)
-	slog.Info("hardcover enrichment enabled")
+	if api.GetHardcoverAPIToken(context.Background(), settingsRepo) != "" {
+		slog.Info("hardcover enrichment enabled")
+	} else {
+		slog.Info("hardcover enrichment idle: no api token configured")
+	}
 
 	// Add the non-primary provider as enricher so metadata is always
 	// cross-checked regardless of which provider is primary.

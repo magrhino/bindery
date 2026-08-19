@@ -113,6 +113,9 @@ func (c *Client) SearchAuthors(ctx context.Context, query string) ([]models.Auth
 	if query == "" {
 		return nil, nil
 	}
+	if c.authorizationToken(ctx) == "" {
+		return nil, metadata.ErrProviderNotConfigured
+	}
 	gql := `query SearchAuthors($query: String!, $queryType: String!, $perPage: Int!) {
 		search(query: $query, query_type: $queryType, per_page: $perPage) {
 			results
@@ -144,6 +147,9 @@ func (c *Client) SearchBooks(ctx context.Context, query string) ([]models.Book, 
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, nil
+	}
+	if c.authorizationToken(ctx) == "" {
+		return nil, metadata.ErrProviderNotConfigured
 	}
 	gql := `query SearchBooks($query: String!, $queryType: String!, $perPage: Int!) {
 		search(query: $query, query_type: $queryType, per_page: $perPage) {
@@ -252,6 +258,9 @@ func (c *Client) GetAuthorWorksByName(ctx context.Context, authorName string) ([
 }
 
 func (c *Client) GetAuthor(ctx context.Context, foreignID string) (*models.Author, error) {
+	if c.authorizationToken(ctx) == "" {
+		return nil, metadata.ErrProviderNotConfigured
+	}
 	id := strings.TrimPrefix(foreignID, idPrefix)
 	const slugGQL = `query GetAuthor($slug: String!) {
 		authors(where: {slug: {_eq: $slug}}, limit: 1) {
@@ -303,6 +312,9 @@ func (c *Client) GetAuthor(ctx context.Context, foreignID string) (*models.Autho
 }
 
 func (c *Client) GetBook(ctx context.Context, foreignID string) (*models.Book, error) {
+	if c.authorizationToken(ctx) == "" {
+		return nil, metadata.ErrProviderNotConfigured
+	}
 	id := strings.TrimPrefix(foreignID, idPrefix)
 	const slugGQL = `query GetBook($slug: String!) {
 		books(where: {slug: {_eq: $slug}}, limit: 1) {
@@ -375,6 +387,9 @@ func (c *Client) GetEditions(ctx context.Context, bookForeignID string) ([]model
 	id := strings.TrimSpace(strings.TrimPrefix(bookForeignID, idPrefix))
 	if id == "" {
 		return nil, nil
+	}
+	if c.authorizationToken(ctx) == "" {
+		return nil, metadata.ErrProviderNotConfigured
 	}
 
 	const slugGQL = `query GetEditions($slug: String!, $limit: Int!, $offset: Int!) {
@@ -468,6 +483,9 @@ func (c *Client) GetEditions(ctx context.Context, bookForeignID string) ([]model
 }
 
 func (c *Client) GetBookByISBN(ctx context.Context, isbn string) (*models.Book, error) {
+	if c.authorizationToken(ctx) == "" {
+		return nil, metadata.ErrProviderNotConfigured
+	}
 	gql := `query GetBookByISBN($isbn: String!) {
 		editions(where: {_or: [{isbn_10: {_eq: $isbn}}, {isbn_13: {_eq: $isbn}}]}, limit: 1) {
 			language { language }
