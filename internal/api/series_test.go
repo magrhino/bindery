@@ -1702,6 +1702,199 @@ func TestSeriesFillReusesCrossProviderAuthorAndExistingBook(t *testing.T) {
 	}
 }
 
+// TestSeriesFillPrefersExactTitleOverOmnibusOnScoreTie is the regression
+// test for the live-observed bug where Fill matched a box-set/omnibus title
+// to a catalog slot instead of the real single-book title it happened to
+// contain. TitleScore's PartialRatio/TokenSetRatio components score a
+// substring match as a perfect 100 — the same score an exact match gets —
+// so the omnibus and the real book tie. The book is created deliberately
+// BEFORE the omnibus does not exist here: the omnibus is created first (so
+// it gets the lower ID and would win under first-match-wins iteration
+// order, matching the real repro), then the exact match second. Fill must
+// still queue and link the real book, not the omnibus.
+func TestSeriesFillPrefersExactTitleOverOmnibusOnScoreTie(t *testing.T) {
+	catalog := stormlightCatalog()
+	searcher := newMockBookSearcher()
+	h, seriesRepo, authorRepo, bookRepo := seriesFixtureWithProvider(t, &stubSeriesProvider{
+		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+	}, searcher)
+	ctx := context.Background()
+	series := &models.Series{ForeignID: "ol-series:stormlight", Title: "The Stormlight Archive"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+	if err := seriesRepo.UpsertHardcoverLink(ctx, &models.SeriesHardcoverLink{
+		SeriesID:            series.ID,
+		HardcoverSeriesID:   catalog.ForeignID,
+		HardcoverProviderID: catalog.ProviderID,
+		HardcoverTitle:      catalog.Title,
+		HardcoverAuthorName: catalog.AuthorName,
+		HardcoverBookCount:  catalog.BookCount,
+		Confidence:          1,
+		LinkedBy:            "manual",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	author := &models.Author{
+		ForeignID:        "ol:brandon-sanderson",
+		Name:             "Brandon Sanderson",
+		SortName:         "Sanderson, Brandon",
+		MetadataProvider: "openlibrary",
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	// Created first so it has the lower ID, matching the real repro's
+	// iteration order.
+	omnibus := &models.Book{
+		ForeignID:        "ol:stormlight-boxed-set",
+		AuthorID:         author.ID,
+		Title:            "The Stormlight Archive Boxed Set: The Way of Kings, Words of Radiance, Oathbringer",
+		SortTitle:        "stormlight archive boxed set the way of kings words of radiance oathbringer",
+		Status:           models.BookStatusWanted,
+		Genres:           []string{},
+		MetadataProvider: "openlibrary",
+	}
+	if err := bookRepo.Create(ctx, omnibus); err != nil {
+		t.Fatal(err)
+	}
+	exactMatch := &models.Book{
+		ForeignID:        "ol:the-way-of-kings",
+		AuthorID:         author.ID,
+		Title:            "The Way of Kings",
+		SortTitle:        "The Way of Kings",
+		Status:           models.BookStatusWanted,
+		Genres:           []string{},
+		MetadataProvider: "openlibrary",
+	}
+	if err := bookRepo.Create(ctx, exactMatch); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Fill(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/fill", nil), "id", strconv.FormatInt(series.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var response map[string]int
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["queued"] != 1 {
+		t.Fatalf("expected exactly one queued book, got %+v", response)
+	}
+	queued := searcher.waitForCall(t, time.Second)
+	if queued.ID != exactMatch.ID {
+		t.Fatalf("expected the exact-title match (id=%d) to be queued, got id=%d title=%q",
+			exactMatch.ID, queued.ID, queued.Title)
+	}
+
+	books, err := seriesRepo.ListBooksInSeries(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(books) != 1 || books[0].ID != exactMatch.ID {
+		t.Fatalf("expected only the exact-title match linked to the series, got %+v", books)
+	}
+}
+
+// TestSeriesFillPrefersSuffixedRealTitleOverShorterUnrelatedTitle covers the
+// inverted shape of TestSeriesFillPrefersExactTitleOverOmnibusOnScoreTie
+// (maintainer review, PR #1969): a naive length-closeness tiebreak assumes
+// the wrong candidate is always the LONGER one (an omnibus containing the
+// target as a substring), but a real local title routinely carries its own
+// appended qualifier from Calibre/ABS scanning ("The Way of Kings: The
+// Stormlight Archive, Book One") and can end up longer than a short,
+// unrelated title ("Kings") that merely shares a word with the target. Both
+// tie at TitleScore 100 against target "The Way of Kings"; length-closeness
+// alone would pick "Kings" (closer in length to the target) over the real
+// match.
+func TestSeriesFillPrefersSuffixedRealTitleOverShorterUnrelatedTitle(t *testing.T) {
+	catalog := stormlightCatalog()
+	searcher := newMockBookSearcher()
+	h, seriesRepo, authorRepo, bookRepo := seriesFixtureWithProvider(t, &stubSeriesProvider{
+		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+	}, searcher)
+	ctx := context.Background()
+	series := &models.Series{ForeignID: "ol-series:stormlight", Title: "The Stormlight Archive"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+	if err := seriesRepo.UpsertHardcoverLink(ctx, &models.SeriesHardcoverLink{
+		SeriesID:            series.ID,
+		HardcoverSeriesID:   catalog.ForeignID,
+		HardcoverProviderID: catalog.ProviderID,
+		HardcoverTitle:      catalog.Title,
+		HardcoverAuthorName: catalog.AuthorName,
+		HardcoverBookCount:  catalog.BookCount,
+		Confidence:          1,
+		LinkedBy:            "manual",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	author := &models.Author{
+		ForeignID:        "ol:brandon-sanderson",
+		Name:             "Brandon Sanderson",
+		SortName:         "Sanderson, Brandon",
+		MetadataProvider: "openlibrary",
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	// Created first so it has the lower ID, matching the real repro's
+	// iteration order — first-match-wins would pick this one.
+	unrelated := &models.Book{
+		ForeignID:        "ol:kings",
+		AuthorID:         author.ID,
+		Title:            "Kings",
+		SortTitle:        "kings",
+		Status:           models.BookStatusWanted,
+		Genres:           []string{},
+		MetadataProvider: "openlibrary",
+	}
+	if err := bookRepo.Create(ctx, unrelated); err != nil {
+		t.Fatal(err)
+	}
+	suffixedRealMatch := &models.Book{
+		ForeignID:        "ol:the-way-of-kings-suffixed",
+		AuthorID:         author.ID,
+		Title:            "The Way of Kings: The Stormlight Archive, Book One",
+		SortTitle:        "the way of kings the stormlight archive book one",
+		Status:           models.BookStatusWanted,
+		Genres:           []string{},
+		MetadataProvider: "openlibrary",
+	}
+	if err := bookRepo.Create(ctx, suffixedRealMatch); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Fill(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/fill", nil), "id", strconv.FormatInt(series.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var response map[string]int
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["queued"] != 1 {
+		t.Fatalf("expected exactly one queued book, got %+v", response)
+	}
+	queued := searcher.waitForCall(t, time.Second)
+	if queued.ID != suffixedRealMatch.ID {
+		t.Fatalf("expected the suffixed real match (id=%d) to be queued, got id=%d title=%q",
+			suffixedRealMatch.ID, queued.ID, queued.Title)
+	}
+
+	books, err := seriesRepo.ListBooksInSeries(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(books) != 1 || books[0].ID != suffixedRealMatch.ID {
+		t.Fatalf("expected only the suffixed real match linked to the series, got %+v", books)
+	}
+}
+
 func TestSeriesFillSkipsExcludedHardcoverForeignIDMatch(t *testing.T) {
 	catalog := stormlightCatalog()
 	searcher := newMockBookSearcher()
@@ -1852,6 +2045,114 @@ func TestSeriesFillSkipsExcludedHardcoverTitleMatch(t *testing.T) {
 	}
 	if len(books) != 0 {
 		t.Fatalf("expected excluded title match to remain unlinked, got %+v", books)
+	}
+}
+
+// TestSeriesFillLinksRealMatchDespiteEarlierExcludedTitle covers the scan-order
+// finding from review: since the loop now scans every candidate instead of
+// stopping at the first match, an excluded candidate encountered before a
+// real (non-excluded) higher-or-equal-scoring one must not block the real
+// match from being linked. blockedByExcludedTitle is only meaningful when
+// nothing has matched, so a real match found later in the scan must win.
+func TestSeriesFillLinksRealMatchDespiteEarlierExcludedTitle(t *testing.T) {
+	catalog := stormlightCatalog()
+	catalog.Books[0].ForeignID = "hc:the-way-of-kings-new"
+	catalog.Books[0].Book.ForeignID = "hc:the-way-of-kings-new"
+	searcher := newMockBookSearcher()
+	h, seriesRepo, authorRepo, bookRepo := seriesFixtureWithProvider(t, &stubSeriesProvider{
+		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+	}, searcher)
+	ctx := context.Background()
+	series := &models.Series{ForeignID: "ol-series:stormlight", Title: "The Stormlight Archive"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+	link := &models.SeriesHardcoverLink{
+		SeriesID:            series.ID,
+		HardcoverSeriesID:   catalog.ForeignID,
+		HardcoverProviderID: catalog.ProviderID,
+		HardcoverTitle:      catalog.Title,
+		HardcoverAuthorName: catalog.AuthorName,
+		HardcoverBookCount:  catalog.BookCount,
+		Confidence:          1,
+		LinkedBy:            "manual",
+	}
+	if err := seriesRepo.UpsertHardcoverLink(ctx, link); err != nil {
+		t.Fatal(err)
+	}
+	author := &models.Author{
+		ForeignID:        "hc:brandon-sanderson",
+		Name:             "Brandon Sanderson",
+		SortName:         "Sanderson, Brandon",
+		MetadataProvider: "hardcover",
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	// Excluded candidate created first, so ListByAuthorIncludingExcluded
+	// returns it before the real match below — this is what makes the
+	// scan-order case reachable: blockedByExcludedTitle gets set while
+	// best is still nil, and only afterward does the real match arrive.
+	excluded := &models.Book{
+		ForeignID:        "manual:excluded-way-of-kings",
+		AuthorID:         author.ID,
+		Title:            "The Way of Kings",
+		SortTitle:        "The Way of Kings",
+		Status:           models.BookStatusSkipped,
+		Genres:           []string{},
+		MetadataProvider: "manual",
+	}
+	if err := bookRepo.Create(ctx, excluded); err != nil {
+		t.Fatal(err)
+	}
+	if err := bookRepo.SetExcluded(ctx, excluded.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	real := &models.Book{
+		ForeignID:        "ol:the-way-of-kings",
+		AuthorID:         author.ID,
+		Title:            "The Way of Kings",
+		SortTitle:        "The Way of Kings",
+		Status:           models.BookStatusSkipped,
+		Genres:           []string{},
+		MetadataProvider: "openlibrary",
+	}
+	if err := bookRepo.Create(ctx, real); err != nil {
+		t.Fatal(err)
+	}
+
+	body := bytes.NewBufferString(`{"foreignBookId":"hc:the-way-of-kings-new","providerId":"101","position":"1"}`)
+	rec := httptest.NewRecorder()
+	h.Fill(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/fill", body), "id", strconv.FormatInt(series.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var response map[string]int
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["queued"] != 1 {
+		t.Fatalf("expected the real match to be queued despite an earlier excluded candidate, got %+v", response)
+	}
+	queued := searcher.waitForCall(t, time.Second)
+	if queued.ID != real.ID {
+		t.Fatalf("expected the real (non-excluded) book to be linked, got %+v", queued)
+	}
+	if duplicate, err := bookRepo.GetByForeignID(ctx, "hc:the-way-of-kings-new"); err != nil || duplicate != nil {
+		t.Fatalf("expected no duplicate Hardcover book created, got book=%+v err=%v", duplicate, err)
+	}
+	books, err := seriesRepo.ListBooksInSeries(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundReal := false
+	for _, b := range books {
+		if b.ID == real.ID {
+			foundReal = true
+		}
+	}
+	if !foundReal {
+		t.Fatalf("expected the real book linked to series, got %+v", books)
 	}
 }
 
