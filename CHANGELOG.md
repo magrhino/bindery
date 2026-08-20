@@ -4,6 +4,91 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
+## [v1.32.1] — 2026-08-20
+
+**Single sign-on could lock you out of your own instance.**
+
+Bindery read OIDC group membership only from the ID token and never called the
+provider's userinfo endpoint. Authelia, Okta and Auth0 do not put `groups` in
+the ID token by default and serve it only from userinfo, so Bindery saw no
+groups at all. With `BINDERY_OIDC_ADMIN_GROUP` set, that empty result read as
+"not an admin" and demoted the user on every login, including the operator who
+configured it. The last-admin guard is deliberately bypassed on this path, so
+there was nothing to catch it. It also explains OIDC users whose Bindery
+username was a `sub` UUID, since `preferred_username` is userinfo-only under
+the same defaults. Bindery now reads userinfo as well and merges it underneath
+the ID token, and a group claim missing from both leaves your existing role
+alone instead of assuming the worst.
+
+**Adding the second volume of a series did nothing.** With Hardcover as the
+metadata provider, adding a book whose main title matched a volume already in
+your library was silently folded onto that volume. The Add button flickered, no
+book appeared, and no error was shown. Bindery has a guard for exactly this,
+comparing the two volumes' series positions, but the query that fetches a
+single book never asked Hardcover for its series, so the guard had nothing to
+compare and waved the merge through every time.
+
+**Migrating from Readarr turned every download client into SABnzbd**, unless it
+was qBittorrent. A Readarr install on Transmission, Deluge, NZBGet or rTorrent
+imported a client with the right host and port and entirely the wrong type. It
+saved, it appeared in the list, and then every grab against it failed, with
+nothing in the migration result admitting the type had been guessed.
+
+**Bulk folder import timed out and returned nothing.** The scan matched each
+file against the catalogue one at a time, at roughly 213 ms per file on network
+or spinning storage, so a thousand file scan ran past three minutes, outlived
+the server's write timeout, and died mid response. The page sat there and then
+retried straight into the same wall. That scan now finishes in under half a
+minute.
+
+---
+
+### Changed
+
+- **SQLite now runs the connection pragmas that WAL expects** (#2142). Turning on WAL never changed `synchronous`, so every commit was still paying a disk flush under SQLite's FULL default, and the page cache and temp store were left at their untuned defaults. Writes on the import, scan and download poll paths get noticeably cheaper. The trade, stated plainly: with `synchronous=NORMAL` an OS crash or power loss can lose the last few committed transactions that have not been checkpointed. It cannot corrupt the database, and an application crash loses nothing. See [Database durability](docs/DEPLOYMENT.md#database-durability).
+
+- **Audiobookshelf imports fetch Hardcover series catalogues concurrently** (#2144). A search returns up to five candidate series, and each one's catalogue was fetched only after the previous had returned, so a book whose series were not yet cached cost five sequential round trips. Most noticeable on the first import of a library, which is when the fewest series are cached.
+
+- **Calibre cover downloads reuse one HTTP client** (#2144). Each cover fetch built its own, so two covers from the same host could not share a connection. Affects the first import of a library, before the on disk cover cache is warm.
+
+- **`make check` now runs `govulncheck`** (#2140), pinned to the same revision CI installs. `CONTRIBUTING.md` described the target as running what the gating CI checks run, and listed the vulnerability scan among them, but the target left it out. A contributor who ran `make check` before opening a pull request had not actually run the scan CI would fail them on.
+
+- **Contributor documentation corrected and extended.** `ARCHITECTURE.md` claimed SQLite reads run concurrently, which the single connection pool has never allowed. `CONTRIBUTING.md` gains a guide to adding a metadata provider, download client or indexer, the three likeliest outside contributions and previously the three least documented.
+
+### Fixed
+
+- **OIDC group mapping works with Authelia, Okta and Auth0 again, and a missing group claim no longer takes your admin rights away** (#2097). Bindery now reads the userinfo document as well and merges it underneath the ID token, so a claim carried by both keeps the signed ID token's value, and a userinfo document whose subject does not match the ID token's is discarded (OIDC Core 1.0 §5.3.2). A group claim missing from both leaves the existing role untouched and logs why; a claim that is present and does not list the admin group still demotes, because that is the provider actually saying so. `allowed_groups` now says which of the two it rejected a login for instead of giving the same message either way.
+
+- **Adding a second volume of a series did nothing** (#2116). The query that fetches a single book never asked Hardcover for its series, so the duplicate guard had nothing to compare and always let the merge through. The same field was missing from the ISBN lookup.
+
+- **Hardcover supplemented author catalogues had no series information** (#2121). Works pulled from Hardcover to fill out an author's bibliography arrived with no series membership, so those books were never linked into a series and an author set to monitor a specific series never picked them up. They now carry the series and volume number Hardcover holds. Existing books gain their links on the next author refresh.
+
+- **Readarr migration turned every non qBittorrent download client into SABnzbd** (#1983). All six client types Bindery supports are now mapped by name, and a Readarr client with no Bindery equivalent, such as NZBVortex or a blackhole, is reported as a skipped row instead of becoming a SABnzbd client that cannot work.
+
+- **Bulk folder import scan timed out and returned nothing** (#1638). Matching now runs up to eight files at once.
+
+- **Import lists ignored their root folder** (#1864). The per-list root folder picker saved its value and the Hardcover list syncer never read it, so authors created by a list landed with no root folder at all. Same defect as the quality profile in #1781, one field over. A list with no root folder configured still leaves the author's unset rather than guessing, because root folders belong to a user and picking one for somebody else's authors is worse than leaving it empty.
+
+- **Author imports kept creating rows with no metadata profile** (#1803). Six author creation paths, including ABS import, the Calibre importer, the Goodreads migration and the CSV importer, inserted authors with the metadata profile column empty. v1.31.0's migration cleaned up the ones that had accumulated, but the paths producing them were untouched, so the next import started refilling it. Nothing behaved differently in the meantime, since every reader already fell back to the default; the profile column in the author UI was simply blank when it should not have been.
+
+- **Grabs signed by host match lost their indexer** (#2053). When an API client posts a release with no indexer id, Bindery works out which configured indexer the download URL belongs to and signs it with that indexer's key. It never recorded which one it picked, so the download row had no indexer attribution in the queue and any per indexer seed ratio override was skipped. Two indexers sharing a host and key still sign the URL but attribute nothing, since their seed ratios can differ and choosing between them would be a guess.
+
+- **"SABnzbd rejected download" never said why** (#2120). SAB replies to a refused upload with its own explanation, and Bindery decoded only the success flag and discarded the reason. Since SAB deletes the uploaded file before its own backup step, that reply was the last place the explanation existed. The reason now reaches the queue and the history entry.
+
+- **Audiobookshelf base URL rejected a port with an error about the scheme** (#2056). Typing `audiobookshelf:13378`, the natural form when everything runs under Compose on one host, produced "must use http or https". Go reads a scheme-less `host:port` as a scheme, so the complaint pointed at the wrong half of the input, and the obvious next move was to drop the port and land on port 80. Ports were always supported. The error now names the missing scheme and prints the exact value to use.
+
+- **Strict media type never said it was letting explicit adds through** (#1759). The setting skips catalogue books in the wrong format and narrows dual format ones, but a book you add yourself has always been created in the format you picked, on both add paths. That is deliberate, since silently refusing something you explicitly asked for is worse than the row it prevents, but nothing said so anywhere. The setting's help text now states the boundary, and an add that goes past the policy is logged instead of passing unremarked.
+
+### Removed
+
+- **Three scratch files that were committed by accident**: `err.log`, `magazine-feature-prompt.txt` and `ui-browser-test-prompt.txt`. They shipped in every clone. Their siblings were already ignored; these were missed.
+
+### Security
+
+- **The login rate limiter no longer grows without bound** (#2137). The per address bucket map only expired entries for an address that came back, so a caller rotating source addresses, which is trivial inside a single IPv6 /64, could grow it indefinitely. Buckets are now swept once per window. Forged `X-Forwarded-For` was never the vector here, since forwarded headers are stripped from untrusted peers.
+
+- **The telemetry server compares its stats token in constant time** (#2138). The `/api/stats` and `/api/backup` bearer check used a plain string comparison, whose timing leaks how much of a guess was correct. `/api/backup` returns a snapshot of the installs database, so that token is the only control in front of it. Every other secret in the main binary was already compared this way.
+
 ## [v1.32.0] — 2026-08-19
 
 **Five metadata profile filters did nothing at all.** `skipPartBooks`,
