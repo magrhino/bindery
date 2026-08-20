@@ -173,13 +173,85 @@ doc- and config-only PRs have no measured lines and pass automatically.
 Schema changes are additive SQL files in `internal/db/migrations/`, applied
 idempotently at startup, named `NNN_short_description.sql`.
 
-- **Use the next free number** — look at the highest existing file and add one.
+- **Use the next free number.** Look at the highest existing file and add one,
+  then **check the open pull requests too**. "Next free" computed against `main`
+  alone is wrong whenever another branch has already claimed a number and has not
+  merged yet, and announcing a number reserves nothing. Only a pushed file is
+  visible to anyone else.
 - **The gap at `010` is intentional**; numbering follows the filename prefix, not
   slice position. Don't fill the gap.
 - Two files sharing a number are rejected at boot (the duplicate-version guard),
   so if your branch and `main` both added `0NN`, **renumber yours** to the next
   free slot when you rebase.
 - Migrations are forward-only and must not destructively rewrite existing rows.
+
+## Adding a new integration
+
+The three most common contributions are a new metadata source, a new download
+client, and a new indexer. They are wired up very differently, so it is worth
+knowing which shape you are dealing with before you start.
+
+### A metadata provider (interface based)
+
+Implement `metadata.Provider` (`internal/metadata/provider.go`). That is the
+required surface: `Name`, `SearchAuthors`, `SearchBooks`, `GetAuthor`,
+`GetBook`, `GetEditions`, `GetBookByISBN`.
+
+Extra capabilities are **optional interfaces**, discovered by type assertion
+rather than declared up front. Implement only what your source supports:
+
+| Interface | Gives you |
+|-----------|-----------|
+| `metadata.SeriesCatalogProvider` | Series search and ordered series catalogues |
+| `metadata.CoverProvider` | Cover art lookup |
+
+Register the provider in `cmd/bindery/main.go`, at the
+`metadata.NewAggregator(primaryProvider, enrichers...)` call. A source is either
+the *primary* (the one that defines canonical identity) or an *enricher* (one
+that fills gaps). Most new sources are enrichers.
+
+Return `metadata.ErrProviderNotConfigured` when credentials are missing, rather
+than an error. The aggregator treats it as "skip me" instead of a failure, which
+is what lets an unconfigured provider stay registered without generating noise.
+
+### A download client (switch based)
+
+There is no interface here. `models.DownloadClient.Type` is a string and
+`internal/downloader/` switches on it, so adding a client means adding cases by
+hand. Missing one is the usual way a new client ends up half working.
+
+**Required**, in `internal/downloader/adapter.go`: `TestClient`, the dispatch
+switch, `RemoveDownload` and `GetStalledIDs`, plus the `IsTorrentClient` /
+`IsNZBGetClient` / `ProtocolForClient` helpers that decide protocol and
+semantics. Every client type must appear here. Plus the client package itself,
+under `internal/downloader/<name>/`.
+
+**Optional, and currently partial.** Do not assume these cover every client,
+because they do not:
+
+- `internal/downloader/pathcheck.go` carries path visibility. Only qBittorrent,
+  NZBGet and rTorrent implement it; the rest fall through.
+- `internal/downloader/health.go` carries health probing. qBittorrent only, and
+  every other type stores a fabricated OK. That is
+  [#2029](https://github.com/vavallee/bindery/issues/2029), so check whether it
+  has been generalised before adding a case.
+
+Grep for `qbittorrent` to see the fullest set of sites, since it is the one
+client wired into all of them.
+
+### An indexer
+
+Indexers live under `internal/indexer/`. Most are Newznab or Torznab compatible
+and go through `internal/indexer/newznab/`, so a genuinely new protocol is rare.
+Check whether your target speaks one of those first.
+
+### In all three cases
+
+Outbound HTTP must go through the SSRF guard. Use
+`httpsec.ValidateOutboundURL` with the policy that matches your source:
+`PolicyLANLoopback` for admin configured infrastructure, `PolicyStrict` for
+anything derived from data you did not type in yourself. See
+`internal/httpsec/ssrf.go` for what each policy allows and why.
 
 ## Changelog — add a fragment, don't edit CHANGELOG.md
 

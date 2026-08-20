@@ -451,6 +451,21 @@ If your platform doesn't let you change the container command (some NAS app UIs)
 
 Where the orphans come from: before [#1727](https://github.com/vavallee/bindery/issues/1727), foreign key enforcement could silently switch off on a replacement pooled connection, so declared cascades stopped firing. Long-running instances accumulated orphan rows. They are harmless to normal operation — Bindery starts and runs fine with them — and this tooling exists to clean them up on your schedule. See [Troubleshooting](Troubleshooting-Wiki.md#bindery-will-not-start-after-upgrading-foreign_key_check-found-n-violations).
 
+## Database durability
+
+Bindery runs SQLite in WAL mode with `synchronous=NORMAL`. That is the setting SQLite documents as the correct companion to WAL, and it is what the database has used since [#2142](https://github.com/vavallee/bindery/issues/2142).
+
+What it means in practice:
+
+- **An application crash loses nothing.** If Bindery is killed, panics, or the container is stopped, WAL recovery replays the log on next start and every committed transaction is intact.
+- **A sudden power loss or OS crash can lose the last few committed transactions**, specifically those not yet checkpointed. It cannot corrupt the database.
+
+Under the previous default (`synchronous=FULL`) every single commit was flushed to disk. Bindery commits constantly on paths nobody triggers by hand: the importer updates status per file, the scheduler polls download clients and writes results back, library scans reconcile rows, and history rows are appended. Paying a disk flush for each of those cost far more than the few seconds of status updates at risk from a power cut.
+
+If your instance runs somewhere with unreliable power and you would rather have the old behaviour, run it on a UPS, or open an issue and it can be made configurable. There is no environment variable for it today because no one has needed one.
+
+This has no bearing on backups. Take a copy of `bindery.db` on your own schedule as before, with the instance stopped or via `sqlite3 bindery.db ".backup"`.
+
 ## Upgrading
 
 ### Legacy migration-marker repair

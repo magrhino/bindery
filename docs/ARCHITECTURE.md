@@ -26,7 +26,7 @@ OpenLibrary    Google Books, Hardcover.app,   Audnex, Audible
 |-------|-------|-------|
 | **HTTP router** | [chi](https://github.com/go-chi/chi) v5 | Sub-routers per resource, middleware-driven auth/CSRF/rate-limit. |
 | **Backend language** | Go 1.26 (built with `golang:1.26.4`) | Standard library HTTP server, structured logging via `slog`. |
-| **Database** | SQLite, WAL mode | [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) — pure Go, no CGO. Single `bindery.db` file. |
+| **Database** | SQLite, WAL mode | [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) — pure Go, no CGO. Single `bindery.db` file. Connection pragmas (`foreign_keys`, `busy_timeout`, `synchronous`, `temp_store`, `cache_size`) are carried in the DSN so the driver reapplies them to every connection it opens; see [Database durability](DEPLOYMENT.md#database-durability). |
 | **Schema migrations** | Embedded SQL files in `internal/db/migrations/` | Linearly-numbered, additive-only, applied at startup. |
 | **Frontend** | React 19 + TypeScript + Tailwind CSS 4 | Built with [Vite](https://vite.dev), output baked into the binary via `go:embed`. |
 | **Container** | Multi-stage build on [distroless/static-debian12:nonroot](https://github.com/GoogleContainerTools/distroless) | No shell, no package manager, runs as UID `65532`. |
@@ -87,7 +87,7 @@ If audiobooks live on a different volume, set `BINDERY_AUDIOBOOK_DIR` (and optio
 
 - One HTTP server goroutine pool; chi's per-request handlers run on caller goroutines.
 - Background workers (auto-grab sweep, recommendations refresh, indexer probes, ABS import) are scheduled by the `scheduler` package as long-lived goroutines guarded by context cancellation on shutdown.
-- SQLite uses WAL mode with a single writer; reads are concurrent, writes serialize at the connection-pool layer. This is sufficient for the workload — measured contention is negligible on libraries with tens of thousands of books.
+- SQLite runs in WAL mode, but the connection pool is pinned to a single connection (`SetMaxOpenConns(1)`), so **reads serialize alongside writes** rather than running concurrently. WAL's concurrent-reader property is not currently being used. This is sufficient for the workload in practice, and [#2147](https://github.com/vavallee/bindery/issues/2147) tracks lifting it, including the reason it is not a one-line change: migrations run a connection-scoped `PRAGMA foreign_keys=OFF`, which a pool would break.
 - All outbound HTTP calls go through a shared client with timeouts, SSRF guards, and User-Agent stamping (`bindery/<version>`).
 
 ## Why these choices

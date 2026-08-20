@@ -1,0 +1,2 @@
+### Changed
+- **Docs corrected and extended after the security and performance sweep**. `ARCHITECTURE.md` claimed SQLite reads run concurrently, which the single connection pool has never allowed. `DEPLOYMENT.md` gains a database durability section explaining what `synchronous=NORMAL` does and does not risk. `CONTRIBUTING.md` gains a guide to adding a metadata provider, download client or indexer, and now warns that the next free migration number must be checked against open pull requests, not just `main`.
