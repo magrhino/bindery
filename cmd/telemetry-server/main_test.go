@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1317,6 +1318,49 @@ func TestHandlePing_WritesLedger(t *testing.T) {
 	}
 	if version != "1.15.3" {
 		t.Errorf("ledger version = %q, want 1.15.3 (last ping of the day wins)", version)
+	}
+}
+
+// TestHandlePing_LogsNewInstall verifies the ping log line carries
+// new_install=true on the first ping from an install_id and false on every
+// later one. The flag comes from the upsert's RETURNING clause, so this
+// also pins that first_seen = last_seen compares equal on the insert path
+// under modernc's time binding.
+func TestHandlePing_LogsNewInstall(t *testing.T) {
+	s := newTestServer(t, "v1.15.3")
+	s.limiter = newRateLimiter(time.Hour, time.Minute)
+
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	ping := func(installID, remoteAddr string) string {
+		t.Helper()
+		logs.Reset()
+		body, _ := json.Marshal(pingRequest{
+			InstallID: installID, Version: "1.15.3", OS: "linux", Arch: "amd64",
+		})
+		r := httptest.NewRequest(http.MethodPost, "/api/ping", bytes.NewReader(body))
+		r.RemoteAddr = remoteAddr
+		w := httptest.NewRecorder()
+		s.handlePing(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("ping status = %d, body = %s", w.Code, w.Body.String())
+		}
+		return logs.String()
+	}
+
+	const a = "11111111-1111-1111-1111-111111111111"
+	const b = "22222222-2222-2222-2222-222222222222"
+	if got := ping(a, "192.0.2.10:1234"); !strings.Contains(got, "new_install=true") {
+		t.Errorf("first ping from %s: log = %q, want new_install=true", a[:8], got)
+	}
+	if got := ping(a, "192.0.2.11:1234"); !strings.Contains(got, "new_install=false") {
+		t.Errorf("second ping from %s: log = %q, want new_install=false", a[:8], got)
+	}
+	if got := ping(b, "192.0.2.12:1234"); !strings.Contains(got, "new_install=true") {
+		t.Errorf("first ping from %s: log = %q, want new_install=true", b[:8], got)
 	}
 }
 

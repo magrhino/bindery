@@ -1274,13 +1274,20 @@ func (s *server) handlePing(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UTC()
+	// newInstall is true when the upsert inserted a row rather than
+	// updating one. RETURNING sees the row as stored after the statement,
+	// so first_seen == last_seen only on the insert path (both bound to
+	// the same `now`); on the update path first_seen keeps its original
+	// value. Surfaced in the ping log line so new installs can be spotted
+	// in k8s logs without querying the DB.
+	var newInstall bool
 	err := func() error {
 		tx, err := s.db.BeginTx(r.Context(), nil)
 		if err != nil {
 			return err
 		}
 		defer func() { _ = tx.Rollback() }()
-		if _, err := tx.ExecContext(r.Context(), `
+		if err := tx.QueryRowContext(r.Context(), `
 			INSERT INTO installs (install_id, version, os, arch, deploy, features, first_seen, last_seen)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(install_id) DO UPDATE SET
@@ -1290,7 +1297,8 @@ func (s *server) handlePing(w http.ResponseWriter, r *http.Request) {
 				deploy    = excluded.deploy,
 				features  = excluded.features,
 				last_seen = excluded.last_seen
-		`, req.InstallID, req.Version, req.OS, req.Arch, req.Deploy, featuresJSON, now, now); err != nil {
+			RETURNING first_seen = last_seen
+		`, req.InstallID, req.Version, req.OS, req.Arch, req.Deploy, featuresJSON, now, now).Scan(&newInstall); err != nil {
 			return err
 		}
 		// Activity ledger: attribute this install to today. Unlike
@@ -1313,7 +1321,7 @@ func (s *server) handlePing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("ping", "id", req.InstallID[:min(8, len(req.InstallID))], "version", req.Version, "os", req.OS, "arch", req.Arch, "features", featuresJSON.Valid)
+	slog.Info("ping", "id", req.InstallID[:min(8, len(req.InstallID))], "version", req.Version, "os", req.OS, "arch", req.Arch, "features", featuresJSON.Valid, "new_install", newInstall)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(pingResponse{LatestVersion: s.latest()})
