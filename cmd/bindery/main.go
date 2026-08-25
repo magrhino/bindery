@@ -348,8 +348,13 @@ func main() {
 	// Start(), which runs before that point (#2029).
 	downloadHealth := downloader.NewHealthStore().WithNotifier(notif)
 
-	// Indexer searcher
-	idxSearcher := indexer.NewSearcher()
+	// Indexer searcher. Health recording persists whether each indexer answered
+	// its last search, so a suspended account or a revoked API key shows up in
+	// Settings and notifies once, instead of only appearing in an interactive
+	// search panel nobody opens unless they already suspect a problem (#1935).
+	idxSearcher := indexer.NewSearcher().
+		WithHealth(indexerRepo).
+		WithHealthNotifier(notif)
 
 	// Import scanner
 	namingTemplate := defaultNamingTemplate(settingsRepo)
