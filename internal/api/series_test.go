@@ -1605,6 +1605,81 @@ func TestSeriesFillHydratesHardcoverEditionsBeforeQueue(t *testing.T) {
 	}
 }
 
+// TestSeriesFillKeepsSelectedFormat pins #1802: the format dropdown on the
+// Series tab constrains what the fill creates, so a book created for "ebook"
+// must stay ebook even when Hardcover offers an audio edition for the same
+// work. Before the fix, hydration widened it to "both" and the fill queued a
+// grab for both formats. Covers both fill shapes, "add all" and one row.
+func TestSeriesFillKeepsSelectedFormat(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{name: "add all", body: `{"mediaType":"ebook"}`},
+		{name: "single book", body: `{"foreignBookId":"hc:the-way-of-kings","mediaType":"ebook"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			catalog := stormlightCatalog()
+			searcher := newMockBookSearcher()
+			h, seriesRepo, _, bookRepo, _ := seriesFixtureWithProviderAndEditions(t, &stubSeriesProvider{
+				catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+			}, searcher)
+			audioASIN := "B000STORML"
+			h.WithEditionFetcher(func(context.Context, string) ([]models.Edition, error) {
+				return []models.Edition{{
+					ForeignID: "hc:stormlight-audio",
+					Title:     "The Way of Kings",
+					ASIN:      &audioASIN,
+					Format:    "Audiobook",
+					Monitored: true,
+				}}, nil
+			})
+			series := &models.Series{ForeignID: "ol-series:stormlight", Title: "The Stormlight Archive"}
+			if err := seriesRepo.Create(context.Background(), series); err != nil {
+				t.Fatal(err)
+			}
+			if err := seriesRepo.UpsertHardcoverLink(context.Background(), &models.SeriesHardcoverLink{
+				SeriesID:            series.ID,
+				HardcoverSeriesID:   catalog.ForeignID,
+				HardcoverProviderID: catalog.ProviderID,
+				HardcoverTitle:      catalog.Title,
+				HardcoverAuthorName: catalog.AuthorName,
+				HardcoverBookCount:  catalog.BookCount,
+				Confidence:          1,
+				LinkedBy:            "manual",
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/series/1/fill", bytes.NewBufferString(tc.body))
+			h.Fill(rec, withURLParam(req, "id", strconv.FormatInt(series.ID, 10)))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+
+			queued := searcher.waitForCall(t, time.Second)
+			if queued.MediaType != models.MediaTypeEbook {
+				t.Errorf("queued book mediaType = %q, want %q", queued.MediaType, models.MediaTypeEbook)
+			}
+			if queued.NeedsAudiobook() {
+				t.Error("queued book still wants an audiobook; the fill will grab both formats")
+			}
+			created, err := bookRepo.GetByForeignID(context.Background(), "hc:the-way-of-kings")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if created == nil {
+				t.Fatal("expected the Hardcover book to be created")
+			}
+			if created.MediaType != models.MediaTypeEbook {
+				t.Errorf("persisted mediaType = %q, want %q", created.MediaType, models.MediaTypeEbook)
+			}
+		})
+	}
+}
+
 func TestSeriesFillReusesCrossProviderAuthorAndExistingBook(t *testing.T) {
 	catalog := stormlightCatalog()
 	searcher := newMockBookSearcher()

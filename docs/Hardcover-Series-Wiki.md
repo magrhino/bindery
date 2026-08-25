@@ -56,6 +56,8 @@ Missing-book fill uses the linked Hardcover catalog as the source of truth for m
 
 The fill action may create new authors and books from Hardcover metadata when the catalog entry is not already in Bindery. Those books are linked back to the series with the catalog position.
 
+The format dropdown beside **add all** sets the media type of every book the fill creates. Pick **Ebook** and the created books are ebook only, even when Hardcover lists an audiobook edition of the same work, so only one search is queued per book. Pick **Both** if you want Bindery to look for both formats. Books that are already in the series keep whatever media type they were added with, so change those on the book itself.
+
 ## Known Behavior
 
 - Hardcover-backed controls require outbound HTTPS access to Hardcover.

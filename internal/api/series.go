@@ -104,7 +104,10 @@ func (h *SeriesHandler) WithEditionFetcher(fetcher bookhydrate.EditionFetcher) *
 	return h
 }
 
-func (h *SeriesHandler) hydrateHardcoverEditions(ctx context.Context, book *models.Book) {
+// hydrateHardcoverEditions fills the book's editions from Hardcover.
+// mediaTypePinned forwards the caller's "this format was chosen, not guessed"
+// signal so hydration leaves the media type alone (#1802).
+func (h *SeriesHandler) hydrateHardcoverEditions(ctx context.Context, book *models.Book, mediaTypePinned bool) {
 	if book == nil || h.editions == nil {
 		return
 	}
@@ -121,6 +124,11 @@ func (h *SeriesHandler) hydrateHardcoverEditions(ctx context.Context, book *mode
 		Books:         h.books,
 		FetchEditions: fetcher,
 		Enricher:      h.meta,
+		// The series fill sets MediaType from the format dropdown, so an
+		// audio edition on Hardcover must not widen an "ebook" book to
+		// "both" — that queued a grab for both formats when the user had
+		// asked for one (#1802).
+		MediaTypePinned: mediaTypePinned,
 	})
 }
 
@@ -383,6 +391,22 @@ func (r seriesFillRequest) validMediaType() bool {
 	}
 }
 
+// requestedFormat is the media type a fill creates its books with. pinned marks
+// it as a deliberate caller choice, which is what stops Hardcover hydration
+// widening an "ebook" book to "both" the moment the work has an audio edition.
+type requestedFormat struct {
+	mediaType string
+	pinned    bool
+}
+
+// format bundles the requested media type with whether the caller actually
+// named one. The two must travel together: hydration may only refuse to widen
+// a single-format book when the media type is the caller's choice rather than
+// the endpoint's default (#1802, same distinction as #1732).
+func (r seriesFillRequest) format() requestedFormat {
+	return requestedFormat{mediaType: r.mediaType(), pinned: r.MediaType != ""}
+}
+
 func (r seriesFillRequest) hasBookSelector() bool {
 	return r.ForeignBookID != "" || r.ProviderID != "" || r.Position != ""
 }
@@ -471,7 +495,7 @@ func (h *SeriesHandler) Fill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.enhancedHardcoverEnabled(r.Context()) {
-		if err := h.createMissingHardcoverBooks(r.Context(), id, body.mediaType()); err != nil {
+		if err := h.createMissingHardcoverBooks(r.Context(), id, body.format()); err != nil {
 			if !errors.Is(err, errSeriesMetadataProvider) {
 				writeServerError(w, r, err)
 				return
@@ -1218,7 +1242,7 @@ func localDiffBook(local models.SeriesBook) seriesHardcoverDiffBook {
 	return item
 }
 
-func (h *SeriesHandler) createMissingHardcoverBooks(ctx context.Context, seriesID int64, mediaType string) error {
+func (h *SeriesHandler) createMissingHardcoverBooks(ctx context.Context, seriesID int64, format requestedFormat) error {
 	if !h.enhancedHardcoverEnabled(ctx) {
 		return nil
 	}
@@ -1247,7 +1271,7 @@ func (h *SeriesHandler) createMissingHardcoverBooks(ctx context.Context, seriesI
 		if !ok {
 			continue
 		}
-		if _, err := h.ensureHardcoverCatalogBook(ctx, series, catalog.AuthorName, catalogBook, mediaType); err != nil {
+		if _, err := h.ensureHardcoverCatalogBook(ctx, series, catalog.AuthorName, catalogBook, format); err != nil {
 			// One bad volume must not truncate the rest of the series
 			// (#1682). This used to return, so a single failure part-way
 			// through silently abandoned every remaining volume and the user
@@ -1301,7 +1325,7 @@ func (h *SeriesHandler) createMissingHardcoverBook(ctx context.Context, seriesID
 		if !ok {
 			return nil, errSeriesCatalogBookNotFound
 		}
-		return h.ensureHardcoverCatalogBook(ctx, series, catalog.AuthorName, catalogBook, selector.mediaType())
+		return h.ensureHardcoverCatalogBook(ctx, series, catalog.AuthorName, catalogBook, selector.format())
 	}
 	return nil, errSeriesCatalogBookNotFound
 }
@@ -1318,7 +1342,7 @@ func findCatalogBook(books []metadata.SeriesCatalogBook, foreignID, position str
 	return metadata.SeriesCatalogBook{}, false
 }
 
-func (h *SeriesHandler) ensureHardcoverCatalogBook(ctx context.Context, series *models.Series, fallbackAuthor string, catalogBook metadata.SeriesCatalogBook, mediaType string) (*models.Book, error) {
+func (h *SeriesHandler) ensureHardcoverCatalogBook(ctx context.Context, series *models.Series, fallbackAuthor string, catalogBook metadata.SeriesCatalogBook, format requestedFormat) (*models.Book, error) {
 	if series == nil {
 		return nil, errSeriesNotFound
 	}
@@ -1452,7 +1476,7 @@ func (h *SeriesHandler) ensureHardcoverCatalogBook(ctx context.Context, series *
 	book.AnyEditionOK = true
 	// The caller's requested media type wins over the catalog default; it has
 	// already been validated and defaults to ebook when omitted.
-	book.MediaType = firstNonEmpty(mediaType, models.MediaTypeEbook)
+	book.MediaType = firstNonEmpty(format.mediaType, models.MediaTypeEbook)
 	book.Language = firstNonEmpty(book.Language, "eng")
 	book.MetadataProvider = firstNonEmpty(book.MetadataProvider, "hardcover")
 	if series.GenreOverrideSet {
@@ -1465,7 +1489,7 @@ func (h *SeriesHandler) ensureHardcoverCatalogBook(ctx context.Context, series *
 	if err := h.books.Create(ctx, &book); err != nil {
 		return nil, err
 	}
-	h.hydrateHardcoverEditions(ctx, &book)
+	h.hydrateHardcoverEditions(ctx, &book, format.pinned)
 	if _, err := h.series.LinkBookIfMissing(ctx, series.ID, book.ID, catalogBook.Position, true); err != nil {
 		return nil, err
 	}
