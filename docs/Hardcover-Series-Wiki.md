@@ -41,6 +41,17 @@ If either requirement is missing, Bindery hides the enhanced controls and the en
 
 Added Hardcover books are created as wanted and monitored rows. Bindery then queues indexer searches the same way it does for other wanted books.
 
+## Where Series Come From
+
+Most series rows are not created on the Series page at all. They arrive when Bindery syncs an author's catalog: each work the metadata providers return carries its series membership, and Bindery upserts that series and links the book to it as the book is created.
+
+When Hardcover enriches an author whose works come from OpenLibrary, both providers can claim a series for the same book. Hardcover wins. Its series carry a stable catalog id and a position, while OpenLibrary parses a free text string, and keeping both would create two local series for one real one and put the book in each. Providers other than Hardcover only fill in a series when the work has none yet.
+
+Two limits are worth knowing:
+
+- Only books Bindery creates get linked. Books already in your library are not backfilled when a later refresh finds series data for them, so an author added before this behaviour existed keeps an empty series list until those books are recreated.
+- Series populated this way are local series like any other. Linking them to the Hardcover catalog for diffs and missing book fill is still the manual step described below.
+
 ## Automatic Links
 
 When you click **Search** on an unlinked series, Bindery first attempts an automatic match. It only auto-links when the top Hardcover candidate is confident, not ambiguous, and has local evidence:

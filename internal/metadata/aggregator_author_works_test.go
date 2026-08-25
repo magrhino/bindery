@@ -157,6 +157,95 @@ func TestAggregator_GetAuthorWorksForAuthor_MergesSupplementalByTitle(t *testing
 	}
 }
 
+// TestMergeAuthorWorks_MatchedWorkKeepsHardcoverSeriesRefs covers #2207: a
+// Hardcover work that matches an OpenLibrary work by title goes through
+// mergeAuthorWorkMetadata rather than being appended, and used to lose its
+// series membership there. Every well-known novel takes that path, so the only
+// works that gained a series were the ones OpenLibrary does not list.
+func TestMergeAuthorWorks_MatchedWorkKeepsHardcoverSeriesRefs(t *testing.T) {
+	primary := []models.Book{
+		{ForeignID: "OL1W", Title: "Leviathan Wakes", MetadataProvider: "openlibrary"},
+	}
+	supplemental := []models.Book{
+		{
+			ForeignID:        "hc:leviathan-wakes",
+			Title:            "Leviathan Wakes",
+			MetadataProvider: "hardcover",
+			RatingsCount:     2968,
+			AverageRating:    4.3,
+			SeriesRefs: []models.SeriesRef{
+				{ForeignID: "hc-series:1026", Title: "The Expanse", Position: "1", Primary: true},
+			},
+		},
+		{
+			ForeignID:        "hc:the-expanse-origins",
+			Title:            "The Expanse Origins",
+			MetadataProvider: "hardcover",
+			SeriesRefs: []models.SeriesRef{
+				{ForeignID: "hc-series:2210", Title: "The Expanse Origins", Position: "1", Primary: true},
+			},
+		},
+	}
+
+	got := mergeAuthorWorks(primary, supplemental)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 merged works, got %d: %+v", len(got), got)
+	}
+	if got[0].ForeignID != "OL1W" {
+		t.Fatalf("primary identity should win the duplicate title: %+v", got[0])
+	}
+	want := []models.SeriesRef{
+		{ForeignID: "hc-series:1026", Title: "The Expanse", Position: "1", Primary: true},
+	}
+	if !slices.Equal(got[0].SeriesRefs, want) {
+		t.Fatalf("matched work series refs = %+v, want %+v", got[0].SeriesRefs, want)
+	}
+	// The append path was never broken; make sure it still works.
+	if len(got[1].SeriesRefs) != 1 || got[1].SeriesRefs[0].ForeignID != "hc-series:2210" {
+		t.Fatalf("supplemental-only work lost its series refs: %+v", got[1])
+	}
+}
+
+// TestMergeAuthorWorkMetadata_SeriesRefsPreferHardcover pins the collision
+// rule chosen in #2207: Hardcover replaces a populated list, every other
+// source fills an empty one and never clobbers, and a supplement with no
+// series data never blanks what is already there.
+func TestMergeAuthorWorkMetadata_SeriesRefsPreferHardcover(t *testing.T) {
+	olRefs := []models.SeriesRef{{ForeignID: "the-expanse", Title: "The Expanse", Position: "1", Primary: true}}
+	hcRefs := []models.SeriesRef{{ForeignID: "hc-series:1026", Title: "The Expanse", Position: "1", Primary: true}}
+
+	// Hardcover replaces an OpenLibrary-parsed list rather than appending to
+	// it: the two ids are different namespaces, so keeping both would upsert
+	// the same real series twice and join the book to both rows.
+	dst := models.Book{SeriesRefs: slices.Clone(olRefs)}
+	mergeAuthorWorkMetadata(&dst, models.Book{MetadataProvider: "hardcover", SeriesRefs: hcRefs})
+	if !slices.Equal(dst.SeriesRefs, hcRefs) {
+		t.Errorf("hardcover series refs should replace: want %+v, got %+v", hcRefs, dst.SeriesRefs)
+	}
+
+	// A non-Hardcover supplement does not overwrite a populated list.
+	dst2 := models.Book{SeriesRefs: slices.Clone(olRefs)}
+	mergeAuthorWorkMetadata(&dst2, models.Book{MetadataProvider: "googlebooks", SeriesRefs: hcRefs})
+	if !slices.Equal(dst2.SeriesRefs, olRefs) {
+		t.Errorf("non-hardcover must not overwrite: want %+v, got %+v", olRefs, dst2.SeriesRefs)
+	}
+
+	// A non-Hardcover supplement still fills an empty list.
+	dst3 := models.Book{}
+	mergeAuthorWorkMetadata(&dst3, models.Book{MetadataProvider: "googlebooks", SeriesRefs: olRefs})
+	if !slices.Equal(dst3.SeriesRefs, olRefs) {
+		t.Errorf("fill-empty should apply: want %+v, got %+v", olRefs, dst3.SeriesRefs)
+	}
+
+	// A Hardcover supplement that knows no series leaves the existing list
+	// alone instead of blanking it.
+	dst4 := models.Book{SeriesRefs: slices.Clone(olRefs)}
+	mergeAuthorWorkMetadata(&dst4, models.Book{MetadataProvider: "hardcover"})
+	if !slices.Equal(dst4.SeriesRefs, olRefs) {
+		t.Errorf("empty hardcover refs must not blank: want %+v, got %+v", olRefs, dst4.SeriesRefs)
+	}
+}
+
 func TestMergeAuthorWorkMetadata_GenrePreferHardcover(t *testing.T) {
 	// Hardcover supplement replaces OL subjects with its taxonomy.
 	dst := models.Book{Genres: []string{"Fiction", "American literature"}}

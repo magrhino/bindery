@@ -575,6 +575,26 @@ func mergeAuthorWorkMetadata(dst *models.Book, src models.Book) {
 	} else if len(dst.Genres) == 0 {
 		dst.Genres = src.Genres
 	}
+	// SeriesRefs: same argument as Genres, and the same gate. Hardcover
+	// carries curated series membership keyed on a stable numeric id
+	// (hc-series:1026) with a position; OpenLibrary parses a free-text
+	// series string into a slug and often has nothing at all. Before #2207
+	// this field was simply not copied, so the only works that ever gained
+	// series membership were the ones OpenLibrary does not list (the append
+	// path in mergeAuthorWorks) — anthologies and tie-ins, never the novels.
+	//
+	// Replace rather than concatenate. The two providers mint series ids in
+	// different namespaces, so "The Expanse" from each side upserts as two
+	// distinct rows in `series` and the book lands in both, with two
+	// primary_series=1 join rows for GetPrimarySeriesForBook to choose
+	// between arbitrarily. One provider's view of a book's series has to
+	// win, and Hardcover's is the curated one. Non-Hardcover sources keep
+	// the fill-empty rule so no enricher can clobber a populated list.
+	if src.MetadataProvider == "hardcover" && len(src.SeriesRefs) > 0 {
+		dst.SeriesRefs = src.SeriesRefs
+	} else if len(dst.SeriesRefs) == 0 {
+		dst.SeriesRefs = src.SeriesRefs
+	}
 	if dst.DurationSeconds == 0 {
 		dst.DurationSeconds = src.DurationSeconds
 	}
