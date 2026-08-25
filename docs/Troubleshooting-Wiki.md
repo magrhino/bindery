@@ -244,6 +244,21 @@ The usual culprit is the **allowed languages** list on the author's metadata pro
 
 The skip counts are also in the log (`Settings → Logs`): the `author books synced` line carries `added`, `skipped_language`, `skipped_junk` and `skipped_media_type`, and is logged at WARN whenever anything was skipped. Per-book detail (which title, which language) is at DEBUG.
 
+## A book shows a file path that no longer exists
+
+Symptom: you moved or renamed a book's file (or the folder holding it), scanned, and the book still shows the old path. It keeps saying **In Library**, download and delete act on a file that isn't there, and rescanning changes nothing.
+
+What happens: Bindery tracks files as rows, and registering a file at a new location *adds* a row rather than replacing the old one, so the book ends up owning both. Older versions always rendered the oldest row, so once the old path was dead it stayed on screen ([#2186](https://github.com/vavallee/bindery/issues/2186)).
+
+Fixed (#2186): a book now renders whichever of its tracked files still exists on disk, and a **Scan Library** run also repairs books that were already stuck this way, so on a current version the fix is to scan once. The row for the old location is deliberately *not* deleted. To clear it, open the book, find the dead path in the **Files** list, and use **Forget this file**, which drops the tracking row only and never touches the filesystem.
+
+Two things this does not do:
+
+- It does not find the file for you. Bindery only knows about the new location once a scan (or an import) has registered it, and a scan only matches files to books already in your catalogue (see rule 1 in the [User Guide](User-Guide-Wiki.md#1-library-scan-is-a-reconciler-not-an-importer)). A file moved *outside* your library root is not found at all.
+- It does not react to a storage outage. If a mount is temporarily unavailable then every path under it looks missing at once, so Bindery deliberately keeps showing what it showed before rather than acting on the absence. Nothing is deleted or reset, and the books come back as they were when the mount does.
+
+If you reshape your library regularly, **Rename files** on the book or author page is the supported way to do it: it moves the file *and* repoints the same tracking row at the new location, so there is never a second row to clean up.
+
 ## Collecting logs for a bug report
 
 `Settings → Logs` is the whole log store, so you don't need shell access to the container (rootless images give you nowhere to `cat` a file anyway).

@@ -2925,6 +2925,10 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 		}
 	}
 
+	// Books already stuck on a vanished path have nothing left to register,
+	// so re-derive them here rather than leaving the rescan a no-op (#2186).
+	s.refreshStaleRenderedPaths(ctx)
+
 	// Surface every walked root in the completion log. The scan can union
 	// the audiobook root with the library root (see ScanLibrary), and the
 	// pre-fix log only showed s.libraryDir, which let users with separate
@@ -2938,6 +2942,54 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 		"reconciled", reconciled, "unmatched", unmatched, "tagReadFailed", tagReadFailed)
 
 	s.writeScanResult(ctx, len(foundFiles), reconciled, unmatched, alreadyTracked, tagReadFailed, unmatchedFiles)
+}
+
+// refreshStaleRenderedPaths re-derives the file path shown for books that
+// track more than one file of the same format and are currently rendering one
+// that has vanished (#2186).
+//
+// The derivation fix in BookRepo lands whenever a file is registered or
+// removed, which covers every future move. It does not reach a library that
+// broke before the fix shipped: the moved file is already tracked, so the scan
+// records it as such and never calls AddBookFile, and nothing else recomputes
+// the book. That is why "no number of rescans corrects it" was in the report.
+// This sweep is what makes a rescan correct it.
+//
+// It is scoped to stay cheap on a large library: only books with a same-format
+// sibling can have had a live row outranked by a dead one, and each candidate
+// costs at most two os.Stat calls. A book whose rendered paths still resolve
+// is skipped without a write, so a healthy library does no database work here
+// at all. Nothing is deleted — the stale row stays on the book's Files tab for
+// the user to deregister.
+//
+// Best-effort: a scan that has already done its real work must not fail here.
+func (s *Scanner) refreshStaleRenderedPaths(ctx context.Context) {
+	candidates, err := s.books.MultiFileBookPaths(ctx)
+	if err != nil {
+		slog.Warn("library scan: could not list multi-file books for stale-path sweep", "error", err)
+		return
+	}
+	repaired := 0
+	for _, c := range candidates {
+		if ctx.Err() != nil {
+			return
+		}
+		stale := (c.EbookPath != "" && !db.BookFilePathResolves(c.EbookPath)) ||
+			(c.AudiobookPath != "" && !db.BookFilePathResolves(c.AudiobookPath))
+		if !stale {
+			continue
+		}
+		if err := s.books.RefreshBookStatus(ctx, c.BookID); err != nil {
+			slog.Warn("library scan: could not refresh book after stale path",
+				"book_id", c.BookID, "error", err)
+			continue
+		}
+		repaired++
+	}
+	if repaired > 0 {
+		slog.Info("library scan: re-derived file paths for books rendering a vanished file",
+			"books", repaired)
+	}
 }
 
 // isReconcileCandidate reports whether a book should be considered for

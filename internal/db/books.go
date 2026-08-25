@@ -4,9 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -133,10 +133,21 @@ first_audiobook AS (
 )`
 
 // bookColumns is the canonical column list for book SELECT queries.
-// ebook_file_path and audiobook_file_path are derived from book_files first
-// (so multi-file books see the first registered path), with the legacy column
-// as a fallback for rows that pre-date the migration and have not yet been
-// re-imported via AddBookFile.
+//
+// ebook_file_path and audiobook_file_path read the stored column first and
+// fall back to the first_ebook / first_audiobook CTE. That order is load
+// bearing (#2186). The column is not user-writable and is not stale: every
+// mutation of book_files goes through refreshBookStatus, which recomputes it
+// from the rows and writes it back. The CTE cannot do the same job, because
+// choosing the right row means asking the filesystem which paths still
+// resolve and SQL cannot stat. Reading the CTE first therefore overrode the
+// answer refreshBookStatus had already worked out, and a book whose file had
+// moved kept rendering the dead path.
+//
+// The CTE remains the fallback for the shape migration 028 leaves behind: a
+// book backfilled from the legacy untyped file_path column got an 'ebook'
+// book_files row while books.ebook_file_path stayed empty, and it also covers
+// any book whose column was never written.
 //
 // The trailing author columns hydrate book.Author for List/Get responses
 // (#882): the frontend's Books page and Book detail page read
@@ -151,8 +162,8 @@ const bookColumns = `books.id, books.foreign_id, books.author_id, books.title, b
 	books.media_type, books.narrator, books.duration_seconds, books.asin,
 	books.calibre_id, books.metadata_provider, books.last_metadata_refresh_at,
 	books.created_at, books.updated_at,
-	COALESCE(fe.path, COALESCE(books.ebook_file_path, '')),
-	COALESCE(fa.path, COALESCE(books.audiobook_file_path, '')),
+	COALESCE(NULLIF(books.ebook_file_path, ''), fe.path, ''),
+	COALESCE(NULLIF(books.audiobook_file_path, ''), fa.path, ''),
 	books.excluded, COALESCE(books.dedup_key, ''),
 	au.id, au.foreign_id, au.name, au.sort_name,
 	COALESCE(books.owner_user_id, 0),
@@ -712,18 +723,16 @@ func (r *BookRepo) refreshBookStatus(ctx context.Context, bookID int64) error {
 		return nil
 	}
 
-	// Query book_files directly to get the true first path per format.
-	// This bypasses the COALESCE legacy-column fallback in bookColumns so
-	// removing the last book_files entry correctly clears the field.
-	var ebookPath, audiobookPath string
-	if err := r.db.QueryRowContext(ctx,
-		`SELECT COALESCE(path,'') FROM book_files WHERE book_id=? AND format='ebook' ORDER BY id LIMIT 1`,
-		bookID).Scan(&ebookPath); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	// Query book_files directly to get the path each format should render.
+	// Reading the rows rather than the book we just loaded is what lets
+	// removing the last book_files entry correctly clear the field, and it is
+	// the value bookColumns now reads back (see its comment).
+	ebookPath, err := r.derivedFormatPath(ctx, bookID, models.MediaTypeEbook)
+	if err != nil {
 		return fmt.Errorf("refreshBookStatus: read ebook path: %w", err)
 	}
-	if err := r.db.QueryRowContext(ctx,
-		`SELECT COALESCE(path,'') FROM book_files WHERE book_id=? AND format='audiobook' ORDER BY id LIMIT 1`,
-		bookID).Scan(&audiobookPath); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	audiobookPath, err := r.derivedFormatPath(ctx, bookID, models.MediaTypeAudiobook)
+	if err != nil {
 		return fmt.Errorf("refreshBookStatus: read audiobook path: %w", err)
 	}
 
@@ -760,6 +769,136 @@ func (r *BookRepo) refreshBookStatus(ctx context.Context, bookID int64) error {
 	b.FilePath = legacyFilePathFor(b.MediaType, ebookPath, audiobookPath)
 
 	return r.Update(ctx, b)
+}
+
+// BookFilePathResolves reports whether a tracked book file path still points
+// at something on disk. Exported so the library scan's stale-path sweep
+// decides with exactly the same test refreshBookStatus will apply.
+//
+// It is deliberately asymmetric: only a definite "does not exist" counts as
+// gone. A permission error, an I/O error or a stalled network mount all leave
+// the row trusted, because those say "we cannot read this right now", not
+// "this file moved". That is the same rule the ABS importer's prune uses
+// (pruneVanishedFormatPaths, #1692), and it is what keeps a flaky share from
+// changing which row a whole library renders.
+func BookFilePathResolves(path string) bool {
+	if path == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return !os.IsNotExist(err)
+}
+
+// derivedFormatPath picks the path a book renders for one format: the
+// lowest-id book_files row whose file still resolves on disk.
+//
+// The plain "lowest id wins" rule this replaces is what made #2186 visible.
+// BookFileRepo.Add is INSERT OR IGNORE, so registering a file at a new
+// location appends a row instead of replacing the old one; the older row kept
+// the lower id, so a book whose folder had been renamed rendered the dead path
+// forever while still reporting Imported.
+//
+// When no row resolves the lowest-id row is returned unchanged, which is the
+// pre-#2186 answer. That fallback is the whole reason this is safe to run on
+// the write path: an unmounted volume makes every path under it vanish at
+// once, and the right response to "all of this book's files are missing" is to
+// keep rendering what we always rendered, not to blank the field and flip a
+// library back to Wanted. Nothing is deleted either way — a row whose file is
+// gone stays in book_files, listed on the book's Files tab, where the
+// DB-only deregister action (#1692) can remove it.
+//
+// Cost: one os.Stat per format for the single-file books that are the norm,
+// and it runs only from refreshBookStatus (AddBookFile, RemoveBookFile,
+// UpdateBookFilePath), never on a read.
+func (r *BookRepo) derivedFormatPath(ctx context.Context, bookID int64, format string) (string, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT COALESCE(path,'') FROM book_files WHERE book_id=? AND format=? ORDER BY id`,
+		bookID, format)
+	if err != nil {
+		return "", fmt.Errorf("derivedFormatPath: query %s files: %w", format, err)
+	}
+	defer rows.Close()
+
+	var first string
+	var vanished []string
+	live := ""
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return "", fmt.Errorf("derivedFormatPath: scan %s path: %w", format, err)
+		}
+		if first == "" {
+			first = path
+		}
+		if BookFilePathResolves(path) {
+			live = path
+			break
+		}
+		vanished = append(vanished, path)
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("derivedFormatPath: read %s files: %w", format, err)
+	}
+
+	if live == "" {
+		// Either the book has no rows for this format, or none of them
+		// resolve. Both cases keep the old answer.
+		return first, nil
+	}
+	for _, stale := range vanished {
+		// Warn, not Debug: this is a row the user has to deregister by hand,
+		// and the in-app log view is where they will find out it exists.
+		slog.Warn("book file row points at a path that no longer exists",
+			"book_id", bookID, "format", format, "missing", stale, "rendering", live)
+	}
+	return live, nil
+}
+
+// RefreshBookStatus recomputes a book's aggregate status and the file paths it
+// renders from its current book_files rows. Exported for the library scan's
+// stale-path sweep (#2186): a book that broke before this fix shipped has no
+// pending AddBookFile to trigger the recompute, so the scan re-derives it.
+func (r *BookRepo) RefreshBookStatus(ctx context.Context, bookID int64) error {
+	return r.refreshBookStatus(ctx, bookID)
+}
+
+// MultiFileBookPaths returns, for every book that tracks more than one file of
+// the same format, the paths that book currently renders. Used by the library
+// scan's stale-path sweep (#2186) to find the books worth re-deriving without
+// writing to every book in the library: only a book with a same-format sibling
+// can have had a live row outranked by a dead one.
+func (r *BookRepo) MultiFileBookPaths(ctx context.Context) ([]BookRenderedPaths, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT b.id, COALESCE(b.ebook_file_path, ''), COALESCE(b.audiobook_file_path, '')
+		 FROM books b
+		 WHERE b.id IN (
+		     SELECT book_id FROM book_files GROUP BY book_id, format HAVING COUNT(*) > 1
+		 )`)
+	if err != nil {
+		return nil, fmt.Errorf("multi-file book paths: %w", err)
+	}
+	defer rows.Close()
+
+	var out []BookRenderedPaths
+	for rows.Next() {
+		var p BookRenderedPaths
+		if err := rows.Scan(&p.BookID, &p.EbookPath, &p.AudiobookPath); err != nil {
+			return nil, fmt.Errorf("multi-file book paths scan: %w", err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("multi-file book paths rows: %w", err)
+	}
+	return out, nil
+}
+
+// BookRenderedPaths is one row of MultiFileBookPaths: the paths a book
+// currently renders for each format.
+type BookRenderedPaths struct {
+	BookID        int64
+	EbookPath     string
+	AudiobookPath string
 }
 
 // SetFormatFilePath records the on-disk path for a specific format and

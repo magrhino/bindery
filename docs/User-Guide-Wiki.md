@@ -323,6 +323,14 @@ Rule 1 — the catalogue is empty or the authors don't exist yet. Populate
 first ([Bringing in an existing library](#bringing-in-an-existing-library)),
 then scan.
 
+**I moved my files and a book still shows the old path.**
+Fixed (#2186). A book now shows whichever of its tracked files still exists,
+and a **Scan Library** run repairs books that were already stuck on a dead
+path. The old entry stays listed under the book's **Files**; **Forget this
+file** clears it without touching the disk. Use **Rename files** rather than
+moving things by hand and it never happens.
+([troubleshooting](Troubleshooting-Wiki.md))
+
 **I added one book and got the author's whole back catalogue.**
 Fixed (#1816). Adding one book adds one book; a refresh only adds
 newly-discovered works for an author you monitor and have set to take new

@@ -1,0 +1,2 @@
+### Fixed
+- **A moved book file left the book pointing at a path that was gone** (#2186). After a file moved on disk, a scan registered it at its new location but the book kept showing the old, dead path while still reporting Imported, and no amount of rescanning corrected it. A book now shows whichever of its tracked files still exists on disk, and a library scan repairs books that were already stuck this way. The entry for the old location is not deleted: it stays listed under the book's Files, where **Forget this file** clears it without touching anything on disk.
