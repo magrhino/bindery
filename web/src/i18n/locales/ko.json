@@ -627,9 +627,12 @@
       "telemetryDetail": "install_id(임의 UUID), 버전, OS, 아키텍처, 배포 방식, 기능 사용 횟수, 오류 카운터(최근 24시간 ERROR/WARN 합계 및 가장 빈번한 오류 메시지 문자열 5개 — 로그 세부 내용, 제목, 경로, URL은 절대 전송하지 않음)를 하루 한 번 getbindery.dev로 전송합니다. 언제든지 비활성화할 수 있습니다.",
       "metadataProvider": "메타데이터 제공자",
       "metadataProviderLabel": "기본 메타데이터 제공자",
-      "metadataProviderHint": "저자 및 도서 검색에 사용할 소스를 선택합니다. DNB(Deutsche Nationalbibliothek)는 독일·오스트리아·스위스 카탈로그에 권장되며, OpenLibrary 커버리지가 부족한 1913년 이후 독일어 출판물을 포함합니다. 다른 지역의 경우 OpenLibrary가 기본값입니다. 기본이 아닌 제공자는 항상 보완 소스로 사용됩니다.",
+      "metadataProviderHint": "저자 및 도서 검색에 사용할 소스를 선택하며, 저자 카탈로그의 구성을 결정합니다. DNB(Deutsche Nationalbibliothek)는 독일·오스트리아·스위스 카탈로그에 권장되며, OpenLibrary 커버리지가 부족한 1913년 이후 독일어 출판물을 포함합니다. Hardcover는 선별된 카탈로그로, OpenLibrary보다 번역판, 합본, 도서가 아닌 항목이 적게 들어오는 대신 희귀 도서 커버리지는 얇습니다. 기본값은 OpenLibrary입니다. 어느 것을 선택하든 나머지 제공자는 보완 소스로 계속 사용됩니다.",
       "metadataProviderOpenlibrary": "OpenLibrary (기본값)",
-      "metadataProviderDnb": "DNB — Deutsche Nationalbibliothek (독일/DACH)"
+      "metadataProviderDnb": "DNB — Deutsche Nationalbibliothek (독일/DACH)",
+      "metadataProviderHardcover": "Hardcover (선별된 카탈로그)",
+      "metadataProviderHardcoverNoToken": "Hardcover — API 토큰 필요 (설정 → API 키)",
+      "metadataProviderRestartHint": "다음 Bindery 재시작 후에 적용됩니다. 제공자는 시작 시점에 연결되므로 그 전에는 아무것도 바뀌지 않습니다. 이미 라이브러리에 있는 저자는 추가될 때 사용된 제공자에 계속 연결되며, 새 기본 제공자는 이후에 추가하는 저자에게 적용됩니다. 기존 저자를 옮기려면 해당 저자 페이지에서 \"메타데이터 연결\"을 사용하세요."
     },
     "import": {
       "csvHeading": "저자 이름 CSV",
