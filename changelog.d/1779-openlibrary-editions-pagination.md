@@ -1,2 +1,0 @@
-### Fixed
-- **Heavily reprinted books no longer go missing from an author's library** (#1779): Bindery read only the first 50 editions of an OpenLibrary work, in an order OpenLibrary does not sort. The **Min pages** and **Skip missing ISBN** metadata profile settings decide from that list, so a title whose page count or ISBN happened to sit further down was skipped on refresh even though it qualified. The full edition list is now read, so those books come back on the next author refresh.

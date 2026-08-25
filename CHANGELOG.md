@@ -4,6 +4,102 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
+## [v1.32.2] — 2026-08-25
+
+**Books you already owned kept turning back up in Wanted.** Three separate
+faults produced the same symptom, and this release fixes all three. An
+Audiobookshelf import read an item listed without its files as an audiobook and
+quietly made ebook only books dual format, so they wanted an audiobook that was
+never real. An author refresh did the same thing from the other direction,
+widening any owned book whose work a catalogue also listed in the other format:
+one reporter had a single routine refresh flip 29 already downloaded books, some
+added two months earlier. And a file that moved on disk left the book rendering
+the old, dead path while still claiming to be imported, which no amount of
+rescanning corrected. In each case the book's status is derived from the formats
+still missing, so an invented want was enough to drop it off the shelf.
+
+**Heavily reprinted books were disappearing from libraries entirely.** Bindery
+read only the first 50 editions of an OpenLibrary work, in an order OpenLibrary
+does not sort, and the Min pages and Skip missing ISBN metadata profile settings
+decide from that list. A title whose qualifying edition happened to sit further
+down was skipped on every refresh. One work in testing had 139 editions, 131 of
+them carrying an ISBN, more than half of the page counts past the cut.
+
+**Path remaps were impossible to configure with the download client on
+Windows.** A remap written with a drive letter was split at the drive letter's
+own colon, so it silently matched nothing and the Settings validator accepted it
+anyway. Torrents were added, author and book folders were created, and no file
+was ever copied. Anyone running qBittorrent on Windows with Bindery in Docker
+had no working form to write.
+
+**A co-author could swallow another author's whole catalogue.** Importing a
+Calibre book credited to two people made the second one an alias of the first,
+so every later book by that co-author was filed under their collaborator and
+they never got an author page. Which author survived came down to Calibre book
+id order, which is why the effect looked arbitrary. Libraries already affected
+recover on the next import.
+
+**Quality profiles were never checked against the file you actually received**,
+only against the release name, and the check deliberately let through any
+release whose title carried no recognisable format. So the one case it admitted
+it could not judge was exactly the case that arrived unchecked.
+
+**Download client health is now checked for every client type.** If a client
+turns red in Settings after this update, that is almost certainly a problem that
+was already there. Nothing about your setup changed; Bindery just started
+looking. Only qBittorrent was ever checked before, and the other five stored a
+green result without checking anything.
+
+### Changed
+
+- **Author refresh fetches Hardcover editions for new books a few at a time instead of one after another** (#1929). After the library walk fix in v1.30.3, edition hydration was the last provider call the sync made once per newly added book, waiting for each one to come back before starting the next. A 65 book author paid 65 round trips in sequence. The sync now knows the full set of books it created before hydrating any of them, so it fetches their editions in parallel and hands the results to the same hydration path as before. A refresh that adds nothing still fetches nothing, and a lookup that fails is retried live exactly as it was.
+
+### Fixed
+
+- **An Audiobookshelf import no longer sends owned books back to Wanted** (#2169). When ABS listed an item without its files, because the per item detail fetch was skipped or failed, Bindery read that silence as "audiobook" and widened the book to dual format. Status is derived from the formats still missing, so the book then wanted an audiobook that never existed, and the next import demoted it from Imported back to Wanted with its ebook still on disk and still attached. Re-importing repeated the demotion instead of repairing it; one reporter had 23 of 51 rows in that state. Only the formats an item actually exposes now take part in the merge. Books already widened keep their media type, so set one back to the format you want and Bindery re-derives the status.
+
+- **An author refresh no longer changes the format of a book you already own** (#2096). When a catalogue listed the same work in the other format, the refresh merged the row to dual format whether or not the book was already on disk, which invented a want nobody asked for. The merge still runs for a book nobody has yet, which is the duplicate row problem it exists to solve. Books already widened keep their media type; set one back by hand and the status follows.
+
+- **A moved book file left the book pointing at a path that was gone** (#2186). After a file moved on disk, a scan registered it at its new location but the book kept showing the old, dead path while still reporting Imported, and no amount of rescanning corrected it. A book now shows whichever of its tracked files still exists on disk, and a library scan repairs books that were already stuck this way. The entry for the old location is not deleted: it stays listed under the book's Files, where **Forget this file** clears it without touching anything on disk.
+
+- **Heavily reprinted books no longer go missing from an author's library** (#1779). Bindery read only the first 50 editions of an OpenLibrary work, in an order OpenLibrary does not sort. The **Min pages** and **Skip missing ISBN** metadata profile settings decide from that list, so a title whose page count or ISBN happened to sit further down was skipped on refresh even though it qualified. The full edition list is now read, so those books come back on the next author refresh.
+
+- **Path remaps now work when the download client runs on Windows** (#2191, reported in Discussion #1971). A remap written with a drive letter, such as `S:\Downloads:/mnt/Storage/Downloads`, was split at the drive letter's own colon and quietly did nothing, so nobody running qBittorrent on Windows with Bindery on Linux or Docker could configure a working remap at all. Drive letters are now understood on both sides of the pair, either slash works on the Windows side, matching there ignores case while Linux paths stay case sensitive, and the result comes back as a clean path for whichever platform it lands on. Settings now rejects a drive path with no destination instead of silently accepting it, and the download client Test button explains that a Windows client requires a remap rather than suggesting an identical mount that cannot exist.
+
+- **Calibre import no longer files co-authors as aliases of the primary author** (#1684). A book credited to two people made the second one an alias of the first, so every later book by that co-author was filed under their collaborator and they never got an author page at all. Co-authors are simply not recorded now, since a Bindery book carries one author, and an import ignores an existing alias unless something backs it up, so libraries already affected recover on the next import. No alias rows are deleted, and author merges, spelling variants and non-latin alternate names keep resolving exactly as before. Leftover rows can be removed from the author page if you want them gone.
+
+- **The Calibre library import now tracks the files it imports** (#1635). It reconciled titles, authors and series from `metadata.db` but never recorded where the files actually were, so a Calibre managed book was marked imported while Bindery tracked no file for it. Every format Calibre reports is now tracked, so an epub and an audiobook of the same book are both attached rather than one hiding the other, and re-running an import does not duplicate rows. This also gives Calibre libraries a supported way to correct a file path, which they previously lacked.
+
+- **A quality profile's allowed formats are now checked against the file you actually got** (#1782). The check ran once, before downloading, against the release name, and deliberately let through any release whose title carried no recognisable format, which is common for Usenet posts named like "Author - Title (Year)". Nothing after that ever looked again, so a release that turned out to be a MOBI, with no file extension at all, imported cleanly into a library whose profile disallowed MOBI. Bindery now identifies the real format from the file's contents before importing it. A download whose files are all disallowed is held for review rather than imported, with the reason attached, and the release is blocklisted so the next search does not simply grab it again. A download containing a mix imports the format you allowed and leaves the rest. Manual imports are unaffected: if you pick the format yourself, that is the answer.
+
+- **Download client health is now checked for every client type** (#2029). Previously only qBittorrent was ever checked. SABnzbd, NZBGet, Transmission, Deluge and rTorrent each stored a green "path check not required" without checking anything, and the Settings page would not have displayed the result even if they had. That is the mechanism behind the most common support report we get: the connection tests fine, the client accepts grabs, and nothing ever imports. Health is also re-checked every 15 minutes now, so a client that breaks after setup, a remounted seedbox or a rotated password, no longer stays green until someone thinks to press Test. The three client types that genuinely cannot be introspected say so plainly instead of claiming to be fine.
+
+- **Download clients that refuse an action are no longer treated as having done it** (#2192). SABnzbd and NZBGet report a refused pause, resume, delete or history delete as an ordinary HTTP 200 with a failure flag in the body, and Bindery read only the HTTP status. The most visible effect was post import history cleanup: SABnzbd kept the finished job in its history, and the "cleanup failed" warning that was supposed to say so never fired. Deluge and Transmission had the same gap on torrent removal. All six now report the client's own reason, and a client that refuses to forget a job still never leaves a stale row in Bindery's queue.
+
+- **An indexer's error page no longer fails the grab under SABnzbd's name** (#2105). SABnzbd and NZBGet grabs fetch the NZB from the indexer and hand the download client the bytes, so an indexer that answers a refused, expired or rate limited grab with HTTP 200 and an error page had that page forwarded to the client. The client refused to parse it and the grab failed with `SABnzbd rejected download`, naming the one component in the chain that behaved correctly, while the book dropped silently back to Wanted. Bindery now checks that the fetched body is actually an NZB before it goes anywhere, and reports what the indexer really sent, including the newznab error code where there is one. Indexers that serve the NZB as a gzip or bzip2 file rather than as a compressed HTTP response are unaffected.
+
+- **A momentary network failure fetching an NZB no longer fails the grab for good** (#2157). A single failed attempt marked the download failed and dropped the book back to Wanted, where it looked exactly like a book no release had been found for, and nothing retried it until the next scheduled search. The fetch is now attempted up to three times, with a short backoff, for failures another attempt could plausibly clear. Failures that will not change are still reported immediately and after a single request. Only the fetch retries; the upload to the download client is still made once, so a retry can never produce a duplicate job.
+
+- **Ebook searches on Prowlarr synced indexers no longer come back empty** (#2170). When an indexer carried no categories of its own, Bindery derived them from the Sync Categories of every application registered in Prowlarr, including ones that have nothing to do with books. A Mylar install contributing 7030 (Comics) made the ebook bucket non empty and wrong, so every ebook search went out asking for comics and returned nothing, with no error to explain it. Only Readarr and LazyLibrarian scopes are used now, and an indexer that advertises an ebook category no registered application syncs logs a warning instead of failing silently.
+
+- **A hostname that resolves to several addresses no longer fails on the first unreachable one** (#2156). Every guarded outbound connection resolves the hostname itself so it can re-check each address against the SSRF policy, which is what stops a DNS rebind, but it then connected to the first address only. The visible case is a dual stack indexer reached from an IPv4 only container network, where the IPv6 address is an instant "network is unreachable" and the IPv4 one right behind it was never tried. Addresses are now tried in the order the resolver returned them until one connects, and the policy check that refuses the whole dial if any resolved address is forbidden is unchanged.
+
+- **Two different authors publishing under the same name were merged into one** (#1734). Hardcover works were always fetched by author name, so two real people who happen to publish as "J.A. Andrews" looked like one person, and one of them picked up around 44 books that were not theirs. Every metadata refresh re-applied it. Once an author is linked to a specific Hardcover author, their works are now fetched by that link instead of by their name. Name matching is still used when first linking an author, which is the point where a name is genuinely all there is to go on. This prevents new merges rather than untangling existing ones.
+
+- **Series fill now respects the format you picked** (#1802). With enhanced Hardcover series enabled, "add all" and the per row "add" created every book as a dual format book whenever Hardcover listed an audiobook edition, so choosing Ebook still queued and grabbed an audiobook as well. The chosen format is now kept, and only that format is searched for.
+
+- **Library scan no longer lets a notes file take a book's ebook slot** (#2188). When a folder held a real ebook alongside a `.txt`, `.rtf`, `.pdf` or comic archive, whichever file the directory listing happened to yield first became the book's ebook, and the other was reported as unmatched. The real ebook now always wins, and the companion file is counted as already tracked instead of cluttering the Unmatched list. Libraries made up of `.txt`, `.rtf` or `.pdf` files still reconcile exactly as before: a supplement class file is only ever passed over when a better file for the same book is there to take its place.
+
+- **Deleting a user failed for any account that had ever used the app** (#1899). The delete ran as a bare `DELETE FROM users`, and seven tables point at the user with no rule for what happens when they go, so SQLite rejected it. Adding one author was enough. Deleting a user now asks what happens to their library first, showing how many authors, books, downloads, profiles, root folders and import lists are involved: hand them to another user, make them visible to everyone, or delete them along with the account. Blocklist entries always stay, since a release that failed for one user still fails for everyone, and only the record of who added it is cleared. Installs that deleted a user back when this silently orphaned rows instead get those rows swept back into view on upgrade.
+
+- **Bulk author import no longer storms OpenLibrary with unbounded requests** (#2075). A CSV or Readarr database import fired one goroutine per author with no cap, so a 19 author CSV opened 19 simultaneous catalogue fetches, and OpenLibrary's per user agent throttle turned that into 429s cascading into timeouts and connection refusals with nothing to slow the batch down. Catalogue fetches are now bounded to two at a time and paced three seconds apart, which is what actually prevents the storm. The OpenLibrary client additionally retries an occasional 429, 502, 503 or 504 or transient network failure, honouring `Retry-After` when the response sends one.
+
+- **Adding a book by ISBN no longer loses the author** (#2187). An OpenLibrary edition that is not linked to a work now carries its author through the lookup instead of coming back with just a title and cover. The Add button also no longer refuses a result that has no author name: the backend resolves the author from the book itself, so the request goes through.
+
+- **Add Author now honours the default root folder** (#2166). The dialog seeded its root folder picker from the first folder in the list rather than from the configured default, and posted that as an explicit per author choice. Since an author's own root folder is resolved ahead of the install default, the setting had no effect on anything added through the dialog. Invisible with one root folder configured; with two it silently filed authors under whichever was created first.
+
+- **Hardcover errors now say which side failed** (#2128). When Hardcover returns an HTML error page, Bindery no longer pastes that page into the Settings test result and the logs. A rejected token now reads `token rejected (HTTP 401: Invalid or expired token)`, and a Hardcover outage reads as an upstream failure rather than a token problem. Hardcover's `hc_pat_` personal access tokens keep working exactly as before.
+
 ## [v1.32.1] — 2026-08-20
 
 **Single sign-on could lock you out of your own instance.**
