@@ -6,29 +6,42 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/downloader"
+	"github.com/vavallee/bindery/internal/downloader/clienthost"
 	"github.com/vavallee/bindery/internal/httpsec"
 	"github.com/vavallee/bindery/internal/models"
 	"github.com/vavallee/bindery/internal/telemetry"
 )
 
-// sanitizeHost strips any scheme prefix a user may have accidentally included
-// (e.g. "http://192.168.1.50" → "192.168.1.50"). The Host field expects a
-// bare hostname or IP; the scheme is determined by the UseSSL flag.
-func sanitizeHost(host string) string {
-	if after, ok := strings.CutPrefix(host, "https://"); ok {
-		return after
+// sanitizeHost normalises a submitted Host field, or reports why it cannot be
+// used. It strips a scheme prefix a user may have accidentally included
+// (e.g. "http://192.168.1.50" → "192.168.1.50") and rejects a value that
+// carries a port, a path, a query or a fragment: the Host field expects a
+// bare hostname or IP, the scheme comes from the UseSSL flag, the port from
+// the Port field and any reverse-proxy prefix from URLBase.
+//
+// Until #2203 everything but the scheme prefix was kept verbatim, so a URL
+// pasted out of a browser address bar was stored whole and then interpolated
+// into another URL. See clienthost.Normalize for what that produced.
+func sanitizeHost(host string) (string, error) {
+	return clienthost.Normalize(host)
+}
+
+// applyHostToClient normalises c.Host in place and writes the 400 that names
+// the problem when it cannot be used. Reports whether the caller may proceed.
+func applyHostToClient(w http.ResponseWriter, c *models.DownloadClient) bool {
+	host, err := sanitizeHost(c.Host)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return false
 	}
-	if after, ok := strings.CutPrefix(host, "http://"); ok {
-		return after
-	}
-	return host
+	c.Host = host
+	return true
 }
 
 // downloadClientURL assembles the effective URL that would be hit for a
@@ -42,7 +55,7 @@ func downloadClientURL(c *models.DownloadClient) string {
 	if port == 0 {
 		port = 8080
 	}
-	return fmt.Sprintf("%s://%s:%d/", scheme, c.Host, port)
+	return fmt.Sprintf("%s://%s/", scheme, clienthost.Authority(c.Host, port))
 }
 
 type DownloadClientHandler struct {
@@ -146,7 +159,9 @@ func (h *DownloadClientHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name and host required"})
 		return
 	}
-	c.Host = sanitizeHost(c.Host)
+	if !applyHostToClient(w, &c) {
+		return
+	}
 	if c.Type == "" {
 		c.Type = "sabnzbd"
 	}
@@ -185,7 +200,9 @@ func (h *DownloadClientHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if c.Host != "" {
-		c.Host = sanitizeHost(c.Host)
+		if !applyHostToClient(w, &c) {
+			return
+		}
 		if err := httpsec.ValidateOutboundURL(downloadClientURL(&c), httpsec.PolicyLANLoopback); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
@@ -228,6 +245,15 @@ func (h *DownloadClientHandler) Test(w http.ResponseWriter, r *http.Request) {
 	client, err := h.clients.GetByID(r.Context(), id)
 	if err != nil || client == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "download client not found"})
+		return
+	}
+	// Re-check the stored Host. Clients saved before #2203 were never
+	// validated, and a Host that carries a port or a path still reaches a web
+	// server, so the connection probe below happily reports success for a
+	// client that can never return JSON. Failing here is the only way an
+	// operator learns which field to fix.
+	if _, err := sanitizeHost(client.Host); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	if err := httpsec.ValidateOutboundURL(downloadClientURL(client), httpsec.PolicyLANLoopback); err != nil {
@@ -276,7 +302,9 @@ func (h *DownloadClientHandler) TestConfig(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host required"})
 		return
 	}
-	c.Host = sanitizeHost(c.Host)
+	if !applyHostToClient(w, &c) {
+		return
+	}
 	if c.Type == "" {
 		c.Type = "sabnzbd"
 	}

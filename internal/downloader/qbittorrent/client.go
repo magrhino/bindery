@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vavallee/bindery/internal/downloader/clienthost"
 	"github.com/vavallee/bindery/internal/downloader/nethint"
 	"github.com/vavallee/bindery/internal/downloader/urlbase"
 	"github.com/vavallee/bindery/internal/httpsec"
@@ -89,7 +90,7 @@ func New(host string, port int, username, password, urlBase string, useSSL bool)
 
 	jar, _ := cookiejar.New(nil)
 	return &Client{
-		baseURL:        fmt.Sprintf("%s://%s:%d%s", scheme, host, port, urlbase.Normalize(urlBase)),
+		baseURL:        fmt.Sprintf("%s://%s%s", scheme, clienthost.Authority(host, port), urlbase.Normalize(urlBase)),
 		username:       username,
 		password:       password,
 		http:           &http.Client{Timeout: 15 * time.Second, Jar: jar},
@@ -154,13 +155,18 @@ func (c *Client) Login(ctx context.Context) error {
 // responded but rejected us) get a targeted hint; transport failures (the
 // server didn't respond at all) get a hint based on the error class.
 func (c *Client) Test(ctx context.Context) error {
-	if _, err := c.get(ctx, "/api/v2/app/version"); err != nil {
+	body, err := c.get(ctx, "/api/v2/app/version")
+	if err != nil {
 		var authErr *AuthError
 		if errors.As(err, &authErr) {
 			// Server responded — this is an auth/config issue, not unreachable.
 			return fmt.Errorf("connected to qBittorrent at %s but %w", c.baseURL, err)
 		}
 		return fmt.Errorf("could not reach qBittorrent at %s — %w%s", c.baseURL, err, nethint.ForErr(err))
+	}
+	// Something answered, but not necessarily the API. See checkVersionBody.
+	if err := checkVersionBody(body); err != nil {
+		return fmt.Errorf("connected to %s but %w", c.baseURL, err)
 	}
 	return nil
 }
@@ -593,8 +599,8 @@ func (c *Client) GetTorrents(ctx context.Context, category string) ([]Torrent, e
 	}
 
 	var torrents []Torrent
-	if err := json.Unmarshal(data, &torrents); err != nil {
-		return nil, fmt.Errorf("decode torrents: %w", err)
+	if err := decodeJSON("torrents", data, &torrents); err != nil {
+		return nil, err
 	}
 	// Windows-qBit reports paths with backslashes; downstream Linux path code
 	// (filepath.Walk, PathRemap.Apply, pathIsAtOrUnder) can't process them.
@@ -614,8 +620,8 @@ func (c *Client) GetCategories(ctx context.Context) (map[string]Category, error)
 		return nil, err
 	}
 	var categories map[string]Category
-	if err := json.Unmarshal(data, &categories); err != nil {
-		return nil, fmt.Errorf("decode categories: %w", err)
+	if err := decodeJSON("categories", data, &categories); err != nil {
+		return nil, err
 	}
 	for name, category := range categories {
 		if category.Name == "" {
@@ -654,8 +660,8 @@ func (c *Client) Files(ctx context.Context, hash string) ([]File, error) {
 		return nil, err
 	}
 	var files []rpcFile
-	if err := json.Unmarshal(data, &files); err != nil {
-		return nil, fmt.Errorf("decode torrent files: %w", err)
+	if err := decodeJSON("torrent files", data, &files); err != nil {
+		return nil, err
 	}
 	out := make([]File, 0, len(files))
 	for _, f := range files {

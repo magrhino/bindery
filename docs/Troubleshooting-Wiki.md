@@ -90,6 +90,22 @@ This happened on Bindery **1.22.1 and earlier**: Bindery sent the category **and
 
 **Fix:** upgrade to the current release. Bindery now enables auto_tmm and omits the explicit save path whenever a category is set, so qBittorrent places files at the category's configured save path (the source of truth for Bindery's health checks). On an older version, work around it by enabling **Automatic Torrent Management** for the category in qBittorrent, or by setting the category's save path to match Bindery's download root.
 
+## A download client tests fine but every poll logs "invalid character '<'"
+
+```
+qBittorrent category path check failed: decode categories: invalid character '<' looking for beginning of value
+```
+
+The client answered with a web page where Bindery expected JSON. Almost always the **Host** field holds more than a hostname, so every API request lands on the client's own web UI index page instead of its API. That page is served with a perfectly healthy HTTP 200, which is why **Test** used to report the connection verified: something did answer.
+
+The value behind the message above was `192.168.1.50:8080/#/`, copied straight out of a browser address bar. Bindery appended its own port and path to it, so requests went to `http://192.168.1.50:8080/#/:8080/api/v2/...`, and the `#` threw away everything after it (#2203).
+
+**Fix:** open **Settings → Download clients**, edit the client, and leave a bare hostname or IP in Host. The port belongs in **Port**, a reverse proxy prefix belongs in **URL Base**, and `https` is the **Use SSL** checkbox. See [What goes in a download client's Host field](./DEPLOYMENT.md#what-goes-in-a-download-clients-host-field) for the full table.
+
+Current releases refuse to save a Host like that, fail **Test** with a message naming the port and path to move, and turn the client's health dot red, so a client carried over from an older version reports the problem the moment you press Test rather than at the next poll.
+
+If Host is already a bare hostname and the message persists, something in front of the client is serving its own page: check that **URL Base** matches the path your reverse proxy serves the client on.
+
 ## The job stays in the download client after Bindery imports it
 
 The book imports fine and shows **Imported** in the Queue, but the job is still sitting in SABnzbd's history (or NZBGet's, or still listed in your torrent client). Once Bindery has taken ownership of the files it asks the client to forget the job, and the client is allowed to say no.

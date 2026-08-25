@@ -426,3 +426,157 @@ func TestDownloadClientHandler_LifetimeCtxFallsBackToBackground(t *testing.T) {
 		t.Error("WithLifetimeCtx(nil) must not clobber a previously installed ctx")
 	}
 }
+
+// TestDownloadClientCreate_RejectsMalformedHost covers #2203: a Host copied
+// out of a browser address bar was stored whole, interpolated into
+// "http://<host>:<port>/" and then quietly reached the client's web UI
+// instead of its API. Every rejection has to name the field to fix.
+func TestDownloadClientCreate_RejectsMalformedHost(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		host     string
+		contains []string
+	}{
+		// The exact value from the report.
+		{"address bar paste", "10.1.2.3:8080/#/", []string{"a port and a path", "8080 as the port"}},
+		{"embedded port", "10.1.2.3:9091", []string{"a port", "9091 as the port"}},
+		{"trailing path", "10.1.2.3/qbittorrent", []string{"a path"}},
+		{"fragment", "10.1.2.3#/downloads", []string{"a fragment"}},
+		{"credentials", "admin:pw@10.1.2.3", []string{"Username and Password"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, clients := downloadClientFixture(t)
+			body, err := json.Marshal(map[string]any{"name": "qBit", "type": "qbittorrent", "host": tc.host, "port": 8080})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			h.Create(rec, httptest.NewRequest(http.MethodPost, "/downloadclient", bytes.NewReader(body)))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+			}
+			for _, want := range tc.contains {
+				if !strings.Contains(rec.Body.String(), want) {
+					t.Errorf("response %s does not mention %q", rec.Body.String(), want)
+				}
+			}
+			list, err := clients.List(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(list) != 0 {
+				t.Errorf("rejected client was saved anyway: %+v", list)
+			}
+		})
+	}
+}
+
+// TestDownloadClientCreate_AcceptsPlainHosts guards the other direction: the
+// host forms a working install already holds must still save, with only the
+// scheme prefix and a lone trailing slash removed.
+func TestDownloadClientCreate_AcceptsPlainHosts(t *testing.T) {
+	for _, tc := range []struct{ name, host, want string }{
+		{"ip", "10.1.2.3", "10.1.2.3"},
+		{"http prefix", "http://10.1.2.3", "10.1.2.3"},
+		{"https prefix", "https://10.1.2.3", "10.1.2.3"},
+		{"trailing slash", "10.1.2.3/", "10.1.2.3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, clients := downloadClientFixture(t)
+			body, err := json.Marshal(map[string]any{"name": "qBit", "type": "qbittorrent", "host": tc.host, "port": 8080})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			h.Create(rec, httptest.NewRequest(http.MethodPost, "/downloadclient", bytes.NewReader(body)))
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+			}
+			list, err := clients.List(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(list) != 1 || list[0].Host != tc.want {
+				t.Fatalf("stored host = %+v, want %q", list, tc.want)
+			}
+		})
+	}
+}
+
+func TestDownloadClientUpdate_RejectsMalformedHost(t *testing.T) {
+	h, clients := downloadClientFixture(t)
+	ctx := context.Background()
+	client := &models.DownloadClient{Name: "qBit", Type: "qbittorrent", Host: "10.1.2.3", Port: 8080, Enabled: true}
+	if err := clients.Create(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+
+	body := `{"name":"qBit","type":"qbittorrent","host":"10.1.2.3:8080/#/","port":8080}`
+	rec := httptest.NewRecorder()
+	h.Update(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/downloadclient/1", bytes.NewBufferString(body)), "id", "1"))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	got, err := clients.GetByID(ctx, client.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Host != "10.1.2.3" {
+		t.Errorf("host was overwritten with a rejected value: %q", got.Host)
+	}
+}
+
+// TestDownloadClientTest_RejectsSavedBadHost is the reporter's other
+// complaint: the client had already been saved (before this validation
+// existed), so Test is the only place left that can tell them what is wrong.
+// It used to report "Connection verified" because the malformed URL still
+// reached qBittorrent's web UI.
+func TestDownloadClientTest_RejectsSavedBadHost(t *testing.T) {
+	h, clients := downloadClientFixture(t)
+	// Written through the repo, not the handler, so it stands in for a row
+	// saved by an earlier version.
+	client := &models.DownloadClient{Name: "qBit", Type: "qbittorrent", Host: "10.1.2.3:8080/#/", Port: 8080, Enabled: true}
+	if err := clients.Create(context.Background(), client); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Test(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/downloadclient/1/test", nil), "id", "1"))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "8080 as the port") {
+		t.Errorf("response %s does not say which field to fix", rec.Body.String())
+	}
+}
+
+// TestDownloadClientTestConfig_RejectsMalformedHost covers the inline Test
+// button on the add/edit form, which probes an unsaved configuration.
+func TestDownloadClientTestConfig_RejectsMalformedHost(t *testing.T) {
+	h, _ := downloadClientFixture(t)
+	body := `{"name":"qBit","type":"qbittorrent","host":"10.1.2.3:8080/#/","port":8080}`
+	rec := httptest.NewRecorder()
+	h.TestConfig(rec, httptest.NewRequest(http.MethodPost, "/downloadclient/test", bytes.NewBufferString(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "hostname or IP address only") {
+		t.Errorf("response %s does not explain the host", rec.Body.String())
+	}
+}
+
+// TestDownloadClientURL_IPv6 checks the SSRF pre-check URL is well formed for
+// both spellings of an IPv6 literal the Host field accepts. Before #2203 the
+// bare form produced "http://::1:8080/", which is not a URL at all.
+func TestDownloadClientURL_IPv6(t *testing.T) {
+	for _, tc := range []struct{ host, want string }{
+		{"::1", "http://[::1]:8080/"},
+		{"[::1]", "http://[::1]:8080/"},
+		{"10.1.2.3", "http://10.1.2.3:8080/"},
+	} {
+		got := downloadClientURL(&models.DownloadClient{Host: tc.host, Port: 8080})
+		if got != tc.want {
+			t.Errorf("downloadClientURL(%q) = %q, want %q", tc.host, got, tc.want)
+		}
+	}
+}

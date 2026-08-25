@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/vavallee/bindery/internal/downloader/clienthost"
 	"github.com/vavallee/bindery/internal/downloader/nethint"
 	"github.com/vavallee/bindery/internal/downloader/urlbase"
 	"github.com/vavallee/bindery/internal/httpsec"
@@ -73,7 +74,7 @@ func New(host string, port int, password, urlBase string, useSSL bool) *Client {
 	}
 	jar, _ := cookiejar.New(nil)
 	return &Client{
-		baseURL:        fmt.Sprintf("%s://%s:%d%s", scheme, host, port, urlbase.Normalize(urlBase)),
+		baseURL:        fmt.Sprintf("%s://%s%s", scheme, clienthost.Authority(host, port), urlbase.Normalize(urlBase)),
 		password:       password,
 		http:           &http.Client{Timeout: 15 * time.Second, Jar: jar},
 		fetchTransport: httpsec.GuardedTransport(httpsec.DownloadFetchPolicy()),

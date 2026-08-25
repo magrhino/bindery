@@ -30,14 +30,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/vavallee/bindery/internal/downloader/clienthost"
 	"github.com/vavallee/bindery/internal/downloader/infohash"
 	"github.com/vavallee/bindery/internal/downloader/nethint"
 	"github.com/vavallee/bindery/internal/downloader/urlbase"
@@ -163,7 +162,7 @@ func buildRPCURL(scheme, host string, port int, urlBase string) (*url.URL, error
 	}
 	return &url.URL{
 		Scheme: scheme,
-		Host:   net.JoinHostPort(host, strconv.Itoa(port)),
+		Host:   clienthost.Authority(host, port),
 		Path:   path,
 	}, nil
 }

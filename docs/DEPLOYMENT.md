@@ -423,6 +423,21 @@ If a same-host service still isn't reachable, the usual cause is that the servic
 
 **Outbound proxy interaction.** When `BINDERY_OUTBOUND_PROXY` is set, in-scope requests are dialled to the proxy and the proxy resolves the destination, so the destination-URL SSRF validation still runs up front. The per-connection dial re-check (the DNS-rebind guard) can then only see the proxy's own address, not the target's — so for the strict-policy cover-image proxy that re-check is skipped whenever a proxy is configured; otherwise it would reject a LAN/loopback proxy and block every cover fetch. Local destinations skip the proxy entirely per `BINDERY_OUTBOUND_PROXY_BYPASS_LOCAL` (see [Environment variables](#environment-variables)), which is also what keeps a LAN indexer manager (Jackett/Prowlarr) reachable.
 
+### What goes in a download client's Host field
+
+Host takes a hostname or an IP address and nothing else. The scheme comes from the **Use SSL** checkbox, the port from the **Port** box beside it, and any reverse proxy prefix from **URL Base**. A URL copied out of a browser address bar carries all three, so Bindery rejects it on save rather than storing a value that cannot work (#2203):
+
+| Typed into Host | Rejected because | Enter instead |
+|---|---|---|
+| `192.168.1.50:8080/#/` | it carries a port and a path | Host `192.168.1.50`, Port `8080` |
+| `192.168.1.50:8080` | it carries a port | Host `192.168.1.50`, Port `8080` |
+| `192.168.1.50/qbittorrent` | it carries a reverse proxy path | Host `192.168.1.50`, URL Base `/qbittorrent` |
+| `admin:secret@192.168.1.50` | it carries credentials | Host `192.168.1.50`, plus the Username and Password fields |
+
+Two inputs are cleaned up rather than rejected, because neither changes where the request goes: a leading `http://` or `https://`, and a single trailing slash.
+
+IPv6 works in either spelling. `::1` and `[::1]` are both accepted and both reach the same address.
+
 ### Running Bindery behind a VPN (network_mode: service:*)
 
 When Bindery shares a VPN container's network namespace (for example `network_mode: service:gluetun`), all of Bindery's outbound traffic egresses through the VPN. gluetun's killswitch firewall blocks LAN bound traffic by default, so "Test connection" to on LAN services (Audiobookshelf, Calibre, download clients) times out with `Client.Timeout exceeded while awaiting headers`, even though those same services load fine from a browser on the LAN. That contrast is the tell: the browser reaches the service directly because it is on the LAN, but Bindery is inside the VPN namespace and its LAN bound requests are dropped by the killswitch.

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vavallee/bindery/internal/downloader/clienthost"
 	"github.com/vavallee/bindery/internal/downloader/nethint"
 	"github.com/vavallee/bindery/internal/downloader/nzbfetch"
 	"github.com/vavallee/bindery/internal/downloader/urlbase"
@@ -51,7 +52,7 @@ func New(host string, port int, username, password, urlBase string, useSSL bool)
 		scheme = "https"
 	}
 	return &Client{
-		baseURL:  fmt.Sprintf("%s://%s:%d%s/jsonrpc", scheme, host, port, urlbase.Normalize(urlBase)),
+		baseURL:  fmt.Sprintf("%s://%s%s/jsonrpc", scheme, clienthost.Authority(host, port), urlbase.Normalize(urlBase)),
 		username: username,
 		password: password,
 		http:     &http.Client{Timeout: 15 * time.Second},

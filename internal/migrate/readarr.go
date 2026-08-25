@@ -12,6 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/downloader/clienthost"
 	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
 )
@@ -267,6 +268,15 @@ func importReadarrDownloadClients(ctx context.Context, src *sql.DB, repo *db.Dow
 			res.fail(name, "missing host")
 			continue
 		}
+		// Readarr stores whatever was typed into its own Host field, so an
+		// unusable value migrates across as-is and then fails at poll time
+		// rather than at import time (#2203). Fail the row instead, with the
+		// same message the Settings form gives.
+		host, err := clienthost.Normalize(s.Host)
+		if err != nil {
+			res.fail(name, err.Error())
+			continue
+		}
 
 		t, ok := downloadClientTypeFor(impl)
 		if !ok {
@@ -282,7 +292,7 @@ func importReadarrDownloadClients(ctx context.Context, src *sql.DB, repo *db.Dow
 		c := &models.DownloadClient{
 			Name:     name,
 			Type:     t,
-			Host:     s.Host,
+			Host:     host,
 			Port:     s.Port,
 			APIKey:   s.APIKey,
 			Username: s.Username,

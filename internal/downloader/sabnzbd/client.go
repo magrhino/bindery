@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vavallee/bindery/internal/downloader/clienthost"
 	"github.com/vavallee/bindery/internal/downloader/nethint"
 	"github.com/vavallee/bindery/internal/downloader/nzbfetch"
 	"github.com/vavallee/bindery/internal/downloader/urlbase"
@@ -40,7 +41,7 @@ func New(host string, port int, apiKey, urlBase string, useSSL bool) *Client {
 		scheme = "https"
 	}
 	return &Client{
-		baseURL: fmt.Sprintf("%s://%s:%d%s", scheme, host, port, urlbase.Normalize(urlBase)),
+		baseURL: fmt.Sprintf("%s://%s%s", scheme, clienthost.Authority(host, port), urlbase.Normalize(urlBase)),
 		apiKey:  apiKey,
 		http:    &http.Client{Timeout: 15 * time.Second},
 		// fetchHTTP pulls indexer-controlled NZB URLs, so guard the dial: it

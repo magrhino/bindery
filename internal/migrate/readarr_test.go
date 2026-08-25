@@ -489,3 +489,51 @@ func TestImportReadarr_CatalogueFetchIsBoundedAndSurvivesCancellation(t *testing
 		t.Fatalf("max in-flight = %d, want in (0, %d]", max, catalogueFetchConcurrency)
 	}
 }
+
+// TestImportReadarrDownloadClients_MalformedHost covers the migration half of
+// #2203. Readarr stores whatever was typed into its own Host field, so a
+// value that cannot work crosses over intact and then fails at poll time
+// under a Bindery banner. Failing the row names the client and the problem
+// while the operator is still looking at the migration report.
+func TestImportReadarrDownloadClients_MalformedHost(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "readarr.db")
+	src, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	if _, err := src.Exec(`CREATE TABLE DownloadClients (Id INTEGER PRIMARY KEY, Name TEXT, Implementation TEXT, Settings TEXT, Enable INTEGER)`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = src.Exec(`INSERT INTO DownloadClients (Name, Implementation, Settings, Enable) VALUES
+		('Good', 'QBittorrent', ?, 1),
+		('Pasted', 'QBittorrent', ?, 1)`,
+		`{"host":"qbt.local","port":8080,"username":"u","password":"p"}`,
+		`{"host":"10.1.2.3:8080/#/","port":8080,"username":"u","password":"p"}`,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	repo := db.NewDownloadClientRepo(database)
+
+	var res Result
+	if err := importReadarrDownloadClients(context.Background(), src, repo, &res); err != nil {
+		t.Fatalf("importReadarrDownloadClients: %v", err)
+	}
+	if res.Added != 1 || res.Errors != 1 {
+		t.Fatalf("Added=%d Errors=%d, want 1 and 1", res.Added, res.Errors)
+	}
+	clients, err := repo.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clients) != 1 || clients[0].Name != "Good" {
+		t.Fatalf("imported clients = %+v, want only Good", clients)
+	}
+}

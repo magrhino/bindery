@@ -9,15 +9,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/vavallee/bindery/internal/downloader/clienthost"
 	"github.com/vavallee/bindery/internal/downloader/nethint"
 	"github.com/vavallee/bindery/internal/downloader/urlbase"
 	"github.com/vavallee/bindery/internal/httpsec"
@@ -484,7 +483,7 @@ func buildRPCURL(scheme, host string, port int, urlBase string) (*url.URL, error
 
 	return &url.URL{
 		Scheme: scheme,
-		Host:   net.JoinHostPort(host, strconv.Itoa(port)),
+		Host:   clienthost.Authority(host, port),
 		Path:   urlbase.Normalize(urlBase) + "/transmission/rpc",
 	}, nil
 }

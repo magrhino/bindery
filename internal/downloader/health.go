@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vavallee/bindery/internal/downloader/clienthost"
 	"github.com/vavallee/bindery/internal/downloader/qbittorrent"
 	"github.com/vavallee/bindery/internal/jobs"
 	"github.com/vavallee/bindery/internal/models"
@@ -178,6 +179,13 @@ func RefreshDownloadClientHealthAsync(parent context.Context, g *jobs.Group, sto
 func CheckDownloadClientHealth(ctx context.Context, client *models.DownloadClient, downloadDir, audiobookDownloadDir, globalRemap string) models.DownloadClientHealth {
 	if client == nil {
 		return models.DownloadClientHealth{Status: HealthUnknown, Message: "No download client to check"}
+	}
+	// A Host that carries a port or a path cannot work for any client type,
+	// but it still reaches a web server, so every probe below would report a
+	// healthy connection to the wrong endpoint. Clients saved before the
+	// validation added for #2203 are the ones that reach here.
+	if _, err := clienthost.Normalize(client.Host); err != nil {
+		return models.DownloadClientHealth{Status: HealthError, Message: err.Error()}
 	}
 	if client.Type == "qbittorrent" {
 		return checkQbittorrentCategoryPath(ctx, client, downloadDir, audiobookDownloadDir)

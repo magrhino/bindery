@@ -373,3 +373,30 @@ func TestHealthStore_Set_NilNotifierDoesNotPanic(t *testing.T) {
 	s := NewHealthStore()
 	s.Set(1, models.DownloadClientHealth{Status: HealthError, Message: "broken"})
 }
+
+// TestCheckDownloadClientHealth_MalformedHost covers a client saved before the
+// Host validation added for #2203. Every probe below the check would connect
+// to something (the malformed URL still reaches a web server), so without
+// this the client list keeps showing a healthy dot for a client that can
+// never import anything.
+func TestCheckDownloadClientHealth_MalformedHost(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		host string
+	}{
+		{"port and path", "10.1.2.3:8080/#/"},
+		{"embedded port", "10.1.2.3:9091"},
+		{"path", "10.1.2.3/qbittorrent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &models.DownloadClient{Name: "qBit", Type: "qbittorrent", Host: tc.host, Port: 8080, Enabled: true}
+			health := CheckDownloadClientHealth(context.Background(), client, t.TempDir(), "", "")
+			if health.Status != HealthError {
+				t.Fatalf("status = %q, want %q (message %q)", health.Status, HealthError, health.Message)
+			}
+			if !strings.Contains(health.Message, "hostname or IP address") {
+				t.Errorf("message %q does not explain the Host field", health.Message)
+			}
+		})
+	}
+}

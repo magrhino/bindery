@@ -1,0 +1,4 @@
+### Fixed
+- **Download client Host field rejects a pasted URL instead of saving something that cannot work** (#2203). Pasting a value like `192.168.1.50:8080/#/` out of a browser address bar used to save fine and test green, then fail on every poll with `invalid character '<' looking for beginning of value`. Bindery now says which part of the value belongs in the Port field and which belongs in URL Base, fails **Test** for a client already saved with one, and marks it unhealthy in the client list.
+- **qBittorrent errors say what came back** (#2203). A response that is not JSON is now reported as an HTML page from the WebUI, along with the two settings that route a request away from the API, rather than as a JSON parser message about a stray `<`.
+- **IPv6 download client hosts work in both spellings** (#2203). `::1` and `[::1]` now reach the same address whichever client type you use; previously each spelling worked for only half of them.
