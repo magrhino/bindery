@@ -253,6 +253,13 @@ to the records. Things worth knowing before you judge the results:
   an **audiobook supplement** (the companion PDF Audible-style releases ship)
   and is not attached as the book's ebook. The same file in a folder with no
   audio in it is treated as an ebook as usual.
+- When one of those same file types competes with a **real ebook** (EPUB, MOBI,
+  AZW3, FB2, DJVU) for the same book, the real ebook always wins and the other
+  file is counted as already tracked rather than listed as unmatched — a
+  `Book (notes).txt` beside `Book.epub` can no longer take the book's ebook slot
+  by sorting first in the folder. Nothing is excluded outright, so a library of
+  TXT, RTF or PDF files still attaches normally: those files are only passed
+  over when a better file for the same book exists.
 
 ## Metadata: where book data comes from
 

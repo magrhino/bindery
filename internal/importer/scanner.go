@@ -1900,16 +1900,43 @@ func detectDownloadFormat(files []string) string {
 	return models.MediaTypeEbook
 }
 
-// audiobookSupplementExts lists the ebook extensions an audiobook release ships
-// as SUPPLEMENTS rather than as an ebook edition: a chapter/companion PDF, a
-// liner-notes or info .txt/.rtf, occasionally a comic archive. None of them is a
-// text-ebook container, so when one sits in a folder that also holds audio it is
-// material belonging to the audiobook, not the book's ebook file. Real ebook
-// containers (.epub, .mobi, .azw3, .fb2, .djvu, …) are deliberately absent —
-// an epub beside an audiobook IS the ebook edition and must still reconcile
-// (#1957).
-var audiobookSupplementExts = map[string]bool{
+// supplementClassExts lists the ebook extensions a release ships as SUPPLEMENTS
+// at least as often as it ships them as the book itself: a chapter/companion
+// PDF, a liner-notes or info .txt/.rtf, occasionally a comic archive. None of
+// them is a text-ebook container. Real ebook containers (.epub, .mobi, .azw3,
+// .fb2, .djvu, …) are deliberately absent — an epub beside an audiobook IS the
+// ebook edition and must still reconcile (#1957).
+//
+// Membership never disqualifies a file on its own: a PDF-only, comics-only or
+// text-only library is a legitimate ebook library, and a supplement-class file
+// still claims a book when nothing better competes for it. The set is only ever
+// a tie-breaker, at two call sites — the audio-folder guard in the scan loop
+// (one of these beside audio is the audiobook's material, not the book's ebook)
+// and scanClaimRank below (a real container outranks one of these for the same
+// book and format).
+var supplementClassExts = map[string]bool{
 	".pdf": true, ".txt": true, ".rtf": true, ".cbz": true, ".cbr": true,
+}
+
+// scanClaimRank orders the files of one library-scan pass so that a (book,
+// format) slot is claimed on the strength of the FILE rather than on where
+// filepath.Walk happened to reach it. Rank 0 is a real container — any audio
+// file, or an ebook container such as .epub/.mobi/.azw3; rank 1 is a
+// supplement-class ebook file.
+//
+// Sorting a pass by this rank (stably, so equal-rank files keep walk order)
+// gives every container its chance to claim before the first supplement is
+// considered, so "Burning Chrome (notes).txt" can no longer take the ebook slot
+// from "Burning Chrome.epub" merely by sorting ahead of it in the directory
+// (#2188). Ranking rather than excluding is what keeps a text-only or PDF-only
+// library reconciling: with no container competing for the book, the supplement
+// is still the best file there is and claims it.
+func scanClaimRank(path string) int {
+	if detectDownloadFormat([]string{path}) == models.MediaTypeEbook &&
+		supplementClassExts[strings.ToLower(filepath.Ext(path))] {
+		return 1
+	}
+	return 0
 }
 
 // videoExtensions lists common video container extensions. None of these are
@@ -2379,7 +2406,7 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 
 	// audioDirs holds every folder the walk found an audio file in, tracked or
 	// not. It is what tells a supplement PDF apart from a real ebook edition:
-	// see audiobookSupplementExts and the file loop below. Computed from
+	// see supplementClassExts and the file loop below. Computed from
 	// foundFiles rather than inline so the answer never depends on walk order
 	// (the .pdf can be reached before the .m4b that explains it).
 	audioDirs := make(map[string]bool)
@@ -2388,6 +2415,18 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 			audioDirs[filepath.Clean(filepath.Dir(p))] = true
 		}
 	}
+
+	// Rank the pass before anything claims (#2188). The file loop below takes a
+	// (book, format) slot first-come, so until this sort the winner of two files
+	// competing for one book was whichever the directory listing yielded first:
+	// a "… (notes).txt" sorting ahead of the .epub took the book's ebook slot and
+	// sent the epub to Unmatched. Ordering every real container ahead of every
+	// supplement-class file makes the outcome a property of the files instead.
+	// The sort is stable, so equal-rank files keep walk order and nothing else
+	// about the pass changes.
+	slices.SortStableFunc(foundFiles, func(a, b string) int {
+		return scanClaimRank(a) - scanClaimRank(b)
+	})
 
 	// Build author name and full-author caches for the reconciliation loop.
 	// authorMap is needed for the path-under-library-dir constraint check.
@@ -2590,11 +2629,13 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 	// candidate's author is already known to satisfy authorMatch — see the
 	// title tier in the file loop below.
 	var titleCand []int // reused candidate-index scratch
+	// claimBlocked records that the file currently being processed matched a book
+	// whose slot for its format had already been claimed earlier in the pass. It
+	// is reset per file and read only in the unmatched branch, where it tells a
+	// supplement-class sidecar apart from a genuine orphan (#2188).
+	var claimBlocked bool
 	tryReconcileTitle := func(sb *scanBook, path, cleanPath, normParsed, detectedFmt string) bool {
 		b := sb.book
-		if reconciledBooks[bookFormatClaim{b.ID, detectedFmt}] {
-			return false
-		}
 		// Length gate: Jaro-Winkler is bounded above by 0.8 + 0.2·(minLen/
 		// maxLen), so a score >= 0.85 is impossible once the shorter normalised
 		// title drops below a quarter of the longer. Cheap, never skips a match.
@@ -2609,6 +2650,16 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 		// reconciling the wrong book after a delete+rescan (#343).
 		jwScore := textutil.JaroWinkler(sb.normTitle, normParsed)
 		if jwScore < 0.85 {
+			return false
+		}
+		// This book already took a file of this format earlier in the pass. The
+		// claim check used to run before the title gate; it runs after it now so
+		// that claimBlocked means "a book this file actually matches is taken",
+		// not "some unrelated book is taken" (#2188). Jaro-Winkler on two short
+		// normalised titles is far cheaper than the root lookup below, which still
+		// gets skipped.
+		if reconciledBooks[bookFormatClaim{b.ID, detectedFmt}] {
+			claimBlocked = true
 			return false
 		}
 		// File must live under the candidate book's effective library root to
@@ -2642,6 +2693,7 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 		// (#1436).
 		cleanPath := filepath.Clean(path)
 		detectedFmt := detectDownloadFormat([]string{path})
+		claimBlocked = false
 		// The parent-directory entry in trackedPaths stands for "the sibling
 		// TRACKS of a tracked audiobook", so only an audio file may be absorbed
 		// by it. An ebook sharing that folder is a separate format on a
@@ -2664,7 +2716,7 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 		// by folder context rather than extension alone so a PDF-only or
 		// comics-only library still reconciles normally.
 		if detectedFmt == models.MediaTypeEbook &&
-			audiobookSupplementExts[strings.ToLower(filepath.Ext(cleanPath))] &&
+			supplementClassExts[strings.ToLower(filepath.Ext(cleanPath))] &&
 			audioDirs[filepath.Clean(filepath.Dir(cleanPath))] {
 			slog.Debug("library scan: treating file as an audiobook supplement",
 				"path", path, "reason", "ebook-extension file in a folder that holds audio")
@@ -2729,6 +2781,7 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 			for _, sb := range asinIndex[parsed.ASIN] {
 				b := sb.book
 				if reconciledBooks[bookFormatClaim{b.ID, detectedFmt}] {
+					claimBlocked = true
 					continue
 				}
 				// File must live under the candidate book's effective library root.
@@ -2791,7 +2844,9 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 			if seriesErr != nil {
 				slog.Warn("library scan: series position lookup error",
 					"series", parsed.Series, "position", parsed.SeriesNumber, "error", seriesErr)
-			} else if book != nil && !reconciledBooks[bookFormatClaim{book.ID, detectedFmt}] {
+			} else if book != nil && reconciledBooks[bookFormatClaim{book.ID, detectedFmt}] {
+				claimBlocked = true
+			} else if book != nil {
 				effDir := s.effectiveRootForFormat(ctx, authorMap[book.AuthorID], detectedFmt)
 				if pathUnderDir(path, effDir) {
 					if err := s.books.AddBookFile(ctx, book.ID, detectedFmt, path); err != nil {
@@ -2809,6 +2864,23 @@ func (s *Scanner) scanLibrary(ctx context.Context) {
 					}
 				}
 			}
+		}
+
+		if !matched && claimBlocked && detectedFmt == models.MediaTypeEbook &&
+			supplementClassExts[strings.ToLower(filepath.Ext(cleanPath))] {
+			// A supplement-class file whose ONLY obstacle was that a real container
+			// had already claimed the same book's ebook slot in this pass is that
+			// container's sidecar — the notes .txt beside the .epub — not an orphan
+			// for the user to go and fix. Count it the way the audio-folder guard
+			// above counts the same file so files_found still equals reconciled +
+			// unmatched + already_tracked (#1436), and keep the Unmatched list to
+			// files that genuinely need attention (#2188). Reporting it as unmatched
+			// would have named a reason that isn't true of it: the title matched,
+			// the author matched, a better file simply won.
+			slog.Debug("library scan: treating file as a sidecar of an already-matched book",
+				"path", path, "reason", "supplement-class file, a container already claimed this book's ebook slot")
+			alreadyTracked++
+			continue
 		}
 
 		if !matched {
