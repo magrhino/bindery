@@ -383,6 +383,47 @@ func TestSetMode(t *testing.T) {
 	}
 }
 
+// TestSetModeLocalOnlyWarning checks that switching into local-only with no
+// BINDERY_TRUSTED_PROXY set returns the operator warning in the response body,
+// and that configuring a trusted proxy or picking another mode does not.
+func TestSetModeLocalOnlyWarning(t *testing.T) {
+	cases := []struct {
+		name       string
+		mode       string
+		trusted    string
+		wantWarned bool
+	}{
+		{"local-only without trusted proxy", "local-only", "", true},
+		{"local-only with trusted proxy", "local-only", "172.20.0.0/16", false},
+		{"enabled without trusted proxy", "enabled", "", false},
+		{"disabled without trusted proxy", "disabled", "", false},
+		{"proxy without trusted proxy", "proxy", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("BINDERY_TRUSTED_PROXY", c.trusted)
+			h, _, _, _ := newAuthFixture(t)
+			rec := httptest.NewRecorder()
+			h.SetMode(rec, httptest.NewRequest(http.MethodPut, "/auth/mode",
+				jsonBody(t, modeRequest{Mode: c.mode})))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v (body %s)", err, rec.Body.String())
+			}
+			warning, ok := body["warning"].(string)
+			if ok != c.wantWarned {
+				t.Fatalf("warning present = %v, want %v (body %s)", ok, c.wantWarned, rec.Body.String())
+			}
+			if c.wantWarned && warning != auth.LocalOnlyNoTrustedProxyWarning {
+				t.Errorf("warning = %q, want %q", warning, auth.LocalOnlyNoTrustedProxyWarning)
+			}
+		})
+	}
+}
+
 // TestRegenerateAPIKey rolls the stored key and returns the new value. A
 // second call must produce a different value — if it didn't, rotating the
 // key wouldn't invalidate compromised integrations.

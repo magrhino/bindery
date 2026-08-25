@@ -123,8 +123,12 @@ export const authApi = {
     request<{ apiKey: string }>('/auth/apikey/regenerate', { method: 'POST' }),
   authRotateSessionSecret: () =>
     request<{ ok: boolean }>('/auth/session-secret/rotate', { method: 'POST' }),
+  // `warning` is present only when the chosen mode is misconfigured for this
+  // deployment, currently local-only with no BINDERY_TRUSTED_PROXY set. The
+  // text is authored server-side (it is the same string the startup log
+  // carries) so the UI renders it verbatim rather than keeping its own copy.
   authSetMode: (mode: AuthStatus['mode']) =>
-    request<{ mode: string }>('/auth/mode', {
+    request<{ mode: string; warning?: string }>('/auth/mode', {
       method: 'PUT',
       body: JSON.stringify({ mode }),
     }),

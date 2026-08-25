@@ -440,7 +440,21 @@ func (h *AuthHandler) SetMode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("auth mode changed", "mode", mode)
-	writeOK(w, map[string]any{"mode": string(mode)})
+
+	// Switching into local-only with no trusted proxy configured is the same
+	// hazard the boot path warns about, so warn here too: the mode can be
+	// changed long after startup, and the operator changing it is the person
+	// who needs to see it. The CIDR list is re-read from the environment rather
+	// than taken from the cached parse so the check reflects the process's
+	// current configuration.
+	resp := map[string]any{"mode": string(mode)}
+	trusted := auth.ParseTrustedProxyCIDRs(os.Getenv("BINDERY_TRUSTED_PROXY"))
+	if auth.WarnIfLocalOnlyWithoutTrustedProxy(mode, trusted) {
+		// Additive field: existing clients ignore it, and the Settings UI can
+		// surface the same text the log carries.
+		resp["warning"] = auth.LocalOnlyNoTrustedProxyWarning
+	}
+	writeOK(w, resp)
 }
 
 // --- helpers -----------------------------------------------------------------

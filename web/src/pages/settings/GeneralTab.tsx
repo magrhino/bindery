@@ -733,6 +733,10 @@ function SecuritySection() {
   const [regenerating, setRegenerating] = useState(false)
   const [rotatingSecret, setRotatingSecret] = useState(false)
   const [savingMode, setSavingMode] = useState(false)
+  // Server-authored warning about the mode that was just selected, rendered
+  // inline under the control and left in place until the next mode change so
+  // it cannot be missed the way a toast can.
+  const [modeWarning, setModeWarning] = useState('')
   const apiKeyClipboard = useClipboardCopy()
 
   const loadCfg = () => {
@@ -771,7 +775,9 @@ function SecuritySection() {
   const setMode = async (mode: AuthStatus['mode']) => {
     setSavingMode(true)
     try {
-      await api.authSetMode(mode)
+      const r = await api.authSetMode(mode)
+      // A mode with no warning clears any warning left by the previous one.
+      setModeWarning(r.warning ?? '')
       await refresh()
       loadCfg()
     } catch (e) {
@@ -808,6 +814,15 @@ function SecuritySection() {
           {cfg.mode === 'enabled' && <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">Always requires login, regardless of network origin.</p>}
           {cfg.mode === 'local-only' && <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">Login is bypassed for requests from private / LAN IP ranges. Still requires login from the internet.</p>}
           {cfg.mode === 'disabled' && <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">No authentication — only safe when Bindery is behind a trusted reverse proxy that enforces access control.</p>}
+          {/* Server-authored warning for the mode just chosen (currently
+              local-only with no trusted proxy configured). Rendered verbatim so
+              the text lives in exactly one place, next to the control that
+              caused it, and stays put rather than fading like a toast. */}
+          {modeWarning && (
+            <p data-testid="auth-mode-warning" role="alert" className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+              {modeWarning}
+            </p>
+          )}
         </div>
 
         <div className="border-t border-slate-200 dark:border-zinc-800 pt-4">

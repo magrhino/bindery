@@ -10,6 +10,8 @@ When `mode=proxy`, Bindery reads an identity header (default `X-Forwarded-User`)
 
 **Bindery refuses to start in proxy mode if `BINDERY_TRUSTED_PROXY` is empty** — this is intentional. The startup log emits the trusted CIDR list so you can verify it in `kubectl logs` or `docker logs`.
 
+> **Running `local-only` behind a proxy instead?** That mode has no equivalent startup gate, because a direct-to-LAN install is a valid deployment, but it needs `BINDERY_TRUSTED_PROXY` for the same reason: without it Bindery resolves the client IP as the proxy's own private address and serves every proxied request as a trusted local client. See [DEPLOYMENT.md](DEPLOYMENT.md#first-run-setup).
+
 ## Prerequisites
 
 - Your reverse proxy is the sole path into Bindery from untrusted networks.

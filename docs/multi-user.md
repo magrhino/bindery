@@ -14,6 +14,8 @@ Bindery v1.0 introduces per-user library scoping: authors, books, downloads, qua
 >
 > Role-based gating of admin-only configuration (indexers, download clients, user management, system settings) applies in **both** modes — that does not depend on `BINDERY_ENFORCE_TENANCY`. The flag only controls whether *library data* is partitioned per user.
 
+> **Choosing an auth mode: `local-only` requires `BINDERY_TRUSTED_PROXY` behind a proxy.** In `local-only` mode any client whose resolved IP is private is served with admin rights and no login. Bindery resolves that IP from the TCP peer unless `BINDERY_TRUSTED_PROXY` names the proxies whose `X-Forwarded-For` it may trust, so behind a reverse proxy or a Kubernetes ingress the peer is the proxy's own private address and every proxied request qualifies. Set `BINDERY_TRUSTED_PROXY` to your proxy's IP or CIDR, or pick `enabled` (or `proxy`) mode. Bindery logs a warning at startup and on a mode change when it sees this combination. An instance reached directly on a LAN with no proxy in front is unaffected.
+
 For upgrade instructions and migration steps, see [docs/upgrade-v1.md](upgrade-v1.md).
 
 ## Role model
@@ -133,6 +135,7 @@ curl -X POST http://bindery:8787/api/v1/author \
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | User B can see User A's authors or books via the API | `BINDERY_ENFORCE_TENANCY` is unset — this is the documented default behaviour, not a bug | This is expected when tenancy enforcement is off: all authenticated users share one library view. To partition library data per user, set `BINDERY_ENFORCE_TENANCY=true` and restart. (Admins can access all users' data regardless of this flag, by design.) |
+| In `local-only` mode, requests from outside the LAN are served without a login | Bindery is behind a reverse proxy or ingress and `BINDERY_TRUSTED_PROXY` is unset, so the proxy's own private address is taken as the client IP | Set `BINDERY_TRUSTED_PROXY` to the proxy's IP or CIDR so the real client IP is resolved from `X-Forwarded-For`, or switch to `enabled` mode. The startup log carries the same warning. |
 | Data remains after a user is deleted | `DELETE /auth/users/{id}` does not cascade to library data | Reassign or delete the user's authors and books before deleting the user account (see "Deleting a user" above). |
 | `403 Forbidden` on an API call that worked before v1.0 | Session-cookie mutations now require `X-CSRF-Token` | Switch callers to `X-Api-Key` auth (CSRF-exempt), or add a `GET /auth/csrf` preflight to your script (see "CSRF tokens" above). |
 | Admin locked out — no admin account exists or all admins deleted | User row has `role='user'` or all admin rows were removed | Recover via direct DB update (no Bindery restart needed if you can write to the DB file): `sqlite3 /config/bindery.db "UPDATE users SET role='admin' WHERE username='<your-username>';"` — or in Kubernetes: `kubectl exec deploy/bindery -- sqlite3 /config/bindery.db "UPDATE users SET role='admin' WHERE id=1;"` |

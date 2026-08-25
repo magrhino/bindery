@@ -242,15 +242,29 @@ func main() {
 		}
 	}
 
+	// Effective auth mode at boot. bootstrapAuth has already defaulted the
+	// setting, so an absent or empty row only happens on a settings read error;
+	// ParseMode's fail-safe answer for anything unrecognised is ModeEnabled.
+	bootAuthMode := auth.ModeEnabled
+	if s, _ := settingsRepo.Get(ctxBoot, api.SettingAuthMode); s != nil && s.Value != "" {
+		bootAuthMode = auth.ParseMode(s.Value)
+	}
+
 	// Safety gate: proxy auth mode requires at least one trusted proxy CIDR so
 	// that the identity header cannot be forged by arbitrary LAN hosts.
-	if s, _ := settingsRepo.Get(ctxBoot, api.SettingAuthMode); s != nil && s.Value == string(auth.ModeProxy) {
+	if bootAuthMode == auth.ModeProxy {
 		if len(trustedCIDRs) == 0 {
 			slog.Error("proxy auth mode is active but BINDERY_TRUSTED_PROXY is empty — refusing to start (any host could forge the identity header)")
 			os.Exit(1)
 		}
 		slog.Info("proxy auth mode: trusted proxies", "cidrs", trustedCIDRs)
 	}
+
+	// Local-only mode gets a warning rather than the gate proxy mode has:
+	// running Bindery directly on a LAN with no proxy in front is a perfectly
+	// good deployment and must keep working. Behind a proxy it is not, because
+	// the TCP peer is then the proxy's own private address.
+	auth.WarnIfLocalOnlyWithoutTrustedProxy(bootAuthMode, trustedCIDRs)
 
 	// Login rate limiter: thresholds are configurable via BINDERY_RATE_LIMIT_MAX_FAILURES
 	// and BINDERY_RATE_LIMIT_WINDOW_MINUTES; defaults match the original Sonarr-style posture.
