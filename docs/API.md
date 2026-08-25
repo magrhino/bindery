@@ -178,7 +178,10 @@ POST   /api/v1/downloadclient/{id}/test           probe connectivity (admin)
 GET    /api/v1/queue                              active downloads with live downloader overlay
 POST   /api/v1/queue/grab                         submit a search result to the download client
 POST   /api/v1/queue/{id}/retry-import           retry an importFailed item without re-downloading
-DELETE /api/v1/queue/{id}                         remove (also from downloader)
+DELETE /api/v1/queue/{id}                         remove (also from the download client)
+       ?deleteFiles=true                          have the client destroy the data too
+       ?removeFromClient=false                    forget Bindery's row only, leave the torrent/NZB in the client
+POST   /api/v1/queue/bulk-delete                  remove many; {"ids":[..],"deleteFiles":false,"unmonitorBooks":false,"removeFromClient":true}
 
 GET    /api/v1/pending                            grabs awaiting delay-profile clearance
 POST   /api/v1/pending/{id}/grab                  promote pending to queue immediately

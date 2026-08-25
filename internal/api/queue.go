@@ -1083,28 +1083,74 @@ func (h *QueueHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Removing an item from the queue keeps the downloaded data on disk by
-	// default: for torrent clients this also preserves the seed. Destroying
-	// the files is opt-in via `?deleteFiles=true`, mirroring book Delete.
-	deleteFiles := r.URL.Query().Get("deleteFiles") == "true"
+	// default. Destroying the files is opt-in via `?deleteFiles=true`,
+	// mirroring book Delete. It does NOT preserve a torrent's seed — the
+	// client is told to delete the torrent either way, and data left on disk
+	// with no torrent is not seeding. `?removeFromClient=false` is what keeps
+	// the release where it is (#2167).
+	opts := queueRemoveOptions{
+		DeleteFiles:      r.URL.Query().Get("deleteFiles") == "true",
+		RemoveFromClient: r.URL.Query().Get("removeFromClient") != "false",
+	}
+	if err := opts.validate(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
-	if err := h.removeQueueItem(r.Context(), target, deleteFiles, false); err != nil {
+	if err := h.removeQueueItem(r.Context(), target, opts); err != nil {
 		writeServerError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// removeQueueItem removes one download from its client and the local DB. The
-// downloaded data stays on disk unless deleteFiles is set. A downloading/
-// downloaded book is reset to wanted so it doesn't look stuck. When
-// unmonitorBook is true the linked book is also unmonitored, so the scheduler's
-// wanted-search loop won't immediately re-grab it — the key to making a bulk
-// "clear the queue" actually stick after an accidental mass import (#Daize).
-func (h *QueueHandler) removeQueueItem(ctx context.Context, target *models.Download, deleteFiles, unmonitorBook bool) error {
-	if target.DownloadClientID != nil {
+// queueRemoveOptions carries the choices a queue removal offers. They are
+// separate decisions and were previously two positional bools; a third would
+// have made every call site a row of unlabelled true/false.
+type queueRemoveOptions struct {
+	// DeleteFiles asks the download client to destroy the downloaded data as
+	// well as the job. Only meaningful when RemoveFromClient is true, since it
+	// is passed to the client and nowhere else.
+	DeleteFiles bool
+	// UnmonitorBook also unmonitors the linked book, so the scheduler's
+	// wanted-search loop does not immediately re-grab it.
+	UnmonitorBook bool
+	// RemoveFromClient tells the download client to drop the job. Defaults to
+	// true, which is what every caller did before #2167. Setting it false
+	// forgets the download on Bindery's side and leaves the torrent or NZB
+	// alone — the integration case: an item imported through the API mints a
+	// new download row and leaves the earlier attempt in the queue, and
+	// clearing that stale row should not end the seed.
+	RemoveFromClient bool
+}
+
+// validate rejects the one incoherent combination. deleteFiles is only ever
+// handed to the download client, so asking for it while telling Bindery not to
+// contact the client cannot be honoured — better a 400 than silently dropping
+// half of what was asked for.
+func (o queueRemoveOptions) validate() error {
+	if o.DeleteFiles && !o.RemoveFromClient {
+		return errors.New("deleteFiles requires removeFromClient: the files are deleted by the download client")
+	}
+	return nil
+}
+
+// removeQueueItem removes one download from the local DB, and from its client
+// unless opts.RemoveFromClient is false. The downloaded data stays on disk
+// unless opts.DeleteFiles is set. A downloading/downloaded book is reset to
+// wanted so it doesn't look stuck. When opts.UnmonitorBook is true the linked
+// book is also unmonitored, so the scheduler's wanted-search loop won't
+// immediately re-grab it — the key to making a bulk "clear the queue" actually
+// stick after an accidental mass import (#Daize).
+//
+// Everything other than the client call runs either way: the point of
+// RemoveFromClient=false is to forget the download, not to pretend it never
+// happened.
+func (h *QueueHandler) removeQueueItem(ctx context.Context, target *models.Download, opts queueRemoveOptions) error {
+	if opts.RemoveFromClient && target.DownloadClientID != nil {
 		client, err := h.clients.GetByID(ctx, *target.DownloadClientID)
 		if err == nil && client != nil {
-			if err := downloader.RemoveDownload(ctx, client, target, deleteFiles, h.downloadPathRemap); err != nil {
+			if err := downloader.RemoveDownload(ctx, client, target, opts.DeleteFiles, h.downloadPathRemap); err != nil {
 				slog.Warn("failed to remove download from client", "download_id", target.ID, "client_id", client.ID, "error", err)
 			}
 		} else if err != nil {
@@ -1122,7 +1168,7 @@ func (h *QueueHandler) removeQueueItem(ctx context.Context, target *models.Downl
 				book.Status = models.BookStatusWanted
 				changed = true
 			}
-			if unmonitorBook && book.Monitored {
+			if opts.UnmonitorBook && book.Monitored {
 				book.Monitored = false
 				changed = true
 			}
@@ -1145,7 +1191,8 @@ const bulkDeleteConcurrency = 6
 
 // BulkDelete removes many queue items in one request. Body:
 //
-//	{"ids": [1,2,3], "deleteFiles": false, "unmonitorBooks": true}
+//	{"ids": [1,2,3], "deleteFiles": false, "unmonitorBooks": true,
+//	 "removeFromClient": true}
 //
 // Per-ID results mirror the author/book bulk endpoints: a stale or not-owned id
 // is reported inline (as "download not found", the same opaque message the
@@ -1157,6 +1204,9 @@ func (h *QueueHandler) BulkDelete(w http.ResponseWriter, r *http.Request) {
 		IDs            []int64 `json:"ids"`
 		DeleteFiles    bool    `json:"deleteFiles"`
 		UnmonitorBooks bool    `json:"unmonitorBooks"`
+		// Pointer so an absent field keeps the pre-#2167 behaviour of always
+		// removing from the client, while an explicit false is honoured.
+		RemoveFromClient *bool `json:"removeFromClient"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -1180,6 +1230,16 @@ func (h *QueueHandler) BulkDelete(w http.ResponseWriter, r *http.Request) {
 		byID[d.ID] = d
 	}
 
+	opts := queueRemoveOptions{
+		DeleteFiles:      req.DeleteFiles,
+		UnmonitorBook:    req.UnmonitorBooks,
+		RemoveFromClient: req.RemoveFromClient == nil || *req.RemoveFromClient,
+	}
+	if err := opts.validate(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
 	results := make(map[string]bulkItemResult, len(req.IDs))
 	var mu sync.Mutex
 	setResult := func(id int64, res bulkItemResult) {
@@ -1194,7 +1254,7 @@ func (h *QueueHandler) BulkDelete(w http.ResponseWriter, r *http.Request) {
 			setResult(id, bulkItemResult{Error: "download not found"})
 			return
 		}
-		if err := h.removeQueueItem(ctx, &target, req.DeleteFiles, req.UnmonitorBooks); err != nil {
+		if err := h.removeQueueItem(ctx, &target, opts); err != nil {
 			setResult(id, bulkItemResult{Error: err.Error()})
 			return
 		}

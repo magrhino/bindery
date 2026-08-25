@@ -576,6 +576,78 @@ func TestQueueBulkDelete_KeepsMonitoringByDefault(t *testing.T) {
 }
 
 // TestQueueBulkDelete_RequiresIDs rejects an empty batch.
+// TestQueueBulkDelete_HonoursRemoveFromClient covers the bulk half of #2167:
+// the field is a pointer, so an absent one keeps the old always-remove
+// behaviour while an explicit false is honoured, and the incoherent
+// deleteFiles + removeFromClient:false pair is rejected rather than half-applied.
+func TestQueueBulkDelete_HonoursRemoveFromClient(t *testing.T) {
+	var called int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v2/torrents/delete" {
+			called++
+		}
+		if r.URL.Path == "/api/v2/auth/login" {
+			_, _ = w.Write([]byte("Ok."))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	h, _, downloads, clients, _, ctx := queueFixture(t)
+	host, port := testServerHostPort(t, srv.URL)
+	client := &models.DownloadClient{
+		Name: "qb", Type: "qbittorrent", Host: host, Port: port,
+		Username: "user", Password: "pass", Enabled: true,
+	}
+	if err := clients.Create(ctx, client); err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	newDownload := func(guid string) int64 {
+		dl := &models.Download{
+			GUID: guid, DownloadClientID: &client.ID, Title: guid,
+			NZBURL: "magnet:?xt=urn:btih:" + guid, Status: models.StateCompleted,
+			Protocol: "torrent", TorrentID: strPtr(guid),
+		}
+		if err := downloads.Create(ctx, dl); err != nil {
+			t.Fatalf("create download: %v", err)
+		}
+		return dl.ID
+	}
+
+	keepID := newDownload("bulk-keep")
+	body := fmt.Sprintf(`{"ids":[%d],"removeFromClient":false}`, keepID)
+	rec := httptest.NewRecorder()
+	h.BulkDelete(rec, httptest.NewRequest(http.MethodPost, "/api/v1/queue/bulk-delete", bytes.NewBufferString(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if called != 0 {
+		t.Errorf("client delete called %d times with removeFromClient:false, want 0", called)
+	}
+	if got, _ := downloads.GetByGUID(ctx, "bulk-keep"); got != nil {
+		t.Error("the Bindery row should still have been deleted")
+	}
+
+	dropID := newDownload("bulk-drop")
+	body = fmt.Sprintf(`{"ids":[%d]}`, dropID)
+	rec = httptest.NewRecorder()
+	h.BulkDelete(rec, httptest.NewRequest(http.MethodPost, "/api/v1/queue/bulk-delete", bytes.NewBufferString(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if called != 1 {
+		t.Errorf("client delete called %d times with the field absent, want 1", called)
+	}
+
+	rec = httptest.NewRecorder()
+	h.BulkDelete(rec, httptest.NewRequest(http.MethodPost, "/api/v1/queue/bulk-delete",
+		bytes.NewBufferString(fmt.Sprintf(`{"ids":[%d],"deleteFiles":true,"removeFromClient":false}`, dropID))))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for deleteFiles with removeFromClient:false, got %d", rec.Code)
+	}
+}
+
 func TestQueueBulkDelete_RequiresIDs(t *testing.T) {
 	h, _, _, _, _, _ := queueFixture(t)
 	rec := httptest.NewRecorder()
@@ -722,6 +794,97 @@ func TestQueueDelete_DefaultsToKeepingFiles(t *testing.T) {
 func TestQueueDelete_OptInDeletesFiles(t *testing.T) {
 	if got := queueDeleteFilesProbe(t, "?deleteFiles=true"); got != "true" {
 		t.Fatalf("deleteFiles should be true with opt-in, got %q", got)
+	}
+}
+
+// queueClientCallProbe spins up a qBittorrent stub, runs Queue.Delete with the
+// given query suffix, and reports whether the client's delete endpoint was
+// called and whether Bindery's own row went away.
+func queueClientCallProbe(t *testing.T, urlSuffix string) (clientCalled bool, rowDeleted bool, status int) {
+	t.Helper()
+	var called bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/torrents/delete":
+			called = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+
+	h, _, downloads, clients, _, ctx := queueFixture(t)
+	host, port := testServerHostPort(t, srv.URL)
+	client := &models.DownloadClient{
+		Name: "qb", Type: "qbittorrent", Host: host, Port: port,
+		Username: "user", Password: "pass", Enabled: true,
+	}
+	if err := clients.Create(ctx, client); err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	dl := &models.Download{
+		GUID: "keep-guid", DownloadClientID: &client.ID, Title: "Seeding Book",
+		NZBURL: "magnet:?xt=urn:btih:abcdef", Status: models.StateCompleted,
+		Protocol: "torrent", TorrentID: strPtr("abcdef"),
+	}
+	if err := downloads.Create(ctx, dl); err != nil {
+		t.Fatalf("create download: %v", err)
+	}
+
+	path := "/api/v1/queue/" + strconv.FormatInt(dl.ID, 10) + urlSuffix
+	req := withURLParam(httptest.NewRequest(http.MethodDelete, path, nil), "id", strconv.FormatInt(dl.ID, 10))
+	rec := httptest.NewRecorder()
+	h.Delete(rec, req)
+
+	got, err := downloads.GetByGUID(ctx, "keep-guid")
+	if err != nil {
+		t.Fatalf("reload download: %v", err)
+	}
+	return called, got == nil, rec.Code
+}
+
+// TestQueueDelete_RemovesFromClientByDefault pins the pre-#2167 behaviour: with
+// no flag, the download client is still told to drop the job.
+func TestQueueDelete_RemovesFromClientByDefault(t *testing.T) {
+	called, rowDeleted, status := queueClientCallProbe(t, "")
+	if status != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", status)
+	}
+	if !called {
+		t.Error("the download client should have been called")
+	}
+	if !rowDeleted {
+		t.Error("the Bindery row should have been deleted")
+	}
+}
+
+// TestQueueDelete_RemoveFromClientFalseLeavesTheTorrentAlone is #2167: clearing
+// a stale queue row must be able to leave the release in the download client,
+// so a torrent keeps seeding. Bindery's own row still goes away — the point is
+// to forget the download, not to pretend it never happened.
+func TestQueueDelete_RemoveFromClientFalseLeavesTheTorrentAlone(t *testing.T) {
+	called, rowDeleted, status := queueClientCallProbe(t, "?removeFromClient=false")
+	if status != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", status)
+	}
+	if called {
+		t.Error("the download client must NOT be called with removeFromClient=false")
+	}
+	if !rowDeleted {
+		t.Error("the Bindery row should still have been deleted")
+	}
+}
+
+// deleteFiles is only ever handed to the download client, so asking for it
+// while refusing to contact the client cannot be honoured. Reject it rather
+// than silently dropping half the request.
+func TestQueueDelete_RejectsDeleteFilesWithoutRemoveFromClient(t *testing.T) {
+	_, _, status := queueClientCallProbe(t, "?deleteFiles=true&removeFromClient=false")
+	if status != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", status)
 	}
 }
 
