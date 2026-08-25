@@ -163,6 +163,27 @@ The catch is that **Hardcover's GraphQL API requires an API token for every quer
 
 If results still don't appear with a token saved, confirm the instance has outbound HTTPS access to `api.hardcover.app` and that the token is valid (a bad token produces the same "Unable to verify token" error, which is logged and skipped).
 
+## Hardcover fails with HTTP 500, or the token test shows a Hardcover error page
+
+```
+hardcover search books: HTTP 500 (upstream returned a non-JSON response, likely an error page,
+so this is a Hardcover-side failure rather than a token problem)
+```
+
+This means `api.hardcover.app` answered with something that wasn't JSON, almost always its own HTML error page. It's an outage on Hardcover's side: no token change, reinstall or setting fixes it. Wait for Hardcover to recover, then press **Test** again. Bindery deliberately doesn't print the page it received, because pasting Hardcover's markup into the Settings UI made an upstream outage read like a bad token (#2128).
+
+The error tells you which side failed:
+
+| Message | Meaning | What to do |
+|---|---|---|
+| `token rejected (HTTP 401: ...)` | Hardcover read the token and refused it | Reissue the token at [Hardcover API settings](https://hardcover.app/account/api) and save it again |
+| `HTTP 400: ...` / `HTTP 403: ...` plus text from Hardcover | Hardcover rejected the request and said why | Act on the quoted reason; the token itself is fine |
+| `HTTP 5xx (upstream returned a non-JSON response, likely an error page, ...)` | Hardcover served an error page | Nothing on your side. Retry later |
+| `HTTP 5xx (upstream returned an empty response body, ...)` | Nothing came back at all | Usually Hardcover, occasionally a proxy in front of your instance. Check `BINDERY_OUTBOUND_PROXY` if you set one |
+| `GraphQL: ...` | Hardcover answered normally but rejected the query | A Bindery bug. Please file an issue with the message |
+
+**On token formats:** Hardcover issues `hc_pat_` personal access tokens alongside the older JWTs, and **both work**. Bindery sends whatever you save as `Authorization: Bearer <token>`, which is the scheme Hardcover accepts for either format, so there is nothing to configure per format. Pasting the whole header is fine too: a leading `Bearer ` or `Authorization: ` is stripped before the token is stored. Verified against the live API on 2026-08-24, a made up `hc_pat_...` value comes back as `401 invalid_token`, so a PAT that fails with 401 is a token to reissue, while a PAT that fails with 500 is an outage to wait out.
+
 ## Why is the metadata button on some authors but not others?
 
 The metadata button on an author's page only appears when Bindery thinks the author's record could be improved, so you'll see it on some authors and not others. Two cases show it:

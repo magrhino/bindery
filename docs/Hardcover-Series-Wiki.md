@@ -67,7 +67,7 @@ The fill action may create new authors and books from Hardcover metadata when th
 ## Troubleshooting
 
 - Enhanced controls are missing: save a Hardcover API token, then enable **Enhanced Hardcover series** in `Settings -> API Keys`. If your operator disabled the deployment-wide feature flag, they must remove `BINDERY_ENHANCED_HARDCOVER_API=false` and restart Bindery.
-- Hardcover test fails: verify the token at [Hardcover API settings](https://hardcover.app/account/api) and make sure Bindery can reach `hardcover.app`.
+- Hardcover test fails: verify the token at [Hardcover API settings](https://hardcover.app/account/api) and make sure Bindery can reach `hardcover.app`. Both `hc_pat_` personal access tokens and the older JWTs are accepted. The test tells you which side failed: `token rejected (HTTP 401: ...)` is a token to reissue, while `HTTP 500 (upstream returned a non-JSON response ...)` is a Hardcover outage to wait out. See [Troubleshooting](./Troubleshooting-Wiki.md#hardcover-fails-with-http-500-or-the-token-test-shows-a-hardcover-error-page).
 - Search finds the wrong series: choose a different result manually, or remove the link and search again with a more specific local series name.
 - Fill gaps adds nothing: check whether the missing books already exist locally, are excluded, or whether the linked Hardcover catalog has no missing entries relative to the local series.
 - Searches are not queued after fill: verify your indexers and download-client search flow are working for normal wanted books.

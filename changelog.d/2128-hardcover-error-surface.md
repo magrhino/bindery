@@ -1,0 +1,2 @@
+### Fixed
+- **Hardcover errors now say which side failed** (#2128): when Hardcover returns an HTML error page, Bindery no longer pastes that page into the Settings test result and the logs. A rejected token now reads `token rejected (HTTP 401: Invalid or expired token)`, and a Hardcover outage reads `HTTP 500 (upstream returned a non-JSON response, likely an error page, so this is a Hardcover-side failure rather than a token problem)`. Hardcover's `hc_pat_` personal access tokens keep working exactly as before.

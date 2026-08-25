@@ -33,6 +33,14 @@ const (
 	editionsMaxCount    = 1000
 
 	hardcoverSuccessResponseBodyLimit = 8 << 20
+
+	// hardcoverErrorResponseBodyLimit caps how much of a non-200 body we read.
+	// Only parsed JSON fields ever reach the error message, so this needs to
+	// cover Hardcover's error envelope and nothing more.
+	hardcoverErrorResponseBodyLimit = 4 << 10
+
+	// hardcoverErrorDetailLimit caps how much upstream text we quote back.
+	hardcoverErrorDetailLimit = 200
 )
 
 // Client implements metadata.Provider for Hardcover.app using its GraphQL API.
@@ -580,8 +588,8 @@ func (c *Client) query(ctx context.Context, q string, vars map[string]any, out i
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, httpsec.RedactSecrets(string(b)))
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, hardcoverErrorResponseBodyLimit))
+		return classifyHTTPError(resp.StatusCode, b)
 	}
 
 	b, err := io.ReadAll(io.LimitReader(resp.Body, hardcoverSuccessResponseBodyLimit))
@@ -604,6 +612,127 @@ func (c *Client) authorizationToken(ctx context.Context) string {
 		}
 	}
 	return NormalizeAPIToken(c.token)
+}
+
+// hcErrorEnvelope is the JSON body Hardcover returns when its edge rejects a
+// request before the GraphQL layer sees it, for example
+// {"error":"invalid_token","error_description":"Invalid or expired token"} for
+// a bad token, or a bare {"error":"ilike and related operations are not
+// permitted on this server."} for a rejected query operator. Errors carries the
+// GraphQL envelope for the rare non-200 that still answers in GraphQL's shape.
+type hcErrorEnvelope struct {
+	Error            string     `json:"error"`
+	ErrorDescription string     `json:"error_description"`
+	Message          string     `json:"message"`
+	Errors           []gqlError `json:"errors"`
+}
+
+// detail picks the most specific human-readable text the envelope carries, in
+// descending order of usefulness, sanitised for inclusion in an error message.
+func (e hcErrorEnvelope) detail() string {
+	for _, candidate := range []string{e.ErrorDescription, e.Message, e.Error} {
+		if d := sanitizeErrorDetail(candidate); d != "" {
+			return d
+		}
+	}
+	if len(e.Errors) > 0 {
+		return sanitizeErrorDetail(formatGraphQLErrors(e.Errors))
+	}
+	return ""
+}
+
+// classifyHTTPError turns a non-200 Hardcover response into something an
+// operator can act on. Until #2128 the body was pasted into the message
+// verbatim, so a Hardcover outage rendered its HTML error page into the
+// Settings UI and read like a token problem. Three cases matter: the token was
+// rejected, the body is a structured JSON error worth quoting, and everything
+// else (HTML error page, plain text, empty), which is reported as an upstream
+// failure without echoing a single byte of it.
+func classifyHTTPError(status int, raw []byte) error {
+	envelope, parsed := parseHardcoverError(raw)
+	detail := envelope.detail()
+	switch {
+	case isTokenRejection(status, envelope, parsed):
+		if detail != "" {
+			return fmt.Errorf("token rejected (HTTP %d: %s)", status, detail)
+		}
+		return fmt.Errorf("token rejected (HTTP %d), check the Hardcover API token in Settings", status)
+	case detail != "":
+		return fmt.Errorf("HTTP %d: %s", status, detail)
+	case parsed:
+		return fmt.Errorf("HTTP %d (upstream returned a JSON error with no description, so this is a Hardcover-side failure rather than a token problem)", status)
+	case len(bytes.TrimSpace(raw)) == 0:
+		return fmt.Errorf("HTTP %d (upstream returned an empty response body, so this is a Hardcover-side failure rather than a token problem)", status)
+	default:
+		return fmt.Errorf("HTTP %d (upstream returned a non-JSON response, likely an error page, so this is a Hardcover-side failure rather than a token problem)", status)
+	}
+}
+
+// parseHardcoverError decodes the error envelope, reporting whether the body
+// was a JSON object at all. A truncated or non-JSON body (an HTML error page
+// being the case that prompted #2128) reports false, and the caller then says
+// what happened instead of quoting it.
+func parseHardcoverError(raw []byte) (hcErrorEnvelope, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return hcErrorEnvelope{}, false
+	}
+	var envelope hcErrorEnvelope
+	if err := json.Unmarshal(trimmed, &envelope); err != nil {
+		return hcErrorEnvelope{}, false
+	}
+	return envelope, true
+}
+
+// isTokenRejection reports whether the response blames the credential rather
+// than the query or the server. 401 always does. 403 only counts when the body
+// carries an auth error: Hardcover also answers 403 for query operators it
+// refuses (see authorContributionFilter), which no token change fixes.
+func isTokenRejection(status int, envelope hcErrorEnvelope, parsed bool) bool {
+	if status == http.StatusUnauthorized {
+		return true
+	}
+	if status != http.StatusForbidden || !parsed {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(envelope.Error)) {
+	case "invalid_token", "invalid_request", "invalid_grant", "unauthorized", "access_denied", "insufficient_scope":
+		return true
+	}
+	// Unknown 403 codes still count when the text names the credential *and*
+	// rejects it, which is how Hardcover phrases an unauthenticated request
+	// ({"error":"Unable to verify token"}). Naming the token is not enough on
+	// its own: "Token bucket exhausted, retry after 30s" is a rate limit, and
+	// telling the operator to reissue a working token would send them the
+	// wrong way.
+	detail := strings.ToLower(envelope.detail())
+	if !strings.Contains(detail, "token") {
+		return false
+	}
+	for _, rejection := range []string{"invalid", "expired", "unable to verify", "not associated", "unauthori", "forbidden", "revoked", "missing"} {
+		if strings.Contains(detail, rejection) {
+			return true
+		}
+	}
+	return false
+}
+
+// sanitizeErrorDetail makes upstream text safe to quote back: secrets redacted,
+// collapsed onto one line, angle brackets dropped so markup smuggled into a
+// JSON field cannot reach the UI, and hard-capped.
+func sanitizeErrorDetail(s string) string {
+	s = strings.Join(strings.Fields(httpsec.RedactSecrets(s)), " ")
+	s = strings.Map(func(r rune) rune {
+		if r == '<' || r == '>' {
+			return -1
+		}
+		return r
+	}, s)
+	s = strings.TrimSpace(s)
+	if len(s) > hardcoverErrorDetailLimit {
+		s = strings.TrimSpace(strings.ToValidUTF8(s[:hardcoverErrorDetailLimit], "")) + "…"
+	}
+	return s
 }
 
 func formatGraphQLErrors(errors []gqlError) string {
