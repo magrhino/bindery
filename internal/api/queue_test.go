@@ -1196,6 +1196,10 @@ func TestQueueListArrCompatibleLiveStatusMatrix(t *testing.T) {
 				switch req.Method {
 				case "auth.login":
 					result = true
+				// The Web UI session already has a daemon attached, so
+				// Bindery's web.connect step (#2204) short-circuits.
+				case "web.connected":
+					result = true
 				case "core.get_torrents_status":
 					state := "Downloading"
 					if errorState {

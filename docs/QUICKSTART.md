@@ -113,6 +113,21 @@ username/password for the others), and the **Category / Label** (default
 > rTorrent applies the label itself via `d.custom1`, so nothing needs to
 > exist up front — leaving it blank makes Bindery poll every torrent.)
 
+### Deluge
+
+Deluge runs as two processes: `deluge-web` serves the Web UI and its JSON API,
+and `deluged` is the daemon that actually holds the torrents. Bindery talks to
+the Web UI, and a Web UI session has to be attached to a daemon before the Web
+UI has anywhere to send a request. Point Host and Port at `deluge-web` (8112 by
+default) and use the Web UI password; Deluge has no username.
+
+Bindery attaches the session itself when it logs in, as long as the Web UI's
+**Connection Manager** lists exactly one daemon host. If it lists none, or more
+than one, **Test** says so instead of guessing, because sending grabs to the
+wrong daemon would file them somewhere the importer never looks. Open the Web
+UI, connect to the daemon you want Bindery to use, and tick its **auto connect**
+box so the session comes back attached on its own.
+
 ### rTorrent / ruTorrent
 
 rTorrent speaks XML-RPC over two transports, and the **URL Base** field picks

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -79,7 +80,9 @@ func New(host string, port int, password, urlBase string, useSSL bool) *Client {
 	}
 }
 
-// Login authenticates with the Deluge Web UI.
+// Login authenticates with the Deluge Web UI and attaches the resulting
+// session to a deluged daemon, which every core.* method needs — see
+// connectDaemon.
 func (c *Client) Login(ctx context.Context) error {
 	var result bool
 	if err := c.call(ctx, false, "auth.login", []any{c.password}, &result); err != nil {
@@ -88,19 +91,141 @@ func (c *Client) Login(ctx context.Context) error {
 	if !result {
 		return fmt.Errorf("deluge login failed: wrong password")
 	}
+	// Once per login rather than once per call: a session keeps its daemon for
+	// its lifetime, so an extra round trip on every RPC would buy nothing. The
+	// 401 retry path in call() re-enters Login and re-checks.
+	if err := c.connectDaemon(ctx); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	c.loggedIn = true
 	c.mu.Unlock()
 	return nil
 }
 
-// Test verifies connectivity by checking that the Web UI is reachable and
-// the password is correct.
+// Test verifies connectivity by checking that the Web UI is reachable, the
+// password is correct, and the session has a deluged daemon behind it.
 func (c *Client) Test(ctx context.Context) error {
 	if err := c.ensureLoggedIn(ctx); err != nil {
+		// A missing daemon isn't a reachability problem — the Web UI answered,
+		// so "could not reach Deluge" would send the operator hunting a network
+		// fault that isn't there.
+		if errors.Is(err, errNoDaemon) {
+			return err
+		}
 		return fmt.Errorf("could not reach Deluge at %s — %w%s", c.baseURL, err, nethint.ForErr(err))
 	}
+	// ensureLoggedIn only reaches connectDaemon when it actually logs in, so a
+	// long-lived client can be holding a session whose daemon has since gone
+	// away. Re-check here: a Test that passes while every grab fails is the
+	// defect underneath #2204.
+	return c.connectDaemon(ctx)
+}
+
+// errNoDaemon marks the state at the heart of #2204: auth.login succeeded, so
+// the Web UI is reachable and the password is right, but the session has no
+// deluged behind it and every core.* method will fail.
+var errNoDaemon = errors.New("the Deluge Web UI is not connected to a deluged daemon")
+
+// daemonHost is one entry from web.get_hosts.
+type daemonHost struct {
+	id   string
+	addr string
+	port int64
+}
+
+// label renders a host for an error message, preferring the address over the
+// opaque host id.
+func (h daemonHost) label() string {
+	switch {
+	case h.addr == "":
+		return h.id
+	case h.port > 0:
+		return fmt.Sprintf("%s:%d", h.addr, h.port)
+	default:
+		return h.addr
+	}
+}
+
+// connectDaemon attaches the Web UI session to a deluged daemon unless it is
+// attached already.
+//
+// deluge-web and deluged are separate processes. auth.login authenticates
+// against deluge-web alone; until the session is bound to a daemon, deluge-web
+// has nothing to proxy core.* methods to and fails all of them while auth
+// still succeeds. Where deluge-web auto-connects to a single local daemon the
+// step is invisible, which is how Bindery got away without it (#2204).
+//
+// Idempotent: web.connected short-circuits when a daemon is already attached,
+// so the common path costs one extra call per login and nothing per RPC.
+func (c *Client) connectDaemon(ctx context.Context) error {
+	// authenticated=false throughout: auth.login already put the session cookie
+	// in the jar, and asking call() to authenticate would re-enter Login from
+	// inside Login.
+	var connected bool
+	if err := c.call(ctx, false, "web.connected", []any{}, &connected); err != nil {
+		return fmt.Errorf("deluge: could not check whether the Web UI has a daemon: %w", err)
+	}
+	if connected {
+		return nil
+	}
+
+	hosts, err := c.daemonHosts(ctx)
+	if err != nil {
+		return err
+	}
+	switch len(hosts) {
+	case 0:
+		return fmt.Errorf("%w, and no daemon host is configured for it. Open the Deluge Web UI, add your deluged under Connection Manager, and connect to it", errNoDaemon)
+	case 1:
+		// The unambiguous case, and the only one Bindery acts on.
+	default:
+		labels := make([]string, 0, len(hosts))
+		for _, h := range hosts {
+			labels = append(labels, h.label())
+		}
+		// Guessing would be worse than refusing: picking the wrong daemon sends
+		// every grab somewhere the importer never looks, and it would look like
+		// a silent success.
+		return fmt.Errorf("%w, and %d hosts are configured (%s), so Bindery will not guess which one you meant. Open the Deluge Web UI, connect to the daemon you want Bindery to use, and tick its auto connect option", errNoDaemon, len(hosts), strings.Join(labels, ", "))
+	}
+
+	var methods any
+	if err := c.call(ctx, false, "web.connect", []any{hosts[0].id}, &methods); err != nil {
+		return fmt.Errorf("%w: connecting it to %s failed: %w", errNoDaemon, hosts[0].label(), err)
+	}
 	return nil
+}
+
+// daemonHosts lists the daemons configured in the Web UI's Connection Manager.
+//
+// Rows are positional arrays whose width varies by Deluge version: 2.x sends
+// [id, host, port, username], 1.3.x sent [id, host, port, status, version].
+// Only the leading three carry meaning here, so anything past them is skipped
+// rather than decoded.
+func (c *Client) daemonHosts(ctx context.Context) ([]daemonHost, error) {
+	var rows [][]json.RawMessage
+	if err := c.call(ctx, false, "web.get_hosts", []any{}, &rows); err != nil {
+		return nil, fmt.Errorf("deluge: could not list the configured daemon hosts: %w", err)
+	}
+	hosts := make([]daemonHost, 0, len(rows))
+	for _, row := range rows {
+		if len(row) == 0 {
+			continue
+		}
+		var h daemonHost
+		if err := json.Unmarshal(row[0], &h.id); err != nil || h.id == "" {
+			continue
+		}
+		if len(row) > 1 {
+			_ = json.Unmarshal(row[1], &h.addr)
+		}
+		if len(row) > 2 {
+			_ = json.Unmarshal(row[2], &h.port)
+		}
+		hosts = append(hosts, h)
+	}
+	return hosts, nil
 }
 
 // AddTorrent submits a magnet link or torrent URL and returns the torrent hash.

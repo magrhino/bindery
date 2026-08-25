@@ -35,6 +35,10 @@ func delugeHandler(t *testing.T, hash, savePath string) http.HandlerFunc {
 		switch req.Method {
 		case "auth.login", "auth.check_session":
 			write(true)
+		// The Web UI session already has a daemon, so Bindery's web.connect
+		// step (#2204) is a no-op here.
+		case "web.connected":
+			write(true)
 		case "core.get_torrents_status":
 			write(map[string]any{
 				hash: map[string]any{

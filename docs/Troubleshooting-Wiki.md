@@ -156,6 +156,41 @@ You have reached your download limit for today.
 ```
 
 Then act on the snippet — a spent download quota or an expired grab token is the common case, so wait it out or grab from another indexer; an HTML login or challenge page means the indexer session or API key needs attention. On an older release there is nothing to read: SABnzbd purges an invalid NZB before its own backup step, so the bytes are gone by the time you look.
+
+## Deluge's connection test passes but every grab fails
+
+**Test connection** in Settings → Download Clients reports success, and
+Deluge's own log shows Bindery's request arriving at the Web UI JSON API:
+
+```
+json-request: {"method": "core.add_torrent_magnet", ...}
+```
+
+but no torrent is ever added, and the book goes back to **Wanted**. The same
+magnet added by hand in the Deluge Web UI works fine.
+
+Deluge runs as two processes. `deluge-web` serves the Web UI and its JSON API;
+`deluged` is the daemon that holds the torrents. Logging in authenticates
+against `deluge-web` alone, and a Web UI session has to be attached to a daemon
+before the Web UI has anywhere to send a `core.` method. Where `deluge-web`
+auto connects to a single local daemon on startup this step is invisible. Where
+it does not, or where the **Connection Manager** holds more than one host, login
+keeps succeeding while every `core.` call fails, which is exactly the pairing of
+a passing test and failing grabs (#2204).
+
+**Fix:** upgrade. Bindery now attaches the session to a daemon after logging in,
+and the connection test fails with the reason when it cannot, rather than
+reporting success.
+
+Two cases still need you, and the error message names which one you are in:
+
+- **No daemon host configured.** Open the Deluge Web UI, add your `deluged`
+  under **Connection Manager**, and connect to it.
+- **More than one host configured.** Bindery will not guess which daemon you
+  meant, because picking the wrong one files downloads somewhere the importer
+  never looks. Connect to the one you want in the Web UI and tick its **auto
+  connect** box so the session comes back attached on its own.
+
 ## Ebook searches on Prowlarr-synced indexers return zero results
 
 Audiobook searches work, indexer tests pass, and running the same query inside Prowlarr returns releases, but every ebook search in Bindery finds nothing. Open **Settings → Indexers** and look at the synced indexer's **Categories**: if it lists `7030` (Books/Comics) and no `7020` (Books/EBook), this is the cause. Every ebook query goes out as `cat=7030`, which is where comics live, not ebooks.

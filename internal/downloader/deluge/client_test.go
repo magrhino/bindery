@@ -39,6 +39,22 @@ type delugeServer struct {
 	// exercising the Files() error path.
 	statusErr bool
 
+	// daemonConnected is what web.connected reports: whether the Web UI
+	// session is attached to a deluged daemon (#2204). Defaults to true so the
+	// stub behaves like the common auto-connected deployment; web.connect
+	// flips it.
+	daemonConnected bool
+	// hosts is what web.get_hosts returns — Deluge 2.x rows of
+	// [id, host, port, username].
+	hosts []any
+	// connectErr makes web.connect fail, standing in for a daemon that refuses
+	// the Web UI's connection.
+	connectErr bool
+	// connectedCalls counts web.connected; connectCalls records the host ids
+	// passed to web.connect, in order.
+	connectedCalls int
+	connectCalls   []string
+
 	// stopRatio records the ratio passed to core.set_torrent_stop_ratio per
 	// hash; stopAtRatio records whether core.set_torrent_stop_at_ratio(true)
 	// fired. Both stay zero/false when AddTorrent skips the seed-ratio step.
@@ -95,7 +111,32 @@ func (s *delugeServer) handler() http.HandlerFunc {
 			json.Unmarshal(req.Params[0], &pw)
 			write(pw == s.password)
 
+		case "web.connected":
+			s.connectedCalls++
+			write(s.daemonConnected)
+
+		case "web.get_hosts":
+			write(s.hosts)
+
+		case "web.connect":
+			if s.connectErr {
+				writeErr("Failed to connect to daemon")
+				return
+			}
+			var id string
+			json.Unmarshal(req.Params[0], &id)
+			s.connectCalls = append(s.connectCalls, id)
+			s.daemonConnected = true
+			// The real method answers with the daemon's method list.
+			write([]string{"core.add_torrent_magnet", "core.get_torrents_status"})
+
 		case "core.add_torrent_magnet":
+			if !s.daemonConnected {
+				// What deluge-web actually does with an unattached session:
+				// there is no daemon to proxy the call to.
+				writeErr("Not connected to a daemon")
+				return
+			}
 			if s.addMagnetErr {
 				writeErr("add error")
 				return
@@ -201,6 +242,10 @@ func newTestServer(t *testing.T, password string) (*httptest.Server, *delugeServ
 		password: password,
 		torrents: make(map[string]deluge.TorrentStatus),
 		files:    make(map[string][]map[string]any),
+		// Default to the deployment shape most people have: deluge-web already
+		// auto-connected to its single local daemon.
+		daemonConnected: true,
+		hosts:           []any{[]any{"hostid-local", "127.0.0.1", 58846, "localclient"}},
 	}
 	srv := httptest.NewServer(ds.handler())
 	t.Cleanup(srv.Close)
