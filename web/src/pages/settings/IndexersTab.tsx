@@ -360,7 +360,9 @@ function EditIndexerForm({ indexer, onClose, onSaved }: { indexer: Indexer; onCl
   const [name, setName] = useState(indexer.name)
   const [type, setType] = useState(indexer.type || 'newznab')
   const [url, setUrl] = useState(indexer.url)
-  const [apiKey, setApiKey] = useState(indexer.apiKey)
+  // The API never returns the stored key (#2212). Empty means "keep existing":
+  // the payload omits apiKey when blank so the backend leaves the column alone.
+  const [apiKey, setApiKey] = useState('')
   const [categories, setCategories] = useState((indexer.categories ?? [7020]).join(', '))
   const [includeParentCategories, setIncludeParentCategories] = useState(indexer.includeParentCategories ?? false)
   const [priority, setPriority] = useState(String(indexer.priority ?? 0))
@@ -371,7 +373,10 @@ function EditIndexerForm({ indexer, onClose, onSaved }: { indexer: Indexer; onCl
   const labelCls = 'block text-xs text-slate-600 dark:text-zinc-400 mb-1'
 
   const submit = async () => {
-    const updated = await api.updateIndexer(indexer.id, { ...indexer, name, type, url, apiKey, categories: parseCats(categories), includeParentCategories, priority: parsePriority(priority), seedRatio, freeleechOnly })
+    const payload: Partial<Indexer> = { ...indexer, name, type, url, categories: parseCats(categories), includeParentCategories, priority: parsePriority(priority), seedRatio, freeleechOnly }
+    delete payload.apiKey
+    if (apiKey) payload.apiKey = apiKey
+    const updated = await api.updateIndexer(indexer.id, payload)
     onSaved(updated)
   }
 
@@ -379,7 +384,14 @@ function EditIndexerForm({ indexer, onClose, onSaved }: { indexer: Indexer; onCl
     setTesting(true)
     setTestResult(null)
     try {
-      const r = await api.testIndexerConfig({ name, type, url, apiKey, categories: parseCats(categories) })
+      // A blank field means "keep the stored key", which the inline
+      // test-by-config endpoint has no access to. Testing by id makes the
+      // server use the stored key instead of probing with no key at all and
+      // reporting a failure the user cannot explain. A typed key is still
+      // tested inline so it can be validated before saving.
+      const r = apiKey
+        ? await api.testIndexerConfig({ name, type, url, apiKey, categories: parseCats(categories) })
+        : await api.testIndexer(indexer.id)
       setTestResult(r)
     } catch (err: unknown) {
       setTestResult({ ok: false, status: 0, categories: 0, bookSearch: false, latencyMs: 0, searchResults: 0, error: err instanceof Error ? err.message : 'Request failed' })
@@ -409,8 +421,9 @@ function EditIndexerForm({ indexer, onClose, onSaved }: { indexer: Indexer; onCl
         <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">{t('settings.indexers.form.urlHintEdit')}</p>
       </div>
       <div>
-        <label className={labelCls}>{t('settings.indexers.form.apiKey')}</label>
-        <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={t('settings.indexers.form.apiKey')} type="password" className={inputCls} />
+        <label className={labelCls}>{t('settings.indexers.form.apiKeyEditLabel')}</label>
+        <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="••••••••" type="password" className={inputCls} />
+        <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">{t('settings.indexers.form.apiKeyEditHint')}</p>
       </div>
       <div>
         <label className={labelCls}>{t('settings.indexers.form.categories')}</label>

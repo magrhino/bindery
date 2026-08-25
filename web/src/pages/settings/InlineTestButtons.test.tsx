@@ -22,6 +22,7 @@ vi.mock('../../api/client', () => ({
     updateDownloadClient: vi.fn(),
     deleteDownloadClient: vi.fn(),
     testIndexerConfig: vi.fn(),
+    testIndexer: vi.fn(),
     addIndexer: vi.fn(),
     updateIndexer: vi.fn(),
     deleteIndexer: vi.fn(),
@@ -34,6 +35,21 @@ import IndexersTab from './IndexersTab'
 
 const testClient = api.testDownloadClientConfig as ReturnType<typeof vi.fn>
 const testIndexer = api.testIndexerConfig as ReturnType<typeof vi.fn>
+const testIndexerById = api.testIndexer as ReturnType<typeof vi.fn>
+const updateIndexer = api.updateIndexer as ReturnType<typeof vi.fn>
+
+const savedIndexer = {
+  id: 7,
+  name: 'Saved',
+  type: 'newznab',
+  url: 'https://idx.example/api',
+  // The API redacts the key (#2212); the client only learns that one is set.
+  apiKey: '',
+  apiKeyConfigured: true,
+  categories: [7020],
+  priority: 0,
+  enabled: true,
+}
 
 describe('ClientsTab inline Test button', () => {
   beforeEach(() => vi.clearAllMocks())
@@ -141,5 +157,75 @@ describe('IndexersTab inline Test button', () => {
 
     await waitFor(() => expect(testIndexer).toHaveBeenCalledTimes(1))
     expect(await screen.findByText('settings.indexers.testFail error=HTTP 401')).toBeInTheDocument()
+  })
+})
+
+// The edit form no longer holds the saved key (#2212), so a blank field means
+// "keep the stored one". Both the Save payload and the Test button have to
+// respect that: sending a blank key would wipe it, and probing with a blank key
+// would report a failure the user cannot act on.
+describe('IndexersTab edit form with a write-only API key', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const openEditForm = () => {
+    render(<IndexersTab indexers={[savedIndexer]} setIndexers={vi.fn()} prowlarrInstances={[]} setProwlarrInstances={vi.fn()} />)
+    fireEvent.click(screen.getByText('common.edit'))
+  }
+
+  it('starts blank rather than seeding the saved key', () => {
+    openEditForm()
+    expect(screen.getByPlaceholderText('••••••••')).toHaveValue('')
+    expect(screen.getByText('settings.indexers.form.apiKeyEditHint')).toBeInTheDocument()
+  })
+
+  it('omits apiKey from the save payload when the field is left blank', async () => {
+    updateIndexer.mockResolvedValueOnce(savedIndexer)
+    openEditForm()
+
+    fireEvent.click(screen.getByText('common.save'))
+
+    await waitFor(() => expect(updateIndexer).toHaveBeenCalledTimes(1))
+    expect(updateIndexer.mock.calls[0][0]).toBe(7)
+    expect(updateIndexer.mock.calls[0][1]).not.toHaveProperty('apiKey')
+  })
+
+  it('sends the typed key when the user enters a new one', async () => {
+    updateIndexer.mockResolvedValueOnce(savedIndexer)
+    openEditForm()
+
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'rotated' } })
+    fireEvent.click(screen.getByText('common.save'))
+
+    await waitFor(() => expect(updateIndexer).toHaveBeenCalledTimes(1))
+    expect(updateIndexer.mock.calls[0][1]).toMatchObject({ apiKey: 'rotated' })
+  })
+
+  it('tests by id (using the stored key) when the field is blank', async () => {
+    testIndexerById.mockResolvedValueOnce({
+      ok: true, status: 200, categories: 3, bookSearch: true, latencyMs: 42, searchResults: 5,
+    })
+    openEditForm()
+
+    // The saved row carries its own Test button; the edit form's is the last.
+    fireEvent.click(screen.getAllByText('common.test').at(-1)!)
+
+    await waitFor(() => expect(testIndexerById).toHaveBeenCalledTimes(1))
+    expect(testIndexerById).toHaveBeenCalledWith(7)
+    expect(testIndexer).not.toHaveBeenCalled()
+    expect((await screen.findAllByText(/settings\.indexers\.testOk/)).length).toBeGreaterThan(0)
+  })
+
+  it('tests inline with the typed key so it can be validated before saving', async () => {
+    testIndexer.mockResolvedValueOnce({
+      ok: true, status: 200, categories: 3, bookSearch: true, latencyMs: 42, searchResults: 5,
+    })
+    openEditForm()
+
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'rotated' } })
+    fireEvent.click(screen.getAllByText('common.test').at(-1)!)
+
+    await waitFor(() => expect(testIndexer).toHaveBeenCalledTimes(1))
+    expect(testIndexer.mock.calls[0][0]).toMatchObject({ apiKey: 'rotated' })
+    expect(testIndexerById).not.toHaveBeenCalled()
   })
 })

@@ -1409,7 +1409,7 @@ describe('SettingsPage', () => {
     fireEvent.change(screen.getByPlaceholderText('settings.indexers.form.namePlaceholder'), { target: { value: 'DrunkenSlug' } })
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'torznab' } })
     fireEvent.change(screen.getByPlaceholderText('settings.indexers.form.urlPlaceholder'), { target: { value: 'https://slug.example.com/api' } })
-    fireEvent.change(screen.getByPlaceholderText('settings.indexers.form.apiKey'), { target: { value: 'slug-key' } })
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'slug-key' } })
     fireEvent.change(screen.getByDisplayValue('7020, 3030'), { target: { value: '7020, bad, 3030' } })
     fireEvent.click(screen.getByRole('button', { name: 'common.save' }))
 

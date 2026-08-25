@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -101,16 +103,64 @@ func (h *IndexerHandler) WithEditions(editions *db.EditionRepo) *IndexerHandler 
 	return h
 }
 
+// indexerResponses shapes a list of indexers for the wire. See indexerResponse.
+func indexerResponses(idxs []models.Indexer) []models.Indexer {
+	out := make([]models.Indexer, 0, len(idxs))
+	for _, idx := range idxs {
+		out = append(out, indexerResponse(idx))
+	}
+	return out
+}
+
+// indexerResponse strips the stored API key and reports whether one is set.
+// Indexer credentials are write-only over the API: the client needs to know
+// that a key exists so it can render "leave blank to keep the existing key",
+// but it never needs the value back. Mirrors importListResponse.
+func indexerResponse(idx models.Indexer) models.Indexer {
+	idx.APIKeyConfigured = idx.APIKey != ""
+	idx.APIKey = ""
+	return idx
+}
+
+// resolveWriteOnlyAPIKey decides what an update should do with a write-only
+// API key field, given the raw request body and the stored value.
+//
+// An absent key and an explicitly sent empty string both mean "keep the stored
+// value": the web app spreads the redacted object back into its payload, so a
+// blank field must never be read as "wipe the credential". Clearing takes an
+// explicit "clearApiKey": true. Mirrors the import-list patch semantics.
+func resolveWriteOnlyAPIKey(raw map[string]json.RawMessage, stored string) (string, error) {
+	clearKey := false
+	if value, ok := raw["clearApiKey"]; ok {
+		if err := json.Unmarshal(value, &clearKey); err != nil {
+			return "", err
+		}
+	}
+	submitted := ""
+	if value, ok := raw["apiKey"]; ok {
+		if err := json.Unmarshal(value, &submitted); err != nil {
+			return "", err
+		}
+	}
+	if clearKey && submitted != "" {
+		return "", errors.New("apiKey and clearApiKey cannot both be set")
+	}
+	if clearKey {
+		return "", nil
+	}
+	if submitted != "" {
+		return submitted, nil
+	}
+	return stored, nil
+}
+
 func (h *IndexerHandler) List(w http.ResponseWriter, r *http.Request) {
 	idxs, err := h.indexers.List(r.Context())
 	if err != nil {
 		writeServerError(w, r, err)
 		return
 	}
-	if idxs == nil {
-		idxs = []models.Indexer{}
-	}
-	writeJSON(w, http.StatusOK, idxs)
+	writeJSON(w, http.StatusOK, indexerResponses(idxs))
 }
 
 func (h *IndexerHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +173,7 @@ func (h *IndexerHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "indexer not found"})
 		return
 	}
-	writeJSON(w, http.StatusOK, idx)
+	writeJSON(w, http.StatusOK, indexerResponse(*idx))
 }
 
 func (h *IndexerHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -170,7 +220,7 @@ func (h *IndexerHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	telemetry.MarkFirst(r.Context(), h.settings, telemetry.SettingFirstIndexerAt)
-	writeJSON(w, http.StatusCreated, idx)
+	writeJSON(w, http.StatusCreated, indexerResponse(idx))
 }
 
 func (h *IndexerHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -184,6 +234,15 @@ func (h *IndexerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Buffered rather than streamed because the body is read twice: once into
+	// the struct and once as a raw key map for the write-only API key below.
+	// MaxRequestBody bounds it.
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
 	// Decode over a copy of the stored row rather than a zero value: JSON
 	// decoding only writes the keys the client actually sent, so an omitted
 	// field keeps whatever is on disk instead of being reset. Previously any
@@ -191,10 +250,24 @@ func (h *IndexerHandler) Update(w http.ResponseWriter, r *http.Request) {
 	// includeParentCategories — silently turned it off on every save.
 	// An explicitly sent false still disables it.
 	idx := *existing
-	if err := json.NewDecoder(r.Body).Decode(&idx); err != nil {
+	if err := json.Unmarshal(body, &idx); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
+	// The API key is write-only, so it needs the raw body: the struct decode
+	// above cannot tell an omitted key from an explicitly blank one, and the
+	// web app sends the redacted (blank) value straight back on every save.
+	raw := map[string]json.RawMessage{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	apiKey, err := resolveWriteOnlyAPIKey(raw, existing.APIKey)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	idx.APIKey = apiKey
 	if idx.URL != "" {
 		if err := httpsec.ValidateOutboundURL(idx.URL, httpsec.PolicyLANLoopback); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -211,7 +284,7 @@ func (h *IndexerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, idx)
+	writeJSON(w, http.StatusOK, indexerResponse(idx))
 }
 
 func (h *IndexerHandler) Delete(w http.ResponseWriter, r *http.Request) {

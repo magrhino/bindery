@@ -3,11 +3,17 @@ package models
 import "time"
 
 type Indexer struct {
-	ID                      int64  `json:"id"`
-	Name                    string `json:"name"`
-	Type                    string `json:"type"`
-	URL                     string `json:"url"`
-	APIKey                  string `json:"apiKey"`
+	ID     int64  `json:"id"`
+	Name   string `json:"name"`
+	Type   string `json:"type"`
+	URL    string `json:"url"`
+	APIKey string `json:"apiKey"`
+	// APIKeyConfigured is a response-only field: the API blanks APIKey on the
+	// way out and sets this instead, so the client can render "a key is set"
+	// without ever receiving the credential. It is never persisted (the
+	// indexers repo enumerates its columns) and anything a client sends in it
+	// is ignored.
+	APIKeyConfigured        bool   `json:"apiKeyConfigured"`
 	Categories              []int  `json:"categories"`
 	IncludeParentCategories bool   `json:"includeParentCategories"`
 	Priority                int    `json:"priority"`

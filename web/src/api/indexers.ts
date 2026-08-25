@@ -6,7 +6,12 @@ export interface Indexer {
   name: string
   type: string
   url: string
+  // Write-only: the API never returns the stored key, so this is '' on every
+  // response. Send it only when setting or rotating a key; a blank value on
+  // update means "keep the stored one". Use clearApiKey to actually remove it.
   apiKey: string
+  // Response-only: whether a key is stored server-side (#2212).
+  apiKeyConfigured?: boolean
   categories: number[]
   includeParentCategories?: boolean
   priority: number
@@ -41,7 +46,10 @@ export interface ProwlarrInstance {
   id: number
   name: string
   url: string
+  // Write-only, same contract as Indexer.apiKey (#2212).
   apiKey: string
+  // Response-only: whether a key is stored server-side.
+  apiKeyConfigured?: boolean
   syncOnStartup: boolean
   enabled: boolean
   lastSyncAt?: string

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -66,16 +67,31 @@ func LoadProwlarrTimeout(ctx context.Context, s *db.SettingsRepo) time.Duration 
 	return 60 * time.Second
 }
 
+// prowlarrResponses shapes a list of instances for the wire. See prowlarrResponse.
+func prowlarrResponses(items []models.ProwlarrInstance) []models.ProwlarrInstance {
+	out := make([]models.ProwlarrInstance, 0, len(items))
+	for _, p := range items {
+		out = append(out, prowlarrResponse(p))
+	}
+	return out
+}
+
+// prowlarrResponse strips the stored API key and reports whether one is set.
+// Prowlarr credentials are write-only over the API for the same reason indexer
+// ones are: the client only needs to know a key exists. Mirrors indexerResponse.
+func prowlarrResponse(p models.ProwlarrInstance) models.ProwlarrInstance {
+	p.APIKeyConfigured = p.APIKey != ""
+	p.APIKey = ""
+	return p
+}
+
 func (h *ProwlarrHandler) List(w http.ResponseWriter, r *http.Request) {
 	items, err := h.instances.List(r.Context())
 	if err != nil {
 		writeServerError(w, r, err)
 		return
 	}
-	if items == nil {
-		items = []models.ProwlarrInstance{}
-	}
-	writeJSON(w, http.StatusOK, items)
+	writeJSON(w, http.StatusOK, prowlarrResponses(items))
 }
 
 func (h *ProwlarrHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +109,7 @@ func (h *ProwlarrHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
-	writeJSON(w, http.StatusOK, p)
+	writeJSON(w, http.StatusOK, prowlarrResponse(*p))
 }
 
 func (h *ProwlarrHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -117,7 +133,7 @@ func (h *ProwlarrHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, p)
+	writeJSON(w, http.StatusCreated, prowlarrResponse(p))
 }
 
 func (h *ProwlarrHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -136,10 +152,31 @@ func (h *ProwlarrHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	previousKey := existing.APIKey
-	if err := json.NewDecoder(r.Body).Decode(existing); err != nil {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 		return
 	}
+	if err := json.Unmarshal(body, existing); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	// Resolve the write-only API key BEFORE the previousKey comparison below.
+	// A blank submitted key means "keep the stored one", and the web app sends
+	// the redacted (blank) value back on every save. Reading that as a real
+	// change would not just wipe this instance's key, it would cascade the wipe
+	// to every indexer synced from it (#2212).
+	raw := map[string]json.RawMessage{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	apiKey, err := resolveWriteOnlyAPIKey(raw, previousKey)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	existing.APIKey = apiKey
 	existing.ID = id
 	if err := httpsec.ValidateOutboundURL(existing.URL, httpsec.PolicyLANLoopback); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid indexer URL: " + err.Error()})
@@ -155,7 +192,7 @@ func (h *ProwlarrHandler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, existing)
+	writeJSON(w, http.StatusOK, prowlarrResponse(*existing))
 }
 
 func (h *ProwlarrHandler) Delete(w http.ResponseWriter, r *http.Request) {

@@ -389,6 +389,8 @@
         "urlHintEdit": "Newznab 기본 URL(예: https://api.nzbgeek.info) 또는 전체 Torznab 엔드포인트(예: http://prowlarr:9696/1/api)를 입력하세요.",
         "urlHintAdd": "Prowlarr의 경우 Torznab 엔드포인트 URL(보통 /api로 끝남)과 API 키를 붙여넣으세요.",
         "apiKey": "API 키",
+        "apiKeyEditLabel": "API 키 (현재 키를 유지하려면 비워두세요)",
+        "apiKeyEditHint": "저장된 키는 브라우저로 다시 전송되지 않습니다. 그대로 두려면 비워두고, 교체하려면 새 키를 입력하세요.",
         "categories": "카테고리",
         "categoriesPlaceholder": "카테고리 (예: 7020, 7120, 3030)",
         "categoriesHint": "쉼표로 구분된 Newznab 카테고리 ID입니다. 7020 = 전자책, 3030 = 오디오북. 비표준 카테고리를 사용하는 인덱서에는 사용자 지정 ID를 추가하세요(예: 독일어 도서의 경우 7120).",

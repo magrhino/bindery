@@ -127,6 +127,47 @@ POST   /api/v1/rootfolder                         add a new root
 DELETE /api/v1/rootfolder/{id}                    remove
 ```
 
+#### Indexer and Prowlarr API keys are write-only
+
+Indexer and Prowlarr responses never carry the stored credential. Every
+endpoint that returns one of these objects sends `apiKey` as an empty string
+and adds a read-only `apiKeyConfigured` boolean saying whether a key is stored:
+
+```json
+{
+  "id": 3,
+  "name": "NZBGeek",
+  "url": "https://api.nzbgeek.info",
+  "apiKey": "",
+  "apiKeyConfigured": true
+}
+```
+
+`apiKeyConfigured` is response only. It is not persisted, and sending it is
+ignored.
+
+On `PUT /api/v1/indexer/{id}` and `PUT /api/v1/prowlarr/{id}` the key follows
+the same rules the import-list endpoints already use:
+
+| Request body | Result |
+| --- | --- |
+| `apiKey` omitted | the stored key is kept |
+| `"apiKey": ""` | the stored key is kept |
+| `"apiKey": "newkey"` | the stored key is replaced |
+| `"clearApiKey": true` | the stored key is removed |
+| `"apiKey": "newkey"` with `"clearApiKey": true` | `400`, nothing is changed |
+
+Keeping the stored key on a blank value is what lets a client read an object,
+edit an unrelated field, and send it straight back without wiping the
+credential. It also means a blank submit on a Prowlarr instance no longer
+cascades an empty key to every indexer synced from it. Removing a key is
+therefore always deliberate: it takes `clearApiKey`.
+
+Setting a key still works normally on create, and `POST /api/v1/indexer/test`
+still accepts an inline `apiKey` so an unsaved configuration can be probed.
+To test a saved indexer against its stored key, use
+`POST /api/v1/indexer/{id}/test`.
+
 ### Download clients, queue, history, blocklist
 
 ```

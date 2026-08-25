@@ -534,6 +534,8 @@
         "urlHintEdit": "Use a base Newznab URL (for example: https://api.nzbgeek.info) or a full Torznab endpoint (for example: http://prowlarr:9696/1/api).",
         "urlHintAdd": "For Prowlarr, paste the Torznab endpoint URL (usually ending in /api) and API key.",
         "apiKey": "API Key",
+        "apiKeyEditLabel": "API Key (leave blank to keep current)",
+        "apiKeyEditHint": "The saved key is never sent back to the browser. Leave this blank to keep it, or type a new one to replace it.",
         "categories": "Categories",
         "categoriesPlaceholder": "Categories (e.g. 7020, 7120, 3030)",
         "categoriesHint": "Comma-separated Newznab category IDs. 7020 = eBooks, 3030 = Audiobooks. Add custom IDs for indexers with non-standard categories (e.g. 7120 for German books).",

@@ -891,3 +891,219 @@ func TestSearchBook_PopulatesISBNFromEdition(t *testing.T) {
 		t.Errorf("search criteria ISBN = %q, want %q (the ISBN parsed from a matching release)", got, want)
 	}
 }
+
+// TestIndexerResponses_RedactAPIKey pins the write-only contract (#2212):
+// every handler that emits an indexer must blank the stored key and report
+// apiKeyConfigured instead.
+func TestIndexerResponses_RedactAPIKey(t *testing.T) {
+	h := indexerFixture(t)
+
+	rec := httptest.NewRecorder()
+	body := `{"name":"NZBGeek","url":"http://10.20.30.41:9117","apiKey":"topsecret","type":"newznab"}`
+	h.Create(rec, httptest.NewRequest(http.MethodPost, "/indexer", bytes.NewBufferString(body)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "topsecret") {
+		t.Errorf("create response leaked the api key: %s", rec.Body.String())
+	}
+	var created models.Indexer
+	if err := json.NewDecoder(rec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	if created.APIKey != "" || !created.APIKeyConfigured {
+		t.Errorf("create: apiKey=%q apiKeyConfigured=%v, want empty/true", created.APIKey, created.APIKeyConfigured)
+	}
+	idStr := strconv.FormatInt(created.ID, 10)
+
+	// An indexer with no key at all reports apiKeyConfigured=false, so the UI
+	// can tell "a key is set, leave blank to keep it" from "no key yet".
+	rec = httptest.NewRecorder()
+	h.Create(rec, httptest.NewRequest(http.MethodPost, "/indexer",
+		bytes.NewBufferString(`{"name":"Keyless","url":"http://10.20.30.40:9117","type":"newznab"}`)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create keyless: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var keyless models.Indexer
+	if err := json.NewDecoder(rec.Body).Decode(&keyless); err != nil {
+		t.Fatalf("decode keyless: %v", err)
+	}
+	if keyless.APIKeyConfigured {
+		t.Error("keyless indexer should report apiKeyConfigured=false")
+	}
+
+	// List
+	rec = httptest.NewRecorder()
+	h.List(rec, httptest.NewRequest(http.MethodGet, "/indexer", nil))
+	if strings.Contains(rec.Body.String(), "topsecret") {
+		t.Errorf("list response leaked the api key: %s", rec.Body.String())
+	}
+	var list []models.Indexer
+	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected 2 indexers, got %d", len(list))
+	}
+	for _, item := range list {
+		if item.APIKey != "" {
+			t.Errorf("list entry %q returned an api key", item.Name)
+		}
+	}
+
+	// Get
+	rec = httptest.NewRecorder()
+	h.Get(rec, withURLParam(httptest.NewRequest(http.MethodGet, "/indexer/"+idStr, nil), "id", idStr))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get: expected 200, got %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "topsecret") {
+		t.Errorf("get response leaked the api key: %s", rec.Body.String())
+	}
+	var got models.Indexer
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	if got.APIKey != "" || !got.APIKeyConfigured {
+		t.Errorf("get: apiKey=%q apiKeyConfigured=%v, want empty/true", got.APIKey, got.APIKeyConfigured)
+	}
+
+	// Update
+	rec = httptest.NewRecorder()
+	h.Update(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/indexer/"+idStr,
+		bytes.NewBufferString(`{"name":"Renamed"}`)), "id", idStr))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "topsecret") {
+		t.Errorf("update response leaked the api key: %s", rec.Body.String())
+	}
+	var updated models.Indexer
+	if err := json.NewDecoder(rec.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode update: %v", err)
+	}
+	if updated.APIKey != "" || !updated.APIKeyConfigured {
+		t.Errorf("update: apiKey=%q apiKeyConfigured=%v, want empty/true", updated.APIKey, updated.APIKeyConfigured)
+	}
+}
+
+// TestIndexerUpdate_WriteOnlyAPIKey covers the update half of #2212: a blank
+// submitted key keeps the stored one (the UI now spreads a redacted object
+// back into its payload), a non-empty one replaces it, and only an explicit
+// clearApiKey removes it.
+func TestIndexerUpdate_WriteOnlyAPIKey(t *testing.T) {
+	newHandler := func(t *testing.T) (*IndexerHandler, string) {
+		t.Helper()
+		h := indexerFixture(t)
+		idx := &models.Indexer{
+			Name: "Existing", URL: "https://example.com/api", Type: "newznab",
+			APIKey: "stored-key", Categories: []int{7020},
+		}
+		if err := h.indexers.Create(context.Background(), idx); err != nil {
+			t.Fatalf("create fixture indexer: %v", err)
+		}
+		return h, strconv.FormatInt(idx.ID, 10)
+	}
+
+	storedKey := func(t *testing.T, h *IndexerHandler, idStr string) string {
+		t.Helper()
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		row, err := h.indexers.GetByID(context.Background(), id)
+		if err != nil || row == nil {
+			t.Fatalf("reload indexer: %v", err)
+		}
+		return row.APIKey
+	}
+
+	t.Run("omitted apiKey keeps the stored key", func(t *testing.T) {
+		h, idStr := newHandler(t)
+		rec := httptest.NewRecorder()
+		h.Update(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/indexer/"+idStr,
+			bytes.NewBufferString(`{"name":"Renamed","url":"https://example.com/api"}`)), "id", idStr))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if got := storedKey(t, h, idStr); got != "stored-key" {
+			t.Errorf("stored key = %q, want stored-key", got)
+		}
+	})
+
+	t.Run("explicitly blank apiKey keeps the stored key", func(t *testing.T) {
+		h, idStr := newHandler(t)
+		rec := httptest.NewRecorder()
+		h.Update(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/indexer/"+idStr,
+			bytes.NewBufferString(`{"name":"Renamed","url":"https://example.com/api","apiKey":""}`)), "id", idStr))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if got := storedKey(t, h, idStr); got != "stored-key" {
+			t.Errorf("stored key = %q, want stored-key", got)
+		}
+		var updated models.Indexer
+		if err := json.NewDecoder(rec.Body).Decode(&updated); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if !updated.APIKeyConfigured {
+			t.Error("response should still report apiKeyConfigured=true")
+		}
+	})
+
+	t.Run("non-empty apiKey replaces the stored key", func(t *testing.T) {
+		h, idStr := newHandler(t)
+		rec := httptest.NewRecorder()
+		h.Update(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/indexer/"+idStr,
+			bytes.NewBufferString(`{"name":"Renamed","url":"https://example.com/api","apiKey":"rotated"}`)), "id", idStr))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if got := storedKey(t, h, idStr); got != "rotated" {
+			t.Errorf("stored key = %q, want rotated", got)
+		}
+	})
+
+	t.Run("clearApiKey removes the stored key", func(t *testing.T) {
+		h, idStr := newHandler(t)
+		rec := httptest.NewRecorder()
+		h.Update(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/indexer/"+idStr,
+			bytes.NewBufferString(`{"name":"Renamed","url":"https://example.com/api","clearApiKey":true}`)), "id", idStr))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if got := storedKey(t, h, idStr); got != "" {
+			t.Errorf("stored key = %q, want empty", got)
+		}
+		var updated models.Indexer
+		if err := json.NewDecoder(rec.Body).Decode(&updated); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if updated.APIKeyConfigured {
+			t.Error("response should report apiKeyConfigured=false after a clear")
+		}
+	})
+
+	t.Run("apiKey and clearApiKey together is a 400", func(t *testing.T) {
+		h, idStr := newHandler(t)
+		rec := httptest.NewRecorder()
+		h.Update(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/indexer/"+idStr,
+			bytes.NewBufferString(`{"apiKey":"rotated","clearApiKey":true}`)), "id", idStr))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if got := storedKey(t, h, idStr); got != "stored-key" {
+			t.Errorf("rejected update must not touch the key, got %q", got)
+		}
+	})
+
+	t.Run("non-boolean clearApiKey is a 400", func(t *testing.T) {
+		h, idStr := newHandler(t)
+		rec := httptest.NewRecorder()
+		h.Update(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/indexer/"+idStr,
+			bytes.NewBufferString(`{"clearApiKey":"yes"}`)), "id", idStr))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+}

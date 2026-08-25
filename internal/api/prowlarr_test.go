@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/vavallee/bindery/internal/db"
@@ -74,7 +75,8 @@ func TestProwlarrCRUD(t *testing.T) {
 		t.Errorf("flags not persisted: syncOnStartup=%v enabled=%v", stored.SyncOnStartup, stored.Enabled)
 	}
 
-	// Get returns the row including the APIKey (handler logic; admin-gated at router).
+	// Get returns the row with the APIKey redacted (#2212): the key is
+	// write-only, so the response carries apiKeyConfigured instead.
 	idStr := strconv.FormatInt(created.ID, 10)
 	rec = httptest.NewRecorder()
 	h.Get(rec, withURLParam(httptest.NewRequest(http.MethodGet, "/prowlarr/"+idStr, nil), "id", idStr))
@@ -85,8 +87,11 @@ func TestProwlarrCRUD(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got.APIKey != "secret" {
-		t.Errorf("Get should surface APIKey at the handler level, got %q", got.APIKey)
+	if got.APIKey != "" {
+		t.Errorf("Get must not return the stored APIKey, got %q", got.APIKey)
+	}
+	if !got.APIKeyConfigured {
+		t.Error("Get should report apiKeyConfigured=true when a key is stored")
 	}
 
 	// List has exactly the one entry.
@@ -442,5 +447,185 @@ func TestProwlarrClientTimeout_FromSettings(t *testing.T) {
 	}
 	if got := LoadProwlarrTimeout(ctx, settings); got.Seconds() != 5 {
 		t.Errorf("LoadProwlarrTimeout = %v, want 5s", got)
+	}
+}
+
+// TestProwlarrResponses_RedactAPIKey pins the write-only contract (#2212) on
+// the Prowlarr handlers that emit an instance.
+func TestProwlarrResponses_RedactAPIKey(t *testing.T) {
+	h, _, _, _ := prowlarrFixture(t)
+
+	rec := httptest.NewRecorder()
+	body := `{"name":"Main","url":"http://10.10.10.10:9696","apiKey":"topsecret","enabled":true}`
+	h.Create(rec, httptest.NewRequest(http.MethodPost, "/prowlarr", bytes.NewBufferString(body)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "topsecret") {
+		t.Errorf("create response leaked the api key: %s", rec.Body.String())
+	}
+	var created models.ProwlarrInstance
+	if err := json.NewDecoder(rec.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.APIKey != "" || !created.APIKeyConfigured {
+		t.Errorf("create: apiKey=%q apiKeyConfigured=%v, want empty/true", created.APIKey, created.APIKeyConfigured)
+	}
+	idStr := strconv.FormatInt(created.ID, 10)
+
+	rec = httptest.NewRecorder()
+	h.List(rec, httptest.NewRequest(http.MethodGet, "/prowlarr", nil))
+	if strings.Contains(rec.Body.String(), "topsecret") {
+		t.Errorf("list response leaked the api key: %s", rec.Body.String())
+	}
+	var list []models.ProwlarrInstance
+	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected 1 instance, got %d", len(list))
+	}
+	if list[0].APIKey != "" || !list[0].APIKeyConfigured {
+		t.Errorf("list: apiKey=%q apiKeyConfigured=%v, want empty/true", list[0].APIKey, list[0].APIKeyConfigured)
+	}
+
+	rec = httptest.NewRecorder()
+	h.Update(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/prowlarr/"+idStr,
+		bytes.NewBufferString(`{"name":"Renamed","url":"http://10.10.10.10:9696"}`)), "id", idStr))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "topsecret") {
+		t.Errorf("update response leaked the api key: %s", rec.Body.String())
+	}
+	var updated models.ProwlarrInstance
+	if err := json.NewDecoder(rec.Body).Decode(&updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.APIKey != "" || !updated.APIKeyConfigured {
+		t.Errorf("update: apiKey=%q apiKeyConfigured=%v, want empty/true", updated.APIKey, updated.APIKeyConfigured)
+	}
+}
+
+// TestProwlarrUpdate_BlankKeyDoesNotCascadeWipe is the high-risk case in
+// #2212. The web app now sends the redacted (blank) key back on every save, so
+// a blank key has to mean "keep the stored one". If it were read as a change,
+// the previousKey comparison in Update would rewrite api_key to the empty
+// string on every indexer synced from this instance, silently breaking search
+// across the whole library.
+func TestProwlarrUpdate_BlankKeyDoesNotCascadeWipe(t *testing.T) {
+	for name, body := range map[string]string{
+		"omitted apiKey":          `{"name":"P","url":"http://10.0.0.5:9696","enabled":true}`,
+		"explicitly blank apiKey": `{"name":"P","url":"http://10.0.0.5:9696","enabled":true,"apiKey":""}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, instances, indexers, _ := prowlarrFixture(t)
+			ctx := context.Background()
+
+			inst := &models.ProwlarrInstance{Name: "P", URL: "http://10.0.0.5:9696", APIKey: "keep-me", Enabled: true}
+			if err := instances.Create(ctx, inst); err != nil {
+				t.Fatal(err)
+			}
+			idx := &models.Indexer{
+				Name: "From Prowlarr", Type: "torznab", URL: "http://10.0.0.5:9696/1/api",
+				APIKey: "keep-me", Enabled: true, ProwlarrInstanceID: &inst.ID,
+			}
+			if err := indexers.Create(ctx, idx); err != nil {
+				t.Fatal(err)
+			}
+
+			idStr := strconv.FormatInt(inst.ID, 10)
+			rec := httptest.NewRecorder()
+			h.Update(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/prowlarr/"+idStr,
+				bytes.NewBufferString(body)), "id", idStr))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("update: expected 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+
+			stored, err := instances.GetByID(ctx, inst.ID)
+			if err != nil || stored == nil {
+				t.Fatalf("reload instance: %v", err)
+			}
+			if stored.APIKey != "keep-me" {
+				t.Errorf("instance key = %q, want keep-me", stored.APIKey)
+			}
+			rows, err := indexers.ListByProwlarrInstance(ctx, inst.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 1 {
+				t.Fatalf("expected 1 synced indexer, got %d", len(rows))
+			}
+			if rows[0].APIKey != "keep-me" {
+				t.Errorf("blank submit cascaded a wipe to the synced indexer: key = %q", rows[0].APIKey)
+			}
+		})
+	}
+}
+
+// TestProwlarrUpdate_ClearAPIKey checks that the deliberate clear still works
+// and still cascades, which is what distinguishes it from a blank submit.
+func TestProwlarrUpdate_ClearAPIKey(t *testing.T) {
+	h, instances, indexers, _ := prowlarrFixture(t)
+	ctx := context.Background()
+
+	inst := &models.ProwlarrInstance{Name: "P", URL: "http://10.0.0.5:9696", APIKey: "old", Enabled: true}
+	if err := instances.Create(ctx, inst); err != nil {
+		t.Fatal(err)
+	}
+	idx := &models.Indexer{
+		Name: "From Prowlarr", Type: "torznab", URL: "http://10.0.0.5:9696/1/api",
+		APIKey: "old", Enabled: true, ProwlarrInstanceID: &inst.ID,
+	}
+	if err := indexers.Create(ctx, idx); err != nil {
+		t.Fatal(err)
+	}
+
+	idStr := strconv.FormatInt(inst.ID, 10)
+	rec := httptest.NewRecorder()
+	h.Update(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/prowlarr/"+idStr,
+		bytes.NewBufferString(`{"name":"P","url":"http://10.0.0.5:9696","enabled":true,"clearApiKey":true}`)), "id", idStr))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var updated models.ProwlarrInstance
+	if err := json.NewDecoder(rec.Body).Decode(&updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.APIKeyConfigured {
+		t.Error("response should report apiKeyConfigured=false after a clear")
+	}
+
+	stored, _ := instances.GetByID(ctx, inst.ID)
+	if stored == nil || stored.APIKey != "" {
+		t.Fatalf("clearApiKey did not clear the stored key: %+v", stored)
+	}
+	rows, _ := indexers.ListByProwlarrInstance(ctx, inst.ID)
+	if len(rows) != 1 || rows[0].APIKey != "" {
+		t.Errorf("clear should cascade to synced indexers, got %+v", rows)
+	}
+}
+
+// TestProwlarrUpdate_ConflictingKeyFields rejects a body that both supplies a
+// key and asks to clear it, rather than silently picking one.
+func TestProwlarrUpdate_ConflictingKeyFields(t *testing.T) {
+	h, instances, _, _ := prowlarrFixture(t)
+	ctx := context.Background()
+
+	inst := &models.ProwlarrInstance{Name: "P", URL: "http://10.0.0.5:9696", APIKey: "old", Enabled: true}
+	if err := instances.Create(ctx, inst); err != nil {
+		t.Fatal(err)
+	}
+
+	idStr := strconv.FormatInt(inst.ID, 10)
+	rec := httptest.NewRecorder()
+	h.Update(rec, withURLParam(httptest.NewRequest(http.MethodPut, "/prowlarr/"+idStr,
+		bytes.NewBufferString(`{"name":"P","url":"http://10.0.0.5:9696","apiKey":"new","clearApiKey":true}`)), "id", idStr))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	stored, _ := instances.GetByID(ctx, inst.ID)
+	if stored == nil || stored.APIKey != "old" {
+		t.Errorf("rejected update must not touch the key: %+v", stored)
 	}
 }
