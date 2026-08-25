@@ -263,6 +263,13 @@ The usual culprit is the **allowed languages** list on the author's metadata pro
 - **The language list itself.** A work whose language is outside the list is skipped. Foreign-language editions of an English author are the common case.
 - **"When book language is unknown".** OpenLibrary carries no language on many *work* records, so a large tail of an author's catalogue arrives with no language at all. Set to **fail**, every one of those is skipped too — which is what turns "a few translations were dropped" into "most of this author is missing". Setting it to **pass** and refreshing again brings them back.
 
+Two more settings on the same profile drop books by looking at the work's **editions** rather than the work itself:
+
+- **Min pages.** A work is skipped when no edition of it reports a page count at or above the floor. A work whose editions carry no page count at all is treated as unknown and kept, not skipped.
+- **Skip missing ISBN.** A work is skipped when no edition of it carries an ISBN. A work the provider returns no editions for counts as missing and is skipped too.
+
+Both read the full edition list. Older versions fetched only the first 50 editions of an OpenLibrary work, in an order OpenLibrary does not sort, so a heavily reprinted title whose ISBN or page count happened to sit further down the list was skipped even though it qualified. If either setting is on and books went missing that way, refresh the author again after upgrading.
+
 The skip counts are also in the log (`Settings → Logs`): the `author books synced` line carries `added`, `skipped_language`, `skipped_junk` and `skipped_media_type`, and is logged at WARN whenever anything was skipped. Per-book detail (which title, which language) is at DEBUG.
 
 ## A book shows a file path that no longer exists

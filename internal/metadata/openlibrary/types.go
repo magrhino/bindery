@@ -119,6 +119,11 @@ type authorResponse struct {
 }
 
 type editionsResponse struct {
+	// Size is the work's total edition count, which OpenLibrary reports
+	// alongside the (limit-truncated) Entries page. Pagination uses it as the
+	// authoritative terminator; older or partial responses omit it, in which
+	// case a short page is the signal instead.
+	Size    int            `json:"size"`
 	Entries []editionEntry `json:"entries"`
 }
 

@@ -43,10 +43,14 @@ const (
 // the work language (OpenLibrary works carry none of their own, so the
 // foreign-language filter has to sample editions — #891) and a missing cover
 // (OL attaches covers to editions far more consistently than to works —
-// #1748). The cap is deliberately small: the first handful of editions is
-// enough to establish the dominant language and holds the most-held printing's
-// cover, and the endpoint is expensive enough that OL throttles per-UA, so we
-// keep the round-trip cheap (limit=N) rather than paging the full edition list.
+// #1748). The cap is deliberately small: the endpoint is expensive enough that
+// OL throttles per-UA, so we keep the round trip cheap (limit=N) rather than
+// paging the full edition list the way GetEditions does.
+//
+// The cost of that is accuracy. OpenLibrary returns editions in no meaningful
+// order, so a handful of them is a sample rather than the leading editions, and
+// a work whose first few happen to be translations can be read as
+// foreign-language or pick up a foreign cover (#1779, still open on that half).
 //
 // The two derivations used to be separate samplers with separate caches, which
 // meant a work missing both language and cover cost TWO round trips to the
@@ -70,6 +74,20 @@ const authorWorkSampleConcurrency = 4
 const (
 	authorWorksPageSize = 100
 	authorWorksMaxFetch = 2000
+)
+
+// editionsPageSize is the per-request limit for the /works/{id}/editions.json
+// endpoint, and editionsMaxFetch bounds total pagination so a work with an
+// enormous edition count can't trigger unbounded requests.
+//
+// 200 is chosen so the overwhelming majority of works still cost exactly one
+// round trip: OpenLibrary honours a limit that high (verified against
+// /works/OL45804W/editions.json, size 139, returned in full at limit=200), and
+// works past that are rare enough that paying an extra request for them is the
+// right trade. 1000 covers even the most reprinted titles at five requests.
+const (
+	editionsPageSize = 200
+	editionsMaxFetch = 1000
 )
 
 // workEditionSample is everything one edition-list sample derives for a work.
@@ -609,41 +627,81 @@ func shouldFilterOLNoise(title string, subjects []string) bool {
 	return false
 }
 
+// GetEditions fetches a work's editions from /works/{id}/editions.json.
+//
+// The endpoint is paginated the same way /authors/{id}/works is: it returns at
+// most `limit` entries per call and advertises the work's edition total in
+// Size. This used to request one limit=50 page, so a work with more editions
+// than that reported only 50 of them, in whatever order OpenLibrary happened to
+// return — which is neither publication nor popularity order (#1779).
+//
+// The truncation reached further than a short list. The MinPages and
+// SkipMissingISBN metadata-profile filters ask whether ANY edition carries a
+// page count or an ISBN, so a work whose qualifying editions all sat past
+// position 50 was dropped from the author's library on sync. Fantastic Mr Fox
+// (OL45804W) is the case from the report: 139 editions, 76 of them carrying a
+// page count, and more than half of those past the old cap.
+//
+// Pagination stops on a short page, on reaching the advertised Size, or at
+// editionsMaxFetch. A first-page failure is returned to the caller; a later
+// page failing keeps the editions already collected rather than discarding
+// them, matching authorWorksBackfill.
 func (c *Client) GetEditions(ctx context.Context, bookForeignID string) ([]models.Edition, error) {
-	u := fmt.Sprintf("%s/works/%s/editions.json?limit=50", baseURL, bookForeignID)
-	var resp editionsResponse
-	if err := c.getJSON(ctx, u, &resp); err != nil {
-		return nil, fmt.Errorf("get editions for %s: %w", bookForeignID, err)
-	}
+	editions := make([]models.Edition, 0, editionsPageSize)
+	for offset := 0; offset < editionsMaxFetch; offset += editionsPageSize {
+		u := fmt.Sprintf("%s/works/%s/editions.json?limit=%d&offset=%d",
+			baseURL, bookForeignID, editionsPageSize, offset)
+		var resp editionsResponse
+		if err := c.getJSON(ctx, u, &resp); err != nil {
+			if offset == 0 {
+				return nil, fmt.Errorf("get editions for %s: %w", bookForeignID, err)
+			}
+			slog.Warn("openlibrary: edition pagination stopped early",
+				"work", bookForeignID, "offset", offset, "error", err)
+			break
+		}
 
-	editions := make([]models.Edition, 0, len(resp.Entries))
-	for _, e := range resp.Entries {
-		editionID := strings.TrimPrefix(e.Key, "/books/")
-		ed := models.Edition{
-			ForeignID: editionID,
-			Title:     e.Title,
-			Publisher: first(e.Publishers),
-			Format:    e.PhysicalFormat,
-			NumPages:  nilIfZero(e.NumberOfPages),
-			Monitored: true,
+		for _, e := range resp.Entries {
+			editions = append(editions, editionFromEntry(e))
 		}
-		if len(e.ISBN13) > 0 {
-			ed.ISBN13 = &e.ISBN13[0]
+
+		if len(resp.Entries) < editionsPageSize ||
+			(resp.Size > 0 && len(editions) >= resp.Size) {
+			break
 		}
-		if len(e.ISBN10) > 0 {
-			ed.ISBN10 = &e.ISBN10[0]
-		}
-		if len(e.Languages) > 0 {
-			ed.Language = strings.TrimPrefix(e.Languages[0].Key, "/languages/")
-		}
-		if len(e.Covers) > 0 && e.Covers[0] > 0 {
-			ed.ImageURL = fmt.Sprintf("%s/b/id/%d-L.jpg", coverURL, e.Covers[0])
-		}
-		format := strings.ToLower(ed.Format)
-		ed.IsEbook = strings.Contains(format, "ebook") || strings.Contains(format, "kindle")
-		editions = append(editions, ed)
+	}
+	if len(editions) >= editionsMaxFetch {
+		slog.Warn("openlibrary: editions hit pagination cap; edition list may be truncated",
+			"work", bookForeignID, "cap", editionsMaxFetch)
 	}
 	return editions, nil
+}
+
+// editionFromEntry maps one /works/{id}/editions.json entry onto an Edition.
+func editionFromEntry(e editionEntry) models.Edition {
+	ed := models.Edition{
+		ForeignID: strings.TrimPrefix(e.Key, "/books/"),
+		Title:     e.Title,
+		Publisher: first(e.Publishers),
+		Format:    e.PhysicalFormat,
+		NumPages:  nilIfZero(e.NumberOfPages),
+		Monitored: true,
+	}
+	if len(e.ISBN13) > 0 {
+		ed.ISBN13 = &e.ISBN13[0]
+	}
+	if len(e.ISBN10) > 0 {
+		ed.ISBN10 = &e.ISBN10[0]
+	}
+	if len(e.Languages) > 0 {
+		ed.Language = strings.TrimPrefix(e.Languages[0].Key, "/languages/")
+	}
+	if len(e.Covers) > 0 && e.Covers[0] > 0 {
+		ed.ImageURL = fmt.Sprintf("%s/b/id/%d-L.jpg", coverURL, e.Covers[0])
+	}
+	format := strings.ToLower(ed.Format)
+	ed.IsEbook = strings.Contains(format, "ebook") || strings.Contains(format, "kindle")
+	return ed
 }
 
 // FillMissingWorkLanguages derives a language for any book that arrived with an
@@ -798,9 +856,18 @@ func (c *Client) FillMissingWorkCovers(ctx context.Context, books []models.Book)
 	return int(filled.Load())
 }
 
-// firstEditionCover returns the cover URL of the first edition that has one, in
-// the order OpenLibrary returns them (most-held printings first), or "" when no
-// sampled edition carries a cover.
+// firstEditionCover returns the cover URL of the first sampled edition that has
+// one, or "" when none of them carries a cover.
+//
+// It used to say the entries arrive "most-held printings first". They do not:
+// /works/{id}/editions.json takes no sort parameter and its order is neither
+// publication nor popularity order, so which edition this lands on is not
+// meaningful (#1779). It is still a reasonable cover for a work that has none
+// of its own, which is the only situation it is consulted in, but a work whose
+// arbitrary first editions are a translation can pick up that translation's
+// cover. Making the choice deterministic is the open half of #1779 and needs a
+// wider sample than editionSampleCap, which is a cost decision rather than a
+// one-line change.
 func firstEditionCover(entries []editionEntry) string {
 	for _, e := range entries {
 		if len(e.Covers) > 0 && e.Covers[0] > 0 {
