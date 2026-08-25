@@ -192,6 +192,13 @@ func statRemappedPath(client *models.DownloadClient, clientPath, expectedHint, g
 	if strings.TrimSpace(client.PathRemap) == "" {
 		hint = "configure a path remap (Settings → Download clients) to translate the client's path to Bindery's, or mount the same storage at the same path in both"
 	}
+	if raw := strings.TrimSpace(clientPath); pathmap.IsWindowsPath(raw) {
+		// A drive path can never exist on Bindery's filesystem, so the generic
+		// "or mount the same storage at the same path in both" advice is a dead
+		// end for a Windows client (#1971). Name the only fix, with the exact
+		// pair to paste in.
+		hint = fmt.Sprintf("the client reports a Windows drive path, which Bindery cannot mount at the same location, so a path remap is required (Settings → Download clients) mapping it to the path Bindery sees, e.g. %q", raw+":/downloads")
+	}
 	msg := fmt.Sprintf("Connected, but Bindery can't read the client's completed-downloads folder at %q — %s.", localPath, hint)
 	if local := strings.TrimSpace(clientPath); local != "" && filepath.Clean(local) != localPath {
 		msg = fmt.Sprintf("Connected, but Bindery can't read the client's completed-downloads folder. The client writes to %q, which maps to %q inside Bindery, but that path does not exist — %s.", filepath.Clean(local), localPath, hint)

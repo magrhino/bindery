@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -204,6 +205,72 @@ func TestCheckCompletedPathVisibility_UnknownTypes(t *testing.T) {
 			t.Fatalf("type %q: status = %q, want %q", typ, got.Status, PathUnknown)
 		}
 	}
+}
+
+// TestCheckCompletedPathVisibility_WindowsClient reproduces Discussion #1971 at
+// the level the operator hits it: qBittorrent on Windows saving to S:\Downloads,
+// Bindery in Docker on Linux seeing the same storage elsewhere. Before the
+// drive-letter fix, Parse split `S:\Downloads:/mnt/...` at the drive colon, so
+// the remap never applied and the Test action always warned.
+func TestCheckCompletedPathVisibility_WindowsClient(t *testing.T) {
+	storage := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(storage, "bindery"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	newServer := func() *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/v2/auth/login":
+				_, _ = w.Write([]byte("Ok."))
+			case "/api/v2/torrents/categories":
+				// As qBittorrent on Windows reports it.
+				_, _ = w.Write([]byte(`{"books":{"name":"books","savePath":"S:\\Downloads\\bindery"}}`))
+			case "/api/v2/app/defaultSavePath":
+				_, _ = w.Write([]byte(""))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+	}
+
+	t.Run("drive-letter remap resolves", func(t *testing.T) {
+		srv := newServer()
+		defer srv.Close()
+		host, port := serverHostPort(t, srv.URL)
+		client := &models.DownloadClient{
+			Type: "qbittorrent", Host: host, Port: port,
+			Username: "u", Password: "p", Category: "books",
+			PathRemap: `S:\Downloads:` + storage,
+		}
+		got := CheckCompletedPathVisibility(context.Background(), client, "/some/download/dir", "", "")
+		if got.Status != PathVisible {
+			t.Fatalf("status = %q, want %q; message=%s", got.Status, PathVisible, got.Message)
+		}
+		if want := filepath.Join(storage, "bindery"); got.Path != want {
+			t.Fatalf("resolved path = %q, want %q", got.Path, want)
+		}
+	})
+
+	t.Run("no remap names the drive path as the reason", func(t *testing.T) {
+		srv := newServer()
+		defer srv.Close()
+		host, port := serverHostPort(t, srv.URL)
+		client := &models.DownloadClient{
+			Type: "qbittorrent", Host: host, Port: port,
+			Username: "u", Password: "p", Category: "books",
+		}
+		got := CheckCompletedPathVisibility(context.Background(), client, "/some/download/dir", "", "")
+		if got.Status != PathNotVisible {
+			t.Fatalf("status = %q, want %q; message=%s", got.Status, PathNotVisible, got.Message)
+		}
+		if !strings.Contains(got.Message, "Windows drive path") {
+			t.Fatalf("message %q does not explain the Windows case", got.Message)
+		}
+		if strings.Contains(got.Message, "mount the same storage at the same path in both") {
+			t.Fatalf("message %q still offers advice that cannot work for a Windows client", got.Message)
+		}
+	})
 }
 
 func readBody(t *testing.T, r *http.Request) string {

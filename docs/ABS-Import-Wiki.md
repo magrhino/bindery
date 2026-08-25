@@ -55,6 +55,7 @@ A good pre-import cleanup pass in ABS is worth it. If your library already has s
 - Pick the ABS book libraries you want to import from.
 - If ABS and Bindery see the same storage under different mount prefixes, configure path remaps such as `/audiobookshelf:/books/audiobookshelf`.
 - Path remaps are prefix rewrites. The left side is the path prefix ABS reports, and the right side is the path prefix Bindery can actually read. Bindery applies the rewrite before checking whether the resolved file lives under a Bindery-visible library root.
+- If ABS runs on Windows, its paths carry a drive letter. Write the pair as `S:\Audiobooks:/mnt/Storage/Audiobooks`; the colon after the drive letter is part of the path and is not treated as a second separator. Either slash works on the Windows side and matching ignores case.
 - If you want the best initial match rate, it helps to make sure your ABS library metadata is already in good shape before importing.
 
 ## Import Flow

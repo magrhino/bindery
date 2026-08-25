@@ -298,6 +298,27 @@ For a per-client remap, open **Settings → Download clients**, edit the client,
 
 The download client reports `/downloads/complete/My.Book`; Bindery remaps to `/media/complete/My.Book`.
 
+### Windows download client, Bindery on Linux or Docker
+
+A download client running on Windows reports a drive path such as `S:\Downloads`. Bindery cannot mount anything at that location, so a path remap is **required** here, not optional. Put the Windows path on the left, exactly as the client reports it, and Bindery's own path on the right.
+
+| Side | Path |
+|------|------|
+| qBittorrent on Windows 11 | `S:\Downloads` |
+| Bindery in Docker on Ubuntu | `/mnt/Storage/Downloads` |
+
+```
+S:\Downloads:/mnt/Storage/Downloads
+```
+
+Notes for this topology:
+
+- The drive letter's colon is not the pair separator. `S:\Downloads:/mnt/Storage/Downloads` is one pair, not two.
+- Either separator works on the Windows side. `S:/Downloads:/mnt/Storage/Downloads` is equivalent, and matching ignores case, so `s:\downloads` also matches.
+- Map the folder the client actually saves into, not a subfolder Bindery creates. If qBittorrent's category saves to `S:\Downloads\bindery`, the pair above still resolves it to `/mnt/Storage/Downloads/bindery`.
+- Bindery's side keeps forward slashes in the result, and the reverse direction (the save path Bindery hands qBittorrent when it grabs a torrent) is rebuilt as a Windows path automatically.
+- Hardlinks cannot cross this boundary, so imports **copy**. Budget disk space accordingly.
+
 ### Docker Compose
 
 ```yaml

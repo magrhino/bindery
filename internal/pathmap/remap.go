@@ -4,7 +4,7 @@ package pathmap
 
 import (
 	"fmt"
-	"path/filepath"
+	"path"
 	"strings"
 )
 
@@ -15,14 +15,34 @@ type Remapper struct {
 	rules []remapRule
 }
 
+// remapRule is one from:to prefix pair. Either side may be a Windows path
+// (`S:\Downloads`), which is matched case-insensitively and treats `\` and `/`
+// as interchangeable separators, the way Windows itself does. POSIX sides stay
+// case-sensitive and `/`-only.
 type remapRule struct {
 	from string
 	to   string
+
+	fromWin bool
+	toWin   bool
+
+	// fromSep/toSep are the separator the operator wrote on that side, so a
+	// path rebuilt onto a Windows side keeps the style it was configured with.
+	fromSep string
+	toSep   string
+
+	// fromKey/toKey are the comparison forms: for a Windows side, separators
+	// folded to `/` and ASCII letters folded to lower case. Folding preserves
+	// byte length, so an index into the key is also an index into the original.
+	fromKey string
+	toKey   string
 }
 
 // Parse accepts a comma-separated list of `from:to` pairs, e.g.
-// `/downloads:/media,/srv/sab:/mnt/sab`. Empty or malformed entries are
-// skipped. A nil-safe zero Remapper is returned on empty input.
+// `/downloads:/media,/srv/sab:/mnt/sab`. Windows drive letters are understood
+// on either side (`S:\Downloads:/downloads`): the colon of a drive designator
+// is not treated as the pair separator. Empty or malformed entries are skipped.
+// A nil-safe zero Remapper is returned on empty input.
 func Parse(spec string) *Remapper {
 	r := &Remapper{}
 	for entry := range strings.SplitSeq(spec, ",") {
@@ -30,16 +50,26 @@ func Parse(spec string) *Remapper {
 		if entry == "" {
 			continue
 		}
-		colon := strings.Index(entry, ":")
-		if colon <= 0 || colon == len(entry)-1 {
+		rawFrom, rawTo, ok := splitPair(entry)
+		if !ok {
 			continue
 		}
-		from := cleanPrefix(entry[:colon])
-		to := cleanPrefix(entry[colon+1:])
+		fromWin, toWin := IsWindowsPath(rawFrom), IsWindowsPath(rawTo)
+		from := cleanPrefix(rawFrom, fromWin)
+		to := cleanPrefix(rawTo, toWin)
 		if from == "" || to == "" {
 			continue
 		}
-		r.rules = append(r.rules, remapRule{from: from, to: to})
+		r.rules = append(r.rules, remapRule{
+			from:    from,
+			to:      to,
+			fromWin: fromWin,
+			toWin:   toWin,
+			fromSep: separatorStyle(rawFrom),
+			toSep:   separatorStyle(rawTo),
+			fromKey: matchKey(from, fromWin),
+			toKey:   matchKey(to, toWin),
+		})
 	}
 	r.sort()
 	return r
@@ -53,8 +83,14 @@ func Validate(spec string) error {
 		if pair == "" {
 			continue
 		}
-		parts := strings.SplitN(pair, ":", 2)
-		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		from, to, ok := splitPair(pair)
+		if !ok || strings.TrimSpace(from) == "" || strings.TrimSpace(to) == "" {
+			if IsWindowsPath(pair) {
+				// The commonest form of this mistake is pasting only the
+				// client-side Windows path and expecting Bindery to infer the
+				// rest, so name the working shape rather than just refusing.
+				return fmt.Errorf(`pair %d %q is not in 'from:to' format; a Windows path needs the Bindery-visible path after it, e.g. 'S:\Downloads:/downloads'`, i+1, pair)
+			}
 			return fmt.Errorf("pair %d %q is not in 'from:to' format", i+1, pair)
 		}
 	}
@@ -62,50 +98,75 @@ func Validate(spec string) error {
 }
 
 // Apply rewrites p according to the first matching from prefix. A rule matches
-// when p is exactly the source prefix or when it starts with source prefix + "/".
-// If no rule matches, p is returned unchanged.
+// when p is exactly the source prefix or when p continues past it at a
+// separator boundary. A Windows source matches case-insensitively and accepts
+// either separator, so a client that reports `S:/Downloads/Book` still matches
+// a rule written as `S:\Downloads`. The result is rendered for the destination
+// platform: a Windows source mapped to a POSIX destination yields forward
+// slashes. If no rule matches, p is returned unchanged.
 func (r *Remapper) Apply(p string) string {
 	if r == nil || len(r.rules) == 0 || p == "" {
 		return p
 	}
 	for _, rule := range r.rules {
-		if p == rule.from {
+		rest, ok := matchPrefix(p, rule.fromKey, rule.fromWin)
+		if !ok {
+			continue
+		}
+		if rest == "" {
 			return rule.to
 		}
-		if strings.HasPrefix(p, rule.from+"/") {
-			return filepath.Join(rule.to, strings.TrimPrefix(p, rule.from))
-		}
+		return joinRemainder(rule.to, rule.toWin, rule.toSep, rest, rule.fromWin)
 	}
 	return p
 }
 
 // ApplyInverse rewrites p in the opposite direction, from a Bindery-visible
-// path back to the external service mount point.
+// path back to the external service mount point. It round-trips Apply,
+// including the separator style the Windows side was configured with.
 func (r *Remapper) ApplyInverse(p string) string {
 	if r == nil || len(r.rules) == 0 || p == "" {
 		return p
 	}
 	var best *remapRule
-	for _, rule := range r.rules {
-		if p == rule.to || strings.HasPrefix(p, rule.to+"/") {
-			if best == nil || len(rule.to) > len(best.to) {
-				rule := rule
-				best = &rule
-			}
+	var bestRest string
+	for i := range r.rules {
+		rule := &r.rules[i]
+		rest, ok := matchPrefix(p, rule.toKey, rule.toWin)
+		if !ok {
+			continue
+		}
+		if best == nil || len(rule.to) > len(best.to) {
+			best, bestRest = rule, rest
 		}
 	}
-	if best != nil {
-		if p == best.to {
-			return best.from
-		}
-		return filepath.Join(best.from, strings.TrimPrefix(p, best.to))
+	if best == nil {
+		return p
 	}
-	return p
+	if bestRest == "" {
+		return best.from
+	}
+	return joinRemainder(best.from, best.fromWin, best.fromSep, bestRest, best.toWin)
 }
 
 // Empty reports whether the remapper has no rules.
 func (r *Remapper) Empty() bool {
 	return r == nil || len(r.rules) == 0
+}
+
+// IsWindowsPath reports whether p starts with a Windows drive designator — a
+// single ASCII letter, a colon, then a separator (`S:\Downloads`, `S:/Downloads`).
+// Callers use it to explain that a remap is mandatory when a download client
+// reports a drive path that cannot exist on Bindery's filesystem.
+func IsWindowsPath(p string) bool {
+	p = strings.TrimSpace(p)
+	if len(p) < 3 || p[1] != ':' {
+		return false
+	}
+	if !isASCIILetter(p[0]) {
+		return false
+	}
+	return p[2] == '\\' || p[2] == '/'
 }
 
 func (r *Remapper) sort() {
@@ -116,11 +177,100 @@ func (r *Remapper) sort() {
 	}
 }
 
-func cleanPrefix(value string) string {
+// splitPair splits an entry into its from and to halves at the first colon that
+// is not part of a Windows drive designator. Reported ok only when both halves
+// are non-empty.
+func splitPair(entry string) (string, string, bool) {
+	start := 0
+	if IsWindowsPath(entry) {
+		// Skip past `X:` so the drive colon is never the split point.
+		start = 2
+	}
+	colon := strings.Index(entry[start:], ":")
+	if colon < 0 {
+		return "", "", false
+	}
+	colon += start
+	from, to := entry[:colon], entry[colon+1:]
+	if from == "" || to == "" {
+		return "", "", false
+	}
+	return from, to, true
+}
+
+// matchPrefix reports whether p sits at or under the prefix key, returning the
+// remainder (which starts with a separator) when it does. The remainder is
+// sliced out of p, so it keeps p's original separators and case.
+func matchPrefix(p, key string, win bool) (string, bool) {
+	probe := matchKey(p, win)
+	if probe == key {
+		return "", true
+	}
+	if strings.HasPrefix(probe, key+"/") {
+		return p[len(key):], true
+	}
+	return "", false
+}
+
+// matchKey folds a path into its comparison form. Windows paths fold `\` to `/`
+// and ASCII upper case to lower; POSIX paths are returned verbatim because
+// Linux filesystems are case-sensitive and `\` is an ordinary filename byte.
+// The fold is byte-for-byte, so key offsets stay valid in the original string.
+func matchKey(p string, win bool) string {
+	if !win {
+		return p
+	}
+	b := []byte(p)
+	for i := range b {
+		switch {
+		case b[i] == '\\':
+			b[i] = '/'
+		case b[i] >= 'A' && b[i] <= 'Z':
+			b[i] += 'a' - 'A'
+		}
+	}
+	return string(b)
+}
+
+// joinRemainder appends rest to target. rest is normalised first when it came
+// off a Windows source, because filepath.Join on a Linux binary does not treat
+// `\` as a separator and would otherwise bake it into the POSIX result.
+func joinRemainder(target string, targetWin bool, targetSep, rest string, sourceWin bool) string {
+	if sourceWin {
+		rest = strings.ReplaceAll(rest, `\`, "/")
+	}
+	if !targetWin {
+		return path.Join(target, rest)
+	}
+	joined := path.Join(strings.ReplaceAll(target, `\`, "/"), rest)
+	if targetSep == `\` {
+		return strings.ReplaceAll(joined, "/", `\`)
+	}
+	return joined
+}
+
+// separatorStyle reports the separator the operator wrote, so a rebuilt Windows
+// path is handed back in the shape it was configured with.
+func separatorStyle(value string) string {
+	if strings.Contains(value, `\`) {
+		return `\`
+	}
+	return "/"
+}
+
+func cleanPrefix(value string, win bool) string {
 	value = strings.TrimSpace(value)
-	value = strings.TrimRight(value, "/")
+	if win {
+		value = strings.TrimRight(value, `/\`)
+	} else {
+		value = strings.TrimRight(value, "/")
+	}
 	if value == "" {
 		return ""
 	}
 	return value
+}
+
+func isASCIILetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
