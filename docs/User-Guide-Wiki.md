@@ -233,6 +233,12 @@ to the records. Things worth knowing before you judge the results:
 - The scan only matches files whose **author already exists** in Bindery, by
   normalised name — `B. Sanderson/` on disk won't match a "Brandon Sanderson"
   author row.
+- A Calibre book credited to several people is filed under the **first**
+  author only. Bindery books carry a single author, so the other credits are
+  not recorded. Those co-authors still get their own author page as soon as a
+  book credits them first. Older versions filed them as aliases of the primary
+  author instead, which silently swallowed their whole catalogue: see
+  [Troubleshooting](Troubleshooting-Wiki.md#books-are-filed-under-the-wrong-author-after-a-calibre-import).
 - ABS imports that "lose" titles usually didn't: ambiguous matches are parked
   in the **review queue** (Settings → Audiobookshelf) for you to resolve, and
   the import summary counts them.

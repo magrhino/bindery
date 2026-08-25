@@ -325,30 +325,199 @@ func TestImporter_SkipsBooksWithoutAuthors(t *testing.T) {
 	}
 }
 
-// TestImporter_SecondaryAuthorsBecomeAliases — Calibre books with
-// multiple authors are stored as (canonical, aliases) in Bindery. The
-// alias rows let future imports that present the co-author as primary
-// find the same row.
-func TestImporter_SecondaryAuthorsBecomeAliases(t *testing.T) {
+// collabBook is a Calibre book credited to two people, the shape at the
+// centre of #1684.
+func collabBook(id int64, title string, authors ...CalibreAuthor) CalibreBook {
+	return CalibreBook{
+		CalibreID: id, Title: title, SortTitle: title,
+		Authors: authors,
+		Formats: []CalibreFormat{{Format: "EPUB", FileName: "c", AbsolutePath: "/lib/" + title + ".epub"}},
+	}
+}
+
+// TestImporter_SecondaryAuthorsAreNotAliases: a co-author is a different
+// person who happened to share a cover, not another name for the primary
+// author. Recording them as aliases (which this importer used to do) made
+// the alias table claim names it had no business claiming (#1684).
+//
+// This test previously asserted the opposite; the behaviour it locked in
+// was the bug.
+func TestImporter_SecondaryAuthorsAreNotAliases(t *testing.T) {
 	imp, fr, _, _, _, aliasRepo, _ := newImporterFixture(t)
-	fr.books = []CalibreBook{{
-		CalibreID: 1, Title: "Collab", SortTitle: "Collab",
-		Authors: []CalibreAuthor{
-			{CalibreID: 1, Name: "Alice Author"},
-			{CalibreID: 2, Name: "Carol Coauthor"},
-		},
-		Formats: []CalibreFormat{{Format: "EPUB", FileName: "c", AbsolutePath: "/x.epub"}},
-	}}
+	fr.books = []CalibreBook{collabBook(1, "Collab",
+		CalibreAuthor{CalibreID: 1, Name: "Alice Author"},
+		CalibreAuthor{CalibreID: 2, Name: "Carol Coauthor"},
+	)}
 	if _, err := imp.Run(context.Background(), "/lib"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	// Look up the alias by name; it should point at the first author.
 	id, err := aliasRepo.LookupByName(context.Background(), "Carol Coauthor")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id == nil {
-		t.Fatal("secondary author should be recorded as alias")
+	if id != nil {
+		t.Fatalf("co-author recorded as alias of author %d; co-authors must not become aliases", *id)
+	}
+}
+
+// TestImporter_CoAuthorLaterCreditedAloneGetsOwnAuthor is the user-visible
+// regression from #1684. Both reporters lost whole back-catalogues this way:
+// a collaboration is imported first, its co-author becomes an alias of the
+// primary, and every later book by that co-author resolves through the alias
+// and is filed under the wrong person, who is never created at all.
+//
+// Which author survives depended on Calibre book id order, which is why the
+// symptom looked random.
+func TestImporter_CoAuthorLaterCreditedAloneGetsOwnAuthor(t *testing.T) {
+	imp, fr, authorRepo, bookRepo, _, _, _ := newImporterFixture(t)
+	fr.books = []CalibreBook{
+		// Lower calibre id, so this one is processed first.
+		collabBook(1, "Kem Antilles Collab",
+			CalibreAuthor{CalibreID: 1, Name: "Kem Antilles"},
+			CalibreAuthor{CalibreID: 2, Name: "Kevin J. Anderson"},
+		),
+		collabBook(2, "Solo Novel", CalibreAuthor{CalibreID: 2, Name: "Kevin J. Anderson"}),
+	}
+	ctx := context.Background()
+	if _, err := imp.Run(ctx, "/lib"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	authors, err := authorRepo.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := make(map[string]int64, len(authors))
+	for _, a := range authors {
+		byName[a.Name] = a.ID
+	}
+	andersonID, ok := byName["Kevin J. Anderson"]
+	if !ok {
+		t.Fatalf("co-author never got an author row; authors = %v", byName)
+	}
+	if _, ok := byName["Kem Antilles"]; !ok {
+		t.Fatalf("primary author missing; authors = %v", byName)
+	}
+
+	solo, err := bookRepo.GetByCalibreID(ctx, 2)
+	if err != nil || solo == nil {
+		t.Fatalf("solo book: %v / %v", err, solo)
+	}
+	if solo.AuthorID != andersonID {
+		t.Errorf("solo book filed under author %d, want Kevin J. Anderson (%d)", solo.AuthorID, andersonID)
+	}
+}
+
+// TestImporter_IgnoresUntrustedPreExistingAlias covers the installs that are
+// already polluted. New imports no longer mint co-author aliases, but the
+// rows minted by older versions are still in the table and would keep
+// swallowing authors forever. An unattributed alias whose name looks nothing
+// like the author it points at is not evidence of identity, so it no longer
+// decides who an incoming Calibre credit is. Crucially the row is left alone
+// rather than deleted, because nothing in the schema distinguishes it from a
+// legitimate one.
+func TestImporter_IgnoresUntrustedPreExistingAlias(t *testing.T) {
+	imp, fr, authorRepo, bookRepo, _, aliasRepo, _ := newImporterFixture(t)
+	ctx := context.Background()
+
+	pseudonym := &models.Author{ForeignID: "calibre:author:99", Name: "Kem Antilles", SortName: "Antilles, Kem"}
+	if err := authorRepo.Create(ctx, pseudonym); err != nil {
+		t.Fatal(err)
+	}
+	// The shape an older import left behind: no source id, name unrelated.
+	if err := aliasRepo.Create(ctx, &models.AuthorAlias{AuthorID: pseudonym.ID, Name: "Kevin J. Anderson"}); err != nil {
+		t.Fatal(err)
+	}
+
+	fr.books = []CalibreBook{collabBook(5, "Solo Novel", CalibreAuthor{CalibreID: 2, Name: "Kevin J. Anderson"})}
+	if _, err := imp.Run(ctx, "/lib"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	book, err := bookRepo.GetByCalibreID(ctx, 5)
+	if err != nil || book == nil {
+		t.Fatalf("book: %v / %v", err, book)
+	}
+	if book.AuthorID == pseudonym.ID {
+		t.Fatal("book was filed under the pseudonym via an untrusted alias")
+	}
+	author, err := authorRepo.GetByID(ctx, book.AuthorID)
+	if err != nil || author == nil {
+		t.Fatalf("author: %v / %v", err, author)
+	}
+	if author.Name != "Kevin J. Anderson" {
+		t.Errorf("book filed under %q, want a fresh %q row", author.Name, "Kevin J. Anderson")
+	}
+
+	// No data loss: the alias row survives, so indexer search keeps expanding
+	// on it and the user can remove it from the author page if they want to.
+	aliases, err := aliasRepo.ListByAuthor(ctx, pseudonym.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliases) != 1 || aliases[0].Name != "Kevin J. Anderson" {
+		t.Errorf("alias rows = %+v, want the pre-existing row left untouched", aliases)
+	}
+}
+
+// TestImporter_TrustedAliasesStillResolve guards the other side of the trust
+// rule: aliases that genuinely assert identity must keep working, or fixing
+// #1684 would just trade one duplicate-author bug for another.
+func TestImporter_TrustedAliasesStillResolve(t *testing.T) {
+	cases := []struct {
+		name       string
+		authorName string
+		sortName   string
+		alias      models.AuthorAlias
+		credit     string
+	}{
+		{
+			// Merged-away author / provider record: something asserted these
+			// are the same human, so the source id is the assertion.
+			name: "provenanced alias", authorName: "Samuel Clemens", sortName: "Clemens, Samuel",
+			alias: models.AuthorAlias{Name: "Mark Twain", SourceOLID: "OL18319A"}, credit: "Mark Twain",
+		},
+		{
+			// A punctuation variant of the same name is what an alias table
+			// is for; no provenance needed.
+			name: "name variant", authorName: "R.R. Haywood", sortName: "Haywood, R.R.",
+			alias: models.AuthorAlias{Name: "RR Haywood"}, credit: "RR Haywood",
+		},
+		{
+			// saveAlternateNames' reason to exist: a latin-script name for a
+			// non-latin author, which no matcher can connect by spelling.
+			name: "latin alias of non-latin author", authorName: "村上春樹", sortName: "村上春樹",
+			alias: models.AuthorAlias{Name: "Haruki Murakami"}, credit: "Haruki Murakami",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			imp, fr, authorRepo, bookRepo, _, aliasRepo, _ := newImporterFixture(t)
+			ctx := context.Background()
+
+			author := &models.Author{ForeignID: "ol:" + tc.authorName, Name: tc.authorName, SortName: tc.sortName}
+			if err := authorRepo.Create(ctx, author); err != nil {
+				t.Fatal(err)
+			}
+			alias := tc.alias
+			alias.AuthorID = author.ID
+			if err := aliasRepo.Create(ctx, &alias); err != nil {
+				t.Fatal(err)
+			}
+
+			fr.books = []CalibreBook{collabBook(3, "Some Book", CalibreAuthor{CalibreID: 3, Name: tc.credit})}
+			if _, err := imp.Run(ctx, "/lib"); err != nil {
+				t.Fatalf("run: %v", err)
+			}
+
+			book, err := bookRepo.GetByCalibreID(ctx, 3)
+			if err != nil || book == nil {
+				t.Fatalf("book: %v / %v", err, book)
+			}
+			if book.AuthorID != author.ID {
+				t.Errorf("book filed under author %d, want %q (%d) via its alias", book.AuthorID, tc.authorName, author.ID)
+			}
+		})
 	}
 }
 

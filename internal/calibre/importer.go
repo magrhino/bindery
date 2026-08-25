@@ -314,7 +314,17 @@ func (i *Importer) importOne(ctx context.Context, runID int64, cb CalibreBook, s
 	} else {
 		stats.AuthorsLinked++
 	}
-	i.recordSecondaryAuthors(ctx, author.ID, cb.Authors[1:], stats)
+	// Co-authors after the first are deliberately not recorded. Bindery books
+	// carry a single author_id, and the importer used to park the extra
+	// credits in author_aliases pointing at the primary. That made every
+	// co-author an alias of a person they merely shared a cover with, and
+	// stopped them ever getting an author row of their own (#1684). Dropping
+	// the credit loses nothing that was ever modelled; keeping it lost the
+	// author.
+	if len(cb.Authors) > 1 {
+		slog.Debug("calibre import: co-authors not modelled, filing under the first credit",
+			"calibre_id", cb.CalibreID, "author", author.Name, "coauthors", len(cb.Authors)-1)
+	}
 
 	book, newBook, err := i.upsertBook(ctx, runID, author, cb)
 	if err != nil {
@@ -519,7 +529,8 @@ func encodeSourceConfig(libraryPath string) string {
 // resolveAuthor returns the canonical Bindery author for the given Calibre
 // author. Lookup order:
 //  1. Exact name match on authors.name
-//  2. Alias match via author_aliases.name
+//  2. Alias match via author_aliases.name, but only when the alias row is
+//     itself trustworthy evidence of identity (see aliasBindsAuthor)
 //  3. Create a fresh authors row.
 //
 // `created` is true only for case 3. Calibre's author names are already
@@ -555,14 +566,24 @@ func (i *Importer) resolveAuthor(ctx context.Context, runID int64, ca CalibreAut
 		return existing, false, nil
 	}
 
-	if aliasID, err := i.aliases.LookupByName(ctx, name); err != nil {
+	if alias, err := i.aliases.GetByName(ctx, name); err != nil {
 		return nil, false, err
-	} else if aliasID != nil {
-		existing, err := i.authors.GetByID(ctx, *aliasID)
+	} else if alias != nil {
+		existing, err := i.authors.GetByID(ctx, alias.AuthorID)
 		if err != nil {
 			return nil, false, err
 		}
-		if existing != nil {
+		switch {
+		case existing == nil:
+			// Dangling alias (author deleted without cascade). Ignore it.
+		case !aliasBindsAuthor(*alias, existing):
+			// The alias is not evidence that this Calibre credit is the same
+			// person, so it must not decide the author's identity (#1684).
+			// Fall through to creating the real author; the row itself stays
+			// put because indexer search still expands on it.
+			slog.Info("calibre import: ignoring untrusted author alias",
+				"name", name, "aliasAuthor", existing.Name, "aliasAuthorID", existing.ID)
+		default:
 			i.recordAuthorBeforeSnapshot(ctx, runID, externalID, existing, outcomeLinked, map[string]any{"matchedBy": "alias"})
 			if err := i.authors.UpsertAuthorIdentifier(ctx, existing.ID, foreignID); err != nil {
 				return nil, false, err
@@ -657,21 +678,52 @@ func (i *Importer) findAuthorByName(ctx context.Context, name string) (*models.A
 	return best, nil
 }
 
-// recordSecondaryAuthors adds every co-author after the first to the
-// canonical author's alias list, so future imports that see the same
-// co-author-as-primary resolve back to the same Bindery row.
-func (i *Importer) recordSecondaryAuthors(ctx context.Context, canonicalID int64, extras []CalibreAuthor, _ *ImportStats) {
-	for _, ca := range extras {
-		name := strings.TrimSpace(ca.Name)
-		if name == "" {
-			continue
-		}
-		if err := i.aliases.Create(ctx, &models.AuthorAlias{AuthorID: canonicalID, Name: name}); err != nil {
-			// Non-fatal: an alias can collide with a real author. Log and
-			// move on — the primary ingest already succeeded.
-			slog.Debug("calibre import: alias record skipped", "name", name, "error", err)
+// aliasBindsAuthor reports whether an author_aliases row is strong enough
+// evidence to file an incoming Calibre author credit under the aliased
+// author instead of creating that author in their own right.
+//
+// It exists because an alias table mixes two very different kinds of row.
+// Rows carrying a source id came from an author merge or a provider record:
+// somebody or something asserted "these are the same human", so they bind.
+// Rows with no source id are unattributed, and historically that included
+// every co-author the Calibre importer minted (#1684), so they only bind when
+// the names themselves say the same person, which is what an alias table is
+// for.
+//
+// The one unattributed shape that still binds is a latin-script alias on a
+// non-latin canonical name: that is exactly what the add-author flow's
+// saveAlternateNames writes so "Murakami" on a release can reach "村上春樹",
+// and the two names can never look alike to a matcher.
+//
+// This mirrors the ABS importer's trustedAuthorAlias, which the Calibre path
+// never had.
+func aliasBindsAuthor(alias models.AuthorAlias, canonical *models.Author) bool {
+	if canonical == nil {
+		return false
+	}
+	if strings.TrimSpace(alias.SourceOLID) != "" {
+		return true
+	}
+	// FuzzyAuto and not just Exact: punctuation and spacing variants of one
+	// name are the whole point of an alias table, and an exact-only test would
+	// reject "RR Haywood" against "R.R. Haywood". Including it costs nothing
+	// here because the tier covers near-typos of the same name, and a
+	// co-author's name is not a near-typo of the person they wrote with, which
+	// is the shape this function has to refuse.
+	if kind := textutil.MatchAuthorName(alias.Name, canonical.Name).Kind; kind == textutil.AuthorMatchExact || kind == textutil.AuthorMatchFuzzyAuto {
+		return true
+	}
+	return !isAllASCII(canonical.Name) && isAllASCII(alias.Name)
+}
+
+// isAllASCII reports whether every byte of s is a 7-bit ASCII character.
+func isAllASCII(s string) bool {
+	for idx := 0; idx < len(s); idx++ {
+		if s[idx] > 127 {
+			return false
 		}
 	}
+	return true
 }
 
 // bookUpsertResult carries whether a book row was newly created and

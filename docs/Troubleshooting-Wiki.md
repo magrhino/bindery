@@ -195,6 +195,44 @@ The metadata button on an author's page only appears when Bindery thinks the aut
 
 An author that already has a filled-in record (a description, an image, ratings) hides the button, because there's nothing obviously better to fetch. So a missing button means that author already has good metadata. If an author looks well populated but still shows the button, the stored description/image/ratings are likely empty even though the page renders other fields — relink and pick the best match to fill them in.
 
+## Books are filed under the wrong author after a Calibre import
+
+Symptom: a Calibre library imports, and an author you own dozens of books by
+has no author page at all. Their titles are on somebody else's page, usually a
+co-author or a joint pen name. The log shows lines like:
+
+```
+DEBUG calibre import: alias record skipped error="alias \"Isaac Asimov\" already points at author 1125 (refusing to reassign to 105)" name="Isaac Asimov"
+```
+
+The scan then reports those same names under **Unmatched files** with "Parsed
+author isn't in your library", because the name only exists as an alias.
+
+What happened: for a book credited to several people, the import used to record
+every co-author as an *alias* of the first credited author ([#1684](https://github.com/vavallee/bindery/issues/1684)).
+An alias means "another name for this same person", so from then on every book
+by that co-author resolved back to their collaborator, and they never got an
+author row of their own. Which author survived came down to Calibre book id
+order, which is why it looked arbitrary. Rolling the import back does not undo
+it: aliases are shared entities, so a rollback leaves them in place.
+
+### Fix
+
+Upgrade, then re-import. Co-authors are no longer recorded as aliases, and an
+import now ignores an existing alias unless something backs it up, so the real
+authors get created on the next run. Nothing is deleted for you, because the
+database cannot tell a co-author alias apart from a legitimate one.
+
+To tidy up the leftovers, open the author page the books were wrongly filed
+under, find the wrong names in the **Aliases** list, and use the remove button
+on each. Books already attached to the wrong author stay there: move them with
+**Merge authors** on the Authors page, or edit the book's author directly.
+
+An alias is still honoured when it carries real provenance (an author merge, or
+a provider record), when it is simply a spelling variant of the author's own
+name, or when it is a latin-script name on a non-latin author (the "Murakami"
+to "村上春樹" case). Those keep working exactly as before.
+
 ## An author has far fewer books than they should after a refresh
 
 The catalogue sync filters the works the metadata provider returns before creating book rows, so a refresh can legitimately end with far fewer books than the author has written. After the refresh finishes, the author's page shows a note above the book list saying how many works were skipped and by which filter — reload the page if the refresh was still running when you last looked.

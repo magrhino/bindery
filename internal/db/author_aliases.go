@@ -87,6 +87,29 @@ func (r *AuthorAliasRepo) LookupByName(ctx context.Context, name string) (*int64
 	return &id, nil
 }
 
+// GetByName returns the whole alias row for the given name, or nil when no
+// alias matches. Same comparison as LookupByName (case-insensitive, trimmed);
+// callers that must weigh an alias's provenance before trusting it need
+// source_ol_id, which LookupByName throws away.
+func (r *AuthorAliasRepo) GetByName(ctx context.Context, name string) (*models.AuthorAlias, error) {
+	normalized := strings.TrimSpace(name)
+	if normalized == "" {
+		return nil, nil
+	}
+	var a models.AuthorAlias
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, author_id, name, COALESCE(source_ol_id, ''), created_at
+		FROM author_aliases WHERE LOWER(name) = LOWER(?)`, normalized)
+	err := row.Scan(&a.ID, &a.AuthorID, &a.Name, &a.SourceOLID, &a.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get alias %q: %w", normalized, err)
+	}
+	return &a, nil
+}
+
 // Create inserts an alias row. Idempotent on `name` — a duplicate name for
 // the *same* author is a no-op; a duplicate name for a *different* author
 // returns an error (the caller is trying to point one alias at two authors,

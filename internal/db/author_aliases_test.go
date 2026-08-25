@@ -139,6 +139,54 @@ func TestAliasLookupByName_CaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestAliasGetByName_CarriesProvenance(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	authorRepo := NewAuthorRepo(database)
+	aliasRepo := NewAuthorAliasRepo(database)
+
+	a := seedAuthor(t, authorRepo, "OL1A", "Samuel Clemens")
+	if err := aliasRepo.Create(ctx, &models.AuthorAlias{AuthorID: a.ID, Name: "Mark Twain", SourceOLID: "OL18319A"}); err != nil {
+		t.Fatalf("create alias: %v", err)
+	}
+	if err := aliasRepo.Create(ctx, &models.AuthorAlias{AuthorID: a.ID, Name: "Sam Clemens"}); err != nil {
+		t.Fatalf("create alias: %v", err)
+	}
+
+	// Provenance is the whole reason this exists: callers weigh source_ol_id
+	// before letting an alias decide who an author is.
+	got, err := aliasRepo.GetByName(ctx, "  mark twain  ")
+	if err != nil || got == nil {
+		t.Fatalf("get alias: %v / %v", err, got)
+	}
+	if got.AuthorID != a.ID || got.Name != "Mark Twain" || got.SourceOLID != "OL18319A" {
+		t.Errorf("alias = %+v, want author %d / Mark Twain / OL18319A", got, a.ID)
+	}
+
+	// An unattributed row reads back as an empty source, not NULL scan error.
+	got, err = aliasRepo.GetByName(ctx, "Sam Clemens")
+	if err != nil || got == nil {
+		t.Fatalf("get unattributed alias: %v / %v", err, got)
+	}
+	if got.SourceOLID != "" {
+		t.Errorf("source = %q, want empty", got.SourceOLID)
+	}
+
+	// Misses are nil, nil.
+	got, err = aliasRepo.GetByName(ctx, "Unknown Author")
+	if err != nil {
+		t.Errorf("unexpected error on miss: %v", err)
+	}
+	if got != nil {
+		t.Errorf("miss: want nil, got %+v", got)
+	}
+}
+
 func TestAliasListByAuthor(t *testing.T) {
 	database, err := OpenMemory()
 	if err != nil {
