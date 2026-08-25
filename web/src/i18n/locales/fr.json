@@ -469,7 +469,7 @@
     "searchPlaceholder": "Titre, ISBN ou ASIN (par exemple Dune, 9780441478125, B0DBJBFHGT)",
     "searching": "Recherche en cours...",
     "searchFailed": "Échec de la recherche",
-    "authorMissing": "Le nom de l'auteur manque dans ce résultat",
+    "idMissing": "Ce résultat n'a pas d'identifiant de livre et ne peut pas être ajouté",
     "added": "Ajouté",
     "adding": "Ajout en cours...",
     "addFailed": "Échec de l'ajout du livre"

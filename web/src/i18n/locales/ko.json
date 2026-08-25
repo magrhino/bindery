@@ -777,7 +777,7 @@
     "searchPlaceholder": "제목, ISBN 또는 ASIN (예: Dune, 9780441478125, B0DBJBFHGT)",
     "searching": "검색 중...",
     "searchFailed": "검색 실패",
-    "authorMissing": "이 결과에 저자 이름이 없습니다",
+    "idMissing": "이 결과에는 책 ID가 없어 추가할 수 없습니다",
     "added": "추가됨",
     "adding": "추가 중...",
     "addFailed": "도서 추가 실패"

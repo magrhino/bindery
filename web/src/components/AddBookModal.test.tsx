@@ -16,7 +16,7 @@ vi.mock('react-i18next', () => ({
       'addBookModal.searchPlaceholder': 'Title, ISBN, or ASIN (for example, Dune, 9780441478125, B0DBJBFHGT)',
       'addBookModal.searching': 'Searching...',
       'addBookModal.searchFailed': 'Search failed',
-      'addBookModal.authorMissing': 'Author name missing on this result',
+      'addBookModal.idMissing': 'This result has no book ID and cannot be added',
       'addBookModal.added': 'Added',
       'addBookModal.adding': 'Adding...',
       'addBookModal.addFailed': 'Failed to add book',
@@ -145,6 +145,70 @@ describe('AddBookModal — ASIN lookup (#1189)', () => {
     expect(api.searchBooks).toHaveBeenCalledWith('Dune')
     expect(api.lookupASIN).not.toHaveBeenCalled()
     expect(api.lookupISBN).not.toHaveBeenCalled()
+  })
+})
+
+describe('AddBookModal — authorless ISBN result (#2187)', () => {
+  const onClose = vi.fn()
+  const onAdded = vi.fn()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const lookupAndFind = async () => {
+    fireEvent.change(screen.getByPlaceholderText(/Title, ISBN, or ASIN/i), {
+      target: { value: '9780441013593' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^search$/i }))
+    await waitFor(() => expect(screen.getByText('Standalone Edition')).toBeInTheDocument())
+  }
+
+  it('lets a result with no author be added, and sends empty author fields', async () => {
+    // An OpenLibrary edition with no /works/ link and no resolvable author.
+    // The backend only requires foreignBookId — it resolves the author from
+    // the book id — so the modal must not refuse to send the request.
+    vi.mocked(api.lookupISBN).mockResolvedValue({
+      foreignBookId: 'OL999M',
+      title: 'Standalone Edition',
+    } as never)
+    vi.mocked(api.addBook).mockResolvedValue({ id: 7, title: 'Standalone Edition' } as never)
+
+    render(<AddBookModal onClose={onClose} onAdded={onAdded} />)
+    await lookupAndFind()
+
+    const addButton = screen.getByRole('button', { name: /^add$/i })
+    expect(addButton).toBeEnabled()
+
+    fireEvent.click(addButton)
+    await waitFor(() => expect(api.addBook).toHaveBeenCalled())
+    expect(vi.mocked(api.addBook).mock.calls[0][0]).toMatchObject({
+      foreignBookId: 'OL999M',
+      foreignAuthorId: '',
+      authorName: '',
+      searchOnAdd: true,
+    })
+    expect(onAdded).toHaveBeenCalledTimes(1)
+  })
+
+  it('still sends the author name when the result carries one but no author id (DNB)', async () => {
+    vi.mocked(api.lookupISBN).mockResolvedValue({
+      foreignBookId: 'DNB-123',
+      title: 'Standalone Edition',
+      author: { authorName: 'Frank Herbert' },
+    } as never)
+    vi.mocked(api.addBook).mockResolvedValue({ id: 8, title: 'Standalone Edition' } as never)
+
+    render(<AddBookModal onClose={onClose} onAdded={onAdded} />)
+    await lookupAndFind()
+
+    fireEvent.click(screen.getByRole('button', { name: /^add$/i }))
+    await waitFor(() => expect(api.addBook).toHaveBeenCalled())
+    expect(vi.mocked(api.addBook).mock.calls[0][0]).toMatchObject({
+      foreignBookId: 'DNB-123',
+      foreignAuthorId: '',
+      authorName: 'Frank Herbert',
+    })
   })
 })
 

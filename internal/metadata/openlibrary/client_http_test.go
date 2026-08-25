@@ -503,6 +503,123 @@ func TestGetBookByISBN_HTTP_FallbackNoWork(t *testing.T) {
 	}
 }
 
+// isbnAuthors builds the anonymous author-key slice of isbnResponse.
+func isbnAuthors(keys ...string) []struct {
+	Key string `json:"key"`
+} {
+	out := make([]struct {
+		Key string `json:"key"`
+	}, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, struct {
+			Key string `json:"key"`
+		}{Key: k})
+	}
+	return out
+}
+
+// An edition with no /works/ link still names its authors. The fallback used to
+// drop them, so an ISBN lookup returned a correct title and cover with no
+// author at all and nothing downstream filled it in (#2187).
+func TestGetBookByISBN_HTTP_FallbackResolvesAuthor(t *testing.T) {
+	isbnResp := isbnResponse{
+		Key:     "/books/OL999M",
+		Title:   "Standalone Edition",
+		Covers:  []int{11111},
+		Authors: isbnAuthors("/authors/OL123A"),
+	}
+	authorResp := authorResponse{
+		Key:  "/authors/OL123A",
+		Name: "Frank Herbert",
+	}
+	c := newClientWithPaths(t, map[string]interface{}{
+		"/isbn/0441013597.json": jsonStr(isbnResp),
+		"/authors/OL123A.json":  jsonStr(authorResp),
+	})
+
+	book, err := c.GetBookByISBN(context.Background(), "0441013597")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if book == nil {
+		t.Fatal("expected non-nil book")
+		return
+	}
+	if book.Author == nil {
+		t.Fatal("expected the edition's author to be resolved, got nil")
+		return
+	}
+	if book.Author.Name != "Frank Herbert" {
+		t.Errorf("Author.Name: want 'Frank Herbert', got %q", book.Author.Name)
+	}
+	if book.Author.ForeignID != "OL123A" {
+		t.Errorf("Author.ForeignID: want 'OL123A', got %q", book.Author.ForeignID)
+	}
+	// The rest of the fallback book is unchanged.
+	if book.Title != "Standalone Edition" {
+		t.Errorf("Title: want 'Standalone Edition', got %q", book.Title)
+	}
+}
+
+// An edition record with an empty authors[] is a real answer, not a failure:
+// the book comes back without an author and without an error.
+func TestGetBookByISBN_HTTP_FallbackNoAuthors(t *testing.T) {
+	isbnResp := isbnResponse{
+		Key:   "/books/OL999M",
+		Title: "Anonymous Edition",
+	}
+	c := newClientWithPaths(t, map[string]interface{}{
+		"/isbn/0441013597.json": jsonStr(isbnResp),
+	})
+
+	book, err := c.GetBookByISBN(context.Background(), "0441013597")
+	if err != nil {
+		t.Fatalf("GetBookByISBN: %v", err)
+	}
+	if book == nil {
+		t.Fatal("expected non-nil book")
+		return
+	}
+	if book.Author != nil {
+		t.Errorf("expected no author, got %+v", book.Author)
+	}
+	if book.Title != "Anonymous Edition" {
+		t.Errorf("Title: want 'Anonymous Edition', got %q", book.Title)
+	}
+}
+
+// A failing author fetch must not sink the ISBN lookup — the author is
+// best-effort, exactly as in GetBook.
+func TestGetBookByISBN_HTTP_FallbackAuthorFetchFails(t *testing.T) {
+	isbnResp := isbnResponse{
+		Key:     "/books/OL999M",
+		Title:   "Standalone Edition",
+		Authors: isbnAuthors("/authors/OL123A"),
+	}
+	c := newClientWithStatus(t,
+		map[string]interface{}{
+			"/isbn/0441013597.json": jsonStr(isbnResp),
+			"/authors/OL123A.json":  `{"error":"boom"}`,
+		},
+		map[string]int{"/authors/OL123A.json": http.StatusInternalServerError},
+	)
+
+	book, err := c.GetBookByISBN(context.Background(), "0441013597")
+	if err != nil {
+		t.Fatalf("author fetch failure must not fail the lookup, got %v", err)
+	}
+	if book == nil {
+		t.Fatal("expected the book despite the author fetch failing")
+		return
+	}
+	if book.Author != nil {
+		t.Errorf("expected no author after a failed fetch, got %+v", book.Author)
+	}
+	if book.Title != "Standalone Edition" {
+		t.Errorf("Title: want 'Standalone Edition', got %q", book.Title)
+	}
+}
+
 // A 404 from OpenLibrary means "this ISBN is not in their catalog" — not an
 // upstream failure. GetBookByISBN returns (nil, nil) so the API layer can
 // respond with a user-friendly "no book found" message (see issue #284).

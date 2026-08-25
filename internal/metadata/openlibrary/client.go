@@ -847,6 +847,12 @@ func (c *Client) GetSubjectBooks(ctx context.Context, subject string, limit int)
 	return candidates, nil
 }
 
+// GetBookByISBN resolves an ISBN to a Book. When the edition record links a
+// work, the work is authoritative and is fetched in full. Otherwise the Book is
+// built from the edition record itself, with the author resolved from the
+// edition's author key — the same extra round trip the work path already pays
+// inside GetBook. A 404 means "not in OpenLibrary's catalog" and returns
+// (nil, nil), not an error.
 func (c *Client) GetBookByISBN(ctx context.Context, isbn string) (*models.Book, error) {
 	u := fmt.Sprintf("%s/isbn/%s.json", baseURL, isbn)
 	var resp isbnResponse
@@ -877,6 +883,30 @@ func (c *Client) GetBookByISBN(ctx context.Context, isbn string) (*models.Book, 
 	if len(resp.Covers) > 0 && resp.Covers[0] > 0 {
 		b.ImageURL = fmt.Sprintf("%s/b/id/%d-L.jpg", coverURL, resp.Covers[0])
 	}
+
+	// Resolve the author from the edition record. Editions with no /works/
+	// link still name their authors, and nothing downstream fills this in:
+	// cacheISBNBook and enrichBook cover description, cover, rating, genres
+	// and language, never the author. Without this the result renders
+	// authorless and the caller has no author to add the book under (#2187).
+	//
+	// Best-effort, mirroring GetBook's own author resolution: a missing or
+	// unresolvable author must not sink an otherwise good ISBN lookup, so the
+	// failure is logged and the book returned without one.
+	if len(resp.Authors) > 0 {
+		authorKey := strings.TrimPrefix(resp.Authors[0].Key, "/authors/")
+		if authorKey != "" {
+			author, err := c.GetAuthor(ctx, authorKey)
+			if err != nil {
+				slog.Warn("openlibrary: failed to resolve isbn edition author",
+					"isbn", isbn, "key", authorKey, "error", err)
+			} else {
+				b.Author = author
+				b.AuthorID = author.ID
+			}
+		}
+	}
+
 	return b, nil
 }
 

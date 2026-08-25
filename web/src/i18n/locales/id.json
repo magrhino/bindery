@@ -512,7 +512,7 @@
     "searchPlaceholder": "Judul, ISBN, atau ASIN (misalnya Dune, 9780441478125, B0DBJBFHGT)",
     "searching": "Mencari...",
     "searchFailed": "Pencarian gagal",
-    "authorMissing": "Nama penulis tidak ada pada hasil ini",
+    "idMissing": "Hasil ini tidak memiliki ID buku dan tidak dapat ditambahkan",
     "added": "Ditambahkan",
     "adding": "Menambahkan...",
     "addFailed": "Gagal menambah buku"

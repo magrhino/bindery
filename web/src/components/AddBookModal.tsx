@@ -51,7 +51,7 @@ export default function AddBookModal({ onClose, onAdded }: Props) {
   }
 
   const addBook = async (book: Book) => {
-    if (!book.foreignBookId || !book.author?.authorName) return
+    if (!book.foreignBookId) return
     setAdding(book.foreignBookId)
     setAddError(null)
     try {
@@ -59,8 +59,12 @@ export default function AddBookModal({ onClose, onAdded }: Props) {
         foreignBookId: book.foreignBookId,
         // foreignAuthorId may be empty (e.g. DNB results) — the backend
         // resolves the author by ISBN against OpenLibrary in that case.
-        foreignAuthorId: book.author.foreignAuthorId ?? '',
-        authorName: book.author.authorName,
+        // authorName may be empty too (an ISBN edition whose provider record
+        // carries no author): the backend falls back to the book id, and
+        // answers 422 with a "add the author manually first" hint when even
+        // that fails. That is a better outcome than refusing to send (#2187).
+        foreignAuthorId: book.author?.foreignAuthorId ?? '',
+        authorName: book.author?.authorName ?? '',
         searchOnAdd,
         ...(mediaType ? { mediaType } : {}),
       })
@@ -135,9 +139,14 @@ export default function AddBookModal({ onClose, onAdded }: Props) {
               const key = book.foreignBookId || book.title
               const isAdded = added.has(book.foreignBookId)
               const isAdding = adding === book.foreignBookId
-              // Author *name* is enough — when foreignAuthorId is missing
-              // (DNB results), the backend resolves it by ISBN at add-time.
-              const canAdd = !!book.author?.authorName
+              // A book id is all the backend requires. With no
+              // foreignAuthorId it resolves the author from the book id
+              // itself, and falls back to the author *name* only when that
+              // fails (DNB and Google Books results, which carry a name but
+              // no author id, still rely on that fallback — it is unchanged).
+              // Gating on the name blocked ISBN results the API would have
+              // accepted (#2187).
+              const canAdd = !!book.foreignBookId
               return (
                 <div key={key} className="flex items-center gap-3 p-3 rounded-md bg-slate-200/50 dark:bg-zinc-800/50 hover:bg-slate-200 dark:hover:bg-zinc-800">
                   {book.imageUrl && (
@@ -156,7 +165,7 @@ export default function AddBookModal({ onClose, onAdded }: Props) {
                     onClick={() => addBook(book)}
                     disabled={isAdded || isAdding || !canAdd}
                     className={`px-3 py-1 rounded text-xs font-medium flex-shrink-0 ${isAdded ? 'bg-emerald-700 text-white opacity-75 cursor-default' : 'bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50'}`}
-                    title={!canAdd ? t('addBookModal.authorMissing') : undefined}
+                    title={!canAdd ? t('addBookModal.idMissing') : undefined}
                   >
                     {isAdded ? t('addBookModal.added') : isAdding ? t('addBookModal.adding') : t('common.add')}
                   </button>

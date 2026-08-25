@@ -512,7 +512,7 @@
     "searchPlaceholder": "Pamagat, ISBN, o ASIN (halimbawa, Dune, 9780441478125, B0DBJBFHGT)",
     "searching": "Naghahanap...",
     "searchFailed": "Nabigo ang paghahanap",
-    "authorMissing": "Walang pangalan ng may-akda sa resultang ito",
+    "idMissing": "Walang book ID ang resultang ito kaya hindi ito maidaragdag",
     "added": "Naidagdag",
     "adding": "Idinadagdag...",
     "addFailed": "Nabigong idagdag ang libro"
