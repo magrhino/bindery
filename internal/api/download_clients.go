@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -135,7 +137,7 @@ func (h *DownloadClientHandler) List(w http.ResponseWriter, r *http.Request) {
 		clients = []models.DownloadClient{}
 	}
 	h.attachHealth(clients)
-	writeJSON(w, http.StatusOK, clients)
+	writeJSON(w, http.StatusOK, downloadClientResponses(clients))
 }
 
 func (h *DownloadClientHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +148,7 @@ func (h *DownloadClientHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.attachClientHealth(client)
-	writeJSON(w, http.StatusOK, client)
+	writeJSON(w, http.StatusOK, downloadClientResponse(*client))
 }
 
 func (h *DownloadClientHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -183,7 +185,7 @@ func (h *DownloadClientHandler) Create(w http.ResponseWriter, r *http.Request) {
 	telemetry.MarkFirst(r.Context(), h.settings, telemetry.SettingFirstClientAt)
 	h.refreshClientHealthAsync(c)
 	h.attachClientHealth(&c)
-	writeJSON(w, http.StatusCreated, c)
+	writeJSON(w, http.StatusCreated, downloadClientResponse(c))
 }
 
 func (h *DownloadClientHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -194,9 +196,32 @@ func (h *DownloadClientHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var c models.DownloadClient
-	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	// Decode over a copy of the stored row rather than a zero value: JSON
+	// decoding only writes the keys the client actually sent, so an omitted
+	// field keeps whatever is on disk instead of being reset. Before #2213 a
+	// caller that left out "enabled", "useSsl" or "category" silently wiped
+	// them on every save. An explicitly sent false still disables a boolean.
+	// This mirrors the same fix already made to IndexerHandler.Update.
+	c := *existing
+	if err := json.Unmarshal(body, &c); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	// The credential fields need to know whether a key was present at all, so
+	// they are resolved from the raw body rather than from the decoded struct.
+	raw := map[string]json.RawMessage{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if err := applyDownloadClientCredentials(&c, existing, raw); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	if c.Host != "" {
@@ -221,7 +246,106 @@ func (h *DownloadClientHandler) Update(w http.ResponseWriter, r *http.Request) {
 	downloader.Evict(id)
 	h.refreshClientHealthAsync(c)
 	h.attachClientHealth(&c)
-	writeJSON(w, http.StatusOK, c)
+	writeJSON(w, http.StatusOK, downloadClientResponse(c))
+}
+
+// downloadClientResponses shapes a list for the wire. See downloadClientResponse.
+func downloadClientResponses(clients []models.DownloadClient) []models.DownloadClient {
+	out := make([]models.DownloadClient, 0, len(clients))
+	for _, c := range clients {
+		out = append(out, downloadClientResponse(c))
+	}
+	return out
+}
+
+// downloadClientResponse returns a copy of c with the stored credentials
+// blanked and the response-only booleans set, so no handler ever hands a
+// password or an API key back to a caller (#2213). Modelled on the same
+// treatment importListResponse gives models.ImportList.
+func downloadClientResponse(c models.DownloadClient) models.DownloadClient {
+	c.APIKeyConfigured = c.APIKey != ""
+	c.PasswordConfigured = c.Password != ""
+	c.APIKey = ""
+	c.Password = ""
+	return c
+}
+
+// rawDownloadClientBool reads an optional boolean field out of a raw update
+// body. An absent key is false; a key holding anything other than a boolean is
+// an error rather than a silent false.
+func rawDownloadClientBool(raw map[string]json.RawMessage, key string) (bool, error) {
+	value, ok := raw[key]
+	if !ok {
+		return false, nil
+	}
+	var b bool
+	if err := json.Unmarshal(value, &b); err != nil {
+		return false, fmt.Errorf("%s must be a boolean", key)
+	}
+	return b, nil
+}
+
+// rawDownloadClientNonEmptyString reports whether the body carries key with a
+// non-empty string value.
+func rawDownloadClientNonEmptyString(raw map[string]json.RawMessage, key string) bool {
+	value, ok := raw[key]
+	if !ok {
+		return false
+	}
+	var s string
+	if err := json.Unmarshal(value, &s); err != nil {
+		return false
+	}
+	return s != ""
+}
+
+// applyDownloadClientCredentials resolves the write-only credential fields for
+// an update (#2213). c has already been decoded over a copy of the stored row,
+// so an omitted key already carries the stored value; an explicitly sent empty
+// string means "keep the stored value" as well, which is what lets the edit
+// form save without ever holding the secret. Removing a credential takes an
+// explicit clearApiKey / clearPassword flag, and sending a value together with
+// its own clear flag is a contradiction rather than a precedence question.
+func applyDownloadClientCredentials(c, existing *models.DownloadClient, raw map[string]json.RawMessage) error {
+	clearAPIKey, err := rawDownloadClientBool(raw, "clearApiKey")
+	if err != nil {
+		return err
+	}
+	clearPassword, err := rawDownloadClientBool(raw, "clearPassword")
+	if err != nil {
+		return err
+	}
+	if clearAPIKey && rawDownloadClientNonEmptyString(raw, "apiKey") {
+		return errors.New("apiKey and clearApiKey cannot both be set")
+	}
+	if clearPassword && rawDownloadClientNonEmptyString(raw, "password") {
+		return errors.New("password and clearPassword cannot both be set")
+	}
+
+	switch {
+	case clearAPIKey:
+		c.APIKey = ""
+	case c.APIKey == "":
+		c.APIKey = existing.APIKey
+	}
+	switch {
+	case clearPassword:
+		c.Password = ""
+	case c.Password == "":
+		c.Password = existing.Password
+	}
+
+	// Rows written by a pre-#423 bindery kept a qBittorrent or Transmission
+	// password in the api_key column, and the repo mirrors that value back into
+	// Password on read. Clearing the password on such a row has to drop the
+	// mirror too, otherwise the repo write path copies it straight back and the
+	// credential survives the clear. This only fires when the api_key value is
+	// literally the password being cleared, so a real API key is left alone.
+	if clearPassword && !clearAPIKey && c.APIKey != "" && c.APIKey == existing.Password &&
+		!rawDownloadClientNonEmptyString(raw, "apiKey") {
+		c.APIKey = ""
+	}
+	return nil
 }
 
 func (h *DownloadClientHandler) Delete(w http.ResponseWriter, r *http.Request) {
@@ -311,6 +435,7 @@ func (h *DownloadClientHandler) TestConfig(w http.ResponseWriter, r *http.Reques
 	if c.Port == 0 {
 		c.Port = 8080
 	}
+	h.hydrateTestConfigCredentials(r.Context(), &c)
 	if err := httpsec.ValidateOutboundURL(downloadClientURL(&c), httpsec.PolicyLANLoopback); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -324,6 +449,38 @@ func (h *DownloadClientHandler) TestConfig(w http.ResponseWriter, r *http.Reques
 		Message        string                     `json:"message"`
 		PathVisibility *downloader.PathVisibility `json:"pathVisibility,omitempty"`
 	}{Message: "Connection verified", PathVisibility: pathVisibilityForResponse(pathVis)})
+}
+
+// hydrateTestConfigCredentials fills a blank credential on a test-a-config
+// request from the saved row it belongs to. The edit form no longer receives
+// the stored password or API key (#2213), so without this the "Test" button
+// would probe unauthenticated whenever the user did not retype the secret.
+//
+// It deliberately refuses to do so once the request points somewhere else:
+// type, host, port, TLS and URL base must all still match the saved row. That
+// keeps the endpoint from being turned into a way to read a stored credential
+// back out by aiming a probe at a host the caller controls.
+func (h *DownloadClientHandler) hydrateTestConfigCredentials(ctx context.Context, c *models.DownloadClient) {
+	if c.ID <= 0 || h.clients == nil {
+		return
+	}
+	if c.APIKey != "" && c.Password != "" {
+		return
+	}
+	stored, err := h.clients.GetByID(ctx, c.ID)
+	if err != nil || stored == nil {
+		return
+	}
+	if stored.Type != c.Type || stored.Host != c.Host || stored.Port != c.Port ||
+		stored.UseSSL != c.UseSSL || strings.TrimSpace(stored.URLBase) != strings.TrimSpace(c.URLBase) {
+		return
+	}
+	if c.APIKey == "" {
+		c.APIKey = stored.APIKey
+	}
+	if c.Password == "" {
+		c.Password = stored.Password
+	}
 }
 
 func (h *DownloadClientHandler) attachHealth(clients []models.DownloadClient) {

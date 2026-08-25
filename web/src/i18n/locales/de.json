@@ -243,7 +243,11 @@
     "clients": {
       "heading": "Download-Clients",
       "addButton": "+ Client hinzufügen",
-      "empty": "Keine Download-Clients konfiguriert. Fügen Sie SABnzbd hinzu, um Downloads zu aktivieren."
+      "empty": "Keine Download-Clients konfiguriert. Fügen Sie SABnzbd hinzu, um Downloads zu aktivieren.",
+      "passwordEditLabel": "Passwort (leer lassen, um das aktuelle zu behalten)",
+      "apiKeyEditLabel": "API-Schlüssel (leer lassen, um den aktuellen zu behalten)",
+      "credentialKeepHint": "Bindery sendet gespeicherte Passwörter und API-Schlüssel nicht mehr an den Browser zurück. Leer lassen, um den gespeicherten Wert zu behalten.",
+      "credentialUnsetHint": "Für diesen Client sind noch keine Zugangsdaten gespeichert."
     },
     "notifications": {
       "heading": "Webhook-Benachrichtigungen",

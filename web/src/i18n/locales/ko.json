@@ -436,7 +436,11 @@
       "empty": "설정된 다운로드 클라이언트가 없습니다. SABnzbd를 추가하여 다운로드를 활성화하세요.",
       "audiobookCategoryLabel": "오디오북 카테고리 / 레이블",
       "audiobookCategoryPlaceholder": "audiobooks",
-      "audiobookCategoryHelp": "선택 사항. 설정하면 오디오북 다운로드 시 위의 카테고리 대신 이 카테고리를 사용합니다. 전자책과 동일한 카테고리를 사용하려면 비워두세요."
+      "audiobookCategoryHelp": "선택 사항. 설정하면 오디오북 다운로드 시 위의 카테고리 대신 이 카테고리를 사용합니다. 전자책과 동일한 카테고리를 사용하려면 비워두세요.",
+      "passwordEditLabel": "비밀번호 (현재 값을 유지하려면 비워두세요)",
+      "apiKeyEditLabel": "API 키 (현재 키를 유지하려면 비워두세요)",
+      "credentialKeepHint": "Bindery는 저장된 비밀번호나 API 키를 더 이상 브라우저로 돌려보내지 않습니다. 저장된 값을 그대로 두려면 비워두세요.",
+      "credentialUnsetHint": "이 클라이언트에는 아직 저장된 자격 증명이 없습니다."
     },
     "notifications": {
       "heading": "웹훅 알림",

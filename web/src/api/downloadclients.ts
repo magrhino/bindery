@@ -6,9 +6,14 @@ export interface DownloadClient {
   type: string
   host: string
   port: number
+  // apiKey and password are write-only (#2213). Every response blanks them and
+  // reports whether one is stored through the two booleans below, so nothing in
+  // the browser ever holds a download-client secret it did not just type.
   apiKey: string
   username: string
   password: string
+  apiKeyConfigured: boolean
+  passwordConfigured: boolean
   useSsl: boolean
   urlBase: string
   category: string
@@ -19,6 +24,15 @@ export interface DownloadClient {
   pathRemap?: string
   enabled: boolean
   health?: DownloadClientHealth
+}
+
+// DownloadClientUpdate is the edit payload. Omitting apiKey or password (or
+// sending an empty string) keeps whatever is stored; removing one takes the
+// matching clear flag. Sending a non-empty value together with its own clear
+// flag is rejected with a 400.
+export type DownloadClientUpdate = Partial<DownloadClient> & {
+  clearApiKey?: boolean
+  clearPassword?: boolean
 }
 
 export interface DownloadClientHealth {
@@ -45,11 +59,14 @@ export const downloadClientsApi = {
   // Download clients
   listDownloadClients: () => request<DownloadClient[]>('/downloadclient'),
   addDownloadClient: (data: Partial<DownloadClient>) => request<DownloadClient>('/downloadclient', { method: 'POST', body: JSON.stringify(data) }),
-  updateDownloadClient: (id: number, data: Partial<DownloadClient>) => request<DownloadClient>(`/downloadclient/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  updateDownloadClient: (id: number, data: DownloadClientUpdate) => request<DownloadClient>(`/downloadclient/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteDownloadClient: (id: number) => request<void>(`/downloadclient/${id}`, { method: 'DELETE' }),
   testDownloadClient: (id: number) => request<{ message: string; health?: DownloadClientHealth; pathVisibility?: PathVisibility }>(`/downloadclient/${id}/test`, { method: 'POST' }),
   // Test an unsaved download-client config (Add/Edit form Test button). Does
   // not persist; mirrors testDownloadClient's response (minus async health).
-  testDownloadClientConfig: (data: Partial<DownloadClient>) =>
+  // Passing the saved client's id lets the backend fill in a credential the
+  // caller left blank, but only while type, host, port, TLS and URL base still
+  // match the saved row (#2213).
+  testDownloadClientConfig: (data: DownloadClientUpdate) =>
     request<{ message: string; pathVisibility?: PathVisibility }>('/downloadclient/test', { method: 'POST', body: JSON.stringify(data) }),
 }

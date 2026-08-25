@@ -137,8 +137,11 @@ type downloadClientRouteHandler interface {
 	TestConfig(http.ResponseWriter, *http.Request)
 }
 
-// registerDownloadClientRoutes mounts /downloadclient/* — entire subtree is
-// admin-only because List/Get return DownloadClient.Username, Password, APIKey.
+// registerDownloadClientRoutes mounts /downloadclient/*. The whole subtree
+// stays admin-only: List/Get still return the connection details and
+// DownloadClient.Username, and every write route sets credentials. Password and
+// APIKey themselves are write-only as of #2213, so a response no longer carries
+// them, but that reduced the blast radius rather than opening the routes up.
 func registerDownloadClientRoutes(r chi.Router, h downloadClientRouteHandler) {
 	r.Group(func(r chi.Router) {
 		r.Use(auth.RequireAdmin)

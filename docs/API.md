@@ -173,7 +173,11 @@ To test a saved indexer against its stored key, use
 ```
 GET    /api/v1/downloadclient                     list (filtered by visibility)
 POST   /api/v1/downloadclient                     add (admin)
+GET    /api/v1/downloadclient/{id}                fetch one (admin)
+PUT    /api/v1/downloadclient/{id}                update (admin)
+DELETE /api/v1/downloadclient/{id}                remove (admin)
 POST   /api/v1/downloadclient/{id}/test           probe connectivity (admin)
+POST   /api/v1/downloadclient/test                probe an unsaved config (admin)
 
 GET    /api/v1/queue                              active downloads with live downloader overlay
 POST   /api/v1/queue/grab                         submit a search result to the download client
@@ -204,6 +208,48 @@ GET    /api/v1/blocklist                          list blocked releases
 DELETE /api/v1/blocklist/{id}                     remove an entry
 DELETE /api/v1/blocklist/bulk                     bulk remove
 ```
+
+#### Download client credentials are write-only
+
+Every download client response blanks `apiKey` and `password` and reports
+whether one is stored through two extra booleans, so a stored secret is never
+handed back to a caller:
+
+```json
+{
+  "id": 3,
+  "name": "qBittorrent",
+  "type": "qbittorrent",
+  "username": "admin",
+  "apiKey": "",
+  "password": "",
+  "apiKeyConfigured": false,
+  "passwordConfigured": true
+}
+```
+
+`PUT /api/v1/downloadclient/{id}` decodes over the stored row, so any key you
+leave out keeps its stored value rather than being reset. That applies to the
+credentials too:
+
+* `apiKey` absent, or `""`: keeps the stored API key.
+* `apiKey: "new-value"`: replaces the stored API key.
+* `clearApiKey: true`: removes the stored API key.
+* `apiKey: "new-value"` together with `clearApiKey: true`: rejected with `400`, because the two contradict each other.
+
+`password` and `clearPassword` behave the same way. Because an empty string now
+means "keep", moving a client between a password type and an API-key type has
+to send the clear flag for the credential it is abandoning, otherwise the old
+secret stays on the row.
+
+Booleans follow the same rule: omitting `enabled` or `useSsl` leaves them as
+they were, and an explicitly sent `false` still turns them off.
+
+`POST /api/v1/downloadclient/test` probes a config without saving it. Include
+the saved client's `id` and the handler fills in a credential you left blank
+from that row, but only while `type`, `host`, `port`, `useSsl` and `urlBase`
+still match it. Point the probe anywhere else and it runs with whatever
+credential the body carried.
 
 ### Notifications, backups, system
 

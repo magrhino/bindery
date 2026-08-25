@@ -243,7 +243,11 @@
     "clients": {
       "heading": "Download-clients",
       "addButton": "+ Client toevoegen",
-      "empty": "Geen download-clients geconfigureerd. Voeg SABnzbd toe om downloads in te schakelen."
+      "empty": "Geen download-clients geconfigureerd. Voeg SABnzbd toe om downloads in te schakelen.",
+      "passwordEditLabel": "Wachtwoord (laat leeg om het huidige te behouden)",
+      "apiKeyEditLabel": "API-sleutel (laat leeg om de huidige te behouden)",
+      "credentialKeepHint": "Bindery stuurt opgeslagen wachtwoorden en API-sleutels niet meer terug naar de browser. Laat dit veld leeg om de opgeslagen waarde te behouden.",
+      "credentialUnsetHint": "Er zijn nog geen inloggegevens opgeslagen voor deze client."
     },
     "notifications": {
       "heading": "Webhook-meldingen",

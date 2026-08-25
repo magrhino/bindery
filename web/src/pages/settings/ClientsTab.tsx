@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, DownloadClient } from '../../api/client'
+import { api, DownloadClient, DownloadClientUpdate } from '../../api/client'
 import { inputCls } from './formStyles'
 import Toggle from './Toggle'
 import PathRemapField from './PathRemapField'
@@ -157,8 +157,11 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
   const [type, setType] = useState(client.type || 'sabnzbd')
   const [host, setHost] = useState(client.host)
   const [port, setPort] = useState(String(client.port))
-  const usesPassword = client.type === 'qbittorrent' || client.type === 'transmission' || client.type === 'nzbget' || client.type === 'deluge' || client.type === 'rtorrent'
-  const [credential, setCredential] = useState(usesPassword ? (client.password || '') : (client.apiKey || ''))
+  // Credentials are write-only (#2213): the API returns apiKey and password
+  // blank and reports presence through apiKeyConfigured / passwordConfigured
+  // instead, so there is nothing to seed here and nothing for a script reading
+  // the input's value to find. Blank on save means "keep the stored one".
+  const [credential, setCredential] = useState('')
   const [username, setUsername] = useState(client.username || '')
   const [useSSL, setUseSSL] = useState(client.useSsl || false)
   const [urlBase, setUrlBase] = useState(client.urlBase || '')
@@ -182,13 +185,49 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
   // both a username and a password (Deluge's Web UI has a password only).
   const hasUsername = (t: string) => t === 'qbittorrent' || t === 'transmission' || t === 'nzbget' || t === 'rtorrent'
 
-  // SCGI is rTorrent's own listener: no TLS, no auth. Say so where the choice
-  // is made rather than dropping the fields silently on save.
-  const scgiIgnored = rtorrentScgiIgnoredFields(type, urlBase, useSSL, username, credential)
+  // Whether the row already holds a credential of the kind the currently
+  // selected type uses. Drives the "leave blank to keep" wording and the masked
+  // placeholder; a type switch abandons the stored credential, so after one the
+  // field goes back to reading as unset.
+  const credentialStored = type === client.type &&
+    (isPasswordClient(type) ? client.passwordConfigured : client.apiKeyConfigured)
 
-  const buildData = () => isPasswordClient(type)
-    ? { ...client, name, type, host, port: parseInt(port), username: hasUsername(type) ? username : '', password: credential, apiKey: '', category, categoryAudiobook: categoryAudiobook.trim(), pathRemap: pathRemap.trim(), useSsl: useSSL, urlBase: urlBase.trim() }
-    : { ...client, name, type, host, port: parseInt(port), apiKey: credential, username: '', password: '', category, categoryAudiobook: categoryAudiobook.trim(), pathRemap: pathRemap.trim(), useSsl: useSSL, urlBase: urlBase.trim() }
+  // SCGI is rTorrent's own listener: no TLS, no auth. Say so where the choice
+  // is made rather than dropping the fields silently on save. A stored password
+  // counts even though the form can no longer show it.
+  const scgiIgnored = rtorrentScgiIgnoredFields(type, urlBase, useSSL, username, credential || (credentialStored ? 'stored' : ''))
+
+  // The stored credential of whichever kind this client no longer uses has to
+  // be dropped, otherwise switching a client from a password type to an
+  // API-key type (or back) leaves the old secret sitting in the row. The form
+  // used to do that by sending the other field as an empty string; under the
+  // write-only contract an empty string means "keep", so it now sends the
+  // explicit clear flag for the abandoned field, and omits the credential the
+  // user left blank rather than blanking the stored one (#2213).
+  const buildData = (): DownloadClientUpdate => {
+    const data: DownloadClientUpdate = {
+      id: client.id,
+      enabled: client.enabled,
+      name,
+      type,
+      host,
+      port: parseInt(port),
+      username: hasUsername(type) ? username : '',
+      category,
+      categoryAudiobook: categoryAudiobook.trim(),
+      pathRemap: pathRemap.trim(),
+      useSsl: useSSL,
+      urlBase: urlBase.trim(),
+    }
+    if (isPasswordClient(type)) {
+      data.clearApiKey = true
+      if (credential) data.password = credential
+    } else {
+      data.clearPassword = true
+      if (credential) data.apiKey = credential
+    }
+    return data
+  }
 
   const submit = async () => {
     const data = buildData()
@@ -278,8 +317,20 @@ function EditClientForm({ client, onClose, onSaved }: { client: DownloadClient; 
         </div>
       )}
       <div>
-        <label className={labelCls}>{isPasswordClient(type) ? 'Password' : 'API Key'}</label>
-        <input value={credential} onChange={e => setCredential(e.target.value)} placeholder={isPasswordClient(type) ? 'Password' : 'API Key'} type="password" className={inputCls} />
+        <label className={labelCls} htmlFor={`edit-credential-${client.id}`}>{isPasswordClient(type)
+          ? t('settings.clients.passwordEditLabel')
+          : t('settings.clients.apiKeyEditLabel')}</label>
+        <input
+          id={`edit-credential-${client.id}`}
+          value={credential}
+          onChange={e => setCredential(e.target.value)}
+          placeholder={credentialStored ? '••••••••' : (isPasswordClient(type) ? 'Password' : 'API Key')}
+          type="password"
+          className={inputCls}
+        />
+        <p className="text-xs text-slate-500 dark:text-zinc-500 mt-1">{credentialStored
+          ? t('settings.clients.credentialKeepHint')
+          : t('settings.clients.credentialUnsetHint')}</p>
       </div>
       <div>
         <label className={labelCls}>{type === 'transmission' ? 'Download Directory' : 'Category / Label'}</label>

@@ -265,7 +265,11 @@
     "clients": {
       "heading": "Clientes de descarga",
       "addButton": "+ Añadir cliente",
-      "empty": "No hay clientes de descarga configurados. Añade SABnzbd para activar las descargas."
+      "empty": "No hay clientes de descarga configurados. Añade SABnzbd para activar las descargas.",
+      "passwordEditLabel": "Contraseña (déjalo en blanco para conservar la actual)",
+      "apiKeyEditLabel": "Clave de API (déjalo en blanco para conservar la actual)",
+      "credentialKeepHint": "Bindery ya no devuelve al navegador las contraseñas ni las claves de API guardadas. Déjalo en blanco para conservar la que ya está almacenada.",
+      "credentialUnsetHint": "Todavía no hay ninguna credencial guardada para este cliente."
     },
     "notifications": {
       "heading": "Notificaciones por webhook",

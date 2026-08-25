@@ -133,9 +133,13 @@ function makeClient(overrides: Partial<DownloadClient> = {}): DownloadClient {
     type: 'sabnzbd',
     host: 'sabnzbd',
     port: 8080,
-    apiKey: 'sab-key',
+    // Credentials are write-only (#2213): responses blank apiKey and password
+    // and report whether one is stored through the two booleans instead.
+    apiKey: '',
     username: '',
     password: '',
+    apiKeyConfigured: true,
+    passwordConfigured: false,
     useSsl: false,
     urlBase: '',
     category: 'books',
@@ -1737,7 +1741,7 @@ describe('SettingsPage', () => {
   })
 
   it('edits a download client with credential remapping, SSL, URL Base, and category updates', async () => {
-    const client = makeClient({ id: 44, name: 'Old SAB', host: 'sab-old', apiKey: 'old-api' })
+    const client = makeClient({ id: 44, name: 'Old SAB', host: 'sab-old' })
 
     renderSettings({ clients: [client] })
     await openClientsTab()
@@ -1756,15 +1760,18 @@ describe('SettingsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'common.save' }))
 
     await waitFor(() => {
+      // clearApiKey rather than apiKey: ''. An empty string now means "keep
+      // the stored value", so abandoning the API key takes the explicit flag.
       expect(api.updateDownloadClient).toHaveBeenCalledWith(44, {
-        ...client,
+        id: 44,
+        enabled: true,
         name: 'qBit Books',
         type: 'qbittorrent',
         host: 'qbittorrent',
         port: 8081,
         username: 'qbit-user',
         password: 'qbit-pass',
-        apiKey: '',
+        clearApiKey: true,
         category: 'ebooks',
         categoryAudiobook: '',
         pathRemap: '/media:/books',

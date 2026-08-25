@@ -27,8 +27,19 @@ type DownloadClient struct {
 	// Username and Password are used by download clients that authenticate with
 	// credentials rather than an API key (e.g. qBittorrent, Transmission).
 	// These fields are persisted in dedicated download_clients table columns.
+	//
+	// APIKey and Password are write-only over the HTTP API: the handlers blank
+	// them on every response and report presence through the two booleans
+	// below instead (#2213).
 	Username string `json:"username"`
 	Password string `json:"password"`
+
+	// APIKeyConfigured and PasswordConfigured are response-only. They are
+	// never persisted and never read from a request body; the API layer sets
+	// them so a caller can tell that a credential is stored without being
+	// handed the credential itself.
+	APIKeyConfigured   bool `json:"apiKeyConfigured"`
+	PasswordConfigured bool `json:"passwordConfigured"`
 }
 
 type DownloadClientHealth struct {

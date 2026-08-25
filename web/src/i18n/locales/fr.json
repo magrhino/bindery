@@ -243,7 +243,11 @@
     "clients": {
       "heading": "Clients de téléchargement",
       "addButton": "+ Ajouter un client",
-      "empty": "Aucun client de téléchargement configuré. Ajoutez SABnzbd pour activer les téléchargements."
+      "empty": "Aucun client de téléchargement configuré. Ajoutez SABnzbd pour activer les téléchargements.",
+      "passwordEditLabel": "Mot de passe (laisser vide pour conserver l’actuel)",
+      "apiKeyEditLabel": "Clé API (laisser vide pour conserver l’actuelle)",
+      "credentialKeepHint": "Bindery ne renvoie plus au navigateur les mots de passe ni les clés API enregistrés. Laissez ce champ vide pour conserver la valeur déjà enregistrée.",
+      "credentialUnsetHint": "Aucun identifiant n’est encore enregistré pour ce client."
     },
     "notifications": {
       "heading": "Notifications webhook",
