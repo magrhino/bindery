@@ -368,9 +368,18 @@ func (c *Client) RemoveTorrent(ctx context.Context, hash string, deleteFiles boo
 	if err := c.ensureLoggedIn(ctx); err != nil {
 		return err
 	}
-	var result bool
+	// core.remove_torrent answers False when the daemon declines the removal
+	// without raising, which doCall's error-member check cannot see: the reply
+	// is a plain 200 with no error object, so discarding this flag reported
+	// every such refusal as a success (#2192). A pointer distinguishes an
+	// explicit false from a daemon that answered null; only the former is a
+	// refusal.
+	var result *bool
 	if err := c.call(ctx, true, "core.remove_torrent", []any{hash, deleteFiles}, &result); err != nil {
 		return fmt.Errorf("remove torrent: %w", err)
+	}
+	if result != nil && !*result {
+		return fmt.Errorf("deluge rejected the removal of torrent %s (core.remove_torrent returned false); check the Deluge daemon's log for the reason", hash)
 	}
 	return nil
 }

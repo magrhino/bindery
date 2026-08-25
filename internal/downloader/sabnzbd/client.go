@@ -299,7 +299,10 @@ func (c *Client) Pause(ctx context.Context, nzoID string) error {
 		"value": {nzoID},
 	}
 	var resp SimpleResponse
-	return c.apiCall(ctx, params, &resp)
+	if err := c.apiCall(ctx, params, &resp); err != nil {
+		return err
+	}
+	return checkSimpleResponse("pause", resp)
 }
 
 // Resume resumes a paused download.
@@ -310,7 +313,10 @@ func (c *Client) Resume(ctx context.Context, nzoID string) error {
 		"value": {nzoID},
 	}
 	var resp SimpleResponse
-	return c.apiCall(ctx, params, &resp)
+	if err := c.apiCall(ctx, params, &resp); err != nil {
+		return err
+	}
+	return checkSimpleResponse("resume", resp)
 }
 
 // Delete removes a download from the queue.
@@ -324,7 +330,10 @@ func (c *Client) Delete(ctx context.Context, nzoID string, deleteFiles bool) err
 		params.Set("del_files", "1")
 	}
 	var resp SimpleResponse
-	return c.apiCall(ctx, params, &resp)
+	if err := c.apiCall(ctx, params, &resp); err != nil {
+		return err
+	}
+	return checkSimpleResponse("queue delete", resp)
 }
 
 // DeleteHistory removes a finished job from SABnzbd's history. When deleteFiles
@@ -340,7 +349,29 @@ func (c *Client) DeleteHistory(ctx context.Context, nzoID string, deleteFiles bo
 		params.Set("del_files", "1")
 	}
 	var resp SimpleResponse
-	return c.apiCall(ctx, params, &resp)
+	if err := c.apiCall(ctx, params, &resp); err != nil {
+		return err
+	}
+	return checkSimpleResponse("history delete", resp)
+}
+
+// checkSimpleResponse turns SABnzbd's "refused, but with an HTTP 200" answer
+// into an error. SAB signals a refused queue or history action as
+// {"status": false, "error": "..."} rather than a 4xx, so apiCall (which only
+// fails on a transport error or a non-200) hands back nil and the caller reads
+// the refusal as success. That is issue #2192, where a rejected post-import
+// history delete left the job sitting in SAB with nothing in Bindery's log.
+//
+// action names the operation for the message, e.g. "history delete". The
+// wording mirrors AddURL, which has always checked the same field.
+func checkSimpleResponse(action string, resp SimpleResponse) error {
+	if resp.Status {
+		return nil
+	}
+	if detail := strings.TrimSpace(resp.Error); detail != "" {
+		return fmt.Errorf("SABnzbd rejected %s: %s", action, detail)
+	}
+	return fmt.Errorf("SABnzbd rejected %s (SABnzbd gave no reason)", action)
 }
 
 // redactURLError scrubs the apikey from a *url.Error's URL field in place, so

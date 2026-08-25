@@ -28,6 +28,13 @@ type delugeServer struct {
 	loginErr     bool
 	addMagnetErr bool
 	removeFail   bool
+	// removeRefused makes core.remove_torrent answer a plain `false` with no
+	// RPC error object: Deluge's "I declined, but nothing went wrong on the
+	// wire" reply (#2192).
+	removeRefused bool
+	// nullResult makes core.remove_torrent answer `null` instead of a boolean,
+	// which is not a refusal and must not be reported as one.
+	nullResult bool
 	// statusErr forces core.get_torrent_status to return an RPC error,
 	// exercising the Files() error path.
 	statusErr bool
@@ -166,6 +173,14 @@ func (s *delugeServer) handler() http.HandlerFunc {
 		case "core.remove_torrent":
 			var hash string
 			json.Unmarshal(req.Params[0], &hash)
+			if s.removeRefused {
+				write(false)
+				return
+			}
+			if s.nullResult {
+				write(nil)
+				return
+			}
 			delete(s.torrents, hash)
 			if s.removeFail {
 				writeErr("remove failed")

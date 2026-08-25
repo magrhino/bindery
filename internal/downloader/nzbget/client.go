@@ -389,7 +389,7 @@ func (c *Client) Remove(ctx context.Context, nzbID int, deleteFiles bool) error 
 	if err := c.call(ctx, "editqueue", []any{command, "", []int{nzbID}}, &resp); err != nil {
 		return fmt.Errorf("remove nzb %d: %w", nzbID, err)
 	}
-	return nil
+	return checkEditQueueResponse(command, nzbID, resp)
 }
 
 // RemoveHistory removes a completed/failed item from NZBGet history by NZBID.
@@ -398,7 +398,21 @@ func (c *Client) RemoveHistory(ctx context.Context, nzbID int) error {
 	if err := c.call(ctx, "editqueue", []any{"HistoryDelete", "", []int{nzbID}}, &resp); err != nil {
 		return fmt.Errorf("remove history %d: %w", nzbID, err)
 	}
-	return nil
+	return checkEditQueueResponse("HistoryDelete", nzbID, resp)
+}
+
+// checkEditQueueResponse turns NZBGet's refusal of an editqueue command into an
+// error. A command NZBGet declines to apply comes back as HTTP 200 with a
+// JSON-RPC result of false and no error object, so call(), which only reports
+// transport failures, non-200s and JSON-RPC faults, hands back nil and the
+// caller reads the refusal as success (#2192). editqueue carries no reason
+// string, so the message says what was asked and where to look, in the same
+// shape as Add's rejection message.
+func checkEditQueueResponse(command string, nzbID int, resp editQueueResponse) error {
+	if resp.Result {
+		return nil
+	}
+	return fmt.Errorf("NZBGet rejected editqueue %s for nzb %d (returned false). The ID is usually already gone from the queue or history, or NZBGet declined the command; check NZBGet's log for the reason", command, nzbID)
 }
 
 // ParseNZBID parses a string NZBID (as stored in the DB) back to an int.

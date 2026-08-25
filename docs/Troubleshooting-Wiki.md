@@ -90,6 +90,27 @@ This happened on Bindery **1.22.1 and earlier**: Bindery sent the category **and
 
 **Fix:** upgrade to the current release. Bindery now enables auto_tmm and omits the explicit save path whenever a category is set, so qBittorrent places files at the category's configured save path (the source of truth for Bindery's health checks). On an older version, work around it by enabling **Automatic Torrent Management** for the category in qBittorrent, or by setting the category's save path to match Bindery's download root.
 
+## The job stays in the download client after Bindery imports it
+
+The book imports fine and shows **Imported** in the Queue, but the job is still sitting in SABnzbd's history (or NZBGet's, or still listed in your torrent client). Once Bindery has taken ownership of the files it asks the client to forget the job, and the client is allowed to say no.
+
+Bindery logs that refusal. Look for a `cleanup failed` warning naming the client:
+
+```text
+level=WARN msg="cleanup failed" error="SABnzbd rejected history delete: Job not found" clientType=sabnzbd remoteID=SABnzbd_nzo_abc123
+```
+
+Versions before this fix (#2192) produced no log line at all, because SABnzbd and NZBGet report a refused action as a normal HTTP 200 response with a failure flag inside it, and Bindery read only the HTTP status. Nothing about the client's behaviour changed, only whether Bindery notices it.
+
+Common reasons a client refuses:
+
+* **The job was already removed**, by hand or by the client's own retention setting. Harmless, and the message usually says so ("Job not found", or an unknown ID).
+* **The client restarted between the download finishing and the import**, losing the history slot.
+* **The API user has no permission** to modify history or the queue. Check the API key or the RPC username's rights.
+* **The client is busy repairing or unpacking** something else and declines the edit. It normally succeeds on the next import.
+
+Nothing else is affected. The import completed and the book is in your library either way, and removing a Queue item in Bindery still removes Bindery's own row even when the client refuses to drop its copy. If the warning repeats for every import, the job is genuinely piling up on the client side and the reason in the message is what to fix.
+
 ## Grab fails with "not allowed to download NZBs" (newznab error 203) on a Prowlarr-synced indexer
 
 Searching works and the same release downloads fine from inside Prowlarr, but grabbing it in Bindery fails with something like:

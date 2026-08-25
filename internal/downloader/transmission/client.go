@@ -308,8 +308,27 @@ func (c *Client) RemoveTorrent(ctx context.Context, torrentID int64, deleteFiles
 	if err != nil {
 		return err
 	}
-	_, err = c.doRequest(req)
-	return err
+	respBody, err := c.doRequest(req)
+	if err != nil {
+		return err
+	}
+
+	// Transmission reports a refused call as HTTP 200 with "result" set to the
+	// failure string rather than "success", so throwing the body away made
+	// every refusal look like a removal (#2192). AddTorrent has always read
+	// the same field, and this is the same check.
+	var resp SimpleResponse
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return fmt.Errorf("decode remove torrent response: %w", err)
+	}
+	if resp.Result != "success" {
+		reason := strings.TrimSpace(resp.Result)
+		if reason == "" {
+			reason = "Transmission gave no reason"
+		}
+		return fmt.Errorf("transmission rejected the removal of torrent %d: %s", torrentID, reason)
+	}
+	return nil
 }
 
 // isMagnetLink reports whether magnetOrURL is a magnet: scheme URL. Magnet
