@@ -689,3 +689,147 @@ func TestRunSync_GatedOnLibraryImportEnabled(t *testing.T) {
 		t.Fatal("RunSync imported nothing after enabling library import; want the fake book")
 	}
 }
+
+// TestImporter_TracksBookFiles is the second half of #1635. The import
+// reconciled title, author and series from metadata.db but left book_files
+// untouched, so a Calibre-managed book had its path recorded only in the
+// legacy books.file_path column, or nowhere at all on the freshly-created
+// path. Anything reading tracked files saw a book that had none.
+func TestImporter_TracksBookFiles(t *testing.T) {
+	imp, fr, _, bookRepo, _, _, _ := newImporterFixture(t)
+	book := sampleCalibreBook(1, "Book One", "Alice Author")
+	// A combined item: Calibre is the authority on what the book has, and an
+	// audiobook beside the epub must be tracked as its own format rather than
+	// lost behind the first entry.
+	book.Formats = append(book.Formats, CalibreFormat{
+		Format: "M4B", FileName: "book", AbsolutePath: filepath.Join("/lib", "Book One.m4b"),
+	})
+	fr.books = []CalibreBook{book}
+
+	if _, err := imp.Run(context.Background(), "/lib"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	books, err := bookRepo.ListIncludingExcluded(context.Background())
+	if err != nil {
+		t.Fatalf("list books: %v", err)
+	}
+	if len(books) != 1 {
+		t.Fatalf("books = %d, want 1", len(books))
+	}
+	files, err := bookRepo.ListFiles(context.Background(), books[0].ID)
+	if err != nil {
+		t.Fatalf("list files: %v", err)
+	}
+	got := map[string]string{}
+	for _, f := range files {
+		got[f.Format] = f.Path
+	}
+	want := map[string]string{
+		models.MediaTypeEbook:     filepath.Join("/lib", "Book One.epub"),
+		models.MediaTypeAudiobook: filepath.Join("/lib", "Book One.m4b"),
+	}
+	for format, wantPath := range want {
+		if got[format] != wantPath {
+			t.Errorf("tracked %s path = %q, want %q (all rows: %+v)", format, got[format], wantPath, files)
+		}
+	}
+}
+
+// A re-import must not accumulate duplicate rows for a file that has not moved.
+func TestImporter_ReimportDoesNotDuplicateBookFiles(t *testing.T) {
+	imp, fr, _, bookRepo, _, _, _ := newImporterFixture(t)
+	fr.books = []CalibreBook{sampleCalibreBook(1, "Book One", "Alice Author")}
+
+	for i := 0; i < 3; i++ {
+		if _, err := imp.Run(context.Background(), "/lib"); err != nil {
+			t.Fatalf("Run %d: %v", i, err)
+		}
+	}
+
+	books, err := bookRepo.ListIncludingExcluded(context.Background())
+	if err != nil {
+		t.Fatalf("list books: %v", err)
+	}
+	files, err := bookRepo.ListFiles(context.Background(), books[0].ID)
+	if err != nil {
+		t.Fatalf("list files: %v", err)
+	}
+	if len(files) != 1 {
+		t.Errorf("tracked files after three imports = %d, want 1: %+v", len(files), files)
+	}
+}
+
+func TestCalibreFormatMediaType(t *testing.T) {
+	for format, want := range map[string]string{
+		"EPUB": models.MediaTypeEbook,
+		"MOBI": models.MediaTypeEbook,
+		"PDF":  models.MediaTypeEbook,
+		"AZW3": models.MediaTypeEbook,
+		"M4B":  models.MediaTypeAudiobook,
+		"mp3":  models.MediaTypeAudiobook,
+		" M4A": models.MediaTypeAudiobook,
+		"":     models.MediaTypeEbook,
+	} {
+		if got := calibreFormatMediaType(format); got != want {
+			t.Errorf("calibreFormatMediaType(%q) = %q, want %q", format, got, want)
+		}
+	}
+}
+
+// A format Calibre reports with no resolved path is skipped rather than
+// tracked as an empty string, and a book with no formats at all tracks
+// nothing without failing the import.
+func TestImporter_SkipsFormatsWithoutAPath(t *testing.T) {
+	imp, fr, _, bookRepo, _, _, _ := newImporterFixture(t)
+
+	withBlank := sampleCalibreBook(1, "Book One", "Alice Author")
+	withBlank.Formats = append(withBlank.Formats, CalibreFormat{Format: "MOBI", FileName: "book"})
+	noFormats := sampleCalibreBook(2, "Book Two", "Alice Author")
+	noFormats.Formats = nil
+	fr.books = []CalibreBook{withBlank, noFormats}
+
+	stats, err := imp.Run(context.Background(), "/lib")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if stats.BooksAdded != 2 {
+		t.Fatalf("booksAdded = %d, want 2 (a pathless format must not fail the import)", stats.BooksAdded)
+	}
+
+	books, err := bookRepo.ListIncludingExcluded(context.Background())
+	if err != nil {
+		t.Fatalf("list books: %v", err)
+	}
+	byTitle := map[string]int64{}
+	for _, b := range books {
+		byTitle[b.Title] = b.ID
+	}
+	one, err := bookRepo.ListFiles(context.Background(), byTitle["Book One"])
+	if err != nil {
+		t.Fatalf("list files: %v", err)
+	}
+	if len(one) != 1 || one[0].Path != filepath.Join("/lib", "Book One.epub") {
+		t.Errorf("Book One tracked files = %+v, want only the epub", one)
+	}
+	two, err := bookRepo.ListFiles(context.Background(), byTitle["Book Two"])
+	if err != nil {
+		t.Fatalf("list files: %v", err)
+	}
+	if len(two) != 0 {
+		t.Errorf("Book Two tracked files = %+v, want none", two)
+	}
+}
+
+// registerBookFiles is defensive about a book it cannot track against; the
+// guard is cheap and the import must not panic on a partially built row.
+func TestImporter_RegisterBookFilesIgnoresUnusableBooks(t *testing.T) {
+	imp, _, _, _, _, _, _ := newImporterFixture(t)
+	cb := sampleCalibreBook(1, "Book One", "Alice Author")
+
+	imp.registerBookFiles(context.Background(), nil, cb)
+	imp.registerBookFiles(context.Background(), &models.Book{ID: 0}, cb)
+
+	noRepo := &Importer{}
+	noRepo.registerBookFiles(context.Background(), &models.Book{ID: 1}, cb)
+}
