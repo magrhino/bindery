@@ -157,6 +157,7 @@ func (a *Aggregator) GetAuthorWorksForAuthor(ctx context.Context, author models.
 		}
 	}
 	books = pruneAuthorWorkCompilations(books, compilationTitles)
+	books = pruneAuthorWorkBundleTitles(books)
 	books = pruneAuthorWorkRedundantTitles(books)
 	books = pruneAuthorWorkSubjectOutliers(books)
 	books = pruneAuthorWorkSelfReference(books, author)
@@ -222,6 +223,51 @@ func pruneAuthorWorkCompilations(books []models.Book, compilationTitles map[stri
 			continue
 		}
 		if _, ok := compilationTitles[authorWorkMergeKey(b.Title)]; ok {
+			continue
+		}
+		filtered = append(filtered, b)
+	}
+	return filtered
+}
+
+// pruneAuthorWorkBundleTitles drops works whose own title unambiguously names
+// a box set, boxed set, collection set, signed-copy carton or "N books set",
+// whatever the metadata profile says (#1780).
+//
+// pruneAuthorWorkCompilations above can only act on titles an enricher
+// classified, and the only enricher that classifies them is Hardcover, which
+// is skipped silently when no token is configured. OpenLibrary carries no
+// compilation signal of its own and models a box set as an ordinary Work, so
+// the default install (OpenLibrary, no Hardcover) had nothing removing them:
+// with monitor mode "all" every bundle row arrives monitored and Wanted and
+// goes looking for releases.
+//
+// The SkipPartBooks metadata-profile setting screens the same shapes out
+// during author sync, but it is DEFAULT 0 including in the seeded Standard
+// profile, so an untouched settings page took Hardcover's place as the thing
+// standing between a fresh install and a catalogue full of box sets.
+// Flipping that default would only ever reach newly created profiles, and an
+// UPDATE migration reaching existing ones cannot tell "never touched it"
+// from "deliberately turned it off", and it would also switch on the risky
+// branches whose whole justification is that opting in is a choice.
+//
+// So only the confident half runs here. IsUnambiguousBundleTitle covers the
+// keywords no real single book uses about itself; the shapes with documented
+// false positives (a bare trailing "omnibus", the slash-separated namings,
+// "Books N-M") stay behind SkipPartBooks in the author sync loop, where that
+// risk is still opt-in.
+//
+// Unlike the sync-loop filter this cannot exempt a book the user already
+// owns, because the aggregator has no view of the library. A bundle already
+// in the library simply stops being re-offered by the catalogue, exactly as
+// one Hardcover flags as a compilation already does. The filter is in place
+// and order-preserving.
+func pruneAuthorWorkBundleTitles(books []models.Book) []models.Book {
+	filtered := books[:0]
+	for _, b := range books {
+		if IsUnambiguousBundleTitle(b.Title) {
+			slog.Debug("pruning work whose title names a box set rather than a book",
+				"title", b.Title, "foreignId", b.ForeignID)
 			continue
 		}
 		filtered = append(filtered, b)

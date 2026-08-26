@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -37,119 +36,19 @@ var (
 
 const authorAutoSearchConcurrency = 4
 
-// partBookTitleRe matches OpenLibrary work titles that describe a box set,
-// omnibus, signed-copy carton, or slash-separated multi-title anthology
-// rather than a single book. These "works" are real OL records, so they pass
-// every other filter (title is non-empty, language is set, media type
-// matches) and land in the wanted list indistinguishable from a real book,
-// which is what the (until now unused) SkipPartBooks profile setting always
-// implied it screened out.
-//
-// Ported from the interim external workaround (denoise_author.py) once it
-// was confirmed empirically, over several authors, that these patterns catch
-// the box-set noise without false-positiving on legitimate titles. Kept as a
-// title-text heuristic rather than an OL work-type field because OpenLibrary
-// does not reliably distinguish "part"/omnibus works from regular ones in its
-// API response.
-// omnibus is deliberately NOT in this alternation — see hasNonLeadingOmnibus,
-// which applies it with an additional leading-word exclusion the rest of
-// these keyword checks don't need.
-//
-// The two slash branches require actual whitespace around every "/" ("\s+"
-// either side, not "\s*"). Real anthology naming is always spaced ("Title A
-// / Title B"); an unspaced slash is far more often a title using "/" as its
-// own punctuation (a two-character-choice title like "He/She/It", or
-// "Rock/Paper/Scissors") than a bundle. Confirmed against real
-// maintainer-reported false positives (vavallee, PR #1968 review).
-var partBookTitleRe = regexp.MustCompile(`(?i:` +
-	`\bbox\s*set\b` +
-	`|\bboxed\s*set\b` +
-	`|\(\s*boxed\s*\)` + // parenthesized bare "(Boxed)" — real OL titles drop "set" entirely, e.g. "4 Vol. (Boxed)".
-	// Deliberately NOT a bare \bboxed\b: that would also match "boxed" used
-	// as an ordinary word in a real title, which the parenthesized form
-	// this was ported from never does.
-	`|\bcollection\s*set\b` +
-	`|\bcollection\s+of\s+\d` +
-	`|\bcarton\s+of\s+\d+\s+signed\s+cop` +
-	`|\bbooks?\s+\d+\s*-\s*\d+\b` + // "Books 1-3". Known low-risk residual: could also
-	// match a real single volume a publisher numbered like "Book 1-2" — not observed,
-	// and the setting is opt-in, but noted per review rather than left a surprise.
-	`|\b\d+\s*(?:books?|vol(?:ume)?s?)\s+set\b` + // "3 Books Set", "5 Volumes Set"
-	`)` +
-	`|(?:[^/]+\s+/\s+){2,}[^/]+` + // "Title A / Title B / Title C" multi-title anthology naming
-	`|\([^()]+\s+/\s+[^()]+\)\s*$`) // "Prefix (Title A / Title B)" — 2-title anthology naming inside parens
-
-// bracketContentRe extracts the content of each bracketed span in a title,
-// for hasJoinedBundleBracket.
-var bracketContentRe = regexp.MustCompile(`\[([^\]]*)\]`)
-
-// hasJoinedBundleBracket reports whether title has a bracketed annotation
-// naming a bundle, e.g. "The Hobbit & The Lord of the Rings [collection/set]".
-// Requires the bracket content to contain BOTH a "/" AND one of
-// collection/set/boxed — not just any one of those words alone, which a
-// real single book's bracketed edition/provenance note could plausibly also
-// contain for an unrelated reason (e.g. "[Author's Personal Collection]",
-// "[Set in Wartime London]"). The joined-pair shape ("X/Y") is what was
-// actually observed on real OpenLibrary bundle records; a lone keyword
-// wasn't.
-func hasJoinedBundleBracket(title string) bool {
-	for _, m := range bracketContentRe.FindAllStringSubmatch(title, -1) {
-		content := strings.ToLower(m[1])
-		if !strings.Contains(content, "/") {
-			continue
-		}
-		if strings.Contains(content, "collection") || strings.Contains(content, "set") || strings.Contains(content, "boxed") {
-			return true
-		}
-	}
-	return false
-}
-
-// omnibusWordRe and leadingArticleForOmnibusCheckRe back hasNonLeadingOmnibus.
-var omnibusWordRe = regexp.MustCompile(`(?i)\bomnibus\b`)
-var leadingArticleForOmnibusCheckRe = regexp.MustCompile(`(?i)^(?:the|an?)\s+`)
-
-// hasNonLeadingOmnibus reports whether "omnibus" appears in title as a
-// description of a bundle rather than as the title's own subject. Real
-// compilation titles put "omnibus" after the name of what's bundled ("The
-// Dune Omnibus", "The Silmarillion Omnibus"); a single real book can also use
-// "Omnibus" as its own proper-noun title ("The Omnibus of Crime", a genuine
-// Dorothy Sayers volume) or as a publisher's brand name leading the title
-// ("Omnibus Press Presents..."). Both shapes put "omnibus" at (or immediately
-// after only a leading article before) the very start of the title, which
-// this excludes. Confirmed against real maintainer-reported false positives
-// (vavallee, PR #1968 review).
-//
-// Known residual gap, documented rather than chased further: this assumes
-// real non-bundle usage always leads and real bundle-descriptor usage always
-// trails. Two real books break that — "The New Turing Omnibus" and "Thrown
-// under the omnibus" both use "omnibus" metaphorically/idiomatically in a
-// trailing position, so they're still wrongly caught. The real distinguishing
-// signal (does this book actually bundle other separately-catalogued works)
-// isn't recoverable from title text alone for a bare keyword the way it is
-// for the slash-joined case (pruneAuthorWorkRedundantTitles can check named
-// segments against known titles). Hardcover's IsCompilation classification
-// gets both right when configured; left for the maintainer to weigh in on.
-func hasNonLeadingOmnibus(title string) bool {
-	if !omnibusWordRe.MatchString(title) {
-		return false
-	}
-	stripped := leadingArticleForOmnibusCheckRe.ReplaceAllString(strings.TrimSpace(title), "")
-	return !strings.HasPrefix(strings.ToLower(stripped), "omnibus")
-}
-
 // isPartBookTitle reports whether title looks like a box set, omnibus, or
-// carton rather than a single book. See partBookTitleRe and
-// hasNonLeadingOmnibus.
+// carton rather than a single book. It is the full two-tier detector: the
+// unambiguous keywords plus the lower-confidence ones (a bare trailing
+// "omnibus", the slash-separated namings, "Books N-M"), which is what the
+// opt-in SkipPartBooks metadata-profile setting has always implied it
+// screened out.
 //
-// Known residual false positive, not fixed here: a genuine single-volume
-// edition bundling several distinct classic works under one title, spaced
-// and 3+ segments, e.g. the Penguin Nietzsche edition "The Anti-Christ / Ecce
-// Homo / Twilight of the Idols" — indistinguishable by title text alone from
-// a real anthology bundle, and the maintainer's own suggested fix (spaces +
-// 3+ segments) does not clear it either, since it already satisfies both.
+// The patterns themselves live in internal/metadata (bundle_titles.go), so
+// there is one keyword list rather than two: catalogue ingestion prunes the
+// unambiguous tier of that same list for every profile (#1780), and this
+// call adds the ambiguous tier for profiles that asked for it.
 func isPartBookTitle(title string) bool {
-	return partBookTitleRe.MatchString(title) || hasNonLeadingOmnibus(title) || hasJoinedBundleBracket(title)
+	return metadata.IsBundleTitle(title)
 }
 
 type AuthorHandler struct {

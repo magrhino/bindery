@@ -301,6 +301,15 @@ When metadata is wrong, you have three levels of fix:
 3. A **metadata profile** (languages, minimum popularity, skip part-books)
    filters what a catalogue sync lets in.
 
+Box sets need no setting. A work whose title plainly names a bundle ("... Box
+Set", "3 Books Set", "Carton of 10 Signed Copies") is dropped from every
+author catalogue as it is fetched, on any provider. **Skip part books** in the
+metadata profile adds the shapes that are a judgement call, and is off by
+default because each of them has real single books it would wrongly catch: a
+title ending in "Omnibus", slash-separated titles like "Title A / Title B",
+and "Books 1-3". Neither filter touches "Trilogy". A bundle already in your
+library is left alone; it just stops being offered back by the catalogue.
+
 A **metadata refresh** re-syncs an author's metadata from the provider:
 covers, descriptions, ratings, genres and series links on the books you
 already have. It only *adds* newly-discovered works for an author you monitor

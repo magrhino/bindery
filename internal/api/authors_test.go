@@ -7474,11 +7474,17 @@ func TestFetchAuthorBooks_SkipsPartBooks(t *testing.T) {
 		}
 	}
 
+	// Only the ambiguous title reaches this counter now. The three
+	// unambiguous box-set titles never arrive: since #1780 the aggregator
+	// prunes those from every author catalogue before the sync loop sees
+	// them, whatever the profile says (pruneAuthorWorkBundleTitles). What
+	// this setting still contributes, and therefore still reports, is the
+	// lower-confidence tier.
 	summary := h.syncSummaries.get(author.ID)
 	if summary == nil {
 		t.Fatal("expected a recorded sync summary, got nil")
 	}
-	if want := 4; summary.SkippedPartBooks != want {
+	if want := 1; summary.SkippedPartBooks != want {
 		t.Errorf("summary.SkippedPartBooks = %d, want %d", summary.SkippedPartBooks, want)
 	}
 	if summary.SkippedTotal() < summary.SkippedPartBooks {
@@ -7489,9 +7495,6 @@ func TestFetchAuthorBooks_SkipsPartBooks(t *testing.T) {
 		sampleTitles[b.Title] = true
 	}
 	for _, junk := range []string{
-		"Expanse Hardcover Boxed Set : Leviathan Wakes, Caliban's War, Abaddon's Gate",
-		"Expanse Series, Collection Set of 3 Books. Leviathan Wakes, Caliban's War, Abaddon's Gate",
-		"Leviathan Falls - Carton of 10 Signed Copies",
 		"The Martian / Artemis / Project Hail Mary",
 	} {
 		if !sampleTitles[junk] {
@@ -7500,11 +7503,17 @@ func TestFetchAuthorBooks_SkipsPartBooks(t *testing.T) {
 	}
 }
 
-// TestFetchAuthorBooks_PartBooksKeptWhenSkipDisabled verifies the inverse of
-// TestFetchAuthorBooks_SkipsPartBooks: with SkipPartBooks left at its default
-// (false), box-set/omnibus titles are still cataloged exactly as before this
-// change — the filter is opt-in, not a behavior change for profiles that
-// never touch the setting.
+// TestFetchAuthorBooks_PartBooksKeptWhenSkipDisabled verifies what the
+// SkipPartBooks setting is still responsible for. With it left at its default
+// (false), the lower-confidence titles the setting owns are cataloged exactly
+// as before: it stays opt-in, not a behavior change for profiles that never
+// touch it.
+//
+// The unambiguously-titled box sets are gone from this list even so (#1780).
+// They are pruned from the author catalogue itself, one layer up in the
+// aggregator, because leaving them to a setting that is DEFAULT 0 in the
+// seeded profile meant an untouched settings page was all it took for a
+// default install to fill with bundle rows.
 func TestFetchAuthorBooks_PartBooksKeptWhenSkipDisabled(t *testing.T) {
 	database, err := db.OpenMemory()
 	if err != nil {
@@ -7534,11 +7543,36 @@ func TestFetchAuthorBooks_PartBooksKeptWhenSkipDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != len(partBookTestWorks()) {
-		t.Errorf("got %d books, want %d (SkipPartBooks defaults to false, nothing should be dropped)",
-			len(got), len(partBookTestWorks()))
+	byTitle := make(map[string]bool, len(got))
+	for _, b := range got {
+		byTitle[b.Title] = true
+	}
+	for _, kept := range []string{
+		// The ambiguous tier: still the setting's business, still opt-in.
+		"The Martian / Artemis / Project Hail Mary",
+		"Leviathan Wakes",
+		"Abaddon's Gate",
+		"Catch 22",
+	} {
+		if !byTitle[kept] {
+			t.Errorf("%q should still be cataloged with SkipPartBooks off, but was dropped", kept)
+		}
+	}
+	for _, dropped := range []string{
+		"Expanse Hardcover Boxed Set : Leviathan Wakes, Caliban's War, Abaddon's Gate",
+		"Expanse Series, Collection Set of 3 Books. Leviathan Wakes, Caliban's War, Abaddon's Gate",
+		"Leviathan Falls - Carton of 10 Signed Copies",
+	} {
+		if byTitle[dropped] {
+			t.Errorf("unambiguous box-set title %q should be pruned regardless of the setting, but was created", dropped)
+		}
+	}
+	if want := 4; len(got) != want {
+		t.Errorf("got %d books, want %d", len(got), want)
 	}
 
+	// The setting itself skipped nothing: the box sets never reached its
+	// counter, they were pruned from the catalogue before the sync loop ran.
 	if summary := h.syncSummaries.get(author.ID); summary != nil && summary.SkippedPartBooks != 0 {
 		t.Errorf("summary.SkippedPartBooks = %d, want 0 (filter is opt-in)", summary.SkippedPartBooks)
 	}
@@ -7551,6 +7585,12 @@ func TestFetchAuthorBooks_PartBooksKeptWhenSkipDisabled(t *testing.T) {
 // fresh candidate with the same title would be filtered out (vavallee, PR
 // review — filtering screens works out of discovery, it must not also stop
 // maintaining ones already accepted).
+//
+// Uses an ambiguous-tier title, the half of the detector this setting still
+// owns. The unconditional tier cannot offer the same exemption, because it
+// runs in the aggregator where there is no view of the library; see
+// TestFetchAuthorBooks_UnconditionalBundlePruneKeepsOwnedBook for what
+// happens there instead.
 func TestFetchAuthorBooks_SkipPartBooksExemptsAlreadyTrackedBook(t *testing.T) {
 	database, err := db.OpenMemory()
 	if err != nil {
@@ -7582,7 +7622,7 @@ func TestFetchAuthorBooks_SkipPartBooksExemptsAlreadyTrackedBook(t *testing.T) {
 	}
 
 	owned := &models.Book{
-		ForeignID: "OL913W", Title: "Leviathan Falls - Carton of 10 Signed Copies", SortTitle: "leviathan falls - carton of 10 signed copies",
+		ForeignID: "OL913W", Title: "The Martian / Artemis / Project Hail Mary", SortTitle: "the martian / artemis / project hail mary",
 		AuthorID: author.ID, Language: "eng", Status: models.BookStatusWanted,
 		MediaType: models.MediaTypeEbook, MetadataProvider: "openlibrary",
 	}
@@ -7591,7 +7631,7 @@ func TestFetchAuthorBooks_SkipPartBooksExemptsAlreadyTrackedBook(t *testing.T) {
 	}
 
 	agg := metadata.NewAggregator(&stubMetaProvider{works: []models.Book{
-		{ForeignID: "OL913W", Title: "Leviathan Falls - Carton of 10 Signed Copies", SortTitle: "leviathan falls - carton of 10 signed copies",
+		{ForeignID: "OL913W", Title: "The Martian / Artemis / Project Hail Mary", SortTitle: "the martian / artemis / project hail mary",
 			Language: "eng", MediaType: models.MediaTypeEbook, Status: models.BookStatusWanted, MetadataProvider: "openlibrary",
 			AverageRating: 4.2, RatingsCount: 250},
 	}})
@@ -7611,6 +7651,67 @@ func TestFetchAuthorBooks_SkipPartBooksExemptsAlreadyTrackedBook(t *testing.T) {
 
 	if summary := h.syncSummaries.get(author.ID); summary != nil && summary.SkippedPartBooks != 0 {
 		t.Errorf("summary.SkippedPartBooks = %d, want 0 (already-tracked book must not be counted as skipped)", summary.SkippedPartBooks)
+	}
+}
+
+// TestFetchAuthorBooks_UnconditionalBundlePruneKeepsOwnedBook records what the
+// unconditional box-set prune (#1780) does to a bundle the user already owns.
+// The row and its files stay: nothing deletes a book for being absent from a
+// catalogue fetch. What it loses is refreshes, because the catalogue no longer
+// offers the work at all and the sync loop only updates what it is handed.
+//
+// This is not new in kind. A user with a Hardcover token has had exactly this
+// since pruneAuthorWorkCompilations landed: an owned box set Hardcover flags
+// as a compilation is dropped from the list the same way, ownership included.
+// #1780 extends it to the OpenLibrary-only install that never had an enricher
+// to do the flagging.
+func TestFetchAuthorBooks_UnconditionalBundlePruneKeepsOwnedBook(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	profileRepo := db.NewMetadataProfileRepo(database)
+	settingsRepo := db.NewSettingsRepo(database)
+	ctx := context.Background()
+
+	author := &models.Author{
+		ForeignID: "OL914A", Name: "Part-Book Author Four", SortName: "Author, Part-Book Four",
+		MetadataProvider: "openlibrary", Monitored: false,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+
+	owned := &models.Book{
+		ForeignID: "OL915W", Title: "Leviathan Falls - Carton of 10 Signed Copies", SortTitle: "leviathan falls - carton of 10 signed copies",
+		AuthorID: author.ID, Language: "eng", Status: models.BookStatusWanted,
+		MediaType: models.MediaTypeEbook, MetadataProvider: "openlibrary",
+	}
+	if err := bookRepo.Create(ctx, owned); err != nil {
+		t.Fatal(err)
+	}
+
+	agg := metadata.NewAggregator(&stubMetaProvider{works: []models.Book{
+		{ForeignID: "OL915W", Title: "Leviathan Falls - Carton of 10 Signed Copies", SortTitle: "leviathan falls - carton of 10 signed copies",
+			Language: "eng", MediaType: models.MediaTypeEbook, Status: models.BookStatusWanted, MetadataProvider: "openlibrary",
+			AverageRating: 4.2, RatingsCount: 250},
+	}})
+	h := NewAuthorHandler(authorRepo, nil, bookRepo, nil, agg, settingsRepo, profileRepo, nil)
+	h.FetchAuthorBooks(author, false, models.MediaTypeEbook)
+
+	updated, err := bookRepo.GetByForeignID(ctx, "OL915W")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated == nil {
+		t.Fatal("owned box-set title was deleted, want it kept")
+	}
+	if updated.RatingsCount != 0 {
+		t.Errorf("RatingsCount = %d, want 0 (the work is no longer offered by the catalogue, so nothing refreshes it)", updated.RatingsCount)
 	}
 }
 

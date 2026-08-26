@@ -185,6 +185,9 @@ var audibleLanguageAliases = map[string]string{
 // normalized language code; the caller applies the active metadata
 // profile's allowed_languages filter alongside OpenLibrary-sourced books.
 //
+// Titles that unambiguously name a box set are pruned before returning, the
+// same filter the primary catalogue path applies (#1780).
+//
 // Callers use this as a supplement to GetAuthorWorks — neither OpenLibrary
 // nor Hardcover has full Audible ASIN cross-referencing, so prolific
 // authors (Sanderson, King, etc.) are missing a large share of their
@@ -212,6 +215,12 @@ func (a *Aggregator) GetAuthorAudiobooks(ctx context.Context, authorName string)
 	if books == nil {
 		books = []models.Book{}
 	}
+	// Audible sells box sets of its own, and this list is appended to the
+	// author catalogue after GetAuthorWorksForAuthor has already run its
+	// prunes, so the unconditional bundle filter has to be applied here too
+	// or the same rows arrive by a different door (#1780). Only the
+	// unambiguous tier, same as the primary path.
+	books = pruneAuthorWorkBundleTitles(books)
 	a.cache.set(key, books)
 	return books, nil
 }
