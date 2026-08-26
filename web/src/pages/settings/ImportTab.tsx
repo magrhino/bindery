@@ -546,6 +546,21 @@ function HardcoverListsSection({ onNavigate }: { onNavigate?: (tab: string) => v
     }
   }
 
+  // Per-list "Download books from this list" toggle (#2124). Off syncs the
+  // list's books into the catalogue unmonitored, so nothing is searched or
+  // grabbed until the user monitors one — the wishlist reading of a Want to
+  // Read shelf. On (the default) keeps the historical behaviour: every synced
+  // book is created monitored and wanted.
+  const handleMonitorNewChange = async (il: ImportList, monitorNew: boolean) => {
+    setError(null)
+    try {
+      const updated = await api.updateImportList(il.id, { monitorNew })
+      updateLocalList(updated)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update download setting')
+    }
+  }
+
   const handleOwnerChange = async (il: ImportList, value: string) => {
     setError(null)
     try {
@@ -796,6 +811,17 @@ function HardcoverListsSection({ onNavigate }: { onNavigate?: (tab: string) => v
                 </label>
                 {il && (
                   <div className="flex flex-wrap justify-end gap-2">
+                    <label
+                      className="flex items-center gap-1.5 text-xs px-2 py-1 rounded bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 cursor-pointer"
+                      title={t('settings.import.downloadBooksHint', 'On: books synced from this list are marked wanted and downloaded. Off: they are added to your library unmonitored, so nothing is downloaded until you monitor one.')}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={il.monitorNew}
+                        onChange={e => handleMonitorNewChange(il, e.target.checked)}
+                      />
+                      {t('settings.import.downloadBooks', 'Download books from this list')}
+                    </label>
                     <select
                       value={il.mediaType || ''}
                       onChange={e => handleMediaTypeChange(il, e.target.value)}

@@ -876,6 +876,8 @@
       "hardcoverTokenOverride": "Token override",
       "hardcoverMediaType": "Media type",
       "hardcoverMediaTypeHint": "Format synced books are created as. Auto uses what Hardcover reports.",
+      "downloadBooks": "Download books from this list",
+      "downloadBooksHint": "On: books synced from this list are marked wanted and downloaded. Off: they are added to your library unmonitored, so nothing is downloaded until you monitor one.",
       "mediaTypeAuto": "Auto",
       "mediaTypeEbook": "Ebook",
       "mediaTypeAudiobook": "Audiobook",

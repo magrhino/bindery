@@ -296,6 +296,44 @@ func TestImportListCreate_Validation(t *testing.T) {
 	}
 }
 
+// TestImportListCreate_MonitorNewDefaultsTrue: a create that never mentions
+// monitorNew must persist it as true, matching the schema default (DEFAULT 1)
+// and the pre-#2124 behaviour every API script was written against. An
+// explicit false must stick — that is the new "catalogue, don't download" opt
+// out the syncer now reads.
+func TestImportListCreate_MonitorNewDefaultsTrue(t *testing.T) {
+	h, repo, _ := importListFixture(t)
+
+	for _, tc := range []struct {
+		desc string
+		body string
+		want bool
+	}{
+		{"absent defaults true", `{"name":"Shelf","type":"hardcover","url":"shelf"}`, true},
+		{"explicit false sticks", `{"name":"Wishlist","type":"hardcover","url":"wishlist","monitorNew":false}`, false},
+	} {
+		rec := httptest.NewRecorder()
+		h.Create(rec, httptest.NewRequest(http.MethodPost, "/api/v1/importlist", bytes.NewBufferString(tc.body)))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("%s: expected 201, got %d: %s", tc.desc, rec.Code, rec.Body.String())
+		}
+		var created models.ImportList
+		if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+			t.Fatalf("%s: decode response: %v", tc.desc, err)
+		}
+		if created.MonitorNew != tc.want {
+			t.Errorf("%s: response monitorNew = %v, want %v", tc.desc, created.MonitorNew, tc.want)
+		}
+		stored, err := repo.GetByID(context.Background(), created.ID)
+		if err != nil || stored == nil {
+			t.Fatalf("%s: reload created list: %v", tc.desc, err)
+		}
+		if stored.MonitorNew != tc.want {
+			t.Errorf("%s: stored monitorNew = %v, want %v", tc.desc, stored.MonitorNew, tc.want)
+		}
+	}
+}
+
 func TestImportListExclusions(t *testing.T) {
 	h, _, _ := importListFixture(t)
 

@@ -1,5 +1,6 @@
 // Package hardcoverlistsyncer syncs Hardcover reading lists into Bindery's
-// book catalogue as "wanted" books.
+// book catalogue. Whether the synced books are also marked monitored (and so
+// picked up by the wanted-search sweep) is each list's MonitorNew flag (#2124).
 package hardcoverlistsyncer
 
 import (
@@ -551,7 +552,16 @@ func (s *ListSyncer) syncList(ctx context.Context, il models.ImportList) error {
 		}
 
 		book.AuthorID = authorID
-		book.Monitored = true
+		// The list's MonitorNew decides whether its books land monitored
+		// (#2124). The field was persisted and API-settable from the start but
+		// never read, so every list behaved as "download everything on it" —
+		// the wrong default for a Want to Read shelf synced as a wishlist.
+		// Status stays "wanted" either way, matching how refresh-discovered
+		// rows are shaped: monitored is the flag that means "fetch this", and
+		// every wanted query and the scheduler's grab sweep filter on
+		// monitored = 1, so an unmonitored row is catalogued and left alone
+		// until the user monitors it.
+		book.Monitored = il.MonitorNew
 		book.Status = models.BookStatusWanted
 		// Stamp the list owner so the synced book is scoped to that user (0 =
 		// global). BookRepo.Create honours b.OwnerUserID directly.
@@ -720,14 +730,24 @@ func (s *ListSyncer) ensureAuthor(ctx context.Context, book *models.Book, nameIn
 	// the scheduler refreshes their metadata, but their MonitorMode is pinned to
 	// "none": only the specific book(s) on the user's Hardcover list should end
 	// up wanted, never the author's entire back-catalogue (#1290). The listed
-	// book is monitored explicitly in syncList (book.Monitored = true), and the
+	// book is stamped monitored in syncList (per the list's MonitorNew), and the
 	// catalogue-discovery pass (FetchAuthorBooks) leaves already-tracked books
 	// untouched while gating newly-discovered works on shouldMonitorBookForAuthor
 	// — which returns false under "none". Leaving MonitorMode == "" would instead
 	// make that predicate treat the author as "all" and auto-want every work.
+	//
+	// MonitorNewItems is pinned to "none" for the same reason (#2217).
+	// MonitorMode "none" only keeps discovered works unmonitored — it does not
+	// stop the refresh from discovering and inserting them at all
+	// (authorAcceptsDiscoveredBooks, internal/api/authors.go, documents that
+	// only MonitorNewItems == "none" does). Left at the default "all", a
+	// list-created author pulled its entire back-catalogue into the library as
+	// unmonitored rows on its very first refresh, which nobody asked for when
+	// they synced a shelf holding one of the author's books.
 	author := book.Author
 	author.Monitored = true
 	author.MonitorMode = models.AuthorMonitorModeNone
+	author.MonitorNewItems = models.AuthorMonitorNewItemsNone
 	author.MetadataProvider = "hardcover"
 	if author.SortName == "" {
 		author.SortName = sortName(author.Name)

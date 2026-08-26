@@ -125,7 +125,13 @@ func (h *ImportListHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ImportListHandler) Create(w http.ResponseWriter, r *http.Request) {
-	var il models.ImportList
+	// Decode over pre-set defaults so a create that omits monitorNew/autoAdd
+	// keeps the documented column defaults (both DEFAULT 1). The repo INSERT
+	// always writes the struct values, so decoding into a zero struct would
+	// silently turn "field absent" into monitorNew=false — which matters now
+	// that the syncer reads MonitorNew (#2124): an API client that never sends
+	// the flag must keep the historical download-everything behaviour.
+	il := models.ImportList{MonitorNew: true, AutoAdd: true}
 	if err := json.NewDecoder(r.Body).Decode(&il); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return

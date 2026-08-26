@@ -419,7 +419,9 @@
       "resultSkipped": "ignorés (existent déjà)",
       "resultFailed": "échoués",
       "showFailures": "Afficher {{count}} échec(s)",
-      "configureHardcoverToken": "Configurez le jeton d'API Hardcover dans les paramètres Clés d'API →"
+      "configureHardcoverToken": "Configurez le jeton d'API Hardcover dans les paramètres Clés d'API →",
+      "downloadBooks": "Télécharger les livres de cette liste",
+      "downloadBooksHint": "Activé : les livres synchronisés depuis cette liste sont marqués recherchés et téléchargés. Désactivé : ils sont ajoutés à votre bibliothèque sans surveillance, donc rien n'est téléchargé tant que vous n'en surveillez pas un."
     },
     "oidc": {
       "heading": "SSO / OIDC Providers",

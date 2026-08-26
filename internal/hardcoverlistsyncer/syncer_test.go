@@ -384,6 +384,12 @@ func TestSyncOne_NewAuthorPinnedToMonitorModeNone(t *testing.T) {
 	if created.MonitorMode != models.AuthorMonitorModeNone {
 		t.Errorf("new author MonitorMode = %q, want %q (#1290)", created.MonitorMode, models.AuthorMonitorModeNone)
 	}
+	// ...and MonitorNewItems must be "none" too: MonitorMode "none" only keeps
+	// refresh-discovered works unmonitored, it does not stop the refresh from
+	// inserting the whole back-catalogue as unmonitored rows (#2217).
+	if created.MonitorNewItems != models.AuthorMonitorNewItemsNone {
+		t.Errorf("new author MonitorNewItems = %q, want %q (#2217)", created.MonitorNewItems, models.AuthorMonitorNewItemsNone)
+	}
 
 	// The single listed book is monitored + wanted.
 	books, err := s.books.ListByAuthor(ctx, created.ID)
@@ -401,6 +407,83 @@ func TestSyncOne_NewAuthorPinnedToMonitorModeNone(t *testing.T) {
 	}
 	if books[0].Status != models.BookStatusWanted {
 		t.Errorf("listed book Status = %q, want %q", books[0].Status, models.BookStatusWanted)
+	}
+}
+
+// TestSyncOne_MonitorNewGatesWantedStamp is the #2124 regression: the list's
+// MonitorNew flag was persisted and API-settable but never read, so every
+// synced book was created monitored+wanted regardless — pointing Bindery at a
+// 400-book Want to Read shelf meant downloading 400 books. With MonitorNew
+// false the books must land in the catalogue unmonitored (which every wanted
+// query and the scheduler's grab sweep filter out); with true, monitored and
+// wanted exactly as before.
+func TestSyncOne_MonitorNewGatesWantedStamp(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		monitorNew    bool
+		wantMonitored bool
+	}{
+		{name: "monitor new false catalogues unmonitored", monitorNew: false, wantMonitored: false},
+		{name: "monitor new true still marks wanted", monitorNew: true, wantMonitored: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, repo := newTestSyncer(t)
+			ctx := context.Background()
+
+			il := testImportList("HC", "hardcover", true)
+			il.MonitorNew = tc.monitorNew
+			if err := repo.Create(ctx, &il); err != nil {
+				t.Fatalf("seed list: %v", err)
+			}
+
+			s.WithClientFactory(func(string) hardcoverClient {
+				return &fakeHardcoverClient{
+					lists: []hardcover.HCList{{ID: 7, Slug: il.URL, Name: il.Name}},
+					books: []models.Book{
+						{ForeignID: "hc:wishlisted", Title: "The Wishlisted Book", MetadataProvider: "hardcover",
+							Author: &models.Author{ForeignID: "hc:wishauthor", Name: "Wish Author", MetadataProvider: "hardcover"}},
+					},
+				}
+			})
+
+			if err := s.SyncOne(ctx, il.ID); err != nil {
+				t.Fatalf("SyncOne: %v", err)
+			}
+
+			created, err := s.books.GetByForeignID(ctx, "hc:wishlisted")
+			if err != nil {
+				t.Fatalf("GetByForeignID: %v", err)
+			}
+			if created == nil {
+				t.Fatal("expected the listed book to be created either way — MonitorNew gates monitoring, not cataloguing")
+			}
+			if created.Monitored != tc.wantMonitored {
+				t.Errorf("book Monitored = %v, want %v (#2124)", created.Monitored, tc.wantMonitored)
+			}
+			// Status carries "wanted" in both cases, matching how discovery
+			// shapes unmonitored rows: monitored is the flag that means "fetch
+			// this", and ListByStatus* all require monitored = 1.
+			if created.Status != models.BookStatusWanted {
+				t.Errorf("book Status = %q, want %q", created.Status, models.BookStatusWanted)
+			}
+
+			// The author is created the same way in both cases: monitored for
+			// metadata refresh, but never a source of auto-wanted or
+			// auto-discovered back-catalogue.
+			author, err := s.authors.GetByAnyForeignID(ctx, "hc:wishauthor")
+			if err != nil {
+				t.Fatalf("GetByAnyForeignID: %v", err)
+			}
+			if author == nil {
+				t.Fatal("expected the author to be created")
+			}
+			if !author.Monitored {
+				t.Errorf("author Monitored = false, want true")
+			}
+			if author.MonitorNewItems != models.AuthorMonitorNewItemsNone {
+				t.Errorf("author MonitorNewItems = %q, want %q (#2217)", author.MonitorNewItems, models.AuthorMonitorNewItemsNone)
+			}
+		})
 	}
 }
 
@@ -766,11 +849,15 @@ func TestRunSync_NoEnabledLists(t *testing.T) {
 // set here.
 func testImportList(name, typ string, enabled bool) models.ImportList {
 	return models.ImportList{
-		Name:    name,
-		Type:    typ,
-		URL:     "some-slug",
-		APIKey:  "irrelevant-for-these-tests",
-		Enabled: enabled,
+		Name:   name,
+		Type:   typ,
+		URL:    "some-slug",
+		APIKey: "irrelevant-for-these-tests",
+		// The real create paths default MonitorNew to true (schema DEFAULT 1,
+		// mirrored by the Create handler), and since #2124 the syncer reads
+		// it, so fixtures carry the default explicitly.
+		MonitorNew: true,
+		Enabled:    enabled,
 	}
 }
 

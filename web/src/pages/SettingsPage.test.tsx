@@ -516,6 +516,24 @@ describe('SettingsPage', () => {
     })
   })
 
+  it('toggles a Hardcover list between downloading and cataloguing its books (#2124)', async () => {
+    renderSettings({
+      importLists: [makeImportList({ id: 44, name: 'Want to Read', url: 'want-to-read', enabled: true, monitorNew: true })],
+      hardcoverLists: [makeHardcoverList()],
+    })
+
+    await openImportTab()
+    const toggle = await screen.findByRole('checkbox', { name: 'Download books from this list' })
+    expect(toggle).toBeChecked()
+
+    fireEvent.click(toggle)
+    await waitFor(() => {
+      expect(api.updateImportList).toHaveBeenCalledWith(44, { monitorNew: false })
+    })
+    // The row reflects the saved value, so the next click sends true again.
+    expect(await screen.findByRole('checkbox', { name: 'Download books from this list' })).not.toBeChecked()
+  })
+
   it('keeps per-list Hardcover override tokens write-only in the import picker', async () => {
     renderSettings({
       importLists: [makeImportList({ id: 44, name: 'Want to Read', url: 'want-to-read', apiKeyConfigured: true, enabled: true })],
