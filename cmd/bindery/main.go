@@ -942,6 +942,9 @@ func main() {
 			r.Post("/queue/manual-import", manualImportHandler.Import)
 			r.Post("/queue/manual-import/batch", manualImportHandler.ImportBatch)
 			r.Post("/queue/manual-import/reassign", manualImportHandler.Reassign)
+			// Read-only destination preview for Fix Match (#2055): the modal
+			// warns that the file will be moved and renamed, and names where.
+			r.Get("/queue/manual-import/reassign/preview", manualImportHandler.ReassignPreview)
 			r.Post("/queue/manual-import/match", manualImportHandler.MatchDownload)
 
 			// Library reorganize (#1181) — admin-only: recomputes tracked files'

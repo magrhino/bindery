@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -42,6 +43,14 @@ type stubManualImportScanner struct {
 	importCalls int
 	lastPath    string
 	lastBookID  int64
+
+	// Fix Match destination preview (#2055).
+	preview        importer.DestinationPreview
+	previewErr     error
+	previewCalls   int
+	previewBookID  int64
+	previewPath    string
+	previewFormatH string
 }
 
 func (s *stubManualImportScanner) Lookup(_ context.Context, _ string) (importer.LookupResult, error) {
@@ -68,6 +77,14 @@ func (s *stubManualImportScanner) ImportFromPath(_ context.Context, dl *models.D
 	if dl.BookID != nil {
 		s.lastBookID = *dl.BookID
 	}
+}
+
+func (s *stubManualImportScanner) PreviewImportDestination(_ context.Context, bookID int64, srcPath, formatHint string) (importer.DestinationPreview, error) {
+	s.previewCalls++
+	s.previewBookID = bookID
+	s.previewPath = srcPath
+	s.previewFormatH = formatHint
+	return s.preview, s.previewErr
 }
 
 // manualImportFixture spins up an in-memory DB and wires a ManualImportHandler.
@@ -1522,5 +1539,111 @@ func TestManualImportReassign_TargetNotFound(t *testing.T) {
 	h.Reassign(rec, httptest.NewRequest(http.MethodPost, "/api/v1/queue/manual-import/reassign", bytes.NewReader(body)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (book not found); body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+// ── Fix Match destination preview (#2055) ───────────────────────────────────
+
+// previewRequest builds a GET for the reassign-preview endpoint.
+func previewRequest(path string, bookID int64, format string) *http.Request {
+	q := url.Values{}
+	if path != "" {
+		q.Set("path", path)
+	}
+	if bookID != 0 {
+		q.Set("targetBookId", strconv.FormatInt(bookID, 10))
+	}
+	if format != "" {
+		q.Set("format", format)
+	}
+	return httptest.NewRequest(http.MethodGet, "/api/v1/queue/manual-import/reassign/preview?"+q.Encode(), nil)
+}
+
+func TestReassignPreview_ReturnsDestination(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := makeBookPath(t, root, "wrong-book.epub", false)
+	stub := &stubManualImportScanner{preview: importer.DestinationPreview{
+		Source:      src,
+		Destination: filepath.Join(root, "Jane Doe", "Right Book (2020)", "Right Book - Jane Doe.epub"),
+		Format:      models.MediaTypeEbook,
+		Status:      importer.ReorgStatusMove,
+	}}
+	h := NewManualImportHandler(stub, nil, nil).WithRoots(NewLibraryRoots(nil, root))
+
+	rec := httptest.NewRecorder()
+	h.ReassignPreview(rec, previewRequest(src, 42, ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+	var got reassignPreviewResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Destination != stub.preview.Destination {
+		t.Errorf("destination = %q, want %q", got.Destination, stub.preview.Destination)
+	}
+	if got.Status != importer.ReorgStatusMove {
+		t.Errorf("status = %q, want %q", got.Status, importer.ReorgStatusMove)
+	}
+	if stub.previewBookID != 42 {
+		t.Errorf("previewed bookID = %d, want 42", stub.previewBookID)
+	}
+	// Nothing may be imported by a preview: it is read-only.
+	stub.importMu.Lock()
+	defer stub.importMu.Unlock()
+	if stub.importCalls != 0 {
+		t.Errorf("importCalls = %d, want 0; a preview must not move anything", stub.importCalls)
+	}
+}
+
+func TestReassignPreview_Rejects(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := makeBookPath(t, root, "book.epub", false)
+
+	cases := []struct {
+		name string
+		req  *http.Request
+		want int
+	}{
+		{"missing path", previewRequest("", 1, ""), http.StatusBadRequest},
+		{"relative path", previewRequest("relative/book.epub", 1, ""), http.StatusBadRequest},
+		{"missing target book", previewRequest(src, 0, ""), http.StatusBadRequest},
+		{"bad format", previewRequest(src, 1, "comic"), http.StatusBadRequest},
+		{"path outside roots", previewRequest(filepath.Join(t.TempDir(), "elsewhere.epub"), 1, ""), http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			stub := &stubManualImportScanner{}
+			h := NewManualImportHandler(stub, nil, nil).WithRoots(NewLibraryRoots(nil, root))
+			rec := httptest.NewRecorder()
+			h.ReassignPreview(rec, tc.req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d; body = %s", rec.Code, tc.want, rec.Body.String())
+			}
+			if stub.previewCalls != 0 {
+				t.Errorf("previewCalls = %d, want 0 on a rejected request", stub.previewCalls)
+			}
+		})
+	}
+}
+
+func TestReassignPreview_UnknownBookIsBadRequest(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := makeBookPath(t, root, "book.epub", false)
+	stub := &stubManualImportScanner{previewErr: errors.New("book 99 not found")}
+	h := NewManualImportHandler(stub, nil, nil).WithRoots(NewLibraryRoots(nil, root))
+
+	rec := httptest.NewRecorder()
+	h.ReassignPreview(rec, previewRequest(src, 99, ""))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "not found") {
+		t.Errorf("body = %q, want the not-found reason", rec.Body.String())
 	}
 }

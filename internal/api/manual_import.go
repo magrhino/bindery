@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,9 @@ type manualImportScanner interface {
 	Lookup(ctx context.Context, path string) (importer.LookupResult, error)
 	LookupBatchLayout(ctx context.Context, root string, paths []string) ([]importer.LookupResult, error)
 	ImportFromPath(ctx context.Context, dl *models.Download, path, formatHint string)
+	// PreviewImportDestination reports where importing a path against a book
+	// would place the file, without touching disk (#2055).
+	PreviewImportDestination(ctx context.Context, bookID int64, srcPath, formatHint string) (importer.DestinationPreview, error)
 }
 
 // ManualImportHandler serves the manual-import lookup and trigger endpoints.
@@ -219,6 +223,75 @@ func (h *ManualImportHandler) Reassign(w http.ResponseWriter, r *http.Request) {
 		h.removeStaleSource(ctx, path, targetID, preexisting)
 	}()
 	writeJSON(w, http.StatusAccepted, dl)
+}
+
+// reassignPreviewResponse is the read-only answer to "where would this file end
+// up if I reassigned it to that book?" (#2055).
+type reassignPreviewResponse struct {
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+	Format      string `json:"format"`
+	Status      string `json:"status"`
+	Message     string `json:"message,omitempty"`
+}
+
+// ReassignPreview handles
+// GET /api/v1/queue/manual-import/reassign/preview?path=...&targetBookId=N&format=...
+//
+// Fix Match runs the full import pipeline, so it moves and renames the file into
+// the target book's templated location. Reassign is asynchronous (202 plus a
+// background goroutine), so by the time the user sees the result there is
+// nothing to undo against. This endpoint lets the modal name the destination
+// before the user commits (#2055).
+//
+// Read-only: it stats paths and reads the naming settings, and modifies nothing.
+// Admin-gated with the rest of the manual-import group, since the response
+// discloses server filesystem paths.
+func (h *ManualImportHandler) ReassignPreview(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	path := filepath.Clean(q.Get("path"))
+	if path == "" || path == "." {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path parameter required"})
+		return
+	}
+	if !filepath.IsAbs(path) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path must be absolute"})
+		return
+	}
+	bookID, err := strconv.ParseInt(q.Get("targetBookId"), 10, 64)
+	if err != nil || bookID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "targetBookId parameter required"})
+		return
+	}
+	format := q.Get("format")
+	if format != "" && format != models.MediaTypeEbook && format != models.MediaTypeAudiobook {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "format must be \"ebook\" or \"audiobook\""})
+		return
+	}
+	// Same containment rules as Lookup: resolve symlinks and confirm the path
+	// sits under a configured library root before reporting anything about it.
+	resolved, ok := h.roots.ResolveContained(r.Context(), path)
+	if !ok {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "path is outside the configured library roots"})
+		return
+	}
+	path = resolved
+	if _, statErr := os.Stat(path); statErr != nil { //nolint:gosec // #nosec G304 -- path is symlink-resolved and confirmed inside a configured library root; RequireAdmin middleware enforced at route level
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("path not accessible: %v", statErr)})
+		return
+	}
+	preview, err := h.scanner.PreviewImportDestination(r.Context(), bookID, path, format)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, reassignPreviewResponse{
+		Source:      preview.Source,
+		Destination: preview.Destination,
+		Format:      preview.Format,
+		Status:      preview.Status,
+		Message:     preview.Message,
+	})
 }
 
 // detachSourceFile removes the book_files association for the file being

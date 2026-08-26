@@ -253,6 +253,14 @@ to the records. Things worth knowing before you judge the results:
   the author matched but has no book waiting for a file (populate that author's
   catalogue), no title matched, or no title could be read from the file at all
   (rename it). Use **Manual Import** to resolve the rest by hand.
+- **Fix match moves and renames the file.** When a book page shows the wrong
+  file, the **Fix match** button reassigns it to the book you pick. That runs
+  the full import, so the file is moved into the target book's folder and
+  renamed from your naming template, replacing your own layout for that file.
+  The modal warns you and shows the exact destination path before you confirm,
+  and nothing happens until you do; the move itself then runs in the background
+  and Bindery cannot undo it for you. Reassigning the metadata link *without*
+  relocating the file is not available yet (#2055).
 - A folder holding both an ebook and an audiobook for the same book attaches
   both in a single scan — one file per format, so a second scan is not needed.
 - A PDF, TXT, RTF or CBZ sitting in a folder that also holds audio is treated as

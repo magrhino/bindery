@@ -125,6 +125,17 @@ export interface SearchBookResponse {
   debug: SearchDebug | null
 }
 
+// ReassignPreview is where a Fix Match would move and rename the file (#2055).
+// `status` reuses the reorganize vocabulary: "move" (it will be relocated),
+// "noop" (it is already at the templated path), "collision", "missing", "error".
+export interface ReassignPreview {
+  source: string
+  destination: string
+  format: string
+  status: 'move' | 'noop' | 'collision' | 'missing' | 'error'
+  message?: string
+}
+
 export const booksApi = {
   // Metadata search
   searchAuthors: (term: string) => request<Author[]>(`/search/author?term=${encodeURIComponent(term)}`),
@@ -140,8 +151,19 @@ export const booksApi = {
 
   // Fix Match (#1238): move a mis-matched file to a different book. The file is
   // detached from its current book and re-imported into the target's folder.
+  // This MOVES AND RENAMES the file on disk and returns 202 before the move
+  // runs, so there is nothing to undo against. Call reassignFilePreview first
+  // and let the user confirm (#2055).
   reassignFile: (data: { path: string; targetBookId: number; format?: string }) =>
     request<{ id: number }>('/queue/manual-import/reassign', { method: 'POST', body: JSON.stringify(data) }),
+
+  // Read-only: where reassignFile would put this file. Computed server-side by
+  // the same renamer the import uses, so the path shown is the path written.
+  reassignFilePreview: (data: { path: string; targetBookId: number; format?: string }) => {
+    const q = new URLSearchParams({ path: data.path, targetBookId: String(data.targetBookId) })
+    if (data.format) q.set('format', data.format)
+    return request<ReassignPreview>(`/queue/manual-import/reassign/preview?${q.toString()}`)
+  },
 
   // Books
   listBooks: (params?: { authorId?: number; status?: string; monitored?: boolean; includeExcluded?: boolean; limit?: number; offset?: number; search?: string; mediaType?: string; sort?: string; releaseFrom?: string; releaseBefore?: string }) => {

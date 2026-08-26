@@ -195,6 +195,8 @@ GET    /api/v1/queue/manual-import/scan           enumerate + match book units u
 POST   /api/v1/queue/manual-import                import one path against a book (admin)
 POST   /api/v1/queue/manual-import/batch          import selected {path, bookId} pairs (admin)
 POST   /api/v1/queue/manual-import/reassign       move a mis-matched file to another book (admin)
+GET    /api/v1/queue/manual-import/reassign/preview  where that reassign would move and rename it (admin)
+                                                    ?path=…&targetBookId=N[&format=ebook|audiobook]
 POST   /api/v1/queue/manual-import/match          attach an importFailed download to a book and import its files (admin)
 
 GET    /api/v1/reorganize/preview                 preview renaming tracked files to the current template (admin)

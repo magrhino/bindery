@@ -1232,7 +1232,20 @@
       "hint": "Move this file to a different book",
       "title": "Reassign file to another book",
       "searchPlaceholder": "Search your library for the correct book…",
-      "noResults": "No matching books in your library"
+      "noResults": "No matching books in your library",
+      "moveNotice": "Reassigning does more than correct the metadata: Bindery moves the file into the chosen book’s folder and renames it from your naming template.",
+      "reassigningTo": "Reassigning to",
+      "confirmHeading": "This moves and renames the file on disk",
+      "confirmBody": "Bindery runs the full import against the chosen book, so the file is moved into that book’s folder and renamed from your naming template. Whatever folder layout you had for this file is replaced.",
+      "noUndo": "The move starts in the background as soon as you confirm, and Bindery cannot undo it for you.",
+      "noopNotice": "This file is already where your naming template puts it for that book, so only the metadata link changes.",
+      "currentPathLabel": "Current path",
+      "destinationLabel": "It will be moved to",
+      "destinationLoading": "Working out the destination…",
+      "destinationUnknown": "Bindery could not work out the destination. The file will still be moved and renamed.",
+      "confirmButton": "Move and reassign",
+      "confirmButtonNoop": "Reassign",
+      "backButton": "Choose a different book"
     },
     "metadataSource": {
       "heading": "Metadata source",
