@@ -4,15 +4,27 @@ import { api, QualityProfile } from '../../api/client'
 import { inputCls, labelCls } from './formStyles'
 import { dangerLink } from '../../components/buttons'
 
-// EBOOK_FORMATS and AUDIOBOOK_FORMATS are the format keys the rest of the
-// backend (decision.QualityRank, QualityFromFilename) already understands.
-// Two short lists keeps the UI honest: nothing should be selectable that the
-// scanner cannot label on disk. Split ebook/audiobook so a profile editor can
-// be focused; the model itself has no ebook-vs-audiobook column, but a
-// profile that mixes both is allowed if someone really wants to.
-const EBOOK_FORMATS = ['pdf', 'mobi', 'epub', 'azw3'] as const
-const AUDIOBOOK_FORMATS = ['mp3', 'm4a', 'm4b', 'flac'] as const
+// EBOOK_FORMATS and AUDIOBOOK_FORMATS mirror formatTokens in
+// internal/indexer/release.go, split by indexer.MediaTypeForFormat. Every
+// token release parsing can emit must have a checkbox here: since #1693 the
+// allow-list is authoritative, so a format this editor cannot offer can never
+// be allowed for an author with a configured profile (#1700). Within each
+// list the order is worst → best, following models.QualityRank where a rank
+// exists. The drift guard TestQualityEditorFormatVocabulary
+// (internal/indexer/quality_editor_vocab_test.go) fails the Go suite if
+// either side of this mirror changes without the other.
+// The split matters only for editor focus and the audiobook badge; the model
+// itself has no ebook-vs-audiobook column, and a profile that mixes both is
+// allowed if someone really wants to.
+const EBOOK_FORMATS = ['txt', 'rtf', 'lit', 'djvu', 'cbr', 'cbz', 'fb2', 'pdf', 'azw', 'mobi', 'epub', 'azw3'] as const
+const AUDIOBOOK_FORMATS = ['ogg', 'mp3', 'm4a', 'm4b', 'flac'] as const
 const ALL_FORMATS = [...EBOOK_FORMATS, ...AUDIOBOOK_FORMATS] as const
+
+// Seed for a brand-new profile: the mainstream ebook containers only, worst →
+// best. The long tail (txt, comic archives, ogg, …) is offered through the
+// "+ Add" chips instead, so a fresh profile does not silently allow plain-text
+// dumps or formats the user never asked for.
+const DEFAULT_EBOOK_ITEMS = ['pdf', 'mobi', 'epub', 'azw3'] as const
 
 interface EditorItem {
   quality: string
@@ -22,7 +34,7 @@ interface EditorItem {
 function defaultItems(): EditorItem[] {
   // Worst → best for ebooks. The decision spec compares cutoff and current
   // by index, so order matters: later = better.
-  return EBOOK_FORMATS.map(q => ({ quality: q, allowed: true }))
+  return DEFAULT_EBOOK_ITEMS.map(q => ({ quality: q, allowed: true }))
 }
 
 function normalisedItems(items?: EditorItem[]): EditorItem[] {

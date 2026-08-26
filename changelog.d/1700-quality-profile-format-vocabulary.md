@@ -1,0 +1,2 @@
+### Fixed
+- **The quality profile editor now offers every format release parsing recognises** (#1700). It listed only 8 of the 17 formats the search pipeline can label, so once v1.28.2 made the allow-list authoritative (#1693), AZW, DJVU, CBR, CBZ, FB2, LIT, RTF, TXT and OGG could never be allowed for an author with a configured profile. All nine are now available as "+ Add" chips in the editor; new profiles still start from the familiar PDF, MOBI, EPUB, AZW3 seed. A drift test keeps the editor's vocabulary locked to the parser's so they cannot diverge again.

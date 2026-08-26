@@ -84,4 +84,36 @@ describe('QualityTab', () => {
     expect(screen.getByText('settings.quality.formPreference')).toBeInTheDocument()
     expect(screen.getByText('settings.quality.formCutoff')).toBeInTheDocument()
   })
+
+  it('offers every release format the parser recognises (#1700)', async () => {
+    mockList.mockResolvedValueOnce([])
+    render(<QualityTab />)
+    await waitFor(() => screen.getByText('settings.quality.newProfile'))
+    fireEvent.click(screen.getByText('settings.quality.newProfile'))
+    // A new profile still seeds only the four mainstream ebook containers
+    // (each also appears as a cutoff <option>, hence getAllByText).
+    for (const seeded of ['pdf', 'mobi', 'epub', 'azw3']) {
+      expect(screen.getAllByText(seeded).length).toBeGreaterThanOrEqual(1)
+    }
+    // Everything else ParseRelease can emit is one "+ Add" chip away. Before
+    // #1700 nine of these had no path into the allow-list at all.
+    const chips = [
+      'txt', 'rtf', 'lit', 'djvu', 'cbr', 'cbz', 'fb2', 'azw',
+      'ogg', 'mp3', 'm4a', 'm4b', 'flac',
+    ]
+    for (const f of chips) {
+      expect(screen.getByText(`+ ${f}`)).toBeInTheDocument()
+    }
+  })
+
+  it('adds ogg via its chip and badges it as an audiobook format', async () => {
+    mockList.mockResolvedValueOnce([])
+    render(<QualityTab />)
+    await waitFor(() => screen.getByText('settings.quality.newProfile'))
+    fireEvent.click(screen.getByText('settings.quality.newProfile'))
+    fireEvent.click(screen.getByText('+ ogg'))
+    expect(screen.queryByText('+ ogg')).not.toBeInTheDocument()
+    expect(screen.getByText('ogg')).toBeInTheDocument()
+    expect(screen.getByText('common.audiobook')).toBeInTheDocument()
+  })
 })

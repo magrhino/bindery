@@ -124,7 +124,7 @@ Clean-room Go rewrite, modern React UI, MIT-licensed, actively developed.
 - Smart matching — four-tier query fallback (`t=book` → `surname+title` → `author+title` → title), word-boundary keyword matching, contiguous-phrase requirement for multi-word titles, dual-author-anchor for ambiguous short titles, subtitle-aware (`Title: Subtitle`).
 - SABnzbd, NZBGet, qBittorrent, Transmission, Deluge, rTorrent/ruTorrent — with **Use SSL** and **URL Base** for reverse-proxy subpaths.
 - Auto-grab sweep every 12h, immediate search on add or `wanted` flip, plus interactive per-book search and "Search all wanted" per author. Global kill-switch pauses auto-grab without losing your monitored list.
-- Quality profiles (EPUB / MOBI / AZW3 / PDF), language filter, regex-based custom formats, delay profiles, blocklist (consulted on every search; one-click add from History), and failure visibility in Queue and History.
+- Quality profiles covering every format release parsing recognises (EPUB, MOBI, AZW3, PDF, plus AZW, DJVU, CBR, CBZ, FB2, LIT, RTF, TXT and the audio containers M4B, M4A, FLAC, MP3, OGG), language filter, regex-based custom formats, delay profiles, blocklist (consulted on every search; one-click add from History), and failure visibility in Queue and History.
 
 **Import & organize**
 - Completed downloads matched by NZO ID and placed in the library with configurable naming. Modes: **Auto** (default — hardlink when possible, else copy; seeding-safe), **Move**, **Copy** (keep source for seeding), **Hardlink** (zero extra disk; same filesystem required), **External** (hand off to a sibling tool).
