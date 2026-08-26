@@ -1005,3 +1005,109 @@ describe('BookDetailPage — header', () => {
     expect(deleteFile.className).not.toContain('bg-red-600')
   })
 })
+
+// #1707: the page never said which provider its metadata came from, so with
+// OpenLibrary, Hardcover, Google Books and DNB all in play a user could not
+// tell what record they were looking at or whether to re-bind. The identifier
+// is the requirement and it has to be copyable; a link out is a bonus for the
+// providers whose public URL can be built from the stored id.
+describe('BookDetailPage metadata source (#1707)', () => {
+  it('names the provider and shows the id it is bound to', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(
+      makeBook({ foreignBookId: 'hc:12345', metadataProvider: 'hardcover' }),
+    )
+    renderBookDetailPage()
+
+    const list = await screen.findByTestId('metadata-source-list')
+    expect(within(list).getByText('Hardcover')).toBeInTheDocument()
+    expect(within(list).getByText('hc:12345')).toBeInTheDocument()
+  })
+
+  it('falls back to the foreign-id prefix when the provider column is empty', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(
+      makeBook({ foreignBookId: 'dnb:1234567890', metadataProvider: '' }),
+    )
+    renderBookDetailPage()
+
+    const list = await screen.findByTestId('metadata-source-list')
+    expect(within(list).getByText('DNB')).toBeInTheDocument()
+    expect(within(list).getByText('dnb:1234567890')).toBeInTheDocument()
+  })
+
+  it('copies an id to the clipboard', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(
+      makeBook({ foreignBookId: 'OL27448W', metadataProvider: 'openlibrary' }),
+    )
+    renderBookDetailPage()
+
+    const list = await screen.findByTestId('metadata-source-list')
+    await act(async () => {
+      fireEvent.click(within(list).getByRole('button', { name: 'Copy OL27448W' }))
+    })
+
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('OL27448W')
+    await waitFor(() => expect(within(list).getByText('Copied')).toBeInTheDocument())
+  })
+
+  it('links out only for a provider whose public URL is constructible', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(
+      makeBook({ foreignBookId: 'OL27448W', metadataProvider: 'openlibrary' }),
+    )
+    renderBookDetailPage()
+
+    const list = await screen.findByTestId('metadata-source-list')
+    expect(within(list).getByRole('link', { name: /View on OpenLibrary/ })).toHaveAttribute(
+      'href',
+      'https://openlibrary.org/works/OL27448W',
+    )
+  })
+
+  it('renders a Hardcover-bound book with no link rather than a broken one', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(
+      makeBook({ foreignBookId: 'hc:12345', metadataProvider: 'hardcover' }),
+    )
+    renderBookDetailPage()
+
+    const list = await screen.findByTestId('metadata-source-list')
+    expect(within(list).getByText('hc:12345')).toBeInTheDocument()
+    expect(within(list).queryByRole('link')).not.toBeInTheDocument()
+  })
+
+  // The identity map from #1705 is what makes "which record am I looking at"
+  // answerable when the same book has been resolved through two providers.
+  it('lists every other provider id the same book is known by', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(
+      makeBook({
+        foreignBookId: 'OL27448W',
+        metadataProvider: 'openlibrary',
+        identifiers: [
+          {
+            bookId: 42,
+            provider: 'openlibrary',
+            foreignBookId: 'OL27448W',
+            createdAt: '2026-01-01T00:00:00Z',
+            updatedAt: '2026-01-01T00:00:00Z',
+          },
+          {
+            bookId: 42,
+            provider: 'hardcover',
+            foreignBookId: 'hc:12345',
+            createdAt: '2026-01-01T00:00:00Z',
+            updatedAt: '2026-01-01T00:00:00Z',
+          },
+        ],
+      }),
+    )
+    renderBookDetailPage()
+
+    const list = await screen.findByTestId('metadata-source-list')
+    const rows = within(list).getAllByRole('listitem')
+    // The primary id is not repeated even though the map also carries it.
+    expect(rows).toHaveLength(2)
+    expect(within(rows[0]).getByText('OpenLibrary')).toBeInTheDocument()
+    expect(within(rows[0]).getByText('Current')).toBeInTheDocument()
+    expect(within(rows[1]).getByText('Hardcover')).toBeInTheDocument()
+    expect(within(rows[1]).getByText('hc:12345')).toBeInTheDocument()
+    expect(within(rows[1]).queryByText('Current')).not.toBeInTheDocument()
+  })
+})

@@ -81,6 +81,11 @@ type Book struct {
 	Author    *Author    `json:"author,omitempty"`
 	Editions  []Edition  `json:"editions,omitempty"`
 	BookFiles []BookFile `json:"bookFiles,omitempty"`
+	// Identifiers is the provider identity map from migration 078 (#1705),
+	// populated on the single-book GET so the detail page can show which
+	// record it is looking at and every other id the same book is known by
+	// (#1707). Omitted from list responses: it is a per-book join.
+	Identifiers []BookIdentifier `json:"identifiers,omitempty"`
 
 	// Transport-only: series data from the metadata provider, used during
 	// ingestion to populate series/series_books. Never stored in books table.

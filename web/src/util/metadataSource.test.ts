@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { metadataSourceLink } from './metadataSource'
+import {
+  hardcoverSeriesUrl,
+  metadataSourceLink,
+  providerDisplayName,
+  providerFromBookForeignId,
+} from './metadataSource'
 
 describe('metadataSourceLink', () => {
   it('links OpenLibrary authors', () => {
@@ -34,5 +39,68 @@ describe('metadataSourceLink', () => {
     expect(metadataSourceLink(undefined, 'book')).toBeNull()
     expect(metadataSourceLink('gb:', 'book')).toBeNull()
     expect(metadataSourceLink('OL123', 'author')).toBeNull() // no trailing A
+  })
+})
+
+describe('providerDisplayName', () => {
+  it('names the providers a book can come from', () => {
+    expect(providerDisplayName('openlibrary')).toBe('OpenLibrary')
+    expect(providerDisplayName('hardcover')).toBe('Hardcover')
+    expect(providerDisplayName('googlebooks')).toBe('Google Books')
+    expect(providerDisplayName('dnb')).toBe('DNB')
+    expect(providerDisplayName('calibre')).toBe('Calibre')
+    expect(providerDisplayName('audiobookshelf')).toBe('Audiobookshelf')
+  })
+
+  it('is case insensitive and trims', () => {
+    expect(providerDisplayName('  HardCover ')).toBe('Hardcover')
+  })
+
+  it('passes an unknown provider through rather than hiding it', () => {
+    expect(providerDisplayName('somethingnew')).toBe('somethingnew')
+  })
+
+  it('returns empty for no provider', () => {
+    expect(providerDisplayName('')).toBe('')
+    expect(providerDisplayName(undefined)).toBe('')
+    expect(providerDisplayName(null)).toBe('')
+  })
+})
+
+describe('providerFromBookForeignId', () => {
+  it('mirrors models.BookProviderFromForeignID', () => {
+    expect(providerFromBookForeignId('gb:xyz')).toBe('googlebooks')
+    expect(providerFromBookForeignId('hc:123')).toBe('hardcover')
+    expect(providerFromBookForeignId('HC:123')).toBe('hardcover')
+    expect(providerFromBookForeignId('dnb:123')).toBe('dnb')
+    expect(providerFromBookForeignId('calibre:7')).toBe('calibre')
+    expect(providerFromBookForeignId('abs:lib:item')).toBe('audiobookshelf')
+  })
+
+  it('treats an unprefixed id as OpenLibrary', () => {
+    expect(providerFromBookForeignId('OL27448W')).toBe('openlibrary')
+    expect(providerFromBookForeignId('something-random')).toBe('openlibrary')
+    expect(providerFromBookForeignId('')).toBe('openlibrary')
+  })
+})
+
+describe('hardcoverSeriesUrl', () => {
+  it('builds the public series page from the slug', () => {
+    expect(hardcoverSeriesUrl('the-stormlight-archive')).toBe(
+      'https://hardcover.app/series/the-stormlight-archive',
+    )
+  })
+
+  it('escapes anything that is not URL safe', () => {
+    expect(hardcoverSeriesUrl('a b/c')).toBe('https://hardcover.app/series/a%20b%2Fc')
+  })
+
+  // hardcover.app does not route series on the numeric provider id, so a row
+  // without a slug gets no link at all rather than one that 404s (#1708).
+  it('returns null without a slug', () => {
+    expect(hardcoverSeriesUrl('')).toBeNull()
+    expect(hardcoverSeriesUrl('   ')).toBeNull()
+    expect(hardcoverSeriesUrl(undefined)).toBeNull()
+    expect(hardcoverSeriesUrl(null)).toBeNull()
   })
 })

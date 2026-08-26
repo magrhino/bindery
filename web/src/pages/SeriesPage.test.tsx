@@ -823,3 +823,172 @@ describe('SeriesPage', () => {
     expect(screen.getByRole('button', { name: 'add' })).toBeInTheDocument()
   })
 })
+
+// #1708: near-identical light novel candidates cannot be told apart without
+// opening them, so the candidate list and the linked-series display both need a
+// way through to hardcover.app. The public page routes on the slug, so a row
+// without one renders no link at all rather than one that 404s.
+describe('SeriesPage Hardcover links out (#1708)', () => {
+  const linkedSeries = (hardcoverSlug?: string): Series => ({
+    id: 50,
+    foreignSeriesId: 'series-50',
+    title: 'The Stormlight Archive',
+    description: '',
+    monitored: true,
+    books: [],
+    hardcoverLink: {
+      id: 1,
+      seriesId: 50,
+      hardcoverSeriesId: 'hc-series:42',
+      hardcoverProviderId: '42',
+      ...(hardcoverSlug ? { hardcoverSlug } : {}),
+      hardcoverTitle: 'The Stormlight Archive',
+      hardcoverAuthorName: 'Brandon Sanderson',
+      hardcoverBookCount: 10,
+      confidence: 1,
+      linkedBy: 'manual',
+      linkedAt: '2026-01-01T00:00:00Z',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    },
+  })
+
+  const emptyDiff = {
+    seriesId: 50,
+    present: [],
+    missing: [],
+    localOnly: [],
+    uncertain: [],
+    presentCount: 0,
+    missingCount: 0,
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(api.status).mockResolvedValue({ version: 'dev', commit: 'unknown', buildDate: '', enhancedHardcoverApi: true, hardcoverTokenConfigured: true })
+    vi.mocked(api.listBooks).mockResolvedValue({ items: [], total: 0, limit: 100, offset: 0 })
+    vi.mocked(api.listAuthors).mockResolvedValue({ items: [], total: 0, limit: 100, offset: 0 })
+    vi.mocked(api.listAllBooks).mockResolvedValue([])
+    vi.mocked(api.listAllAuthors).mockResolvedValue([])
+    vi.mocked(api.getSeriesHardcoverLink).mockRejectedValue(new Error('not linked'))
+    vi.mocked(api.searchHardcoverSeries).mockResolvedValue([])
+  })
+
+  it('links the expanded linked-series row to its Hardcover page', async () => {
+    const series = linkedSeries('the-stormlight-archive')
+    vi.mocked(api.getSeriesHardcoverDiff).mockResolvedValue({ ...emptyDiff, link: series.hardcoverLink! })
+    renderSeriesPage([series])
+
+    fireEvent.click(await screen.findByRole('heading', { name: 'The Stormlight Archive' }))
+
+    const link = await screen.findByRole('link', { name: /View on Hardcover/ })
+    expect(link).toHaveAttribute('href', 'https://hardcover.app/series/the-stormlight-archive')
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+  })
+
+  it('renders no link when the stored link has no slug', async () => {
+    const series = linkedSeries()
+    vi.mocked(api.getSeriesHardcoverDiff).mockResolvedValue({ ...emptyDiff, link: series.hardcoverLink! })
+    renderSeriesPage([series])
+
+    fireEvent.click(await screen.findByRole('heading', { name: 'The Stormlight Archive' }))
+
+    expect(await screen.findByText(/Hardcover: The Stormlight Archive/)).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /View on Hardcover/ })).not.toBeInTheDocument()
+  })
+
+  it('links each Hardcover candidate in the picker, and says so when one has no page', async () => {
+    const candidates: SeriesHardcoverSearchResult[] = [
+      {
+        foreignId: 'hc-series:42',
+        providerId: '42',
+        slug: 'the-stormlight-archive',
+        title: 'The Stormlight Archive',
+        authorName: 'Brandon Sanderson',
+        bookCount: 10,
+        readersCount: 19323,
+        books: ['The Way of Kings'],
+      },
+      {
+        foreignId: 'hc-series:43',
+        providerId: '43',
+        title: 'The Stormlight Archive (manga)',
+        authorName: 'Brandon Sanderson',
+        bookCount: 3,
+        readersCount: 12,
+        books: [],
+      },
+    ]
+    vi.mocked(api.searchHardcoverSeries).mockResolvedValue(candidates)
+    vi.mocked(api.autoLinkSeriesHardcover).mockResolvedValue({ linked: false, candidates, reason: 'ambiguous candidates' })
+
+    renderSeriesPage([
+      {
+        id: 51,
+        foreignSeriesId: 'series-51',
+        title: 'The Stormlight Archive',
+        description: '',
+        monitored: true,
+        books: [],
+      },
+    ])
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Search' }))
+    const dialog = await screen.findByRole('dialog')
+
+    const links = await within(dialog).findAllByRole('link', { name: /View on Hardcover/ })
+    expect(links).toHaveLength(1)
+    expect(links[0]).toHaveAttribute('href', 'https://hardcover.app/series/the-stormlight-archive')
+    expect(within(dialog).getByText('No Hardcover page for this result')).toBeInTheDocument()
+  })
+
+  it('still selects a candidate after the link was moved out of the row button', async () => {
+    const candidate: SeriesHardcoverSearchResult = {
+      foreignId: 'hc-series:42',
+      providerId: '42',
+      slug: 'the-stormlight-archive',
+      title: 'The Stormlight Archive',
+      authorName: 'Brandon Sanderson',
+      bookCount: 10,
+      readersCount: 19323,
+      books: [],
+    }
+    vi.mocked(api.searchHardcoverSeries).mockResolvedValue([candidate])
+    vi.mocked(api.autoLinkSeriesHardcover).mockResolvedValue({ linked: false, candidates: [candidate], reason: 'low confidence' })
+    vi.mocked(api.linkSeriesHardcover).mockResolvedValue({
+      id: 9,
+      seriesId: 52,
+      hardcoverSeriesId: candidate.foreignId,
+      hardcoverProviderId: '42',
+      hardcoverSlug: 'the-stormlight-archive',
+      hardcoverTitle: candidate.title,
+      hardcoverAuthorName: candidate.authorName,
+      hardcoverBookCount: 10,
+      confidence: 1,
+      linkedBy: 'manual',
+      linkedAt: '2026-01-01T00:00:00Z',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    })
+
+    renderSeriesPage([
+      {
+        id: 52,
+        foreignSeriesId: 'series-52',
+        title: 'The Stormlight Archive',
+        description: '',
+        monitored: true,
+        books: [],
+      },
+    ])
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Search' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(await within(dialog).findByText('The Stormlight Archive'))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm Selection' }))
+
+    // The slug travels with the selection so the backend can store it.
+    await waitFor(() => expect(api.linkSeriesHardcover).toHaveBeenCalledWith(52, candidate))
+  })
+})

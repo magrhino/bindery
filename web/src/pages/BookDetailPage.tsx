@@ -16,7 +16,7 @@ import ConfirmDialog from '../components/ConfirmDialog'
 import ClipboardManualFallback from '../components/ClipboardManualFallback'
 import { useClipboardCopy } from '../components/useClipboardCopy'
 import { safeHref } from '../util/safeHref'
-import { metadataSourceLink } from '../util/metadataSource'
+import { metadataSourceLink, providerDisplayName, providerFromBookForeignId } from '../util/metadataSource'
 import FixMatchModal from '../components/FixMatchModal'
 import EditBookModal from '../components/EditBookModal'
 
@@ -288,6 +288,10 @@ export default function BookDetailPage() {
   const pathClipboard = useClipboardCopy()
   // The row whose Copy was clicked — the hook's status is shared across rows.
   const [copiedPath, setCopiedPath] = useState<string | null>(null)
+  // Separate from pathClipboard so copying an id does not flip a file row's
+  // button to "Copied" (#1707).
+  const idClipboard = useClipboardCopy()
+  const [copiedId, setCopiedId] = useState<string | null>(null)
   // Series membership for the meta row. series_books has been populated since
   // v0.7.0 but this page never surfaced it.
   const [series, setSeries] = useState<{ title: string; position: string }[]>([])
@@ -515,10 +519,49 @@ export default function BookDetailPage() {
     await pathClipboard.copy(path)
   }
 
+  const copyId = async (value: string) => {
+    setCopiedId(value)
+    await idClipboard.copy(value)
+  }
+
   if (loading) return <div className="text-slate-600 dark:text-zinc-500">{t('common.loading')}</div>
   if (!book) return <div className="text-slate-600 dark:text-zinc-500">{t('bookDetail.notFound')}</div>
 
   const mt: MediaType = book.mediaType || 'ebook'
+
+  // The provider identity of this book (#1707), primary row first.
+  //
+  // books.metadata_provider names the record the page is showing; the identity
+  // map from #1705 adds every other provider that has been resolved to the same
+  // book. metadata_provider can be empty on rows created before the column
+  // existed, so the prefix of the foreign id is the fallback, matching
+  // models.BookProviderFromForeignID.
+  const identityRows = (() => {
+    const primaryId = (book.foreignBookId || '').trim()
+    const rows: { provider: string; foreignId: string; primary: boolean; link: ReturnType<typeof metadataSourceLink> }[] = []
+    const seen = new Set<string>()
+    if (primaryId) {
+      rows.push({
+        provider: (book.metadataProvider || '').trim() || providerFromBookForeignId(primaryId),
+        foreignId: primaryId,
+        primary: true,
+        link: metadataSourceLink(primaryId, 'book'),
+      })
+      seen.add(primaryId)
+    }
+    for (const identifier of book.identifiers ?? []) {
+      const id = (identifier.foreignBookId || '').trim()
+      if (!id || seen.has(id)) continue
+      seen.add(id)
+      rows.push({
+        provider: (identifier.provider || '').trim() || providerFromBookForeignId(id),
+        foreignId: id,
+        primary: false,
+        link: metadataSourceLink(id, 'book'),
+      })
+    }
+    return rows
+  })()
 
   // Display truth is the file inventory, never the declared media type.
   const rows = fileRows(book)
@@ -928,6 +971,63 @@ export default function BookDetailPage() {
           )}
         </div>
       </Section>
+
+      {/* ===== Metadata source (#1707) =====
+          With OpenLibrary, Hardcover, Google Books and DNB all in play, the
+          page never said which record it was showing, so there was no way to
+          tell whether a book needed rebinding. The identifier is the point:
+          it is selectable and copyable, and the link out only appears for
+          providers whose public URL can be built from the stored id. */}
+      {identityRows.length > 0 && (
+        <Section title={t('bookDetail.metadataSource.heading', 'Metadata source')}>
+          <ul className="space-y-2" data-testid="metadata-source-list">
+            {identityRows.map(row => (
+              <li key={`${row.provider}-${row.foreignId}`} className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium min-w-32">
+                  {providerDisplayName(row.provider) || t('bookDetail.metadataSource.unknownProvider', 'Unknown provider')}
+                </span>
+                {row.primary && (
+                  <span className="text-xs px-1.5 py-0.5 rounded-full border border-emerald-500/40 text-emerald-700 dark:text-emerald-300">
+                    {t('bookDetail.metadataSource.current', 'Current')}
+                  </span>
+                )}
+                <code className="font-mono text-xs text-slate-600 dark:text-zinc-400 select-all break-all">
+                  {row.foreignId}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => copyId(row.foreignId)}
+                  className="shrink-0 text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-zinc-200 text-xs border border-slate-300 dark:border-zinc-700 rounded px-1.5 py-0.5"
+                  aria-label={t('bookDetail.metadataSource.copyId', { id: row.foreignId, defaultValue: 'Copy {{id}}' })}
+                >
+                  <span aria-hidden>⧉</span>{' '}
+                  {idClipboard.status === 'copied' && copiedId === row.foreignId
+                    ? t('bookDetail.copied')
+                    : t('bookDetail.copy')}
+                </button>
+                {row.link && (
+                  <a
+                    href={row.link.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-emerald-600 dark:text-emerald-400 hover:underline"
+                  >
+                    {t('common.viewOnSource', { source: row.link.label, defaultValue: 'View on {{source}} ↗' })}
+                  </a>
+                )}
+              </li>
+            ))}
+          </ul>
+          {idClipboard.status === 'manual' && (
+            <div className="mt-2">
+              <ClipboardManualFallback text={idClipboard.manualText} />
+            </div>
+          )}
+          <p className="mt-3 text-xs text-slate-500 dark:text-zinc-500">
+            {t('bookDetail.metadataSource.hint', 'Re-bind this book if the record above is the wrong one.')}
+          </p>
+        </Section>
+      )}
 
       {/* ===== Audiobook ASIN / enrich (audiobook + dual-format only) ===== */}
       {(mt === 'audiobook' || mt === 'both') && (

@@ -11,9 +11,25 @@ export interface BookFile {
   createdAt: string
 }
 
+// One provider's id for a book, from the identity map added in #1705.
+export interface BookIdentifier {
+  bookId: number
+  provider: string
+  foreignBookId: string
+  createdAt: string
+  updatedAt: string
+}
+
 export interface Book {
   id: number
   foreignBookId: string
+  // Which provider this book's metadata came from (#1707). Populated on every
+  // book; older rows created before the column existed may be empty, in which
+  // case the provider is inferred from the foreign id prefix.
+  metadataProvider?: string
+  // Every other provider id the same book is known by (#1705). Only populated
+  // on the single-book GET.
+  identifiers?: BookIdentifier[]
   authorId: number
   title: string
   description: string

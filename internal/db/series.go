@@ -175,9 +175,9 @@ func (r *SeriesRepo) hydrateHardcoverLinks(ctx context.Context, series []models.
 		args = append(args, s.ID)
 	}
 	query := `
-		SELECT id, series_id, hardcover_series_id, hardcover_provider_id, hardcover_title,
-		       hardcover_author_name, hardcover_book_count, link_confidence, linked_by,
-		       linked_at, created_at, updated_at
+		SELECT id, series_id, hardcover_series_id, hardcover_provider_id, hardcover_slug,
+		       hardcover_title, hardcover_author_name, hardcover_book_count, link_confidence,
+		       linked_by, linked_at, created_at, updated_at
 		FROM series_hardcover_links
 		WHERE series_id IN (` + strings.Join(placeholders, ",") + `)` // #nosec G202 -- placeholders are generated from fixed ? tokens; series IDs remain bound args
 	rows, err := r.db.QueryContext(ctx, query, args...)
@@ -394,6 +394,7 @@ func scanSeriesHardcoverLink(scanner seriesHardcoverLinkScanner) (models.SeriesH
 		&link.SeriesID,
 		&link.HardcoverSeriesID,
 		&link.HardcoverProviderID,
+		&link.HardcoverSlug,
 		&link.HardcoverTitle,
 		&link.HardcoverAuthorName,
 		&link.HardcoverBookCount,
@@ -408,9 +409,9 @@ func scanSeriesHardcoverLink(scanner seriesHardcoverLinkScanner) (models.SeriesH
 
 func (r *SeriesRepo) GetHardcoverLink(ctx context.Context, seriesID int64) (*models.SeriesHardcoverLink, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, series_id, hardcover_series_id, hardcover_provider_id, hardcover_title,
-		       hardcover_author_name, hardcover_book_count, link_confidence, linked_by,
-		       linked_at, created_at, updated_at
+		SELECT id, series_id, hardcover_series_id, hardcover_provider_id, hardcover_slug,
+		       hardcover_title, hardcover_author_name, hardcover_book_count, link_confidence,
+		       linked_by, linked_at, created_at, updated_at
 		FROM series_hardcover_links
 		WHERE series_id = ?`, seriesID)
 	link, err := scanSeriesHardcoverLink(row)
@@ -445,14 +446,18 @@ func (r *SeriesRepo) UpsertHardcoverLink(ctx context.Context, link *models.Serie
 	}
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO series_hardcover_links (
-			series_id, hardcover_series_id, hardcover_provider_id, hardcover_title,
-			hardcover_author_name, hardcover_book_count, link_confidence, linked_by,
-			linked_at, created_at, updated_at
+			series_id, hardcover_series_id, hardcover_provider_id, hardcover_slug,
+			hardcover_title, hardcover_author_name, hardcover_book_count, link_confidence,
+			linked_by, linked_at, created_at, updated_at
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(series_id) DO UPDATE SET
 			hardcover_series_id = excluded.hardcover_series_id,
 			hardcover_provider_id = excluded.hardcover_provider_id,
+			-- Keep a slug we already know when the caller has none, so an
+			-- upsert from a path that cannot resolve one does not erase the
+			-- public link (#1708).
+			hardcover_slug = CASE WHEN excluded.hardcover_slug = '' THEN hardcover_slug ELSE excluded.hardcover_slug END,
 			hardcover_title = excluded.hardcover_title,
 			hardcover_author_name = excluded.hardcover_author_name,
 			hardcover_book_count = excluded.hardcover_book_count,
@@ -463,6 +468,7 @@ func (r *SeriesRepo) UpsertHardcoverLink(ctx context.Context, link *models.Serie
 		link.SeriesID,
 		link.HardcoverSeriesID,
 		link.HardcoverProviderID,
+		strings.TrimSpace(link.HardcoverSlug),
 		link.HardcoverTitle,
 		link.HardcoverAuthorName,
 		link.HardcoverBookCount,

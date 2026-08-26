@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router'
 import { api, MediaType, Series, SeriesHardcoverDiff, SeriesHardcoverDiffBook, SeriesHardcoverLink, SeriesHardcoverSearchResult, SystemStatus } from '../api/client'
+import { hardcoverSeriesUrl } from '../util/metadataSource'
 import AddSeriesBookModal from '../components/AddSeriesBookModal'
 import HardcoverSeriesLinkModal from '../components/HardcoverSeriesLinkModal'
 import SeriesNameModal from '../components/SeriesNameModal'
@@ -441,6 +442,21 @@ export default function SeriesPage() {
                         <p className="text-xs text-slate-600 dark:text-zinc-500">
                           {diff ? `${diff.presentCount} matched · ${diff.missingCount} missing` : 'Checking Hardcover catalog...'}
                         </p>
+                        {/* Way back to the record this series is linked to
+                            (#1708). Absent until the slug is known, because
+                            hardcover.app does not route series on the numeric
+                            id Bindery stores. */}
+                        {hardcoverSeriesUrl(series.hardcoverLink.hardcoverSlug) && (
+                          <a
+                            href={hardcoverSeriesUrl(series.hardcoverLink.hardcoverSlug)!}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={e => e.stopPropagation()}
+                            className="text-xs text-sky-700 dark:text-sky-300 hover:underline mt-0.5 inline-block"
+                          >
+                            View on Hardcover ↗
+                          </a>
+                        )}
                       </div>
                       {(diff?.missingCount ?? 0) > 0 && (
                         <div className="flex items-center gap-2 flex-shrink-0">

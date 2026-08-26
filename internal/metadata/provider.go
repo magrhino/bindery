@@ -37,8 +37,13 @@ type Provider interface {
 
 // SeriesSearchResult is a provider-neutral series discovery result.
 type SeriesSearchResult struct {
-	ForeignID    string
-	ProviderID   string
+	ForeignID  string
+	ProviderID string
+	// Slug is the provider's public URL slug for the series, when it has one.
+	// Hardcover's public series page routes on the slug and not on ProviderID,
+	// so this is what a "view on the provider" link has to be built from
+	// (#1708). Empty when the provider does not report one.
+	Slug         string
 	Title        string
 	AuthorName   string
 	BookCount    int
@@ -50,6 +55,9 @@ type SeriesSearchResult struct {
 type SeriesCatalog struct {
 	ForeignID  string
 	ProviderID string
+	// Slug is the provider's public URL slug for the series. See
+	// SeriesSearchResult.Slug.
+	Slug       string
 	Title      string
 	AuthorName string
 	BookCount  int

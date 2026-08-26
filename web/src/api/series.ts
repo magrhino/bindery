@@ -7,6 +7,10 @@ export interface SeriesHardcoverLink {
   seriesId: number
   hardcoverSeriesId: string
   hardcoverProviderId: string
+  // Hardcover's public URL slug. Empty on links stored before migration 080
+  // and on series Hardcover reports without one; hardcoverSeriesUrl returns
+  // null in that case rather than building a URL that 404s (#1708).
+  hardcoverSlug?: string
   hardcoverTitle: string
   hardcoverAuthorName: string
   hardcoverBookCount: number
@@ -20,6 +24,7 @@ export interface SeriesHardcoverLink {
 export interface SeriesHardcoverSearchResult {
   foreignId: string
   providerId: string
+  slug?: string
   title: string
   authorName: string
   bookCount: number

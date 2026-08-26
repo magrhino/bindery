@@ -23,10 +23,16 @@ type Series struct {
 }
 
 type SeriesHardcoverLink struct {
-	ID                  int64     `json:"id"`
-	SeriesID            int64     `json:"seriesId"`
-	HardcoverSeriesID   string    `json:"hardcoverSeriesId"`
-	HardcoverProviderID string    `json:"hardcoverProviderId"`
+	ID                  int64  `json:"id"`
+	SeriesID            int64  `json:"seriesId"`
+	HardcoverSeriesID   string `json:"hardcoverSeriesId"`
+	HardcoverProviderID string `json:"hardcoverProviderId"`
+	// HardcoverSlug is the series' slug on hardcover.app, which is the only
+	// identifier its public page routes on (#1708). Empty for links stored
+	// before migration 080 and for any candidate Hardcover returned without
+	// one; callers must treat "" as "no public link" rather than build a URL
+	// from HardcoverProviderID, which resolves nowhere.
+	HardcoverSlug       string    `json:"hardcoverSlug"`
 	HardcoverTitle      string    `json:"hardcoverTitle"`
 	HardcoverAuthorName string    `json:"hardcoverAuthorName"`
 	HardcoverBookCount  int       `json:"hardcoverBookCount"`

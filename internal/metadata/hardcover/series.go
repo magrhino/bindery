@@ -74,6 +74,7 @@ func (c *Client) GetSeriesCatalog(ctx context.Context, foreignID string) (*metad
 		series_by_pk(id: $seriesId) {
 			id
 			name
+			slug
 			author { name }
 			books_count
 			book_series(
@@ -119,6 +120,7 @@ func (c *Client) GetSeriesCatalog(ctx context.Context, foreignID string) (*metad
 type hcSeriesCatalog struct {
 	ID         int    `json:"id"`
 	Name       string `json:"name"`
+	Slug       string `json:"slug"`
 	BooksCount int    `json:"books_count"`
 	Author     *struct {
 		Name string `json:"name"`
@@ -139,7 +141,10 @@ type hcSeriesSearchResult struct {
 }
 
 type hcSeriesSearchDocument struct {
-	ID                any      `json:"id"`
+	ID any `json:"id"`
+	// Slug is documented as "The URL slug of the series" in the Hardcover
+	// search field list and is what hardcover.app/series/<slug> routes on.
+	Slug              string   `json:"slug"`
 	Name              string   `json:"name"`
 	AuthorName        string   `json:"author_name"`
 	PrimaryBooksCount int      `json:"primary_books_count"`
@@ -222,6 +227,7 @@ func seriesSearchDocumentToResult(doc hcSeriesSearchDocument) metadata.SeriesSea
 	return metadata.SeriesSearchResult{
 		ForeignID:    seriesIDPrefix + id,
 		ProviderID:   id,
+		Slug:         strings.TrimSpace(doc.Slug),
 		Title:        strings.TrimSpace(doc.Name),
 		AuthorName:   strings.TrimSpace(doc.AuthorName),
 		BookCount:    count,
@@ -234,6 +240,7 @@ func (c *Client) toSeriesCatalog(series hcSeriesCatalog) *metadata.SeriesCatalog
 	catalog := &metadata.SeriesCatalog{
 		ForeignID:  seriesIDPrefix + strconv.Itoa(series.ID),
 		ProviderID: strconv.Itoa(series.ID),
+		Slug:       strings.TrimSpace(series.Slug),
 		Title:      strings.TrimSpace(series.Name),
 		BookCount:  series.BooksCount,
 	}

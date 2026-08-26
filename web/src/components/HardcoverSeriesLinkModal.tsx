@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, Series, SeriesHardcoverLink, SeriesHardcoverSearchResult } from '../api/client'
+import { hardcoverSeriesUrl } from '../util/metadataSource'
 
 interface HardcoverSeriesLinkModalProps {
   series: Series
@@ -141,6 +142,16 @@ export default function HardcoverSeriesLinkModal({ series, initialResults, onClo
                   {currentLink.hardcoverAuthorName && (
                     <p className="text-xs text-slate-600 dark:text-zinc-400 mt-0.5">{currentLink.hardcoverAuthorName}</p>
                   )}
+                  {hardcoverSeriesUrl(currentLink.hardcoverSlug) && (
+                    <a
+                      href={hardcoverSeriesUrl(currentLink.hardcoverSlug)!}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-sky-700 dark:text-sky-300 hover:underline mt-1 inline-block"
+                    >
+                      View on Hardcover ↗
+                    </a>
+                  )}
                 </div>
                 <span className="text-xs px-2 py-1 rounded-full border border-sky-500/40 text-sky-700 dark:text-sky-300 flex-shrink-0">
                   {currentLink.linkedBy === 'auto' ? 'Auto' : 'Manual'} {formatConfidence(currentLink.confidence)}
@@ -172,35 +183,57 @@ export default function HardcoverSeriesLinkModal({ series, initialResults, onClo
             {results.map(result => {
               const selectedResult = selectedId === result.foreignId
               const previewBooks = result.books ?? []
+              const sourceUrl = hardcoverSeriesUrl(result.slug)
               return (
-                <button
+                <div
                   key={result.foreignId}
-                  type="button"
-                  onClick={() => setSelectedId(result.foreignId)}
-                  className={`w-full text-left rounded-md border p-4 transition-colors ${
+                  className={`rounded-md border transition-colors ${
                     selectedResult
                       ? 'border-emerald-500 bg-emerald-500/10'
                       : 'border-slate-300 dark:border-zinc-700 bg-slate-200/50 dark:bg-zinc-800/50 hover:bg-slate-200 dark:hover:bg-zinc-800'
                   }`}
                 >
-                  <div className="flex items-start gap-3">
-                    <span className={`mt-1 h-4 w-4 rounded-full border flex-shrink-0 ${selectedResult ? 'border-emerald-500 bg-emerald-500' : 'border-slate-400 dark:border-zinc-500'}`} />
-                    <div className="min-w-0 flex-1">
-                      <div className="font-semibold truncate">{result.title}</div>
-                      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 dark:text-zinc-400">
-                        {result.authorName && <span>{result.authorName}</span>}
-                        <span>{result.bookCount} {result.bookCount === 1 ? 'book' : 'books'}</span>
-                        {result.readersCount > 0 && <span>{result.readersCount.toLocaleString()} readers</span>}
-                        {result.confidence && <span>{formatConfidence(result.confidence)} match</span>}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedId(result.foreignId)}
+                    className="w-full text-left p-4 pb-2"
+                  >
+                    <div className="flex items-start gap-3">
+                      <span className={`mt-1 h-4 w-4 rounded-full border flex-shrink-0 ${selectedResult ? 'border-emerald-500 bg-emerald-500' : 'border-slate-400 dark:border-zinc-500'}`} />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold truncate">{result.title}</div>
+                        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 dark:text-zinc-400">
+                          {result.authorName && <span>{result.authorName}</span>}
+                          <span>{result.bookCount} {result.bookCount === 1 ? 'book' : 'books'}</span>
+                          {result.readersCount > 0 && <span>{result.readersCount.toLocaleString()} readers</span>}
+                          {result.confidence && <span>{formatConfidence(result.confidence)} match</span>}
+                        </div>
+                        {previewBooks.length > 0 && (
+                          <p className="mt-2 text-xs text-slate-600 dark:text-zinc-500 line-clamp-2 italic">
+                            {previewBooks.slice(0, 4).join(', ')}
+                          </p>
+                        )}
                       </div>
-                      {previewBooks.length > 0 && (
-                        <p className="mt-2 text-xs text-slate-600 dark:text-zinc-500 line-clamp-2 italic">
-                          {previewBooks.slice(0, 4).join(', ')}
-                        </p>
-                      )}
                     </div>
+                  </button>
+                  {/* Outside the selection button: near-identical light novel
+                      candidates cannot be told apart without opening them, and
+                      an anchor nested in a button is invalid markup. */}
+                  <div className="px-4 pb-3 pl-11">
+                    {sourceUrl ? (
+                      <a
+                        href={sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-sky-700 dark:text-sky-300 hover:underline"
+                      >
+                        View on Hardcover ↗
+                      </a>
+                    ) : (
+                      <span className="text-xs text-slate-500 dark:text-zinc-500">No Hardcover page for this result</span>
+                    )}
                   </div>
-                </button>
+                </div>
               )
             })}
             {searching && <p className="text-sm text-slate-600 dark:text-zinc-500 text-center py-4">Searching...</p>}

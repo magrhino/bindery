@@ -34,8 +34,8 @@ If either requirement is missing, Bindery hides the enhanced controls and the en
 2. Create a series manually, or open an existing series populated from your library metadata.
 3. Use **Add Book** to attach existing Bindery books and set their series positions.
 4. Use **Search** to find a matching Hardcover series.
-5. Pick the correct Hardcover result, or remove a bad existing link.
-6. Open the linked series to load the Hardcover catalog diff.
+5. Pick the correct Hardcover result, or remove a bad existing link. Each candidate carries a **View on Hardcover** link so you can open it before choosing, which matters most for light novels, where the novel, its manga adaptation and a spin-off all come back under near-identical names.
+6. Open the linked series to load the Hardcover catalog diff. The linked series shows the same **View on Hardcover** link, so there is always a way back to the record it is bound to.
 7. Optionally use **Set genre** before adding books. The override is applied to current and newly added books in the series and locked against metadata refresh.
 8. Use **add** on a single missing row, or **add all** / **Fill gaps** to queue every missing catalog entry.
 
@@ -74,6 +74,7 @@ The format dropdown beside **add all** sets the media type of every book the fil
 - Hardcover-backed controls require outbound HTTPS access to Hardcover.
 - The fill action can also contact configured indexers because it queues searches immediately.
 - A linked series can still have local-only or uncertain entries when local metadata does not cleanly match the Hardcover catalog.
+- **View on Hardcover** is built from the series slug, which is the only identifier hardcover.app routes series pages on. Series linked before Bindery started recording the slug have none stored, so their link appears the next time the catalog diff is loaded. If Hardcover reports a series with no slug at all, Bindery shows no link rather than one that leads to a missing page.
 - Removing a Hardcover link does not delete the local series or local books.
 - Deleting a local series does not delete linked books from your library.
 

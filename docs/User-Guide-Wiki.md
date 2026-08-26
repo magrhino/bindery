@@ -292,6 +292,15 @@ to the records. Things worth knowing before you judge the results:
 - **Google Books** (free API key) and **Audnexus/Audible** (audiobook
   narrator, duration, by ASIN) enrich further.
 
+Which of those a given book actually came from is on the book page, under
+**Metadata source**. It names the provider, shows the identifier the book is
+bound to with a copy button, and lists any other provider ids the same book is
+known by. That is the thing to check before deciding a book needs re-binding,
+and the id is what to quote in a bug report. Providers whose public page can be
+built from the stored id (OpenLibrary, Google Books) also get a link out;
+Hardcover, DNB, Calibre and Audiobookshelf ids show on their own, because their
+stored ids do not map to a stable public page.
+
 When metadata is wrong, you have three levels of fix:
 
 1. **Edit metadata** on the book — edited fields are **locked** so refreshes

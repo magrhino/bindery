@@ -389,6 +389,7 @@ func (h *BookHandler) Get(w http.ResponseWriter, r *http.Request) {
 	proxyBookImages(book)
 	cleanBookDescription(book)
 	h.attachBookFiles(r.Context(), book)
+	h.attachBookIdentifiers(r.Context(), book)
 	writeJSON(w, http.StatusOK, book)
 }
 
@@ -403,6 +404,17 @@ func cleanBookDescription(book *models.Book) {
 func (h *BookHandler) attachBookFiles(ctx context.Context, book *models.Book) {
 	if files, err := h.books.ListFiles(ctx, book.ID); err == nil {
 		book.BookFiles = files
+	}
+}
+
+// attachBookIdentifiers loads the provider identity map for a single book
+// (#1705) so the detail page can name the record it is showing (#1707).
+//
+// Best effort, like attachBookFiles: the book itself is the response, and a
+// failed join should not turn a page load into an error.
+func (h *BookHandler) attachBookIdentifiers(ctx context.Context, book *models.Book) {
+	if identifiers, err := h.books.ListBookIdentifiers(ctx, book.ID); err == nil {
+		book.Identifiers = identifiers
 	}
 }
 

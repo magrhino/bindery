@@ -1234,6 +1234,13 @@
       "searchPlaceholder": "Search your library for the correct book…",
       "noResults": "No matching books in your library"
     },
+    "metadataSource": {
+      "heading": "Metadata source",
+      "current": "Current",
+      "unknownProvider": "Unknown provider",
+      "copyId": "Copy {{id}}",
+      "hint": "Re-bind this book if the record above is the wrong one."
+    },
     "audiobookHeading": "Audiobook metadata",
     "asinLabel": "ASIN (Audible identifier)",
     "saveAsin": "Save ASIN",

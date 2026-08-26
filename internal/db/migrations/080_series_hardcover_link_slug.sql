@@ -1,0 +1,11 @@
+-- Hardcover series slug for the linked-series "View on Hardcover" link (#1708).
+--
+-- The public page is https://hardcover.app/series/<slug>. The link row already
+-- carries the numeric provider id, which is what the GraphQL API takes, but the
+-- website does not route on it, so a link built from the stored id would 404.
+-- The slug ships in both the Typesense series search document and series_by_pk,
+-- so it is recorded whenever a link is created or its catalog is fetched.
+--
+-- Existing rows stay '' until the next catalog fetch backfills them, and the UI
+-- renders no link while the slug is empty rather than guessing one.
+ALTER TABLE series_hardcover_links ADD COLUMN hardcover_slug TEXT NOT NULL DEFAULT '';

@@ -577,8 +577,12 @@ func (h *SeriesHandler) queueSeriesBook(ctx context.Context, b models.Book) (boo
 }
 
 type seriesHardcoverSearchResult struct {
-	ForeignID    string   `json:"foreignId"`
-	ProviderID   string   `json:"providerId"`
+	ForeignID  string `json:"foreignId"`
+	ProviderID string `json:"providerId"`
+	// Slug is Hardcover's public URL slug, the only identifier
+	// hardcover.app/series/<...> routes on (#1708). Omitted when Hardcover
+	// returned none, in which case the client renders no link.
+	Slug         string   `json:"slug,omitempty"`
 	Title        string   `json:"title"`
 	AuthorName   string   `json:"authorName"`
 	BookCount    int      `json:"bookCount"`
@@ -590,6 +594,7 @@ type seriesHardcoverSearchResult struct {
 type seriesHardcoverLinkRequest struct {
 	ForeignID  string  `json:"foreignId"`
 	ProviderID string  `json:"providerId"`
+	Slug       string  `json:"slug"`
 	Title      string  `json:"title"`
 	AuthorName string  `json:"authorName"`
 	BookCount  int     `json:"bookCount"`
@@ -733,6 +738,7 @@ func (h *SeriesHandler) AutoLinkHardcover(w http.ResponseWriter, r *http.Request
 		SeriesID:            series.ID,
 		HardcoverSeriesID:   top.ForeignID,
 		HardcoverProviderID: top.ProviderID,
+		HardcoverSlug:       top.Slug,
 		HardcoverTitle:      top.Title,
 		HardcoverAuthorName: top.AuthorName,
 		HardcoverBookCount:  top.BookCount,
@@ -838,8 +844,32 @@ func (h *SeriesHandler) HardcoverDiff(w http.ResponseWriter, r *http.Request) {
 		writeUpstreamError(w, err)
 		return
 	}
+	h.backfillHardcoverSlug(r.Context(), link, catalog)
 	diff := buildHardcoverDiff(r.Context(), h.books, auth.UserIDFromContext(r.Context()), series, link, catalog)
 	writeJSON(w, http.StatusOK, diff)
+}
+
+// backfillHardcoverSlug records the Hardcover slug on a link that predates
+// migration 080, so the linked-series "View on Hardcover" link appears without
+// asking the user to relink (#1708).
+//
+// Hung off the diff because that path already holds the catalog: no extra
+// upstream call is made, and the series list fetches a diff whenever a linked
+// series is expanded. Best effort: a failed write only means the link stays
+// unlinkable until the next diff.
+func (h *SeriesHandler) backfillHardcoverSlug(ctx context.Context, link *models.SeriesHardcoverLink, catalog *metadata.SeriesCatalog) {
+	if link == nil || catalog == nil {
+		return
+	}
+	slug := strings.TrimSpace(catalog.Slug)
+	if slug == "" || slug == link.HardcoverSlug {
+		return
+	}
+	link.HardcoverSlug = slug
+	if err := h.series.UpsertHardcoverLink(ctx, link); err != nil {
+		slog.Warn("could not record hardcover series slug",
+			"seriesId", link.SeriesID, "slug", slug, "error", err)
+	}
 }
 
 func (h *SeriesHandler) searchHardcoverSeries(ctx context.Context, term string, limit int) ([]seriesHardcoverSearchResult, error) {
@@ -865,6 +895,7 @@ func mapHardcoverSearchResult(result metadata.SeriesSearchResult) seriesHardcove
 	return seriesHardcoverSearchResult{
 		ForeignID:    result.ForeignID,
 		ProviderID:   result.ProviderID,
+		Slug:         result.Slug,
 		Title:        result.Title,
 		AuthorName:   result.AuthorName,
 		BookCount:    result.BookCount,
@@ -881,6 +912,9 @@ func (h *SeriesHandler) scoreHardcoverCandidates(ctx context.Context, series *mo
 			return nil, err
 		}
 		if catalog != nil {
+			if result.Slug == "" {
+				result.Slug = strings.TrimSpace(catalog.Slug)
+			}
 			if result.Title == "" {
 				result.Title = catalog.Title
 			}
@@ -1042,6 +1076,7 @@ func (h *SeriesHandler) linkFromRequest(ctx context.Context, seriesID int64, bod
 		SeriesID:            seriesID,
 		HardcoverSeriesID:   body.ForeignID,
 		HardcoverProviderID: firstNonEmpty(body.ProviderID, strings.TrimPrefix(body.ForeignID, "hc-series:")),
+		HardcoverSlug:       strings.TrimSpace(body.Slug),
 		HardcoverTitle:      body.Title,
 		HardcoverAuthorName: body.AuthorName,
 		HardcoverBookCount:  body.BookCount,
@@ -1060,6 +1095,9 @@ func (h *SeriesHandler) linkFromRequest(ctx context.Context, seriesID int64, bod
 	}
 	link.HardcoverSeriesID = catalog.ForeignID
 	link.HardcoverProviderID = catalog.ProviderID
+	// The catalog is authoritative over whatever the client echoed back, but a
+	// catalog without a slug must not wipe the one the search result carried.
+	link.HardcoverSlug = firstNonEmpty(strings.TrimSpace(catalog.Slug), link.HardcoverSlug)
 	link.HardcoverTitle = catalog.Title
 	link.HardcoverAuthorName = catalog.AuthorName
 	link.HardcoverBookCount = catalog.BookCount
