@@ -2769,3 +2769,463 @@ func TestSeriesFillContinuesPastASkippedVolume(t *testing.T) {
 		}
 	}
 }
+
+// dungeonCrawlerCatalog reproduces the Hardcover shape from #2238 and #2239:
+// three catalog entries filed at position 1 (a box set first, then a novella,
+// then the real volume 1) plus a later volume. Hardcover's own ordering puts
+// the box set ahead of the book people actually want.
+func dungeonCrawlerCatalog() *metadata.SeriesCatalog {
+	author := &models.Author{
+		ForeignID:        "hc:matt-dinniman",
+		Name:             "Matt Dinniman",
+		SortName:         "Dinniman, Matt",
+		MetadataProvider: "hardcover",
+	}
+	entry := func(foreignID, providerID, title, position string) metadata.SeriesCatalogBook {
+		return metadata.SeriesCatalogBook{
+			ForeignID:  foreignID,
+			ProviderID: providerID,
+			Title:      title,
+			Position:   position,
+			Book: models.Book{
+				ForeignID:        foreignID,
+				Title:            title,
+				SortTitle:        title,
+				MetadataProvider: "hardcover",
+				Author:           author,
+			},
+		}
+	}
+	books := []metadata.SeriesCatalogBook{
+		entry("hc:dungeon-crawler-carl-series-by-matt-dinniman-3-books-collection-set", "446679",
+			"Dungeon Crawler Carl Series by Matt Dinniman 3 Books Collection Set", "1"),
+		entry("hc:backstage-at-the-pineapple-cabaret", "446680", "Backstage at the Pineapple Cabaret", "1"),
+		entry("hc:dungeon-crawler-carl", "446681", "Dungeon Crawler Carl", "1"),
+		entry("hc:the-beautiful-place", "446689", "The Beautiful Place", "9"),
+	}
+	return &metadata.SeriesCatalog{
+		ForeignID:  "hc-series:12717",
+		ProviderID: "12717",
+		Title:      "Dungeon Crawler Carl",
+		AuthorName: "Matt Dinniman",
+		BookCount:  len(books),
+		Books:      books,
+	}
+}
+
+// enhancedSeriesFixture wires a handler with the enhanced Hardcover series
+// feature switched on: env flag, saved token and admin toggle.
+func enhancedSeriesFixture(t *testing.T, catalog *metadata.SeriesCatalog, searcher BookSearcher) (*SeriesHandler, *db.SeriesRepo, *db.AuthorRepo, *db.BookRepo, *db.SettingsRepo) {
+	t.Helper()
+	h, seriesRepo, authorRepo, bookRepo, settingsRepo := seriesFixtureWithProviderAndSettings(t, &stubSeriesProvider{
+		catalogs: map[string]*metadata.SeriesCatalog{catalog.ForeignID: catalog},
+	}, searcher, true)
+	ctx := context.Background()
+	if err := settingsRepo.Set(ctx, SettingHardcoverAPIToken, "hc-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if err := settingsRepo.Set(ctx, SettingHardcoverEnhancedSeriesEnabled, "true"); err != nil {
+		t.Fatal(err)
+	}
+	return h, seriesRepo, authorRepo, bookRepo, settingsRepo
+}
+
+// linkedSeries creates a local series already linked to catalog.
+func linkedSeries(t *testing.T, seriesRepo *db.SeriesRepo, catalog *metadata.SeriesCatalog) *models.Series {
+	t.Helper()
+	ctx := context.Background()
+	series := &models.Series{ForeignID: "ol-series:local", Title: catalog.Title}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+	if err := seriesRepo.UpsertHardcoverLink(ctx, &models.SeriesHardcoverLink{
+		SeriesID:            series.ID,
+		HardcoverSeriesID:   catalog.ForeignID,
+		HardcoverProviderID: catalog.ProviderID,
+		HardcoverTitle:      catalog.Title,
+		HardcoverAuthorName: catalog.AuthorName,
+		HardcoverBookCount:  catalog.BookCount,
+		Confidence:          1,
+		LinkedBy:            "manual",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return series
+}
+
+// TestSeriesFillAddsTheRequestedBookNotAPositionSibling is the #2238
+// regression test. findCatalogBook tested the foreign ID and the position in
+// one loop, so an earlier entry matching only on position was returned before
+// the later entry the caller actually named. Hardcover files a box set, a
+// novella and the real volume 1 all at position 1, so clicking add on the
+// real volume created the box set instead.
+func TestSeriesFillAddsTheRequestedBookNotAPositionSibling(t *testing.T) {
+	catalog := dungeonCrawlerCatalog()
+	searcher := newMockBookSearcher()
+	h, seriesRepo, _, bookRepo, _ := enhancedSeriesFixture(t, catalog, searcher)
+	ctx := context.Background()
+	series := linkedSeries(t, seriesRepo, catalog)
+
+	body := bytes.NewBufferString(`{"foreignBookId":"hc:dungeon-crawler-carl","providerId":"446681","position":"1"}`)
+	rec := httptest.NewRecorder()
+	h.Fill(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/fill", body), "id", strconv.FormatInt(series.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	created, err := bookRepo.GetByForeignID(ctx, "hc:dungeon-crawler-carl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created == nil {
+		t.Fatal("the requested book was not created")
+	}
+	if created.Title != "Dungeon Crawler Carl" {
+		t.Errorf("created title = %q, want %q", created.Title, "Dungeon Crawler Carl")
+	}
+	// Nothing else at position 1 may be created in its place.
+	for _, other := range []string{
+		"hc:dungeon-crawler-carl-series-by-matt-dinniman-3-books-collection-set",
+		"hc:backstage-at-the-pineapple-cabaret",
+	} {
+		wrong, err := bookRepo.GetByForeignID(ctx, other)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wrong != nil {
+			t.Errorf("fill created %q (%s) instead of the requested book", wrong.Title, other)
+		}
+	}
+}
+
+// TestSeriesFillSkipsCatalogBoxSets is the #2239 gap-1 regression test. The
+// unconditional bundle prune (#1780) ran on catalogue ingestion only, so a
+// series fill happily created a "3 Books Collection Set" row as a monitored,
+// wanted book that then went looking for releases.
+func TestSeriesFillSkipsCatalogBoxSets(t *testing.T) {
+	catalog := dungeonCrawlerCatalog()
+	searcher := newMockBookSearcher()
+	h, seriesRepo, _, bookRepo, _ := enhancedSeriesFixture(t, catalog, searcher)
+	ctx := context.Background()
+	series := linkedSeries(t, seriesRepo, catalog)
+
+	rec := httptest.NewRecorder()
+	h.Fill(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/fill", nil), "id", strconv.FormatInt(series.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	boxSet, err := bookRepo.GetByForeignID(ctx, "hc:dungeon-crawler-carl-series-by-matt-dinniman-3-books-collection-set")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if boxSet != nil {
+		t.Errorf("fill created the box set %q as a book", boxSet.Title)
+	}
+	// The real volumes still have to be created, or the prune has eaten the
+	// catalogue rather than the bundle.
+	for _, fid := range []string{"hc:dungeon-crawler-carl", "hc:the-beautiful-place"} {
+		real, err := bookRepo.GetByForeignID(ctx, fid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if real == nil {
+			t.Errorf("volume %s was not created", fid)
+		}
+	}
+}
+
+// TestSeriesFillIsNotBlockedByAnExcludedBoxSet is the #2239 gap-2 regression
+// test, and covers the state a v1.33.0 install is already in: the box set was
+// created by an earlier fill and then excluded. Its title contains the real
+// book's title as a substring, and TitleScore scores a substring at 100, so
+// the excluded box set was the only candidate over the threshold and blocked
+// creation of the real book outright, so "Fill" reported nothing to fill for
+// as long as the box set existed.
+func TestSeriesFillIsNotBlockedByAnExcludedBoxSet(t *testing.T) {
+	catalog := dungeonCrawlerCatalog()
+	searcher := newMockBookSearcher()
+	h, seriesRepo, authorRepo, bookRepo, _ := enhancedSeriesFixture(t, catalog, searcher)
+	ctx := context.Background()
+	series := linkedSeries(t, seriesRepo, catalog)
+
+	author := &models.Author{
+		ForeignID:        "hc:matt-dinniman",
+		Name:             "Matt Dinniman",
+		SortName:         "Dinniman, Matt",
+		MetadataProvider: "hardcover",
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	boxSet := &models.Book{
+		ForeignID:        "hc:dungeon-crawler-carl-series-by-matt-dinniman-3-books-collection-set",
+		AuthorID:         author.ID,
+		Title:            "Dungeon Crawler Carl Series by Matt Dinniman 3 Books Collection Set",
+		SortTitle:        "Dungeon Crawler Carl Series by Matt Dinniman 3 Books Collection Set",
+		Status:           models.BookStatusSkipped,
+		Genres:           []string{},
+		MetadataProvider: "hardcover",
+	}
+	if err := bookRepo.Create(ctx, boxSet); err != nil {
+		t.Fatal(err)
+	}
+	if err := bookRepo.SetExcluded(ctx, boxSet.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	body := bytes.NewBufferString(`{"foreignBookId":"hc:dungeon-crawler-carl","providerId":"446681","position":"1"}`)
+	rec := httptest.NewRecorder()
+	h.Fill(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/fill", body), "id", strconv.FormatInt(series.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var response map[string]int
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["queued"] != 1 {
+		t.Fatalf("expected the real book to be queued, got %+v", response)
+	}
+	created, err := bookRepo.GetByForeignID(ctx, "hc:dungeon-crawler-carl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created == nil {
+		t.Fatal("the excluded box set still blocks creation of the real book")
+	}
+	if created.ID == boxSet.ID {
+		t.Fatal("fill linked the excluded box set instead of creating the real book")
+	}
+}
+
+// TestSeriesFillExcludedSameTitleStillBlocks is the guard on the other side of
+// #2239: narrowing the excluded-title block to the same title must not let a
+// book the user deliberately excluded come back under a new Hardcover id.
+func TestSeriesFillExcludedSameTitleStillBlocks(t *testing.T) {
+	catalog := dungeonCrawlerCatalog()
+	searcher := newMockBookSearcher()
+	h, seriesRepo, authorRepo, bookRepo, _ := enhancedSeriesFixture(t, catalog, searcher)
+	ctx := context.Background()
+	series := linkedSeries(t, seriesRepo, catalog)
+
+	author := &models.Author{
+		ForeignID:        "hc:matt-dinniman",
+		Name:             "Matt Dinniman",
+		SortName:         "Dinniman, Matt",
+		MetadataProvider: "hardcover",
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	excluded := &models.Book{
+		ForeignID:        "manual:dungeon-crawler-carl",
+		AuthorID:         author.ID,
+		Title:            "Dungeon Crawler Carl",
+		SortTitle:        "Dungeon Crawler Carl",
+		Status:           models.BookStatusSkipped,
+		Genres:           []string{},
+		MetadataProvider: "manual",
+	}
+	if err := bookRepo.Create(ctx, excluded); err != nil {
+		t.Fatal(err)
+	}
+	if err := bookRepo.SetExcluded(ctx, excluded.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	body := bytes.NewBufferString(`{"foreignBookId":"hc:dungeon-crawler-carl","providerId":"446681","position":"1"}`)
+	rec := httptest.NewRecorder()
+	h.Fill(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/fill", body), "id", strconv.FormatInt(series.ID, 10)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	created, err := bookRepo.GetByForeignID(ctx, "hc:dungeon-crawler-carl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != nil {
+		t.Fatalf("an excluded book of the same title was re-added as %q", created.Title)
+	}
+}
+
+// TestSeriesFillHonoursAutoGrabKillSwitch is the #2242 regression test. Fill
+// marked every book wanted and then fanned out indexer searches with no regard
+// for autoGrab.enabled, so the one action most likely to grab a large batch at
+// once was the one action the global kill switch did not cover: a user turned
+// auto-grab off and a fill grabbed and imported fourteen releases a minute
+// later.
+//
+// Books must still be marked wanted and monitored with the switch off, which
+// is what the scheduled wanted sweep does; only the grabbing stops.
+func TestSeriesFillHonoursAutoGrabKillSwitch(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		autoGrab   string
+		wantSearch bool
+	}{
+		{name: "kill switch off", autoGrab: "false", wantSearch: false},
+		{name: "kill switch on", autoGrab: "true", wantSearch: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			searcher := newMockBookSearcher()
+			// Enhanced Hardcover off: this is about the local fill path and
+			// the search fan-out, not about catalogue expansion.
+			h, seriesRepo, authorRepo, bookRepo, settingsRepo := seriesFixtureWithProviderAndSettings(t, &stubSeriesProvider{}, searcher, false)
+			ctx := context.Background()
+			if err := settingsRepo.Set(ctx, "autoGrab.enabled", tc.autoGrab); err != nil {
+				t.Fatal(err)
+			}
+
+			author := &models.Author{ForeignID: "hc:author", Name: "Author", SortName: "Author"}
+			if err := authorRepo.Create(ctx, author); err != nil {
+				t.Fatal(err)
+			}
+			series := &models.Series{ForeignID: "ol-series:local", Title: "A Series"}
+			if err := seriesRepo.Create(ctx, series); err != nil {
+				t.Fatal(err)
+			}
+			book := &models.Book{
+				ForeignID: "hc:book-one", AuthorID: author.ID,
+				Title: "Book One", SortTitle: "Book One",
+				Status: models.BookStatusSkipped, Genres: []string{},
+			}
+			if err := bookRepo.Create(ctx, book); err != nil {
+				t.Fatal(err)
+			}
+			if err := seriesRepo.LinkBook(ctx, series.ID, book.ID, "1", true); err != nil {
+				t.Fatal(err)
+			}
+
+			rec := httptest.NewRecorder()
+			h.Fill(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/api/v1/series/1/fill", nil), "id", strconv.FormatInt(series.ID, 10)))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+			var response map[string]int
+			if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+				t.Fatal(err)
+			}
+			if response["queued"] != 1 {
+				t.Fatalf("expected the book to be queued either way, got %+v", response)
+			}
+			// Wanted and monitored regardless of the switch.
+			stored, err := bookRepo.GetByID(ctx, book.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored == nil || stored.Status != models.BookStatusWanted || !stored.Monitored {
+				t.Fatalf("book should be wanted and monitored, got %+v", stored)
+			}
+
+			if tc.wantSearch {
+				searcher.waitForCall(t, 2*time.Second)
+			} else {
+				searcher.assertNoCall(t, 200*time.Millisecond)
+			}
+		})
+	}
+}
+
+// TestHandleNewWantedBookLinksHardcoverSeries is the #2245 regression test.
+// A series created from a provider's SeriesRefs got the right hc-series
+// foreign id and no series_hardcover_links row, and that table is the only
+// thing the UI and the Hardcover fill paths read: every series on a freshly
+// added Hardcover author showed "(no Hardcover link)" and Fill did nothing.
+func TestHandleNewWantedBookLinksHardcoverSeries(t *testing.T) {
+	_, seriesRepo, authorRepo, bookRepo := seriesFixture(t)
+	ctx := context.Background()
+
+	author := &models.Author{ForeignID: "hc:adrian-tchaikovsky", Name: "Adrian Tchaikovsky", SortName: "Tchaikovsky, Adrian"}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	book := &models.Book{
+		ForeignID: "hc:children-of-time", AuthorID: author.ID,
+		Title: "Children of Time", SortTitle: "Children of Time",
+		Status: models.BookStatusWanted, Genres: []string{},
+		SeriesRefs: []models.SeriesRef{
+			{ForeignID: "hc-series:1017", Title: "Children of Time", Position: "1", Primary: true},
+			// An OpenLibrary ref must not produce a Hardcover link.
+			{ForeignID: "ol-series:children", Title: "Children of Time", Position: "1"},
+		},
+	}
+	if err := bookRepo.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	handleNewWantedBook(ctx, bookRepo, seriesRepo, nil, *book, author.Name)
+
+	hcSeries, err := seriesRepo.GetByForeignID(ctx, "hc-series:1017")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hcSeries == nil {
+		t.Fatal("the Hardcover series was not created")
+	}
+	link, err := seriesRepo.GetHardcoverLink(ctx, hcSeries.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link == nil {
+		t.Fatal("no series_hardcover_links row was written for a hc-series ref")
+	}
+	if link.HardcoverSeriesID != "hc-series:1017" || link.HardcoverProviderID != "1017" {
+		t.Errorf("link identity = %q/%q, want hc-series:1017/1017", link.HardcoverSeriesID, link.HardcoverProviderID)
+	}
+	if link.LinkedBy != "auto" {
+		t.Errorf("linkedBy = %q, want auto", link.LinkedBy)
+	}
+
+	olSeries, err := seriesRepo.GetByForeignID(ctx, "ol-series:children")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if olSeries == nil {
+		t.Fatal("the OpenLibrary series was not created")
+	}
+	olLink, err := seriesRepo.GetHardcoverLink(ctx, olSeries.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if olLink != nil {
+		t.Errorf("a non-Hardcover series ref produced a Hardcover link: %+v", olLink)
+	}
+}
+
+// TestEnsureHardcoverLinkFromForeignIDKeepsAManualLink pins the idempotence
+// the sync path relies on: a link the user chose by hand is never overwritten
+// by the automatic one (#2245).
+func TestEnsureHardcoverLinkFromForeignIDKeepsAManualLink(t *testing.T) {
+	_, seriesRepo, _, _ := seriesFixture(t)
+	ctx := context.Background()
+
+	series := &models.Series{ForeignID: "hc-series:1017", Title: "Children of Time"}
+	if err := seriesRepo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+	if err := seriesRepo.UpsertHardcoverLink(ctx, &models.SeriesHardcoverLink{
+		SeriesID:          series.ID,
+		HardcoverSeriesID: "hc-series:9999",
+		HardcoverTitle:    "Chosen By Hand",
+		Confidence:        1,
+		LinkedBy:          "manual",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	linked, err := seriesRepo.EnsureHardcoverLinkFromForeignID(ctx, series.ID, "hc-series:1017", "Children of Time")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if linked {
+		t.Error("an existing link was overwritten")
+	}
+	link, err := seriesRepo.GetHardcoverLink(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link == nil || link.LinkedBy != "manual" || link.HardcoverSeriesID != "hc-series:9999" {
+		t.Fatalf("manual link was not preserved: %+v", link)
+	}
+}

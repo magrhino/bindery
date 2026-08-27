@@ -1117,6 +1117,55 @@ func TestSyncOne_LinksSeriesRefsAfterBookImport(t *testing.T) {
 	}
 }
 
+// TestSyncOne_RecordsHardcoverSeriesLink is the #2245 regression test for the
+// list-sync path: a SeriesRef carries the Hardcover series id, so the series
+// must come out of the sync with a series_hardcover_links row, which is the
+// only state the UI and the Hardcover fill paths read.
+func TestSyncOne_RecordsHardcoverSeriesLink(t *testing.T) {
+	s, repo, series := newTestSyncerWithSeries(t)
+	ctx := context.Background()
+
+	il := testImportList("With Series Link", "hardcover", true)
+	if err := repo.Create(ctx, &il); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	book := bookWithSeriesRef("hc:dune", "Dune", []models.SeriesRef{{
+		ForeignID: "hc-series:17",
+		Title:     "Dune Chronicles",
+		Position:  "1",
+		Primary:   true,
+	}})
+	s.WithClientFactory(func(string) hardcoverClient {
+		return &fakeHardcoverClient{
+			lists: []hardcover.HCList{{ID: 12, Slug: il.URL, Name: il.Name}},
+			books: []models.Book{book},
+		}
+	})
+
+	if err := s.SyncOne(ctx, il.ID); err != nil {
+		t.Fatalf("SyncOne: %v", err)
+	}
+
+	persisted, err := series.GetByForeignID(ctx, "hc-series:17")
+	if err != nil || persisted == nil {
+		t.Fatalf("series was not created during sync: %+v, %v", persisted, err)
+	}
+	link, err := series.GetHardcoverLink(ctx, persisted.ID)
+	if err != nil {
+		t.Fatalf("GetHardcoverLink: %v", err)
+	}
+	if link == nil {
+		t.Fatal("no series_hardcover_links row was written for a hc-series ref")
+	}
+	if link.HardcoverSeriesID != "hc-series:17" || link.HardcoverProviderID != "17" {
+		t.Errorf("link identity = %q/%q, want hc-series:17/17", link.HardcoverSeriesID, link.HardcoverProviderID)
+	}
+	if link.LinkedBy != "auto" {
+		t.Errorf("linkedBy = %q, want auto", link.LinkedBy)
+	}
+}
+
 // TestSyncOne_SeriesLinkErrorDoesNotBlockImport guarantees the best-effort
 // contract: when the SeriesRepo errors out, the book is still imported and
 // the sync does not fail the whole list. Regression guard for the warning
@@ -1162,8 +1211,9 @@ func TestSyncOne_SeriesLinkErrorDoesNotBlockImport(t *testing.T) {
 // erroringSeriesRepo always fails CreateOrGet so we can prove the syncer
 // swallows the error.
 type erroringSeriesRepo struct {
-	upsertCalls int
-	linkCalls   int
+	upsertCalls        int
+	linkCalls          int
+	hardcoverLinkCalls int
 }
 
 func (e *erroringSeriesRepo) CreateOrGet(context.Context, *models.Series) error {
@@ -1174,6 +1224,79 @@ func (e *erroringSeriesRepo) CreateOrGet(context.Context, *models.Series) error 
 func (e *erroringSeriesRepo) LinkBook(context.Context, int64, int64, string, bool) error {
 	e.linkCalls++
 	return errors.New("should not be called when upsert fails")
+}
+
+func (e *erroringSeriesRepo) EnsureHardcoverLinkFromForeignID(context.Context, int64, string, string) (bool, error) {
+	e.hardcoverLinkCalls++
+	return false, errors.New("should not be called when upsert fails")
+}
+
+// linkFailingSeriesRepo upserts series rows for real (in memory, no SQL) but
+// fails both per-series link writes, so the two warn-and-continue branches in
+// linkSeriesRefs are actually executed: a failed book link and a failed
+// hardcover link row (#2245) must each be swallowed without blocking the
+// import or each other.
+type linkFailingSeriesRepo struct {
+	nextID             int64
+	linkCalls          int
+	hardcoverLinkCalls int
+}
+
+func (r *linkFailingSeriesRepo) CreateOrGet(_ context.Context, s *models.Series) error {
+	r.nextID++
+	s.ID = r.nextID
+	return nil
+}
+
+func (r *linkFailingSeriesRepo) LinkBook(context.Context, int64, int64, string, bool) error {
+	r.linkCalls++
+	return errors.New("simulated link failure")
+}
+
+func (r *linkFailingSeriesRepo) EnsureHardcoverLinkFromForeignID(context.Context, int64, string, string) (bool, error) {
+	r.hardcoverLinkCalls++
+	return false, errors.New("simulated hardcover link failure")
+}
+
+// TestSyncOne_HardcoverLinkErrorDoesNotBlockImport pins the best-effort
+// contract for the #2245 write: a failing series_hardcover_links write is
+// logged and swallowed, the book still imports, and the sync still succeeds.
+func TestSyncOne_HardcoverLinkErrorDoesNotBlockImport(t *testing.T) {
+	s, _ := newTestSyncer(t)
+	ctx := context.Background()
+
+	stub := &linkFailingSeriesRepo{}
+	s.series = stub
+
+	il := testImportList("Hardcover Link Error", "hardcover", true)
+	importLists := s.importLists
+	if err := importLists.Create(ctx, &il); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	book := bookWithSeriesRef("hc:dune", "Dune", []models.SeriesRef{{
+		ForeignID: "hc-series:17",
+		Title:     "Dune Chronicles",
+		Position:  "1",
+		Primary:   true,
+	}})
+	s.WithClientFactory(func(string) hardcoverClient {
+		return &fakeHardcoverClient{
+			lists: []hardcover.HCList{{ID: 12, Slug: il.URL, Name: il.Name}},
+			books: []models.Book{book},
+		}
+	})
+
+	if err := s.SyncOne(ctx, il.ID); err != nil {
+		t.Fatalf("SyncOne must not fail on a series link error: %v", err)
+	}
+	if stub.linkCalls != 1 || stub.hardcoverLinkCalls != 1 {
+		t.Errorf("expected both link writes to be attempted, got linkCalls=%d hardcoverLinkCalls=%d", stub.linkCalls, stub.hardcoverLinkCalls)
+	}
+	imported, err := s.books.GetByForeignID(ctx, "hc:dune")
+	if err != nil || imported == nil {
+		t.Fatalf("book should still be imported despite link failures: %+v, %v", imported, err)
+	}
 }
 
 // TestSyncOne_NoSeriesRepo_NoSeriesLinkAttempted protects the optional

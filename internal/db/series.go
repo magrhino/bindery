@@ -424,6 +424,51 @@ func (r *SeriesRepo) GetHardcoverLink(ctx context.Context, seriesID int64) (*mod
 	return &link, nil
 }
 
+// HardcoverSeriesIDPrefix is the foreign-id prefix Bindery stores for a
+// Hardcover series ("hc-series:1017"). Provider-supplied, so a series row
+// carrying it already knows its Hardcover identity exactly.
+const HardcoverSeriesIDPrefix = "hc-series:"
+
+// EnsureHardcoverLinkFromForeignID records the series_hardcover_links row for
+// a series whose foreign id is already a Hardcover series id, and reports
+// whether it wrote one.
+//
+// Two pieces of state carry a series' Hardcover identity: series.foreign_id,
+// written by every path that creates a series from a provider's SeriesRefs,
+// and this table, which is the only thing the UI and the Hardcover fill paths
+// read. Nothing on the author-sync path wrote the second, so adding a
+// Hardcover author produced series with the right id and no link at all, and
+// Fill silently did nothing on every one of them (#2245).
+//
+// No matching and no confidence score are involved: the id came from the
+// provider, so the link is exact. Title, author name, slug and book count are
+// left for the diff path to backfill lazily, which keeps this free of any
+// upstream call at sync time. Existing links are never overwritten, so a
+// manual link the user chose deliberately survives.
+func (r *SeriesRepo) EnsureHardcoverLinkFromForeignID(ctx context.Context, seriesID int64, foreignID, title string) (bool, error) {
+	if seriesID == 0 || !strings.HasPrefix(foreignID, HardcoverSeriesIDPrefix) {
+		return false, nil
+	}
+	existing, err := r.GetHardcoverLink(ctx, seriesID)
+	if err != nil {
+		return false, err
+	}
+	if existing != nil {
+		return false, nil
+	}
+	err = r.UpsertHardcoverLink(ctx, &models.SeriesHardcoverLink{
+		SeriesID:          seriesID,
+		HardcoverSeriesID: foreignID,
+		HardcoverTitle:    strings.TrimSpace(title),
+		Confidence:        1,
+		LinkedBy:          "auto",
+	})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (r *SeriesRepo) UpsertHardcoverLink(ctx context.Context, link *models.SeriesHardcoverLink) error {
 	if link == nil {
 		return nil
@@ -442,7 +487,7 @@ func (r *SeriesRepo) UpsertHardcoverLink(ctx context.Context, link *models.Serie
 		link.LinkedBy = "manual"
 	}
 	if link.HardcoverProviderID == "" {
-		link.HardcoverProviderID = strings.TrimPrefix(link.HardcoverSeriesID, "hc-series:")
+		link.HardcoverProviderID = strings.TrimPrefix(link.HardcoverSeriesID, HardcoverSeriesIDPrefix)
 	}
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO series_hardcover_links (

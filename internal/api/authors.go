@@ -1483,10 +1483,21 @@ func (h *AuthorHandler) resolveDefaultMediaTypeStrict(ctx context.Context) bool 
 // isAutoGrabEnabled reads the autoGrab.enabled setting. Defaults to true when
 // the key is absent so existing installs keep working without any migration.
 func (h *AuthorHandler) isAutoGrabEnabled(ctx context.Context) bool {
-	if h.settings == nil {
+	return autoGrabEnabled(ctx, h.settings)
+}
+
+// autoGrabEnabled reads the global autoGrab.enabled kill switch from a
+// settings repository. Defaults to true when the repository is absent or the
+// key is unset, so existing installs keep working without any migration.
+//
+// Package-level rather than a method so every handler that can dispatch a
+// grab reads the same switch: the series fill fan-out shipped without one and
+// grabbed a whole series with the switch off (#2242).
+func autoGrabEnabled(ctx context.Context, settings *db.SettingsRepo) bool {
+	if settings == nil {
 		return true
 	}
-	s, _ := h.settings.Get(ctx, "autoGrab.enabled")
+	s, _ := settings.Get(ctx, "autoGrab.enabled")
 	if s == nil {
 		return true
 	}
@@ -2651,6 +2662,17 @@ func handleNewWantedBook(ctx context.Context, books *db.BookRepo, series *db.Ser
 			}
 			if err := series.LinkBook(ctx, s.ID, book.ID, ref.Position, ref.Primary); err != nil {
 				slog.Warn("failed to link book to series", "book", book.Title, "series", ref.Title, "error", err)
+			}
+			// A Hardcover ref already names the series exactly, so record
+			// the Hardcover link row too (#2245). Without it the series has
+			// the right foreign id and no link, which is the only state the
+			// UI and the fill paths read: every series on a freshly added
+			// Hardcover author showed "(no Hardcover link)" and Fill did
+			// nothing. Best effort, like the two calls above.
+			if linked, err := series.EnsureHardcoverLinkFromForeignID(ctx, s.ID, ref.ForeignID, ref.Title); err != nil {
+				slog.Warn("failed to record hardcover series link", "series", ref.Title, "error", err)
+			} else if linked {
+				slog.Debug("linked series to hardcover from provider series ref", "series", ref.Title, "foreignId", ref.ForeignID)
 			}
 		}
 	}

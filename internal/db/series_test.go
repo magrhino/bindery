@@ -709,3 +709,212 @@ func TestSeriesGenreOverrideClearAndListVisibility(t *testing.T) {
 		t.Fatalf("expected no override after clear, got set=%v value=%#v", cleared.GenreOverrideSet, cleared.GenreOverride)
 	}
 }
+
+// TestEnsureHardcoverLinkFromForeignID covers the #2245 helper against a real
+// SQLite-backed repo: a provider-supplied hc-series foreign id must produce a
+// series_hardcover_links row exactly once, and anything else must write
+// nothing.
+func TestEnsureHardcoverLinkFromForeignID(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	repo := NewSeriesRepo(database)
+	series := &models.Series{ForeignID: "hc-series:1017", Title: "Children of Time"}
+	if err := repo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+
+	linked, err := repo.EnsureHardcoverLinkFromForeignID(ctx, series.ID, "hc-series:1017", "  Children of Time  ")
+	if err != nil {
+		t.Fatalf("ensure link: %v", err)
+	}
+	if !linked {
+		t.Fatal("expected the first call to report a written link")
+	}
+	got, err := repo.GetHardcoverLink(ctx, series.ID)
+	if err != nil {
+		t.Fatalf("get link: %v", err)
+	}
+	if got == nil {
+		t.Fatal("no link row was written")
+	}
+	if got.HardcoverSeriesID != "hc-series:1017" {
+		t.Errorf("hardcover series id = %q, want hc-series:1017", got.HardcoverSeriesID)
+	}
+	// The provider id is derived from the foreign id by UpsertHardcoverLink.
+	if got.HardcoverProviderID != "1017" {
+		t.Errorf("hardcover provider id = %q, want 1017", got.HardcoverProviderID)
+	}
+	if got.HardcoverTitle != "Children of Time" {
+		t.Errorf("hardcover title = %q, want the trimmed title", got.HardcoverTitle)
+	}
+	if got.Confidence != 1 {
+		t.Errorf("confidence = %v, want 1 for a provider-supplied identity", got.Confidence)
+	}
+	if got.LinkedBy != "auto" {
+		t.Errorf("linked_by = %q, want auto", got.LinkedBy)
+	}
+
+	// Idempotent: a second call writes nothing and changes nothing.
+	linked, err = repo.EnsureHardcoverLinkFromForeignID(ctx, series.ID, "hc-series:1017", "Children of Time")
+	if err != nil {
+		t.Fatalf("second ensure: %v", err)
+	}
+	if linked {
+		t.Error("second call must not report a written link")
+	}
+	again, err := repo.GetHardcoverLink(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again == nil || again.ID != got.ID || !again.LinkedAt.Equal(got.LinkedAt) {
+		t.Errorf("second call altered the row: first %+v, second %+v", got, again)
+	}
+}
+
+// TestEnsureHardcoverLinkFromForeignIDIgnoresNonHardcoverIDs pins the guard:
+// only a foreign id carrying the hc-series prefix identifies a Hardcover
+// series. OpenLibrary ids, Hardcover BOOK ids ("hc:"), empty ids and a zero
+// series id must all be a no-op, not an error.
+func TestEnsureHardcoverLinkFromForeignIDIgnoresNonHardcoverIDs(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	repo := NewSeriesRepo(database)
+	series := &models.Series{ForeignID: "ol-series:children", Title: "Children of Time"}
+	if err := repo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		seriesID  int64
+		foreignID string
+	}{
+		{name: "openlibrary id", seriesID: series.ID, foreignID: "ol-series:children"},
+		{name: "hardcover book id", seriesID: series.ID, foreignID: "hc:children-of-time"},
+		{name: "empty id", seriesID: series.ID, foreignID: ""},
+		{name: "zero series id", seriesID: 0, foreignID: "hc-series:1017"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			linked, err := repo.EnsureHardcoverLinkFromForeignID(ctx, tc.seriesID, tc.foreignID, "Children of Time")
+			if err != nil {
+				t.Fatalf("expected a no-op, got error: %v", err)
+			}
+			if linked {
+				t.Error("expected no link to be reported")
+			}
+		})
+	}
+	got, err := repo.GetHardcoverLink(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("a non-Hardcover id produced a link row: %+v", got)
+	}
+}
+
+// TestEnsureHardcoverLinkFromForeignIDKeepsExistingLink pins that an existing
+// link is never overwritten, whatever wrote it: the user's manual choice of a
+// different Hardcover series must survive the automatic path (#2245).
+func TestEnsureHardcoverLinkFromForeignIDKeepsExistingLink(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	repo := NewSeriesRepo(database)
+	series := &models.Series{ForeignID: "hc-series:1017", Title: "Children of Time"}
+	if err := repo.Create(ctx, series); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpsertHardcoverLink(ctx, &models.SeriesHardcoverLink{
+		SeriesID:          series.ID,
+		HardcoverSeriesID: "hc-series:9999",
+		HardcoverTitle:    "Chosen By Hand",
+		Confidence:        1,
+		LinkedBy:          "manual",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	linked, err := repo.EnsureHardcoverLinkFromForeignID(ctx, series.ID, "hc-series:1017", "Children of Time")
+	if err != nil {
+		t.Fatalf("ensure over existing link: %v", err)
+	}
+	if linked {
+		t.Error("an existing link was reported as rewritten")
+	}
+	got, err := repo.GetHardcoverLink(ctx, series.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.LinkedBy != "manual" || got.HardcoverSeriesID != "hc-series:9999" || got.HardcoverTitle != "Chosen By Hand" {
+		t.Fatalf("manual link was not preserved: %+v", got)
+	}
+}
+
+// TestEnsureHardcoverLinkFromForeignIDPropagatesWriteErrors drives the upsert
+// error branch with a real constraint rather than a broken repo: the link
+// table's series_id references series(id) and foreign keys are connection
+// state OpenMemory switches on, so a series id that does not exist fails the
+// insert and the error must reach the caller.
+func TestEnsureHardcoverLinkFromForeignIDPropagatesWriteErrors(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	repo := NewSeriesRepo(database)
+
+	linked, err := repo.EnsureHardcoverLinkFromForeignID(ctx, 99999, "hc-series:1017", "Children of Time")
+	if err == nil {
+		t.Fatal("expected a foreign-key error for a nonexistent series id")
+	}
+	if linked {
+		t.Error("a failed write must not report a link")
+	}
+	row := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM series_hardcover_links")
+	var count int
+	if err := row.Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("failed ensure left %d link rows behind", count)
+	}
+}
+
+// TestEnsureHardcoverLinkFromForeignIDSurfacesReadError ensures a failure
+// reading the existing link propagates rather than being swallowed, following
+// the closed-handle convention TestBackfillAuthorSortKeys_SurfacesReadError
+// uses. A swallowed read error here would fall through to the insert and
+// clobber-or-duplicate the very link the read exists to protect.
+func TestEnsureHardcoverLinkFromForeignIDSurfacesReadError(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewSeriesRepo(database)
+	database.Close() // query against a closed handle errors on the read phase
+
+	linked, err := repo.EnsureHardcoverLinkFromForeignID(context.Background(), 1, "hc-series:1017", "Children of Time")
+	if err == nil {
+		t.Fatal("expected an error against a closed database, got nil")
+	}
+	if linked {
+		t.Error("a failed read must not report a link")
+	}
+}

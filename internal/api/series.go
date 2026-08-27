@@ -535,8 +535,17 @@ func (h *SeriesHandler) Fill(w http.ResponseWriter, r *http.Request) {
 // ctx (via context.WithoutCancel) so the HTTP response is not held while
 // the searches run, but credentials and per-user metadata on ctx still
 // flow through to the indexer layer.
-func (h *SeriesHandler) fanOutSeriesSearches(_ context.Context, books []models.Book) {
+func (h *SeriesHandler) fanOutSeriesSearches(ctx context.Context, books []models.Book) {
 	if h.searcher == nil || len(books) == 0 {
+		return
+	}
+	// Honour the global autoGrab.enabled kill switch (#2242). Fill is the
+	// single action most likely to grab a large batch at once, so it must
+	// stop at the same switch the author catalogue sync and the scheduled
+	// wanted sweep already read. The books stay wanted and monitored, which
+	// is what the scheduler does too; only the grabbing stops.
+	if !autoGrabEnabled(ctx, h.settings) {
+		slog.Info("series fill: auto-grab is disabled, skipping search fan-out", "books", len(books))
 		return
 	}
 	// Use the process-lifecycle context so the fan-out is cancelled cleanly
@@ -1368,11 +1377,26 @@ func (h *SeriesHandler) createMissingHardcoverBook(ctx context.Context, seriesID
 	return nil, errSeriesCatalogBookNotFound
 }
 
+// findCatalogBook resolves one catalog entry from a foreign ID, falling back
+// to the series position when the catalog carries no matching ID.
+//
+// The two tests run as separate passes on purpose (#2238). Interleaved in one
+// loop, an earlier entry that matched only on position returned before a later
+// entry whose foreign ID matched exactly, and Hardcover routinely files
+// several books at one position: a box set, a novella and the real volume all
+// at position 1. Clicking add on the real volume created whichever of them
+// Hardcover happened to list first. An exact identifier the caller supplied
+// must beat an approximate match, the same way ensureHardcoverCatalogBook
+// already reasons about its own tie-breaks.
 func findCatalogBook(books []metadata.SeriesCatalogBook, foreignID, position string) (metadata.SeriesCatalogBook, bool) {
-	for _, book := range books {
-		if foreignID != "" && (foreignID == book.ForeignID || foreignID == book.Book.ForeignID) {
-			return book, true
+	if foreignID != "" {
+		for _, book := range books {
+			if foreignID == book.ForeignID || foreignID == book.Book.ForeignID {
+				return book, true
+			}
 		}
+	}
+	for _, book := range books {
 		if seriesmatch.SamePosition(position, book.Position) {
 			return book, true
 		}
@@ -1383,6 +1407,17 @@ func findCatalogBook(books []metadata.SeriesCatalogBook, foreignID, position str
 func (h *SeriesHandler) ensureHardcoverCatalogBook(ctx context.Context, series *models.Series, fallbackAuthor string, catalogBook metadata.SeriesCatalogBook, format requestedFormat) (*models.Book, error) {
 	if series == nil {
 		return nil, errSeriesNotFound
+	}
+	// A series catalog is a metadata ingestion source like an author
+	// catalogue, so the unconditional bundle prune (#1780) has to apply here
+	// too. It did not, and a fill created "<Series> 3 Books Collection Set"
+	// as a monitored, wanted book that then went looking for releases
+	// (#2239). Same exported detector as the author-catalogue path, so there
+	// is one keyword list rather than two.
+	if title := firstNonEmpty(catalogBook.Book.Title, catalogBook.Title); metadata.IsUnambiguousBundleTitle(title) {
+		slog.Debug("series fill: skipping catalog entry whose title names a box set rather than a book",
+			"seriesID", series.ID, "title", title, "foreignID", catalogBook.ForeignID)
+		return nil, nil
 	}
 	book := catalogBook.Book
 	book.ForeignID = firstNonEmpty(book.ForeignID, catalogBook.ForeignID)
@@ -1473,7 +1508,19 @@ func (h *SeriesHandler) ensureHardcoverCatalogBook(ctx context.Context, series *
 			// candidate instead of stopping at the first match (vavallee,
 			// PR review). Guarding the set keeps that invariant true by
 			// construction rather than by the caller's branch order.
-			if best == nil {
+			//
+			// The block is scoped to a candidate that really is the same
+			// title (#2239). A >=92 fuzzy score is far too wide for this:
+			// TitleScore's PartialRatio/TokenSetRatio components score a
+			// substring at a perfect 100, so an excluded box set whose title
+			// contains the target ("... Carl Series by ... Collection Set"
+			// against "... Carl") blocked the whole call and made the real
+			// volume impossible to create for as long as the box set
+			// existed. Excluding a book must suppress re-adding THAT book,
+			// not a differently titled sibling it happens to shadow. Re-adding
+			// the same record by identity is still blocked earlier, by the
+			// GetByForeignID branch at the top of this function.
+			if best == nil && sameCleanedTitle(existing.Title, incomingTitle) {
 				blockedByExcludedTitle = true
 			}
 			continue
@@ -1681,6 +1728,18 @@ func titleTiebreakWins(candidate, current, target string) bool {
 	}
 
 	return titleLengthCloser(candidate, current, target)
+}
+
+// sameCleanedTitle reports whether two titles are the same title once
+// normalized: case, punctuation and the noise words CleanTitle strips do not
+// count, but extra words do. Deliberately an equality test rather than a
+// similarity score. Its one caller decides whether an EXCLUDED book means
+// "the user already refused this book" (#2239), and a score wide enough to
+// tolerate a trailing box-set qualifier is wide enough to block a different
+// book.
+func sameCleanedTitle(a, b string) bool {
+	cleanA := seriesmatch.CleanTitle(a)
+	return cleanA != "" && cleanA == seriesmatch.CleanTitle(b)
 }
 
 // titleBoundaryMatch reports whether targetClean appears as a whole-word

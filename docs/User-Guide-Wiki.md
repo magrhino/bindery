@@ -171,8 +171,10 @@ grab", not "won't list". Select the ones you never want and **Exclude** them.
 **Search.** A scheduled sweep (default every 12 hours; interval in Settings →
 General, restart required) searches your indexers for every book on the
 Wanted page and auto-grabs the best release. The **Auto-grab** toggle in
-Settings → General turns the sweep's grabbing off entirely if you prefer to
-grab by hand from the Wanted page. Searches also fire when an author is added
+Settings → General turns grabbing off entirely if you prefer to grab by hand
+from the Wanted page: it covers the scheduled sweep, the searches an author
+add fires, and the searches a series fill fires. Books are still created and
+still marked wanted, so the Wanted page is complete when you come back to it. Searches also fire when an author is added
 ("Search for books on add") and when a book flips to wanted.
 
 **Decision.** Each release is checked against your quality profile (allowed

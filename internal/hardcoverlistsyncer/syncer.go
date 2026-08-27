@@ -98,6 +98,7 @@ type hardcoverClient interface {
 type seriesLinker interface {
 	CreateOrGet(ctx context.Context, s *models.Series) error
 	LinkBook(ctx context.Context, seriesID, bookID int64, position string, primary bool) error
+	EnsureHardcoverLinkFromForeignID(ctx context.Context, seriesID int64, foreignID, title string) (bool, error)
 }
 
 type hardcoverClientFactory func(string) hardcoverClient
@@ -642,6 +643,12 @@ func (s *ListSyncer) linkSeriesRefs(ctx context.Context, book *models.Book) {
 		}
 		if err := s.series.LinkBook(ctx, ser.ID, book.ID, ref.Position, ref.Primary); err != nil {
 			slog.Warn("hardcover list sync: link book to series failed", "series", ref.Title, "book", book.Title, "error", err)
+		}
+		// The ref carries the Hardcover series id, so record the link row
+		// the UI and the fill paths read (#2245). Best effort like the rest
+		// of this loop.
+		if _, err := s.series.EnsureHardcoverLinkFromForeignID(ctx, ser.ID, ref.ForeignID, ref.Title); err != nil {
+			slog.Warn("hardcover list sync: record hardcover series link failed", "series", ref.Title, "error", err)
 		}
 	}
 }
