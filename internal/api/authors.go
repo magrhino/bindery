@@ -1533,6 +1533,12 @@ func (h *AuthorHandler) isAutoGrabEnabled(ctx context.Context) bool {
 // Package-level rather than a method so every handler that can dispatch a
 // grab reads the same switch: the series fill fan-out shipped without one and
 // grabbed a whole series with the switch off (#2242).
+//
+// Since #2256 the authoritative check is inside
+// scheduler.Scheduler.SearchAndGrabBook, so the handler-side uses of this are
+// early exits that skip fan-out work and goroutines. They must agree with the
+// scheduler's reading of the same key, never contradict it: no handler may
+// grab when this returns false.
 func autoGrabEnabled(ctx context.Context, settings *db.SettingsRepo) bool {
 	if settings == nil {
 		return true

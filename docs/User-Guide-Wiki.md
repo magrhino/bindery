@@ -172,9 +172,12 @@ grab", not "won't list". Select the ones you never want and **Exclude** them.
 General, restart required) searches your indexers for every book on the
 Wanted page and auto-grabs the best release. The **Auto-grab** toggle in
 Settings → General turns grabbing off entirely if you prefer to grab by hand
-from the Wanted page: it covers the scheduled sweep, the searches an author
-add fires, and the searches a series fill fires. Books are still created and
-still marked wanted, so the Wanted page is complete when you come back to it. Searches also fire when an author is added
+from the Wanted page. It covers every path that can start a download: the
+scheduled sweep, the searches an author add fires, a series fill, adding a
+single book, adding from recommendations, a bulk **Search** action, a book
+flipping to wanted, and the re-search after a stalled download. Books are
+still created and still marked wanted, so the Wanted page is complete when
+you come back to it. Searches also fire when an author is added
 ("Search for books on add") and when a book flips to wanted.
 
 **Decision.** Each release is checked against your quality profile (allowed

@@ -593,12 +593,45 @@ func (s *Scheduler) Stop() {
 // It is the same logic the 12-hour wanted-scan uses, promoted so on-add and
 // status-transition hooks can trigger a search without waiting for the next run.
 func (s *Scheduler) SearchAndGrabBook(ctx context.Context, book models.Book) {
+	// The global auto-grab kill switch is enforced here, at the single point
+	// where a grab is actually dispatched, rather than at each caller (#2256).
+	// Every caller reaches a download through this function, so a new dispatch
+	// site inherits the switch instead of having to know the rule exists.
+	// Callers keep marking books wanted and monitored; only the grab stops.
+	if !s.autoGrabEnabled(ctx) {
+		slog.Info("auto-grab disabled globally, skipping search",
+			"book_id", book.ID, "title", book.Title)
+		return
+	}
 	if book.NeedsEbook() {
 		s.searchAndGrabFormat(ctx, book, models.MediaTypeEbook)
 	}
 	if book.NeedsAudiobook() {
 		s.searchAndGrabFormat(ctx, book, models.MediaTypeAudiobook)
 	}
+}
+
+// autoGrabEnabled reports whether the global autoGrab.enabled kill switch is
+// on. It fails open: an unattached settings repo, a missing row or a read
+// error all read as enabled, matching what every existing call site already
+// did (internal/api/authors.go autoGrabEnabled, books.go, searchWanted).
+//
+// This is read once per SearchAndGrabBook call rather than cached, because
+// searchAndGrabFormat already performs a settings read of its own per format
+// ("search.preferredLanguage"), so the check costs at most one extra
+// single-row primary-key lookup against a book that is about to pay for
+// several indexer HTTP round trips. A TTL cache would make the switch take
+// effect late, which is the exact failure #2242 reported.
+func (s *Scheduler) autoGrabEnabled(ctx context.Context) bool {
+	if s.settings == nil {
+		return true
+	}
+	setting, err := s.settings.Get(ctx, "autoGrab.enabled")
+	if err != nil {
+		slog.Warn("failed to load auto-grab setting", "error", err)
+		return true
+	}
+	return setting == nil || setting.Value != "false"
 }
 
 // resolveAllowedLanguages returns the parsed allowed-language list for an
@@ -1019,6 +1052,11 @@ func (s *Scheduler) searchWanted() {
 	// Respect the global auto-grab kill-switch. When disabled, the
 	// scheduled wanted-scan is skipped entirely — users manage grabs
 	// manually from the Wanted page.
+	//
+	// Kept as a cheap early exit rather than removed in #2256: it skips
+	// building the whole wanted queue and the paced fan-out over it, so a
+	// sweep of thousands costs one settings read instead of one per book.
+	// SearchAndGrabBook holds the authoritative check.
 	if s.settings != nil {
 		if setting, err := s.settings.Get(ctx, "autoGrab.enabled"); err != nil {
 			slog.Warn("failed to load auto-grab setting", "error", err)
@@ -1272,14 +1310,14 @@ func (s *Scheduler) handleStalledDownload(ctx context.Context, dl *models.Downlo
 		}
 	}
 
-	// Trigger a fresh search if auto-grab is enabled.
+	// Trigger a fresh search if auto-grab is enabled. Early exit only: it
+	// avoids the book load, the history row and the goroutine. The
+	// authoritative check lives in SearchAndGrabBook (#2256).
 	if dl.BookID == nil {
 		return
 	}
-	if s.settings != nil {
-		if v, _ := s.settings.Get(ctx, "autoGrab.enabled"); v != nil && v.Value == "false" {
-			return
-		}
+	if !s.autoGrabEnabled(ctx) {
+		return
 	}
 	book, err := s.books.GetByID(ctx, *dl.BookID)
 	if err != nil || book == nil {
