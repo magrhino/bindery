@@ -1,3 +1,0 @@
-### Fixed
-- **Provider fallback when adding an author is no longer silent** (#2237): with `metadata.primary_provider` set, adding an author whose record comes from another provider now says so. The add dialog flags the result, warns before the add that the catalogue will sync from the other provider, and the API response carries a `providerMismatch` object.
-- **Relink endpoints honour tenancy enforcement being off** (#2243): `relink-upstream` and its candidates endpoint no longer 404 for callers whose user id differs from the author's owner while `BINDERY_ENFORCE_TENANCY` is unset. They now scope their lookup like every other author endpoint, and cross-user access stays blocked when enforcement is on.
