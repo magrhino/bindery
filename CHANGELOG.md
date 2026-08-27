@@ -8,7 +8,7 @@ All notable changes to Bindery are documented here. Format loosely follows
 
 **A series fill could grab your whole library with auto-grab switched off.**
 
-Nine fixes for faults reported within a day of v1.33.0, most of them found by
+Ten fixes for faults reported within a day of v1.33.0, most of them found by
 one person exercising Hardcover as the primary metadata provider harder than it
 had been exercised before. Four are in series fill, which turned out to be the
 one action that ignored the auto-grab kill switch, could add the wrong book,
