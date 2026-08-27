@@ -2074,9 +2074,32 @@ func TestClient_Files_WindowsBackslashesNormalized(t *testing.T) {
 	}
 }
 
+// requireShareLimitParams mimics qBittorrent 5.2's requireParams for
+// /api/v2/torrents/setShareLimits (webui/api/torrentscontroller.cpp): the
+// listed keys must be present or the whole request 400s. This is exactly the
+// failure #2205 hit in production while the old stub accepted anything, so
+// the stub now enforces it. Extra keys are ignored, matching the real
+// server.
+func requireShareLimitParams(w http.ResponseWriter, r *http.Request) bool {
+	var missing []string
+	for _, p := range []string{"hashes", "ratioLimit", "seedingTimeLimit", "inactiveSeedingTimeLimit", "shareLimitAction"} {
+		if !r.PostForm.Has(p) {
+			missing = append(missing, p)
+		}
+	}
+	if len(missing) > 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprintf(w, "Missing required parameters: %s", strings.Join(missing, ", "))
+		return false
+	}
+	return true
+}
+
 // TestSetShareLimits_Positive asserts a positive override posts the ratioLimit
 // verbatim to /api/v2/torrents/setShareLimits, with seedingTime fields left at
-// -2 (use global) so only the ratio rule is touched.
+// -2 (use global) so only the ratio rule is touched, and shareLimitAction set
+// to Default (apply the client's configured action) as qBittorrent 5.2+
+// requires.
 func TestSetShareLimits_Positive(t *testing.T) {
 	var gotForm url.Values
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2085,6 +2108,9 @@ func TestSetShareLimits_Positive(t *testing.T) {
 			_, _ = w.Write([]byte("Ok."))
 		case "/api/v2/torrents/setShareLimits":
 			_ = r.ParseForm()
+			if !requireShareLimitParams(w, r) {
+				return
+			}
 			gotForm = r.PostForm
 			w.WriteHeader(http.StatusOK)
 		default:
@@ -2107,6 +2133,9 @@ func TestSetShareLimits_Positive(t *testing.T) {
 	if got := gotForm.Get("seedingTimeLimit"); got != "-2" {
 		t.Errorf("seedingTimeLimit = %q, want -2 (use global)", got)
 	}
+	if got := gotForm.Get("shareLimitAction"); got != "Default" {
+		t.Errorf("shareLimitAction = %q, want Default", got)
+	}
 }
 
 // TestSetShareLimits_Unlimited asserts the -1 sentinel passes straight through;
@@ -2119,6 +2148,9 @@ func TestSetShareLimits_Unlimited(t *testing.T) {
 			_, _ = w.Write([]byte("Ok."))
 		case "/api/v2/torrents/setShareLimits":
 			_ = r.ParseForm()
+			if !requireShareLimitParams(w, r) {
+				return
+			}
 			gotRatio = r.PostForm.Get("ratioLimit")
 			w.WriteHeader(http.StatusOK)
 		default:

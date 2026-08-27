@@ -1,0 +1,2 @@
+### Fixed
+- **Per-indexer seed ratios reach qBittorrent again** (#2205). qBittorrent 5.2 made `shareLimitAction` a required parameter of the share limits endpoint, so every attempt to apply an indexer's seed ratio was rejected with HTTP 400 and the torrent silently kept the client's global limit. Bindery now sends the parameter with its default value, which preserves the previous behaviour of applying the client's configured action when the limit is reached. Older qBittorrent versions ignore the extra field, so nothing changes there.

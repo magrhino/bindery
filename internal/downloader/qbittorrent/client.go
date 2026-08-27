@@ -179,6 +179,22 @@ func (c *Client) Test(ctx context.Context) error {
 // touches the ratio rule. Callers resolve the value from the indexer's
 // SeedRatio override (#883); a nil override skips this call entirely so the
 // torrent keeps the client's global rule.
+//
+// qBittorrent 5.2.0 made shareLimitAction a required parameter of this
+// endpoint; without it the whole call is rejected with HTTP 400 and the
+// torrent silently keeps the global limit (#2205). The value is the
+// enumerator NAME, parsed server side by QMetaEnum::keyToValue. The enum
+// (src/base/bittorrent/sharelimits.h) is Default = -1, Stop = 0, Remove = 1,
+// EnableSuperSeeding = 2, RemoveWithContent = 3; "Default" means "apply the
+// client's configured default action when the limit is reached", which is
+// what the old five-field call effectively did, so behaviour is unchanged.
+// shareLimitsMode (Default = -1, MatchAny = 0, MatchAll = 1) is not yet
+// required by any release but is by qBittorrent master; sending
+// "Default" now avoids repeating this bug when that ships. Releases that do
+// not know a field ignore it: requireParams (webui/api/apicontroller.cpp)
+// only checks that the listed keys are present, never that extras are
+// absent, so both fields are safe to send unconditionally to 5.1.x and
+// older.
 func (c *Client) SetShareLimits(ctx context.Context, hash string, ratioLimit float64) error {
 	if err := c.ensureLoggedIn(ctx); err != nil {
 		return err
@@ -188,6 +204,8 @@ func (c *Client) SetShareLimits(ctx context.Context, hash string, ratioLimit flo
 		"ratioLimit":               {strconv.FormatFloat(ratioLimit, 'f', -1, 64)},
 		"seedingTimeLimit":         {"-2"},
 		"inactiveSeedingTimeLimit": {"-2"},
+		"shareLimitAction":         {"Default"},
+		"shareLimitsMode":          {"Default"},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		c.baseURL+"/api/v2/torrents/setShareLimits",
