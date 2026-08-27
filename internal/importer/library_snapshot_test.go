@@ -117,3 +117,70 @@ func TestLibrarySnapshot_CancelledContextIsNotCached(t *testing.T) {
 		t.Errorf("post-cancel query: got %q, want %q — the abandoned walk was cached", got, path)
 	}
 }
+
+// TestLibrarySnapshot_SupplementBesideAudioNeverBinds is the regression test
+// for #2240, from ianepreston's second repro: a folder holding an audiobook
+// release plus its cue sheet. bookExtensions includes .txt, so the walk
+// collected the cue as a candidate book file, and titleMatch's
+// two-significant-token bar let "Dogs of War.cue" clear both "Dogs of War" AND
+// "Bear Head: Dogs of War, Book 2" — one supplement file bound to two
+// different books in a single author-sync pass, each recorded as owned with
+// its on-add search suppressed.
+//
+// The audio-folder guard from #2188 rejects exactly this shape in the scan
+// loop; this pins that the snapshot walk applies it too: a supplement-class
+// file whose folder also holds audio is the audiobook's material and must
+// never be a FindExisting answer. The chapter-named audio files themselves
+// match neither title, so both queries must come back empty.
+func TestLibrarySnapshot_SupplementBesideAudioNeverBinds(t *testing.T) {
+	abDir := t.TempDir()
+	bookDir := filepath.Join(abDir, "Adrian Tchaikovsky", "Dogs of War (2025)")
+	cue := filepath.Join(bookDir, "Dogs of War.cue.txt")
+	writeFile(t, cue)
+	writeFile(t, filepath.Join(bookDir, "Track 01.mp3"))
+	writeFile(t, filepath.Join(bookDir, "Track 02.mp3"))
+
+	snap := NewLibrarySnapshot("", abDir)
+	for _, title := range []string{"Dogs of War", "Bear Head: Dogs of War, Book 2"} {
+		got := snap.FindExisting(context.Background(), title, "Adrian Tchaikovsky", models.MediaTypeAudiobook)
+		if got == cue {
+			t.Errorf("FindExisting(%q) bound the cue sheet %q — the audio-folder guard is not reaching the snapshot walk", title, got)
+		} else if got != "" {
+			t.Errorf("FindExisting(%q) = %q, want no match", title, got)
+		}
+	}
+}
+
+// TestLibrarySnapshot_ContainerOutranksSupplement carries #2188's claim
+// ranking into FindExisting: when a real ebook container and a supplement-class
+// file both match the same book, the container must win regardless of which
+// one the directory listing yields first ("(notes)" sorts before "- Author"
+// here, so walk order alone would return the .txt).
+func TestLibrarySnapshot_ContainerOutranksSupplement(t *testing.T) {
+	libDir := t.TempDir()
+	dir := filepath.Join(libDir, "William Gibson")
+	notes := filepath.Join(dir, "Burning Chrome (notes).txt")
+	epub := filepath.Join(dir, "Burning Chrome - William Gibson.epub")
+	writeFile(t, notes)
+	writeFile(t, epub)
+
+	snap := NewLibrarySnapshot(libDir, "")
+	if got := snap.FindExisting(context.Background(), "Burning Chrome", "William Gibson", models.MediaTypeEbook); got != epub {
+		t.Errorf("got %q, want the real container %q — supplement ranking is not applied", got, epub)
+	}
+}
+
+// TestLibrarySnapshot_TextOnlyLibraryStillMatches pins #2188's "ranking rather
+// than excluding" property on the snapshot path: a supplement-class file with
+// no audio beside it and no container competing for the book is a legitimate
+// ebook and must still be found.
+func TestLibrarySnapshot_TextOnlyLibraryStillMatches(t *testing.T) {
+	libDir := t.TempDir()
+	txt := filepath.Join(libDir, "Jane Doe", "Plain Book - Jane Doe.txt")
+	writeFile(t, txt)
+
+	snap := NewLibrarySnapshot(libDir, "")
+	if got := snap.FindExisting(context.Background(), "Plain Book", "Jane Doe", models.MediaTypeEbook); got != txt {
+		t.Errorf("got %q, want %q — a text-only library must keep matching", got, txt)
+	}
+}

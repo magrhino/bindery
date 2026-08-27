@@ -274,6 +274,10 @@ to the records. Things worth knowing before you judge the results:
   by sorting first in the folder. Nothing is excluded outright, so a library of
   TXT, RTF or PDF files still attaches normally: those files are only passed
   over when a better file for the same book exists.
+- The same two rules apply when **adding a book** and Bindery checks whether you
+  already own it: a cue sheet or notes file next to an audiobook is never taken
+  as evidence you own the book, and a real ebook wins over a supplement-class
+  file when both match (#2240).
 
 ## Metadata: where book data comes from
 

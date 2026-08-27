@@ -2031,10 +2031,18 @@ var supplementClassExts = map[string]bool{
 func scanClaimRank(path string) int {
 	if detectDownloadFormat([]string{path}) == models.MediaTypeEbook &&
 		supplementClassExts[strings.ToLower(filepath.Ext(path))] {
-		return 1
+		return supplementClaimRank
 	}
-	return 0
+	return containerClaimRank
 }
+
+// The two tiers scanClaimRank sorts by, named so its other reader — the
+// library-snapshot walk behind FindExisting (#2240) — can test a file's tier
+// without a magic number.
+const (
+	containerClaimRank  = 0
+	supplementClaimRank = 1
+)
 
 // videoExtensions lists common video container extensions. None of these are
 // book files, so a download whose largest file carries one is a movie/TV

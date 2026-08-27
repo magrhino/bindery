@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -61,9 +62,10 @@ func NewLibrarySnapshot(libraryDir, audiobookDir string) *LibrarySnapshot {
 }
 
 // FindExisting reports the first library file matching title/author, or "".
-// Semantics are identical to the pre-snapshot Scanner walk: the same media-type
-// root selection, the same author-folder pre-filter, the same title/author
-// match, in the same walk order — only the walk count changes.
+// Root selection, the author-folder pre-filter and the title/author match are
+// those of the pre-snapshot Scanner walk; the candidate set is filtered and
+// ranked by walkLibraryEntries so a supplement-class file beside audio never
+// answers and a real container outranks a supplement (#2188/#2240).
 func (ls *LibrarySnapshot) FindExisting(ctx context.Context, title, authorName, mediaType string) string {
 	if title == "" {
 		return ""
@@ -143,14 +145,31 @@ func (ls *LibrarySnapshot) entriesFor(ctx context.Context, root string) ([]libra
 // a missing root simply yields no entries. Returns ok=false only on context
 // cancellation, which the old walk ignored outright (#1929) — a cancelled sync
 // kept walking the whole tree.
+//
+// The candidate set gets the same two-tier supplement treatment the library
+// scan gives its pass (#2188), which used to stop at the scan loop and leave
+// FindExisting binding new books to cue sheets and notes files (#2240):
+//
+//   - A supplement-class file (.txt/.rtf/.pdf/.cbz/.cbr) whose folder also
+//     holds audio is the audiobook's material, never a candidate — the scan
+//     loop's audio-folder guard, applied while walking. Tracked from the whole
+//     walk before filtering so the answer never depends on walk order.
+//   - The surviving entries are ordered by scanClaimRank, real containers
+//     ahead of supplement-class files, so FindExisting answers with a real
+//     container whenever one matches and falls back to a supplement only when
+//     nothing better does. Text-only and PDF-only libraries keep matching.
 func walkLibraryEntries(ctx context.Context, root string) ([]libraryEntry, bool) {
 	var entries []libraryEntry
+	audioDirs := make(map[string]bool)
 	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if ctx.Err() != nil {
 			return filepath.SkipAll
 		}
 		if err != nil || info.IsDir() {
 			return nil //nolint:nilerr // best-effort walk: skip unreadable entries rather than abort
+		}
+		if IsAudioFile(path) {
+			audioDirs[filepath.Clean(filepath.Dir(path))] = true
 		}
 		if !IsBookFile(path) {
 			return nil
@@ -173,5 +192,17 @@ func walkLibraryEntries(ctx context.Context, root string) ([]libraryEntry, bool)
 	if ctx.Err() != nil {
 		return nil, false
 	}
+	kept := entries[:0]
+	for _, e := range entries {
+		if scanClaimRank(e.path) == supplementClaimRank &&
+			audioDirs[filepath.Clean(filepath.Dir(e.path))] {
+			continue
+		}
+		kept = append(kept, e)
+	}
+	entries = kept
+	slices.SortStableFunc(entries, func(a, b libraryEntry) int {
+		return scanClaimRank(a.path) - scanClaimRank(b.path)
+	})
 	return entries, true
 }
