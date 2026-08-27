@@ -459,7 +459,9 @@
     "ratings": "{{count}} Bewertungen",
     "noResults": "Keine Ergebnisse gefunden",
     "searchError": "Metadatenanbieter nicht erreichbar — {{error}}",
-    "addFail": "Autor konnte nicht hinzugefügt werden"
+    "addFail": "Autor konnte nicht hinzugefügt werden",
+    "resultProvider": "von {{provider}}",
+    "providerMismatchNotice": "Dieser Eintrag stammt von {{linked}}, nicht von deinem primären Metadaten-Anbieter {{primary}}. Wenn du ihn hinzufügst, wird der Katalog dieses Autors von {{linked}} synchronisiert. {{primary}} hat den richtigen Eintrag möglicherweise trotzdem, auch wenn die Suche ihn nicht gefunden hat."
   },
   "addBookModal": {
     "title": "Buch hinzufügen",

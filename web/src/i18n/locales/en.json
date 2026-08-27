@@ -996,7 +996,9 @@
     "searchError": "Could not reach the metadata provider — {{error}}",
     "openExisting": "Open existing author",
     "findMetadata": "Find metadata",
-    "addFail": "Failed to add author"
+    "addFail": "Failed to add author",
+    "resultProvider": "from {{provider}}",
+    "providerMismatchNotice": "This record comes from {{linked}}, not from your primary metadata provider {{primary}}. If you add it, this author's catalogue will sync from {{linked}}. {{primary}} may still have the right record even though its search missed it."
   },
   "addBookModal": {
     "title": "Add Book",

@@ -459,7 +459,9 @@
     "ratings": "{{count}} beoordelingen",
     "noResults": "Geen resultaten gevonden",
     "searchError": "Metadataprovider niet bereikbaar — {{error}}",
-    "addFail": "Auteur toevoegen mislukt"
+    "addFail": "Auteur toevoegen mislukt",
+    "resultProvider": "van {{provider}}",
+    "providerMismatchNotice": "Dit record komt van {{linked}}, niet van je primaire metadataprovider {{primary}}. Als je het toevoegt, wordt de catalogus van deze auteur gesynchroniseerd vanaf {{linked}}. Mogelijk heeft {{primary}} het juiste record wel, ook al vond de zoekopdracht het niet."
   },
   "addBookModal": {
     "title": "Boek toevoegen",

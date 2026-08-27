@@ -76,6 +76,22 @@ type Author struct {
 	// Transient: populated from the metadata provider during add/refresh; not stored in DB.
 	// Used to seed author_aliases so non-latin primary names get latin-script alternates.
 	AlternateNames []string `json:"-"`
+
+	// ProviderMismatch is stamped on add-flow responses when the record being
+	// linked routes its catalogue syncs to a provider other than the
+	// configured primary (#2237): with metadata.primary_provider = hardcover,
+	// a Hardcover search miss makes the add flow pick a record from another
+	// provider, and the author then syncs from that provider forever.
+	// Transport-only; nothing persists it.
+	ProviderMismatch *AuthorProviderMismatch `json:"providerMismatch,omitempty"`
+}
+
+// AuthorProviderMismatch reports that an author's catalogue will sync from a
+// different provider than the one configured as primary (#2237). Both fields
+// carry normalized provider names ("openlibrary", "hardcover", ...).
+type AuthorProviderMismatch struct {
+	PrimaryProvider string `json:"primaryProvider"`
+	LinkedProvider  string `json:"linkedProvider"`
 }
 
 // AuthorSyncSummary is the outcome of one catalogue sync: how many of the

@@ -25,6 +25,12 @@ vi.mock('react-i18next', () => ({
         const count = Number(options?.count ?? 0)
         return `Show ${count} hidden result${count === 1 ? '' : 's'}`
       }
+      if (key === 'addAuthorModal.resultProvider') {
+        return `from ${String(options?.provider ?? '')}`
+      }
+      if (key === 'addAuthorModal.providerMismatchNotice') {
+        return `This record comes from ${String(options?.linked ?? '')}, not from your primary metadata provider ${String(options?.primary ?? '')}.`
+      }
       return strings[key] ?? key
     },
   }),
@@ -555,6 +561,70 @@ describe('AddAuthorModal — search error handling', () => {
       vi.mocked(api.getSetting).mockImplementation(settingsWithDefaultRoot('404'))
 
       expect(await addTolkien()).toEqual(expect.objectContaining({ rootFolderId: 7 }))
+    })
+  })
+
+  // #2237: with a primary metadata provider configured, a result that would
+  // sync from another provider must be flagged in the result list and on the
+  // confirm step instead of silently falling back.
+  describe('provider mismatch notice (#2237)', () => {
+    function settingsWithPrimary(value: string | null) {
+      return vi.fn().mockImplementation((key: string) => {
+        if (key === 'metadata.primary_provider') {
+          return value === null
+            ? Promise.reject(new Error('HTTP 404'))
+            : Promise.resolve({ key, value })
+        }
+        return Promise.reject(new Error('HTTP 404'))
+      })
+    }
+
+    async function searchDinniman() {
+      vi.mocked(api.searchAuthors).mockResolvedValue([author({
+        id: 0,
+        foreignAuthorId: 'OL3101279A',
+        authorName: 'Matt Dinniman',
+        sortName: 'Dinniman, Matt',
+        metadataProvider: 'openlibrary',
+      })])
+      render(<AddAuthorModal onClose={vi.fn()} onAdded={vi.fn()} />)
+      fireEvent.change(screen.getByPlaceholderText('Search by author name...'), {
+        target: { value: 'Matt Dinniman' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: /^search$/i }))
+      await waitFor(() => expect(screen.getByText('Matt Dinniman')).toBeInTheDocument())
+    }
+
+    it('flags a result from another provider and warns on the confirm step', async () => {
+      vi.mocked(api.getSetting).mockImplementation(settingsWithPrimary('hardcover'))
+
+      await searchDinniman()
+      expect(await screen.findByText('from OpenLibrary')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }))
+      const notice = await screen.findByRole('alert')
+      expect(notice.textContent).toContain('OpenLibrary')
+      expect(notice.textContent).toContain('Hardcover')
+    })
+
+    it('does not flag a result from the configured primary', async () => {
+      vi.mocked(api.getSetting).mockImplementation(settingsWithPrimary('openlibrary'))
+
+      await searchDinniman()
+      expect(screen.queryByText(/^from /)).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }))
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    })
+
+    it('shows no notice when no primary provider is configured', async () => {
+      vi.mocked(api.getSetting).mockImplementation(settingsWithPrimary(null))
+
+      await searchDinniman()
+      expect(screen.queryByText(/^from /)).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }))
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     })
   })
 

@@ -461,7 +461,9 @@
     "ratings": "{{count}} évaluations",
     "noResults": "Aucun résultat",
     "searchError": "Impossible d'atteindre le fournisseur de métadonnées — {{error}}",
-    "addFail": "Échec de l'ajout de l'auteur"
+    "addFail": "Échec de l'ajout de l'auteur",
+    "resultProvider": "de {{provider}}",
+    "providerMismatchNotice": "Cette fiche provient de {{linked}}, et non de votre fournisseur de métadonnées principal {{primary}}. Si vous l'ajoutez, le catalogue de cet auteur sera synchronisé depuis {{linked}}. Il se peut que {{primary}} possède la bonne fiche même si sa recherche ne l'a pas trouvée."
   },
   "addBookModal": {
     "title": "Ajouter un livre",

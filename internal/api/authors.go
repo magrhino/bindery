@@ -565,6 +565,7 @@ func (h *AuthorHandler) Create(w http.ResponseWriter, r *http.Request) {
 			// fields (Description, ImageURL, ...); cleaning afterwards would race
 			// the snapshot read against this write (see fetchAuthorBooksAsync).
 			cleanAuthorDescription(canonical)
+			h.stampProviderMismatch(canonical)
 			h.fetchAuthorBooksAsync(canonical, catalogueSyncOptions{autoSearch: req.SearchOnAdd, mediaType: mediaType})
 			writeJSON(w, http.StatusOK, canonical)
 			return
@@ -611,6 +612,7 @@ func (h *AuthorHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// ImageURL, ...). Cleaning after the spawn would race the snapshot read
 	// against this write (see fetchAuthorBooksAsync).
 	cleanAuthorDescription(author)
+	h.stampProviderMismatch(author)
 
 	// Fetch and store books for this author. Always populate the catalogue;
 	// pass searchOnAdd so FetchAuthorBooks knows whether to also queue grabs.
@@ -623,6 +625,28 @@ func (h *AuthorHandler) Create(w http.ResponseWriter, r *http.Request) {
 func cleanAuthorDescription(author *models.Author) {
 	if author != nil {
 		author.Description = textutil.CleanDescription(author.Description)
+	}
+}
+
+// stampProviderMismatch marks an add-flow response when the linked record's
+// catalogue provider (derived from the foreign-ID prefix, the same way
+// providerForForeignID routes sync fetches) differs from the configured
+// primary (#2237). With metadata.primary_provider = hardcover, a Hardcover
+// search miss makes the add flow pick a record from another provider and the
+// author syncs from that provider forever; making Hardcover's search
+// exhaustive is provider behaviour we cannot fix, but the fallback happening
+// silently is ours to fix. Call before fetchAuthorBooksAsync: the spawn
+// snapshots the author, so mutating it afterwards would race the read.
+func (h *AuthorHandler) stampProviderMismatch(author *models.Author) {
+	if author == nil || h.meta == nil {
+		return
+	}
+	primary := h.meta.PrimaryProviderName()
+	if primary == "" {
+		return
+	}
+	if linked := models.AuthorProviderFromForeignID(author.ForeignID); linked != primary {
+		author.ProviderMismatch = &models.AuthorProviderMismatch{PrimaryProvider: primary, LinkedProvider: linked}
 	}
 }
 
@@ -1192,7 +1216,15 @@ func (h *AuthorHandler) RelinkUpstream(w http.ResponseWriter, r *http.Request) {
 	req.Name = strings.TrimSpace(req.Name)
 
 	userID := auth.UserIDFromContext(r.Context())
-	author, err := h.authors.GetByIDForUser(r.Context(), id, userID)
+	// Scope the lookup with ListScopeUserID (not UserIDFromContext), matching
+	// Get and Delete: unscoped unless tenancy enforcement is on and the caller
+	// is a non-admin. Passing the raw context user id here 404ed relinks for
+	// any caller whose id differed from the author's owner even with
+	// BINDERY_ENFORCE_TENANCY off, while every sibling endpoint let the same
+	// caller read and delete that author (#2243). CheckOwnership below stays
+	// the per-item authorisation gate, so the enforcement-on posture is
+	// unchanged.
+	author, err := h.authors.GetByIDForUser(r.Context(), id, auth.ListScopeUserID(r.Context()))
 	if err != nil {
 		writeServerError(w, r, err)
 		return
@@ -1270,12 +1302,20 @@ func (h *AuthorHandler) RelinkCandidates(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
 		return
 	}
-	author, err := h.authors.GetByIDForUser(r.Context(), id, auth.UserIDFromContext(r.Context()))
+	// Scoped like RelinkUpstream above: ListScopeUserID so the lookup honours
+	// tenancy enforcement being off, with CheckOwnership as the per-item
+	// authorisation gate when it is on (#2243).
+	author, err := h.authors.GetByIDForUser(r.Context(), id, auth.ListScopeUserID(r.Context()))
 	if err != nil {
 		writeServerError(w, r, err)
 		return
 	}
 	if author == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "author not found"})
+		return
+	}
+	// Tier-1 cross-user IDOR guard (D1).
+	if !auth.CheckOwnership(r.Context(), author.OwnerUserID) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "author not found"})
 		return
 	}

@@ -71,6 +71,22 @@ It is held in memory, not stored, so it is absent after a restart until the
 author is synced again. `skippedLanguageSample` is capped at a few titles; the
 counts are exact.
 
+`POST /api/v1/author` responses include a `providerMismatch` object when the
+linked record routes its catalogue syncs to a provider other than the
+configured `metadata.primary_provider` (#2237), so a fallback pick is visible
+instead of silent:
+
+```json
+{
+  "providerMismatch": {
+    "primaryProvider": "hardcover",
+    "linkedProvider": "openlibrary"
+  }
+}
+```
+
+The field is absent when the providers match or no primary is configured.
+
 `POST /api/v1/author/{id}/relink-upstream` may be called without a body for
 automatic upstream matching. Manual relink can send:
 

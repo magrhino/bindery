@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { api, AddAuthorRequest, Author, AuthorConflictBody, AuthorMonitorMode, MediaType, MetadataProfile, RootFolder } from '../api/client'
 import { splitAuthorSearchResults } from './addAuthorTitleGuard'
 import { useNeedsSetup } from './useNeedsSetup'
-import { canLinkAuthorMetadata, hasSparseMetadata } from '../util/authorMetadata'
+import { authorProviderKey, canLinkAuthorMetadata, hasSparseMetadata } from '../util/authorMetadata'
+import { providerDisplayName } from '../util/metadataSource'
 
 interface Props {
   onClose: () => void
@@ -66,6 +67,12 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
   const [monitorMode, setMonitorMode] = useState<AuthorMonitorMode>(DEFAULT_MONITOR_MODE)
   const [monitorLatestCount, setMonitorLatestCount] = useState(DEFAULT_MONITOR_LATEST_COUNT)
   const [monitorOptionsChanged, setMonitorOptionsChanged] = useState(false)
+  // The configured primary metadata provider, when one is explicitly set.
+  // Used to flag results that would sync from another provider (#2237):
+  // Hardcover's author search misses some canonical records, and the add flow
+  // then silently fell back to an OpenLibrary record that syncs from
+  // OpenLibrary forever.
+  const [primaryProvider, setPrimaryProvider] = useState<string | null>(null)
 
   useEffect(() => {
     api.listMetadataProfiles().then(ps => {
@@ -115,7 +122,22 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
         if (Number.isInteger(n) && n > 0) setMonitorLatestCount(n)
       })
       .catch(() => { /* unset; keep latest count default */ })
+    api.getSetting('metadata.primary_provider')
+      .then(s => {
+        const value = (s.value || '').trim().toLowerCase()
+        // Mirror MetadataPrimaryProviders on the backend; anything else means
+        // no explicit choice, so no notice.
+        if (value === 'openlibrary' || value === 'dnb' || value === 'hardcover') setPrimaryProvider(value)
+      })
+      .catch(() => { /* unset; no provider notice needed */ })
   }, [])
+
+  const providerMismatch = (author: Author): string | null => {
+    if (!primaryProvider) return null
+    const provider = authorProviderKey(author)
+    if (!provider || provider === primaryProvider) return null
+    return provider
+  }
 
   const search = async () => {
     const q = query.trim()
@@ -220,6 +242,7 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
                     {author.disambiguation && <span>{t('addAuthorModal.topWork')} {author.disambiguation}</span>}
                     {author.statistics?.bookCount ? <span title={t('addAuthorModal.booksTooltip')}>{t('addAuthorModal.books', { count: author.statistics.bookCount })}</span> : null}
                     {author.ratingsCount ? <span>{t('addAuthorModal.ratings', { count: author.ratingsCount })}</span> : null}
+                    {providerMismatch(author) && <span className="text-amber-600 dark:text-amber-400">{t('addAuthorModal.resultProvider', { provider: providerDisplayName(providerMismatch(author)) })}</span>}
                   </div>
                 </div>
                 <button
@@ -258,6 +281,15 @@ export default function AddAuthorModal({ onClose, onAdded }: Props) {
               <div className="font-medium">{selectedAuthor.authorName}</div>
               {selectedAuthor.disambiguation && <div className="mt-0.5 text-sm text-fg-muted">{selectedAuthor.disambiguation}</div>}
             </div>
+
+            {providerMismatch(selectedAuthor) && (
+              <p role="alert" className="mt-3 px-3 py-2 rounded bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700/60 text-xs text-amber-900 dark:text-amber-200">
+                {t('addAuthorModal.providerMismatchNotice', {
+                  linked: providerDisplayName(providerMismatch(selectedAuthor)),
+                  primary: providerDisplayName(primaryProvider),
+                })}
+              </p>
+            )}
 
             <details className="mt-4 rounded-md border border-slate-300 dark:border-zinc-700">
               <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium hover:bg-slate-200/60 dark:hover:bg-zinc-800/60">

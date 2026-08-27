@@ -20,3 +20,20 @@ export function hasSparseMetadata(author?: Author): boolean {
   if (!author) return true
   return !author.description && !author.imageUrl && !author.disambiguation && (author.ratingsCount ?? 0) === 0 && (author.averageRating ?? 0) === 0
 }
+
+// authorProviderKey names the catalogue provider an author record routes to,
+// mirroring models.AuthorProviderFromForeignID on the backend: the foreign-ID
+// prefix decides where every later catalogue fetch goes. Falls back to the
+// stamped metadataProvider only when there is no foreign ID at all. Drives the
+// add-flow provider notice (#2237).
+export function authorProviderKey(author?: Pick<Author, 'foreignAuthorId' | 'metadataProvider'>): string {
+  if (!author) return ''
+  const id = (author.foreignAuthorId || '').trim().toLowerCase()
+  if (id.startsWith('gb:')) return 'googlebooks'
+  if (id.startsWith('hc:')) return 'hardcover'
+  if (id.startsWith('dnb:')) return 'dnb'
+  if (id.startsWith('calibre:')) return 'calibre'
+  if (id.startsWith('abs:')) return 'audiobookshelf'
+  if (id !== '') return 'openlibrary'
+  return (author.metadataProvider || '').trim().toLowerCase()
+}

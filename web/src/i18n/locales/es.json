@@ -502,7 +502,9 @@
     "ratings": "{{count}} valoraciones",
     "noResults": "Sin resultados",
     "searchError": "No se pudo contactar con el proveedor de metadatos — {{error}}",
-    "addFail": "Error al añadir el autor"
+    "addFail": "Error al añadir el autor",
+    "resultProvider": "de {{provider}}",
+    "providerMismatchNotice": "Este registro proviene de {{linked}}, no de tu proveedor de metadatos principal {{primary}}. Si lo añades, el catálogo de este autor se sincronizará desde {{linked}}. Es posible que {{primary}} tenga el registro correcto aunque su búsqueda no lo haya encontrado."
   },
   "addBookModal": {
     "title": "Añadir libro",

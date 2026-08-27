@@ -33,6 +33,17 @@ export interface Author {
   // What the last catalogue sync did with the provider's works (#1889).
   // Absent until the server has synced this author since it last started.
   lastSync?: AuthorSyncSummary
+  // Present on add-flow responses when the linked record syncs from a
+  // provider other than the configured primary (#2237).
+  providerMismatch?: AuthorProviderMismatch
+}
+
+// AuthorProviderMismatch reports that an author's catalogue will sync from a
+// different provider than the configured primary (#2237). Both fields carry
+// normalized provider keys ('openlibrary', 'hardcover', ...).
+export interface AuthorProviderMismatch {
+  primaryProvider: string
+  linkedProvider: string
 }
 
 // AuthorSyncSummary reports how many provider works became books on the last

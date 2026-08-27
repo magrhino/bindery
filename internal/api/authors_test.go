@@ -3335,7 +3335,133 @@ func TestRelinkUpstream_ManualCandidateRejectsUnverifiedFallback(t *testing.T) {
 	}
 }
 
+// TestCreateAuthor_StampsProviderMismatch is the regression test for #2237:
+// with metadata.primary_provider = hardcover, a Hardcover author-search miss
+// makes the add flow create an author from another provider, and that author
+// syncs from the other provider forever. The fallback used to be silent; the
+// response must now name both providers so the UI can surface it.
+func TestCreateAuthor_StampsProviderMismatch(t *testing.T) {
+	newHandler := func(t *testing.T) (*AuthorHandler, *db.AuthorRepo) {
+		t.Helper()
+		database, err := db.OpenMemory()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = database.Close() })
+		primary := &searchableAuthorProvider{
+			stubMetaProvider: stubMetaProvider{name: "hardcover"},
+			authors: map[string]*models.Author{
+				"hc:jane-doe": {
+					ForeignID:        "hc:jane-doe",
+					Name:             "Jane Doe",
+					SortName:         "Doe, Jane",
+					MetadataProvider: "hardcover",
+				},
+			},
+		}
+		enricher := &searchableAuthorProvider{
+			stubMetaProvider: stubMetaProvider{name: "openlibrary"},
+			authors: map[string]*models.Author{
+				"OL999A": {
+					ForeignID:        "OL999A",
+					Name:             "John Roe",
+					SortName:         "Roe, John",
+					MetadataProvider: "openlibrary",
+				},
+			},
+		}
+		authorRepo := db.NewAuthorRepo(database)
+		return NewAuthorHandler(authorRepo, db.NewAuthorAliasRepo(database), db.NewBookRepo(database), nil, metadata.NewAggregator(primary, enricher), nil, db.NewMetadataProfileRepo(database), nil), authorRepo
+	}
+
+	create := func(t *testing.T, h *AuthorHandler, foreignID, name string, wantStatus int) map[string]any {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{
+			"foreignAuthorId": foreignID,
+			"authorName":      name,
+			"monitored":       true,
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/author", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.Create(rec, req)
+		if rec.Code != wantStatus {
+			t.Fatalf("expected %d, got %d: %s", wantStatus, rec.Code, rec.Body.String())
+		}
+		var resp map[string]any
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	requireMismatch := func(t *testing.T, resp map[string]any) {
+		t.Helper()
+		mismatch, ok := resp["providerMismatch"].(map[string]any)
+		if !ok {
+			t.Fatalf("providerMismatch missing from response: %v", resp)
+		}
+		if mismatch["primaryProvider"] != "hardcover" || mismatch["linkedProvider"] != "openlibrary" {
+			t.Fatalf("providerMismatch = %v, want hardcover/openlibrary", mismatch)
+		}
+	}
+
+	t.Run("openlibrary record under hardcover primary is flagged", func(t *testing.T) {
+		h, _ := newHandler(t)
+		requireMismatch(t, create(t, h, "OL999A", "John Roe", http.StatusCreated))
+	})
+
+	t.Run("hardcover record under hardcover primary is not flagged", func(t *testing.T) {
+		h, _ := newHandler(t)
+		resp := create(t, h, "hc:jane-doe", "Jane Doe", http.StatusCreated)
+		if _, ok := resp["providerMismatch"]; ok {
+			t.Fatalf("unexpected providerMismatch in response: %v", resp)
+		}
+	})
+
+	// The add flow's other success path: the name matches an existing
+	// relinkable local author (abs:/calibre: import), so Create relinks it to
+	// the fetched record and returns 200 instead of 201. The stamp must ride
+	// that response too.
+	t.Run("relinked canonical author under hardcover primary is flagged", func(t *testing.T) {
+		h, authorRepo := newHandler(t)
+		local := &models.Author{
+			ForeignID:        "abs:author:john-roe",
+			Name:             "John Roe",
+			SortName:         "Roe, John",
+			MetadataProvider: "audiobookshelf",
+			Monitored:        true,
+		}
+		if err := authorRepo.Create(context.Background(), local); err != nil {
+			t.Fatalf("seed local author: %v", err)
+		}
+		requireMismatch(t, create(t, h, "OL999A", "John Roe", http.StatusOK))
+	})
+
+	// Defensive guards: a nil author, a handler without an aggregator, and an
+	// aggregator without a wired primary must all leave the record unstamped.
+	t.Run("guards leave the author unstamped", func(t *testing.T) {
+		noMeta := &AuthorHandler{}
+		noMeta.stampProviderMismatch(nil)
+		author := &models.Author{ForeignID: "OL999A"}
+		noMeta.stampProviderMismatch(author)
+		if author.ProviderMismatch != nil {
+			t.Fatalf("nil-aggregator handler stamped the author: %+v", author.ProviderMismatch)
+		}
+		noPrimary := &AuthorHandler{meta: metadata.NewAggregator(nil)}
+		noPrimary.stampProviderMismatch(author)
+		if author.ProviderMismatch != nil {
+			t.Fatalf("primaryless aggregator stamped the author: %+v", author.ProviderMismatch)
+		}
+	})
+}
+
 func TestRelinkUpstream_RejectsOtherUsersAuthor(t *testing.T) {
+	// The cross-user 404 is a tenancy-enforcement property: with the gate off
+	// (the default) every read/mutate path is unscoped and the relink must
+	// succeed instead (#2243, covered below).
+	auth.SetEnforceTenancyForTests(t, true)
+
 	database, err := db.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -3397,6 +3523,105 @@ func TestRelinkUpstream_RejectsOtherUsersAuthor(t *testing.T) {
 	}
 	if got.ForeignID != aliceAuthor.ForeignID || got.MetadataProvider != aliceAuthor.MetadataProvider {
 		t.Fatalf("alice author mutated: %+v", got)
+	}
+}
+
+// relinkTenancyFixture seeds alice's author and returns a handler whose
+// aggregator can resolve "hc:emilia-jae", for exercising the relink endpoints
+// from bob's context in both tenancy modes (#2243).
+func relinkTenancyFixture(t *testing.T) (*relinkUpstreamFixture, *models.Author, int64) {
+	t.Helper()
+
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	ctx := context.Background()
+	users := db.NewUserRepo(database)
+	alice, err := users.Create(ctx, "alice", "h1")
+	if err != nil {
+		t.Fatalf("create alice: %v", err)
+	}
+	bob, err := users.Create(ctx, "bob", "h2")
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+	authorRepo := db.NewAuthorRepo(database)
+	fixture := &relinkUpstreamFixture{
+		ctx:     ctx,
+		authors: authorRepo,
+		aliases: db.NewAuthorAliasRepo(database),
+		books:   db.NewBookRepo(database),
+		handler: NewAuthorHandler(authorRepo, db.NewAuthorAliasRepo(database), db.NewBookRepo(database), nil, metadata.NewAggregator(&searchableAuthorProvider{
+			stubMetaProvider: stubMetaProvider{name: "hardcover"},
+			authors: map[string]*models.Author{
+				"hc:emilia-jae": {
+					ForeignID:        "hc:emilia-jae",
+					Name:             "Emilia Jae",
+					SortName:         "Jae, Emilia",
+					MetadataProvider: "hardcover",
+				},
+			},
+		}), nil, db.NewMetadataProfileRepo(database), nil),
+	}
+	aliceAuthor := &models.Author{
+		ForeignID:        "abs:author:alice:emilia-jae",
+		Name:             "Emilia Jae",
+		SortName:         "Jae, Emilia",
+		MetadataProvider: "audiobookshelf",
+		Monitored:        true,
+	}
+	if err := authorRepo.CreateForUser(ctx, aliceAuthor, alice.ID); err != nil {
+		t.Fatalf("seed alice author: %v", err)
+	}
+	return fixture, aliceAuthor, bob.ID
+}
+
+// TestRelinkUpstream_TenancyOffAllowsCrossUserAuthor is the regression test
+// for #2243: with BINDERY_ENFORCE_TENANCY off (the default) every other
+// author endpoint lets a caller whose user id differs from the owner read and
+// delete the author, but the relink lookup passed the raw context user id to
+// GetByIDForUser and 404ed. The lookup must scope through ListScopeUserID
+// like Get and Delete.
+func TestRelinkUpstream_TenancyOffAllowsCrossUserAuthor(t *testing.T) {
+	auth.SetEnforceTenancyForTests(t, false)
+	fixture, aliceAuthor, bobID := relinkTenancyFixture(t)
+
+	rec := fixture.relinkToCandidateAs(t, bobID, aliceAuthor.ID, "hc:emilia-jae", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 with tenancy enforcement off, got %d: %s", rec.Code, rec.Body.String())
+	}
+	got, err := fixture.authors.GetByID(fixture.ctx, aliceAuthor.ID)
+	if err != nil || got == nil {
+		t.Fatalf("author lookup: %+v err=%v", got, err)
+	}
+	if got.ForeignID != "hc:emilia-jae" || got.MetadataProvider != "hardcover" {
+		t.Fatalf("author not relinked: foreignID=%q provider=%q", got.ForeignID, got.MetadataProvider)
+	}
+}
+
+func TestRelinkCandidates_TenancyOffAllowsCrossUserAuthor(t *testing.T) {
+	auth.SetEnforceTenancyForTests(t, false)
+	fixture, aliceAuthor, bobID := relinkTenancyFixture(t)
+
+	rec := fixture.candidatesAs(t, bobID, aliceAuthor.ID, "Emilia+Jae")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 with tenancy enforcement off, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRelinkCandidates_TenancyOnRejectsCrossUserAuthor(t *testing.T) {
+	auth.SetEnforceTenancyForTests(t, true)
+	fixture, aliceAuthor, bobID := relinkTenancyFixture(t)
+
+	rec := fixture.candidatesAs(t, bobID, aliceAuthor.ID, "Emilia+Jae")
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 with tenancy enforcement on, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

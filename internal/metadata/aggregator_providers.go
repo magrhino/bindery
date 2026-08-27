@@ -75,3 +75,16 @@ func (a *Aggregator) providers() []Provider {
 	providers = append(providers, a.enrichers...)
 	return providers
 }
+
+// PrimaryProviderName returns the normalized name of the provider wired as
+// primary ("openlibrary", "hardcover", ...), or "" when there is none. The
+// primary is fixed at boot (cmd/bindery), so this names the provider that
+// serves catalogue syncs for records carrying no other provider's prefix.
+// Exported so the API layer can tell when a record being linked will sync
+// from somewhere other than the configured primary (#2237).
+func (a *Aggregator) PrimaryProviderName() string {
+	if a == nil {
+		return ""
+	}
+	return normalizedProviderName(providerName(a.primary))
+}
