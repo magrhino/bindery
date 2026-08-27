@@ -71,6 +71,10 @@ Read the most recent two `## [vX.Y.Z]` sections in `CHANGELOG.md` before draftin
 - [ ] CHANGELOG entry is merged to `main` — the release step reads it at the tagged commit and aborts if missing.
 - [ ] `main` is green (build, backend suite, frontend) at the commit being tagged.
 - [ ] Any known-unverified fix in the release is called out to the maintainer before pushing.
+- [ ] **Anything cut from this release is checked against what is still shipping.** For every item deferred during planning, ask whether something in the release depends on it. Deferring a fix is fine; deferring it in the release that ships the feature which needs it is how v1.33.0 shipped #1780's unconditional box-set prune on the ingestion path while leaving series fill unfiltered (#2239).
+- [ ] **A fix to shared state or shared data has had its sibling consumers grepped.** #2188 wired supplement ranking into the scan loop's two call sites and missed `LibrarySnapshot.FindExisting`, which consumes the same walk (#2240). Same shape as the #2211/#2216 import break. Find every caller, not just the one in the bug report.
+- [ ] **A re-landed revert has been re-tested against whatever changed underneath it.** #2041 was held back by #2093 specifically so it would not ship beside the metadata profile filters. When it re-landed in v1.33.0 its own guardrail tests still passed, but nobody exercised it against those filters, which is exactly where it broke (#2241).
+- [ ] **The build has soaked on dev.** A `v*` tag deploys dev and prod from the same run, so tagging immediately after the last merge means the first real exercise of the release is by users. v1.33.0 drew ten issues within twelve hours, every one of them findable by leaving it on dev overnight. For a minor, sleep on it. For a patch fixing a live incident, say plainly that you are skipping the soak and why.
 
 ## Tagging
 
