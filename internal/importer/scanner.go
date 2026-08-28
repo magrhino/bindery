@@ -1381,6 +1381,43 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 		}
 	}
 
+	// Multi-book pack guard (#2276).
+	//
+	// A download row carries one BookID and both placement branches below
+	// compute exactly one destination from it, so a release that is explicitly
+	// several books has no correct import: every file in it lands in one
+	// book's folder. The reported case was a four-book, 117-file audiobook
+	// pack auto-grabbed for a single book.
+	//
+	// decision.MultiBookPackSpec now stops these being selected
+	// automatically, but a pack can still reach here — hand-picked from
+	// interactive search (where the spec is deliberately absent), grabbed by
+	// an older version, or already sitting in the queue across the upgrade.
+	// Block it before any filesystem write rather than after.
+	//
+	// Deliberately not blocklisted: unlike a format rejection, this release
+	// may have been chosen on purpose, and blocklisting would fight the user
+	// on their next attempt. The decision spec is what prevents an automatic
+	// re-grab.
+	//
+	// formatHint is the override, on the same principle as the video guard: a
+	// human driving manual import has already said what these files are.
+	if formatHint == "" && book != nil {
+		if marker := indexer.MultiBookPackMarker(dl.Title); marker != "" &&
+			indexer.MultiBookPackMarker(book.Title) == "" {
+			slog.Warn("import blocked: release is a multi-book pack linked to one book",
+				"title", dl.Title, "marker", marker, "bookID", book.ID, "book", book.Title)
+			// Record the path so the queue's manual import can place the files
+			// belonging to each book by hand, which is the only way a pack can
+			// be imported correctly today.
+			s.recordUnmatchedImportPath(ctx, dl.ID, downloadPath)
+			s.failImport(ctx, dl, models.StateImportBlocked, fmt.Sprintf(
+				"release is titled %q but is linked to the single book %q. Bindery cannot split a pack across book records, so nothing was imported. Use manual import to place each book's files",
+				marker, book.Title))
+			return
+		}
+	}
+
 	// Audiobook path: place the entire download directory as a unit so
 	// multi-part m4b/mp3 files, cover art, and cue sheets stay together.
 	if detectedFormat == models.MediaTypeAudiobook {

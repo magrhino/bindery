@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/models"
 )
 
@@ -319,4 +320,42 @@ func (s FreeleechOnlySpec) IsSatisfiedBy(r Release, _ models.Book) (bool, string
 	}
 	// Anything above zero costs ratio, including half-leech (0.5).
 	return false, fmt.Sprintf("%s: costs %g× ratio (not freeleech)", RejectionFreeleechHold, *r.DownloadVolumeFactor)
+}
+
+// --- MultiBookPack ---
+
+// RejectionMultiBookPack prefixes every rejection produced by
+// MultiBookPackSpec, so the scheduler can recognise one without a typed flag
+// (the same convention RejectionFreeleechHold uses).
+const RejectionMultiBookPack = "multi-book pack"
+
+// MultiBookPackSpec rejects releases that name themselves as several books —
+// "Books 1-4", a box set, an omnibus — when the search was for one book.
+//
+// This is not a quality preference. A download row carries one BookID and the
+// importer computes one destination from it, so there is no outcome in which
+// grabbing a four-book pack for one book record is right: the files either all
+// land in one book's folder or the import fails. Bindery has no pack splitter,
+// so the only correct move is not to select it.
+//
+// Constructed only on the automatic path in the scheduler. Interactive search
+// deliberately does not build it, exactly as FreeleechOnlySpec is left out
+// there: a user who can see the release name and wants the pack anyway should
+// still be able to see it and grab it. The importer carries its own guard for
+// that case (#2276).
+type MultiBookPackSpec struct{}
+
+func (MultiBookPackSpec) IsSatisfiedBy(r Release, book models.Book) (bool, string) {
+	marker := indexer.MultiBookPackMarker(r.Title)
+	if marker == "" {
+		return true, ""
+	}
+	// The wanted book is itself a bundle. Someone tracking "The Lord of the
+	// Rings Omnibus" or a box set edition as a single book record wants
+	// exactly the release this spec would otherwise refuse, and for them the
+	// one-destination problem does not arise: the pack IS the book.
+	if indexer.MultiBookPackMarker(book.Title) != "" {
+		return true, ""
+	}
+	return false, fmt.Sprintf("%s: release is titled %q, and a download is linked to one book — Bindery cannot split a pack across book records", RejectionMultiBookPack, marker)
 }

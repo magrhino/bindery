@@ -185,6 +185,22 @@ formats, cutoff), delay profile, blocklist, size limits, and language filter.
 On indexers marked *freeleech only*, non-freeleech releases are not discarded
 — they are parked as **pending** for manual approval.
 
+**Multi-book packs are not auto-grabbed.** A download is linked to exactly
+one book, and the importer works out one destination folder from it, so there
+is no correct way to import a release that is several books: everything in it
+would land in one book's folder. Automatic selection therefore skips releases
+that name themselves as a pack — an explicit range like `Books 1-4`, a box
+set, an omnibus, a "complete series". They still appear in interactive search
+so you can see them, and if you grab one by hand the import is blocked with an
+explanation rather than run. To take a pack, use **Queue → Manual import** and
+place each book's files against the right book record.
+
+A release is only judged a pack on wording that single books do not use about
+themselves. `Part 1-2` is left alone, because that is how one long audiobook
+is split, and so is `Trilogy`, because real single books are subtitled "Book
+III of the X Trilogy". If the book you are tracking is itself a bundle (a box
+set as one record), matching packs are allowed for it.
+
 **Grab.** Torznab (torrent) indexers route to your torrent client, Newznab
 (usenet) to your NZB client — which is why the client's protocol must match
 the indexer, and why the category (default `books`) must already exist in the

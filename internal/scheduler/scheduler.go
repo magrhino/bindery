@@ -781,6 +781,14 @@ func (s *Scheduler) searchAndGrabFormat(ctx context.Context, book models.Book, m
 			specs = append(specs, decision.NewBlocklistedSpec(entries))
 		}
 	}
+	// Multi-book pack guard (#2276). A download row carries one BookID and the
+	// importer computes one destination from it, so an explicit "Books 1-4"
+	// pack has no correct import — the reported case put all 117 files of a
+	// four-book release into one book's folder. Automatic selection must not
+	// pick one. Interactive search deliberately does not build this spec, so a
+	// user who wants the pack can still see and grab it; the importer blocks
+	// that before it writes anything.
+	specs = append(specs, decision.MultiBookPackSpec{})
 	// The author's quality profile "allowed formats" list (#1693). The UI has
 	// always presented these checkboxes as a hard allow-list, but the spec that
 	// implements them was never constructed anywhere, so nothing stopped a
@@ -834,6 +842,15 @@ func (s *Scheduler) searchAndGrabFormat(ctx context.Context, book models.Book, m
 		if s.pending != nil && (strings.Contains(d.Rejection, "delay not met") ||
 			strings.Contains(d.Rejection, decision.RejectionFreeleechHold)) {
 			s.storePending(ctx, book.ID, mediaType, results[i], d.Rejection)
+		}
+		// A pack is deliberately NOT parked in pending: pending exists for
+		// releases that may become grabbable later or on approval, and
+		// approving a pack would just walk it into the importer's own block.
+		// Log it instead, so "nothing was grabbed" is not silent when the only
+		// candidates were packs.
+		if strings.Contains(d.Rejection, decision.RejectionMultiBookPack) {
+			slog.Info("skipping a multi-book pack for a single-book search",
+				"book", book.Title, "release", results[i].Title, "reason", d.Rejection)
 		}
 	}
 	if best == nil {
