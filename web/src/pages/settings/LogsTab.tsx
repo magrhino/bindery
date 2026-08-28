@@ -409,6 +409,16 @@ export default function LogsTab() {
               </button>
             </div>
           </div>
+          {/* A backup is a whole-database copy (VACUUM INTO), so it carries
+              every stored credential in plain text. v1.33.0 made the HTTP APIs
+              write-only for credentials, which closed the browser and API
+              surface and did nothing for a file sitting on disk — it was never
+              meant to. Saying so here is the honest minimum: the realistic
+              exposure is an operator attaching a backup to a bug report or
+              syncing it offsite without knowing what is in it (#2269). */}
+          <p className="text-xs text-amber-700 dark:text-amber-500/90 border-t border-slate-200 dark:border-zinc-800 pt-3">
+            {t('settings.general.backupSecretsNote')}
+          </p>
           {backups.length > 0 && (
             <div className="mt-3 border-t border-slate-200 dark:border-zinc-800 pt-3">
               <p className="text-xs text-slate-600 dark:text-zinc-500 mb-2">{t('settings.general.existingBackups')}</p>

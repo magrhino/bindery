@@ -1889,6 +1889,18 @@ describe('SettingsPage', () => {
     expect(api.updateDownloadClient).toHaveBeenCalledOnce()
   })
 
+  // #2269: a backup is a whole-database copy, so it carries every stored
+  // credential in plain text. The realistic exposure is an operator attaching
+  // one to a bug report or syncing it offsite without knowing that. The note
+  // has to be on the screen unconditionally, not only once a backup exists.
+  it('warns that a backup contains every stored credential, before any backup exists', async () => {
+    vi.mocked(api.listBackups).mockResolvedValue([])
+    renderSettings()
+    await openLogsTab()
+
+    expect(await screen.findByText('settings.general.backupSecretsNote')).toBeInTheDocument()
+  })
+
   it('deletes a backup from the list', async () => {
     const backup = { name: 'bindery_20260513_120000.db', size: 1024 * 512, modTime: new Date().toISOString() }
     vi.mocked(api.listBackups).mockResolvedValue([backup])

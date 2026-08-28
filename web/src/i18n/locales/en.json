@@ -808,6 +808,7 @@
       "backup": "Backup & Restore",
       "backupCreate": "Create a backup of all Bindery configuration",
       "backupHint": "Includes authors, books, indexers, and settings",
+      "backupSecretsNote": "A backup is a full copy of the database, so it also contains every credential Bindery holds in plain text: indexer and Prowlarr API keys, download client passwords, OIDC client secrets, session signing secrets, the Bindery API key and any external service tokens. Treat a backup file like a password. Do not attach one to a bug report or sync it somewhere you would not put those credentials.",
       "backupButton": "Create Backup",
       "backupCreating": "Creating...",
       "backupLabelPlaceholder": "Label (optional)",

@@ -652,6 +652,43 @@ curl -X POST -H "X-Api-Key: ..." http://bindery:8787/api/v1/backup
 
 or via the UI: **Settings → General → Backup → Create backup.** Backups land in `$BINDERY_DATA_DIR` (default `/config`).
 
+### What a backup contains, and how to treat it
+
+A backup is a whole-database copy (`VACUUM INTO`), and every credential Bindery
+holds is stored in the database in plain text. So a backup file contains, in the
+clear:
+
+- indexer and Prowlarr API keys
+- download client passwords and API keys
+- OIDC client secrets
+- the session signing secret and the Bindery API key
+- Hardcover, Audiobookshelf and any other external service tokens
+
+**Treat a backup file exactly like the credentials inside it.** Do not attach one
+to a bug report or a support thread, do not leave one in a directory served to
+the network, and do not sync one to a location where you would not store those
+credentials directly.
+
+This is the deliberate posture, not an oversight, so it is worth saying why. The
+process has to be able to read these credentials in order to use them, so a key
+kept beside the database would be obfuscation rather than protection: it would
+not stop anyone who can already read the container's filesystem, which is the
+only attacker an encrypted database would otherwise be defending against.
+Encrypting at rest with an **operator-supplied** key would genuinely protect
+backups and cold copies, at the cost of key management landing on you, restores
+requiring the key, and a lost key meaning every credential is re-entered by hand.
+That trade is tracked in [#2269](https://github.com/vavallee/bindery/issues/2269)
+and has not been taken.
+
+Redacting secrets out of a backup is **not** on the table: a restored instance
+with no working credentials is a broken instance. The sharable, secret-free
+config export is tracked separately as
+[#1789](https://github.com/vavallee/bindery/issues/1789).
+
+Note that the v1.33.0 write-only credential APIs (#2212, #2213) are a different
+control. They stop stored secrets being served back to a browser or an API
+client. They have no bearing on a file on disk and were never meant to.
+
 ## See also
 
 - [Wiki: Reverse-proxy & SSO setups](https://github.com/vavallee/bindery/wiki/Reverse-proxy-and-SSO) — Traefik / Caddy / Nginx / Authelia / Authentik recipes
