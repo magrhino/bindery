@@ -29,9 +29,16 @@ import (
 )
 
 var (
-	errNoMetadataAggregator   = errors.New("metadata aggregator not configured")
-	errNoMetadataMatch        = errors.New("no exact-name match in metadata provider")
-	errAmbiguousMetadataMatch = errors.New("multiple exact-name matches in metadata provider")
+	errNoMetadataAggregator = errors.New("metadata aggregator not configured")
+	errNoMetadataMatch      = errors.New("no exact-name match in metadata provider")
+	// errPrimaryProviderUnavailable is returned instead of a match when the
+	// configured primary provider dropped out of the search and the only
+	// candidates came from a fallback. Binding one of those writes the wrong
+	// provider into the author row permanently (#2271), so these paths keep
+	// whatever identity the author already had and let a later attempt, made
+	// when the primary is answering, do the linking.
+	errPrimaryProviderUnavailable = errors.New("primary metadata provider unavailable, not linking to a fallback provider")
+	errAmbiguousMetadataMatch     = errors.New("multiple exact-name matches in metadata provider")
 )
 
 const authorAutoSearchConcurrency = 4
@@ -1255,6 +1262,15 @@ func (h *AuthorHandler) RelinkUpstream(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errAmbiguousMetadataMatch):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "author name resolves ambiguously in upstream metadata"})
 		return
+	case errors.Is(err, errPrimaryProviderUnavailable):
+		// 503 rather than the default 502: nothing upstream returned a bad
+		// answer. The primary provider did not answer at all and we declined
+		// to write a link to a fallback that would have stuck (#2271).
+		// Retrying later is the correct action, which is what 503 says.
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "the primary metadata provider did not answer, so no link was written; try again shortly",
+		})
+		return
 	default:
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
@@ -1567,7 +1583,7 @@ func (h *AuthorHandler) relinkCalibreAuthor(ctx context.Context, author *models.
 	if h.meta == nil {
 		return errNoMetadataAggregator
 	}
-	results, err := h.meta.SearchAuthors(ctx, author.Name)
+	results, outcome, err := h.meta.SearchAuthorsWithOutcome(ctx, author.Name)
 	if err != nil {
 		return err
 	}
@@ -1581,6 +1597,12 @@ func (h *AuthorHandler) relinkCalibreAuthor(ctx context.Context, author *models.
 	}
 	if match == nil {
 		return errNoMetadataMatch
+	}
+	if !outcome.SafeToBind(match.ForeignID) {
+		slog.Warn("calibre relink skipped: primary metadata provider unavailable",
+			"author", author.Name, "primary", outcome.Primary,
+			"failed", outcome.FailureSummary(), "wouldHaveLinked", match.ForeignID)
+		return errPrimaryProviderUnavailable
 	}
 
 	full, err := h.meta.GetAuthor(ctx, match.ForeignID)
@@ -2903,10 +2925,17 @@ func (h *AuthorHandler) lookupUpstreamAuthorByName(ctx context.Context, name str
 	queries := authorSearchQueries(name)
 	var match *models.Author
 	matchedQuery := ""
+	var outcome metadata.SearchOutcome
 	for _, query := range queries {
-		results, err := h.meta.SearchAuthors(ctx, query)
+		results, queryOutcome, err := h.meta.SearchAuthorsWithOutcome(ctx, query)
 		if err != nil {
 			return nil, err
+		}
+		// One tainted query taints the lookup: the queries are alternative
+		// spellings of the same name, so a record the primary would have
+		// returned for a later query is just as missing from the picture.
+		if queryOutcome.PrimaryFailed {
+			outcome = queryOutcome
 		}
 		for idx := range results {
 			if textutil.NormalizeAuthorName(results[idx].Name) != want {
@@ -2927,6 +2956,12 @@ func (h *AuthorHandler) lookupUpstreamAuthorByName(ctx context.Context, name str
 	if match == nil {
 		slog.Debug("author relink match not found", "author", name, "queries", queries)
 		return nil, errNoMetadataMatch
+	}
+	if !outcome.SafeToBind(match.ForeignID) {
+		slog.Warn("author relink skipped: primary metadata provider unavailable",
+			"author", name, "primary", outcome.Primary,
+			"failed", outcome.FailureSummary(), "wouldHaveLinked", match.ForeignID)
+		return nil, errPrimaryProviderUnavailable
 	}
 
 	full, err := h.meta.GetAuthor(ctx, match.ForeignID)

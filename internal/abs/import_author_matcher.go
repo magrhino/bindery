@@ -3,10 +3,12 @@ package abs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
 	"github.com/vavallee/bindery/internal/textutil"
 )
@@ -532,10 +534,19 @@ func (i *Importer) lookupUpstreamAuthorUncached(ctx context.Context, name string
 		exactHits    = make(map[string]struct{})
 		exactMatches = make(map[string]models.Author)
 	)
+	var outcome metadata.SearchOutcome
 	for _, query := range authorSearchQueries(name) {
-		results, err := i.meta.SearchAuthors(ctx, query)
+		results, queryOutcome, err := i.meta.SearchAuthorsWithOutcome(ctx, query)
 		if err != nil {
 			return nil, false, err
+		}
+		// Any query in the sequence losing the primary provider taints the
+		// whole lookup: the queries are alternative spellings of one name, so
+		// a record the primary would have returned for query 2 is just as
+		// absent from the merged picture as one it would have returned for
+		// query 1.
+		if queryOutcome.PrimaryFailed {
+			outcome = queryOutcome
 		}
 		for idx := range results {
 			res := textutil.MatchAuthorName(name, results[idx].Name)
@@ -602,6 +613,25 @@ func (i *Importer) lookupUpstreamAuthorUncached(ctx context.Context, name string
 		slog.Info("abs import: upstream author match ambiguous (tie)", "author", name, "best", bestScore, "second", secondScore)
 		return nil, true, nil
 	}
+	// The match is only allowed to become this author's permanent provider
+	// link if the primary provider was actually consulted. With
+	// metadata.primary_provider = hardcover and a free-tier token, a 429 used
+	// to leave OpenLibrary as the only provider that answered, its record won
+	// by walkover, and the author synced from OpenLibrary forever because
+	// providerForForeignID reads the provider back off the id we wrote here
+	// (#2271). Refusing the bind leaves the author unlinked for this run,
+	// which a later import or a manual relink can still fix; writing it does
+	// not.
+	if !outcome.SafeToBind(best.ForeignID) {
+		slog.Warn("abs import: refusing to bind author to a fallback provider",
+			"author", name, "primary", outcome.Primary, "failed", outcome.FailureSummary(),
+			"wouldHaveLinked", best.ForeignID)
+		return nil, false, &PrimaryProviderUnavailableError{
+			Primary: outcome.Primary,
+			Failed:  outcome.FailureSummary(),
+			Err:     outcome.FirstErr,
+		}
+	}
 	full, err := i.meta.GetAuthor(ctx, best.ForeignID)
 	if err != nil {
 		return nil, false, err
@@ -609,6 +639,30 @@ func (i *Importer) lookupUpstreamAuthorUncached(ctx context.Context, name string
 	slog.Info("abs import: upstream author matched", "author", name, "query", matchedQuery, "foreignId", best.ForeignID, "score", bestScore)
 	return full, false, nil
 }
+
+// PrimaryProviderUnavailableError reports that a lookup was abandoned rather
+// than resolved against a fallback provider, because the configured primary
+// did not answer. It is not an import failure: the item still imports, the
+// author simply keeps whatever identity it had instead of being bound to the
+// wrong provider permanently (#2271).
+type PrimaryProviderUnavailableError struct {
+	Primary string
+	Failed  string
+	Err     error
+}
+
+func (e *PrimaryProviderUnavailableError) Error() string {
+	msg := fmt.Sprintf("primary metadata provider %q did not answer", e.Primary)
+	if e.Failed != "" {
+		msg = fmt.Sprintf("metadata provider %s did not answer", e.Failed)
+	}
+	if e.Err != nil {
+		return msg + ": " + e.Err.Error()
+	}
+	return msg
+}
+
+func (e *PrimaryProviderUnavailableError) Unwrap() error { return e.Err }
 
 func dominantExactAuthorMatch(candidates map[string]models.Author) (models.Author, bool) {
 	const minDominantGap = 10

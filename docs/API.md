@@ -97,6 +97,15 @@ automatic upstream matching. Manual relink can send:
 }
 ```
 
+The automatic form answers **503** when the provider configured as
+`metadata.primary_provider` did not respond and the only candidates came from a
+fallback provider. Nothing is written in that case. The foreign ID a relink
+stores is what every later catalogue sync reads the provider back off, so a
+link written while the primary was rate limited would silently and permanently
+move that author onto the fallback (#2271). Retry once the primary is
+answering, or send an explicit `foreignAuthorId`, which skips the search
+entirely.
+
 ### Books
 
 ```

@@ -61,15 +61,34 @@ func (a *Aggregator) WithAudnexClient(client AudnexBookClient) *Aggregator {
 // returning several partial records for one author. Providers that error or
 // time out are skipped; an error is returned only when every provider fails.
 func (a *Aggregator) SearchAuthors(ctx context.Context, query string) ([]models.Author, error) {
+	authors, _, err := a.SearchAuthorsWithOutcome(ctx, query)
+	return authors, err
+}
+
+// SearchAuthorsWithOutcome is SearchAuthors plus which providers dropped out
+// of the fan-out. Callers that PERSIST a provider link from a search result —
+// the Audiobookshelf import, the Calibre relink, the add flow's canonical
+// match — must use this one and consult SearchOutcome.SafeToBind before
+// writing a foreign ID, because the link they write decides which provider
+// that author syncs from forever (#2271).
+func (a *Aggregator) SearchAuthorsWithOutcome(ctx context.Context, query string) ([]models.Author, SearchOutcome, error) {
+	primary := a.PrimaryProviderName()
 	providers := a.providers()
 	if len(providers) == 0 {
-		return nil, nil
+		return nil, SearchOutcome{Primary: primary}, nil
 	}
-	results, anySuccess, firstErr := searchFanOut(ctx, providers, func(c context.Context, p Provider) ([]models.Author, error) {
+	results, failed, anySuccess, firstErr := searchFanOutWithFailures(ctx, providers, func(c context.Context, p Provider) ([]models.Author, error) {
 		return p.SearchAuthors(c, query)
 	})
+	outcome := SearchOutcome{Primary: primary, FailedProviders: failed, FirstErr: firstErr}
+	for _, name := range failed {
+		if name == primary {
+			outcome.PrimaryFailed = true
+			break
+		}
+	}
 	if !anySuccess && firstErr != nil {
-		return nil, firstErr
+		return nil, outcome, firstErr
 	}
 
 	var all []models.Author
@@ -87,7 +106,7 @@ func (a *Aggregator) SearchAuthors(ctx context.Context, query string) ([]models.
 	}
 	merged := dedupeAuthorsByName(all, normalizedProviderName(providerName(a.primary)))
 	rerankAuthorsByRelevance(merged, query)
-	return merged, nil
+	return merged, outcome, nil
 }
 
 // ResolveCanonicalAuthor finds the richest OpenLibrary record for an author name
@@ -165,6 +184,17 @@ func (a *Aggregator) ResolveCanonicalAuthor(ctx context.Context, name string) (*
 // (primary first), whether any provider returned without error, and the first
 // non-"not configured" error seen.
 func searchFanOut[T any](ctx context.Context, providers []Provider, fn func(context.Context, Provider) ([]T, error)) (results [][]T, anySuccess bool, firstErr error) {
+	results, _, anySuccess, firstErr = searchFanOutWithFailures(ctx, providers, fn)
+	return results, anySuccess, firstErr
+}
+
+// searchFanOutWithFailures is searchFanOut with the identity of the providers
+// that dropped out. searchFanOut discarded that, which is the root of #2271: a
+// caller could not tell "the primary provider has no such record" from "the
+// primary provider would not answer", and one of those is a fact about the
+// world while the other is a fact about the last eight seconds. Binding an
+// author permanently on the strength of the second is the bug.
+func searchFanOutWithFailures[T any](ctx context.Context, providers []Provider, fn func(context.Context, Provider) ([]T, error)) (results [][]T, failed []string, anySuccess bool, firstErr error) {
 	results = make([][]T, len(providers))
 	errs := make([]error, len(providers))
 	var wg sync.WaitGroup
@@ -188,8 +218,13 @@ func searchFanOut[T any](ctx context.Context, providers []Provider, fn func(cont
 			continue
 		}
 		if errs[i] != nil {
+			// A provider with no credentials configured has not FAILED; it
+			// was never in the running. Counting it as a failure would make
+			// every install without a Hardcover token look permanently
+			// degraded.
 			if !errors.Is(errs[i], ErrProviderNotConfigured) {
 				slog.Warn("metadata search: provider failed", "provider", p.Name(), "error", errs[i])
+				failed = append(failed, normalizedProviderName(providerName(p)))
 				if firstErr == nil {
 					firstErr = errs[i]
 				}
@@ -199,7 +234,7 @@ func searchFanOut[T any](ctx context.Context, providers []Provider, fn func(cont
 		}
 		anySuccess = true
 	}
-	return results, anySuccess, firstErr
+	return results, failed, anySuccess, firstErr
 }
 
 // canonicalAuthorKey normalizes an author name to a comparison key, treating

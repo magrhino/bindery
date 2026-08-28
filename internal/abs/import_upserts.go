@@ -377,6 +377,18 @@ func (i *Importer) enrichAuthor(ctx context.Context, cfg ImportConfig, item Norm
 
 	full, ambiguous, err := i.lookupUpstreamAuthor(ctx, item.Authors[0].Name)
 	if err != nil {
+		// A primary provider that did not answer is reported to the operator
+		// rather than buried in the log, because the visible symptom of
+		// #2271 was that nothing said anything: 38 of 42 authors quietly
+		// landed on the fallback provider and the import summary was clean.
+		var unavailable *PrimaryProviderUnavailableError
+		if errors.As(err, &unavailable) {
+			slog.Warn("abs import: author left unlinked, primary metadata provider unavailable",
+				"author", item.Authors[0].Name, "error", err)
+			return metadataMergeResult{Messages: []string{
+				"author left unlinked: " + unavailable.Error() + ", so it was not bound to a fallback provider",
+			}}, nil
+		}
 		slog.Warn("abs import: author metadata lookup failed", "author", item.Authors[0].Name, "error", err)
 		return metadataMergeResult{}, nil
 	}
