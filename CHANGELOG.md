@@ -4,6 +4,27 @@ All notable changes to Bindery are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com) and versions follow
 [Semantic Versioning](https://semver.org).
 
+## [v1.33.2] — 2026-08-28
+
+**A throttled Hardcover call was permanently moving your authors onto the wrong metadata provider.**
+
+Four fixes for faults reported the day after v1.33.1. Two of them are the same
+shape: something transient produced something permanent, quietly. A rate limit
+that lasts one second decided which provider an author syncs from forever, and
+a release-name filter that only knew the English names of languages let foreign
+audiobooks through to be downloaded and imported under English books.
+
+### Fixed
+
+- **A rate-limited metadata provider no longer downgrades an author permanently** (#2271). With `metadata.primary_provider` set to Hardcover, a single HTTP 429 during an import left the author linked to OpenLibrary, and because the catalogue provider is read back off that stored link, the author then synced from OpenLibrary forever. One 72-item Audiobookshelf import put 38 of 42 authors in that state with nothing reported. The reason re-importing never repaired it is that an OpenLibrary identity is not replaceable, while the `abs:` or `calibre:` identity the author had before is, so the wrong link was the one state the import could not climb back out of. The Audiobookshelf import, the Calibre relink and the automatic author relink now refuse to write a provider link when the configured primary dropped out of the search and the only candidates came from a fallback. The author keeps the identity it had, the Audiobookshelf import summary says so per author, and the relink endpoint answers 503 instead of binding. A primary that answers and simply has no such record is unchanged: that link is a real answer and is still written. Thanks to jmerhar for the report and the log data.
+- **Hardcover requests are paced and retried instead of storming its rate limit** (#2075). The Hardcover client sent one request and returned whatever came back, so a burst of parallel lookups had most of them refused: one 72-item import produced 86 rate-limit rejections across four call sites, and the "Try again in 1 seconds" the response itself carried was never read. Requests now pace themselves and a refused request is retried, honouring Hardcover's own hint. The pacing costs nothing until Hardcover actually refuses something, hardens if it keeps refusing, and relaxes again after a run of successes, so a paid-tier token is never slowed for a limit it does not have. Thanks to jmerhar for confirming this was still live and for isolating it to a configured, working token.
+- **Foreign-language audiobooks are no longer auto-grabbed under an English-only profile** (#2273). The release-name language filter only recognised the English names of languages, so a scene release named in its own language carried no tag at all and passed `allowedLanguages: ["eng"]` untouched. `Luisterboek ... (NL Audiobook)` and `... (Ungekürzt)` were approved and, on the auto-grab path, downloaded and imported under English book entries. The filter now also recognises the word a release of that language actually uses: `Hörbuch`, `Ungekürzt`, `Gekürzt`, `Luisterboek`, `Hoorspel`, `Nederlands`, `Ljudbok`, `Svensk`, `Lydbok`, `Norsk`, `Lydbog`, `Dansk`, `Audiolivro` and `Livre Audio`. Untagged releases still always pass, which is deliberate. Thanks to 4pBdhJoZ3Xy3reVvBoU9C3YPzyXDDU for the report, the traces and a patch that was right about the mechanism.
+- **Nine languages the filter could drop can now be allowed** (#2273). The metadata profile editor offered ten languages while the filter recognised nineteen, so a release tagged Korean, Arabic, Swedish, Norwegian, Danish, Polish, Czech, Turkish or Hindi was dropped by a profile that had no way to permit it. All nineteen are now in the editor, and a test fails the build if the two lists drift apart again.
+
+### Security
+
+- **The backup screen and the deployment docs now say what a backup actually contains** (#2269). Every credential Bindery holds is stored in the database in plain text, and a backup is a whole-database copy, so a backup file carries indexer and Prowlarr API keys, download client passwords, OIDC client secrets, the session signing secret, the Bindery API key and every external service token in the clear. Nothing said so, and the realistic way people get hurt by this is attaching a backup to a bug report or syncing one offsite without knowing what is in it. `docs/DEPLOYMENT.md` now also records why encrypting at rest with a key kept beside the database would be obfuscation rather than protection, and what an operator-supplied key would actually cost. The write-only credential APIs added in v1.33.0 are a different control: they stop secrets being served back to a browser, and have no bearing on a file on disk.
+
 ## [v1.33.1] — 2026-08-27
 
 **A series fill could grab your whole library with auto-grab switched off.**
