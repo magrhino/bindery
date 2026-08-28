@@ -1088,6 +1088,95 @@ func (s *Scanner) resolveAudiobookSource(downloadPath string, bookFiles []string
 	return common, false
 }
 
+// PerFileCollisionError reports that two files in one download would flatten
+// onto the same destination path during per-file audiobook placement.
+type PerFileCollisionError struct {
+	Dest      string // the projected destination both files claim
+	FirstSrc  string // the source that would be placed first
+	SecondSrc string // the source that would land on top of it
+}
+
+func (e *PerFileCollisionError) Error() string {
+	return fmt.Sprintf("two files in this download would be placed at the same path %q: %q and %q share a filename but are different files. "+
+		"Per-file audiobook import flattens every file into one folder by filename, so one would overwrite the other. "+
+		"Nothing was imported. Use manual import to place these files, or rename one of them at the source",
+		e.Dest, e.FirstSrc, e.SecondSrc)
+}
+
+// checkPerFileCollisions projects the destination path of every file the
+// per-file audiobook branch would place and returns a PerFileCollisionError
+// on the first pair that would collide (#2275).
+//
+// Per-file placement exists for downloads whose book files share no directory
+// strictly below the download root (see resolveAudiobookSource), so the files
+// routinely come from different source directories — which is exactly where
+// two tracks can carry the same basename. Flattening them by
+// filepath.Base then gives both the same destination, and each import mode
+// loses that race differently: hardlink fails with EEXIST partway through and
+// leaves a half-placed folder, copy truncates the first file via os.Create,
+// and move replaces it via os.Rename after its own source was already
+// consumed. Only the hardlink case is even visible.
+//
+// Running this before the destination directory is created means a collision
+// blocks the import with nothing written at all.
+//
+// Comparison is byte-exact rather than case-folded: this predicts what the
+// placement calls below would actually do, and on a case-sensitive filesystem
+// "Track.mp3" and "track.mp3" genuinely coexist.
+func checkPerFileCollisions(destDir string, bookFiles []string) error {
+	seen := make(map[string]string, len(bookFiles))
+	for _, f := range bookFiles {
+		dst := filepath.Join(destDir, filepath.Base(f))
+		if prev, ok := seen[dst]; ok {
+			return &PerFileCollisionError{Dest: dst, FirstSrc: prev, SecondSrc: f}
+		}
+		seen[dst] = f
+	}
+	return nil
+}
+
+// rollbackPlacedFiles removes the files a failed per-file placement attempt
+// created inside destDir, then removes destDir if that leaves it empty.
+//
+// names are basenames within destDir, and the removals go through an os.Root
+// opened on destDir, so the kernel scopes them: a name that tried to escape
+// (or a symlink placed under destDir mid-import) is rejected there rather than
+// by a user-space check that can race. Same reasoning as copyDirContext and
+// hardlinkDirRooted, which use os.Root for the write side of the same paths.
+//
+// Safe only for copy and hardlink, where every source file is still in the
+// download directory and the placed copies are redundant. Callers must NOT
+// use it after a move: move consumes the source, so the placed files are the
+// user's only copy and deleting them would destroy data. That is the same
+// split the SetFormatFilePath failure path already makes.
+//
+// os.Remove (not RemoveAll) on destDir deliberately: it fails harmlessly if
+// anything unexpected is in there, so nothing outside this attempt is touched.
+func rollbackPlacedFiles(destDir string, names []string) {
+	root, err := os.OpenRoot(destDir)
+	if err != nil {
+		slog.Warn("could not open the audiobook destination to roll it back", "path", destDir, "error", err)
+		return
+	}
+	defer func() { _ = root.Close() }()
+	for _, n := range names {
+		if err := root.Remove(n); err != nil && !os.IsNotExist(err) {
+			slog.Warn("could not roll back a partially placed audiobook file", "dir", destDir, "name", n, "error", err)
+		}
+	}
+	// destDir itself goes the same way, through a root on its parent, so both
+	// removals in this function are kernel-scoped rather than trusted.
+	parent, err := os.OpenRoot(filepath.Dir(destDir))
+	if err != nil {
+		slog.Warn("could not open the audiobook destination's parent to remove it", "path", destDir, "error", err)
+		return
+	}
+	defer func() { _ = parent.Close() }()
+	if err := parent.Remove(filepath.Base(destDir)); err != nil && !os.IsNotExist(err) {
+		slog.Warn("could not remove the partially placed audiobook folder", "path", destDir, "error", err)
+	}
+}
+
 // transmissionFilesFor calls Transmission's torrent-get "files" RPC for the
 // supplied torrent and returns the absolute Bindery-side book-file paths,
 // or nil when the call fails or the torrent reported no files yet. A nil

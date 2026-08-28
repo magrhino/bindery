@@ -704,9 +704,36 @@ func HardlinkFile(src, dst string) error {
 		if crossDeviceErr(err) {
 			return copyFile(src, dst)
 		}
-		return fmt.Errorf("hardlink %q → %q: %w (download dir and library must be on the same filesystem)", src, dst, err)
+		return linkError(src, dst, err)
 	}
 	return nil
+}
+
+// linkError wraps an os.Link failure with guidance that matches its cause.
+//
+// Every non-EXDEV link failure used to be reported as "download dir and
+// library must be on the same filesystem", which is only ever a guess and was
+// actively wrong for the case that reported it (#2275): a destination
+// collision on a single ZFS dataset, where the advice sent the user to check
+// mounts that had nothing to do with it.
+//
+// The mount hint survives as the default arm rather than being dropped
+// outright, because crossDeviceErr only recognises syscall.EXDEV — on Windows
+// (and in the non-Unix build, where it always returns false) a genuine
+// cross-volume link failure arrives here unlabelled, and there the hint is the
+// right guess. The three causes below are the ones that are knowable, so they
+// no longer get the guess.
+func linkError(src, dst string, err error) error {
+	switch {
+	case errors.Is(err, fs.ErrExist):
+		return fmt.Errorf("hardlink %q → %q: %w (a file is already at the destination)", src, dst, err)
+	case errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("hardlink %q → %q: %w (the source file is missing)", src, dst, err)
+	case errors.Is(err, fs.ErrPermission):
+		return fmt.Errorf("hardlink %q → %q: %w (check the permissions on the download dir and the library)", src, dst, err)
+	default:
+		return fmt.Errorf("hardlink %q → %q: %w (download dir and library must be on the same filesystem)", src, dst, err)
+	}
 }
 
 // CopyDir copies a directory tree from src to dst without removing the source.
@@ -824,7 +851,7 @@ func hardlinkDirRooted(srcRoot, dstRoot *os.Root, rel string) error {
 				}
 				continue
 			}
-			return fmt.Errorf("hardlink %q → %q: %w (download dir and library must be on the same filesystem)", srcPath, dstPath, err)
+			return linkError(srcPath, dstPath, err)
 		}
 	}
 	return nil

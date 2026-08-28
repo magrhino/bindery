@@ -38,6 +38,16 @@ Guarantees:
 - **Copy/hardlink only.** Flattening is enforced backend-side to run only when the resolved import mode is `copy` or `hardlink`, because it renames files and must never touch a still-seeding torrent source. In `move` and `external` mode the setting is ignored and the existing whole-folder behaviour applies.
 - **Seeding preserved.** The source download is copied or hardlinked, never moved or renamed, so it keeps seeding.
 
+## Audiobooks whose files share no folder
+
+A torrent sometimes reports book files that sit directly at a shared download root, or spread across sibling folders with no single folder below the root containing them all. Moving that root would drag in unrelated downloads, so Bindery places those files one at a time into the book's destination folder instead.
+
+Per-file placement flattens: every file keeps its own name and lands directly in the destination. If two of the reported files have the same filename but different contents, they would both claim the same destination path and one would replace the other.
+
+Bindery checks for that before it creates anything. When two files would collide, the import is blocked with a message naming both source paths and the destination they share, and nothing is written: no destination folder, no partially placed tracks. Both files stay in the download folder untouched.
+
+To import such a download, either rename one of the files at the source and retry, or use **Queue → Manual import** to place the files by hand.
+
 ## Download folders
 
 | Variable | Purpose |

@@ -1462,9 +1462,28 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 			// known file into destDir individually. This loses cover art and
 			// cue sheets that the dir walk would have grabbed, but is safer
 			// than moving the shared download root.
+			//
+			// Collision preflight first (#2275): flattening by basename can
+			// give two files from different source directories the same
+			// destination, and the placement calls below would then lose one
+			// of them (silently, in copy and move mode). Checking before the
+			// MkdirAll means a collision blocks the import with nothing
+			// written, rather than halfway through a folder.
+			if collErr := checkPerFileCollisions(destDir, bookFiles); collErr != nil {
+				slog.Error("audiobook import blocked: per-file destination collision",
+					"src", audiobookSource, "dst", destDir, "error", collErr)
+				// Record the path so the queue's manual-import action can
+				// still place these files against the right books by hand.
+				s.recordUnmatchedImportPath(ctx, dl.ID, downloadPath)
+				s.failImport(ctx, dl, models.StateImportBlocked, collErr.Error())
+				return
+			}
 			if err := os.MkdirAll(destDir, 0o750); err != nil {
 				dirErr = fmt.Errorf("create audiobook dest dir: %w", err)
 			} else {
+				// Basenames rather than full paths: rollbackPlacedFiles
+				// removes them through an os.Root opened on destDir.
+				placed := make([]string, 0, len(bookFiles))
 				for _, srcFile := range bookFiles {
 					dstFile := filepath.Join(destDir, filepath.Base(srcFile))
 					var fileErr error
@@ -1479,6 +1498,22 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 					if fileErr != nil {
 						dirErr = fileErr
 						break
+					}
+					placed = append(placed, filepath.Base(srcFile))
+				}
+				// An unexpected placement failure (a full disk, a revoked
+				// permission) used to leave the already-placed files behind
+				// in a folder the book never records, so a retry ran
+				// UniqueDir and built a second partial "Title (2)". Undo this
+				// attempt instead — but only when the sources still exist.
+				// After a move they do not, and those files are the only
+				// copy, so they stay put and the error tells the user where.
+				if dirErr != nil && len(placed) > 0 {
+					if mode == "move" {
+						slog.Warn("audiobook move failed partway; placed files left in place because their sources are already gone",
+							"dst", destDir, "placed", len(placed))
+					} else {
+						rollbackPlacedFiles(destDir, placed)
 					}
 				}
 			}

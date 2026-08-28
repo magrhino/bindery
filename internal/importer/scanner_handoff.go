@@ -495,13 +495,26 @@ func (s *Scanner) dropPlaceAudiobook(ctx context.Context, downloadPath string, b
 		}
 	}
 	if usePerFile {
+		// Same basename-collision preflight as the managed import path
+		// (#2275). It matters more here, not less: dropPlaceFile removes an
+		// existing destination before placing, so a collision would overwrite
+		// silently in both link modes rather than failing on EEXIST.
+		if err := checkPerFileCollisions(destDir, bookFiles); err != nil {
+			return err
+		}
 		if err := os.MkdirAll(destDir, 0o750); err != nil {
 			return fmt.Errorf("create drop dir: %w", err)
 		}
+		placed := make([]string, 0, len(bookFiles))
 		for _, f := range bookFiles {
-			if err := dropPlaceFile(ctx, f, filepath.Join(destDir, filepath.Base(f)), linkMode); err != nil {
+			name := filepath.Base(f)
+			if err := dropPlaceFile(ctx, f, filepath.Join(destDir, name), linkMode); err != nil {
+				// Drop handoff never moves, so every source is still in the
+				// download directory and undoing this attempt is safe.
+				rollbackPlacedFiles(destDir, placed)
 				return err
 			}
+			placed = append(placed, name)
 		}
 		return nil
 	}
