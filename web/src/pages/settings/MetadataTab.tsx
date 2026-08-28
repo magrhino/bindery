@@ -10,9 +10,14 @@ function isAuthorMonitorMode(value: string): value is AuthorMonitorMode {
 }
 
 // KNOWN_LANGUAGES are the ISO 639-2/B codes exposed in the profile editor.
-// We keep the list short rather than dumping the full ISO catalogue because
-// indexers and metadata providers only reliably tag a handful of majors, and
-// a long list invites typos and half-implemented filters.
+// The list is not the full ISO catalogue: it is exactly the set of codes the
+// release-name language filter can produce (releaseLanguageTags in
+// internal/indexer/searcher.go). That equality matters in one direction in
+// particular — a language the filter can DROP but the editor cannot OFFER is a
+// language no operator can allow, so their releases disappear with no setting
+// to bring them back. Nine codes were in that state until #2273, which is why
+// this list grew rather than the filter shrinking.
+// TestMetadataEditorLanguageVocabulary in internal/indexer fails on drift.
 const KNOWN_LANGUAGES: Array<{ code: string; label: string }> = [
   { code: 'eng', label: 'English' },
   { code: 'fre', label: 'French' },
@@ -24,6 +29,15 @@ const KNOWN_LANGUAGES: Array<{ code: string; label: string }> = [
   { code: 'jpn', label: 'Japanese' },
   { code: 'chi', label: 'Chinese' },
   { code: 'rus', label: 'Russian' },
+  { code: 'kor', label: 'Korean' },
+  { code: 'ara', label: 'Arabic' },
+  { code: 'swe', label: 'Swedish' },
+  { code: 'nor', label: 'Norwegian' },
+  { code: 'dan', label: 'Danish' },
+  { code: 'pol', label: 'Polish' },
+  { code: 'cze', label: 'Czech' },
+  { code: 'tur', label: 'Turkish' },
+  { code: 'hin', label: 'Hindi' },
 ]
 
 function formatLanguageList(csv: string): string {

@@ -1091,24 +1091,53 @@ func protocolForType(t string) string {
 // matches "RUSSELL". The codes use the same vocabulary the metadata-profile
 // editor writes into allowed_languages, so a profile's language set can be
 // checked against a release directly.
+//
+// Two kinds of marker live here. The first is the *name* of a language, in
+// English or in another language ("german", "deutsch"). The second is a word
+// that only appears in releases OF that language, typically the local word for
+// "audiobook", "radio play" or "unabridged" (#2273): scene audiobook releases
+// are named in the target language and frequently never spell out the English
+// name of it, so "Luisterboek ... (NL Audiobook)" and "... (Ungekürzt)" carried
+// no recognisable tag at all and passed an eng-only filter untouched.
+//
+// Adding a marker here is a widening of what counts as *tagged*, which makes
+// the filter drop more, so a marker earns its place only when it is unambiguous
+// across the languages this map already knows. Deliberately absent:
+//   - "audiolibro" is both Spanish and Italian, and a tag maps to one code, so
+//     including it would drop Italian releases from an ita-allowed profile.
+//   - "audiokniha" is Czech and Slovak; Slovak has no entry here to lose to.
+//   - Finnish, Estonian and Hungarian markers were suggested on #2273 but the
+//     forms given were not right, and guessing at a marker is how false drops
+//     get shipped. They can be added by someone who reads the language.
+//
+// Umlauts need only their ASCII-expanded form: NormalizeRelease transliterates
+// ä/ö/ü before matching and WordBoundaryRegex makes the ae/oe/ue flexible, so
+// "ungekuerzt" alone matches "Ungekürzt", "Ungekuerzt" and "Ungekurzt".
+//
+// Every code produced here must also be selectable in the profile editor, or
+// the filter can drop a language no operator is able to allow.
+// TestMetadataEditorLanguageVocabulary enforces that.
 var releaseLanguageTags = map[string]string{
 	"english": "eng",
 	"french":  "fre", "francais": "fre",
 	"vf": "fre", "vostfr": "fre", "vff": "fre",
-	"german": "ger", "deutsch": "ger",
+	"livre audio": "fre",
+	"german":      "ger", "deutsch": "ger",
+	"hoerbuch": "ger", "ungekuerzt": "ger", "gekuerzt": "ger",
 	"spanish": "spa", "espanol": "spa", "español": "spa",
-	"dutch": "dut", "netherlands": "dut",
+	"dutch": "dut", "netherlands": "dut", "nederlands": "dut",
+	"luisterboek": "dut", "hoorspel": "dut",
 	"italian": "ita", "italiano": "ita",
-	"portuguese": "por", "portugues": "por",
+	"portuguese": "por", "portugues": "por", "audiolivro": "por",
 	"russian": "rus", "russe": "rus",
 	"japanese": "jpn", "japonais": "jpn",
 	"chinese": "chi", "mandarin": "chi",
 	"korean": "kor",
 	"arabic": "ara", "arabe": "ara",
-	"swedish": "swe", "svenska": "swe",
-	"norwegian": "nor",
-	"danish":    "dan",
-	"polish":    "pol", "polski": "pol",
+	"swedish": "swe", "svenska": "swe", "svensk": "swe", "ljudbok": "swe",
+	"norwegian": "nor", "norsk": "nor", "lydbok": "nor",
+	"danish": "dan", "dansk": "dan", "lydbog": "dan",
+	"polish": "pol", "polski": "pol",
 	"czech":   "cze",
 	"turkish": "tur",
 	"hindi":   "hin",

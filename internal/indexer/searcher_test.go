@@ -726,6 +726,86 @@ func TestFilterByAllowedLanguages(t *testing.T) {
 	}
 }
 
+// TestFilterByAllowedLanguagesNativeMarkers covers #2273: a scene audiobook
+// release is named in its own language and often never spells out the English
+// name of that language, so before the native markers were added
+// releaseLanguageCodes returned nothing for these and an eng-only profile
+// approved every one of them — including on the auto-grab path, which is how
+// a German audiobook was imported under an English book.
+//
+// The two verbatim reproductions from the issue lead. The rest are the
+// remaining markers, each asserted to be recognised at all rather than merely
+// not to crash.
+func TestFilterByAllowedLanguagesNativeMarkers(t *testing.T) {
+	reported := toResults(
+		"Luisterboek  Rebecca Yarros - Variation (NL Audiobook) [xxxxxxx]-xpost",
+		"Luisterboek  Rebecca Yarros - Variation  NL Audiobook-xpost",
+		`(01/17) - Description - "Mick Herron - London Rules - Ein Fall für Jackson Lamb (Ungekürzt).par2" - 638,74 MB`,
+		"Rebecca Yarros - Variation (Unabridged) [M4B]",
+	)
+	got := FilterByAllowedLanguages(reported, []string{"eng"})
+	if len(got) != 1 || !contains(got, "Rebecca Yarros - Variation (Unabridged) [M4B]") {
+		t.Fatalf("eng-only profile must keep only the untagged English release, got %v", resultTitles(got))
+	}
+
+	// Every marker maps to the language it names, and the English release in
+	// the same set is never collateral damage.
+	for _, tc := range []struct {
+		title string
+		code  string
+	}{
+		{"Author - Title (Hoerbuch, Gekuerzt) [MP3]", "ger"},
+		{"Author - Title Hörbuch Ungekürzt", "ger"},
+		{"Author - Title Hoorspel NL", "dut"},
+		{"Author - Title Nederlands ePub", "dut"},
+		{"Author - Title Ljudbok Svensk utgåva", "swe"},
+		{"Author - Title Lydbok Norsk", "nor"},
+		{"Author - Title Lydbog Dansk", "dan"},
+		{"Author - Title Audiolivro PT-BR", "por"},
+		{"Author - Title Livre Audio FR", "fre"},
+	} {
+		codes := releaseLanguageCodes(NormalizeRelease(tc.title))
+		if !slices.Contains(codes, tc.code) {
+			t.Errorf("%q: expected language %q, got %v", tc.title, tc.code, codes)
+		}
+		if kept := FilterByAllowedLanguages(toResults(tc.title), []string{"eng"}); len(kept) != 0 {
+			t.Errorf("%q: an eng-only profile must drop a %s-tagged release", tc.title, tc.code)
+		}
+		if kept := FilterByAllowedLanguages(toResults(tc.title), []string{tc.code}); len(kept) != 1 {
+			t.Errorf("%q: a %s-allowed profile must keep it", tc.title, tc.code)
+		}
+	}
+}
+
+// TestReleaseLanguageMarkersDoNotFalsePositive pins the titles a widened
+// marker list could plausibly break. Every marker added for #2273 is a whole
+// token, so an English release that merely contains one of them as a substring
+// must stay untagged; "gekuerzt" inside "ungekuerzt" is the same check in the
+// other direction, and both markers mean German anyway.
+func TestReleaseLanguageMarkersDoNotFalsePositive(t *testing.T) {
+	for _, title := range []string{
+		"Nora Roberts - Norse Mythology Retold (Unabridged)",
+		"Author - Livre of Audio Engineering",
+		"Author - Boklund and Sons",
+		"Author - The Hoard",
+		"Author - Ungekuerzte Fassung Notes",
+	} {
+		if codes := releaseLanguageCodes(NormalizeRelease(title)); len(codes) != 0 {
+			t.Errorf("%q must carry no language tag, got %v", title, codes)
+		}
+	}
+
+	// The known false positive, recorded rather than fixed: "danish" has been a
+	// marker since long before #2273, so an English title containing the word
+	// was already tagged dan and dropped from an eng-only profile. Widening the
+	// marker list does not create this class of error, and narrowing it would
+	// cost the genuine "DANISH"-tagged releases the marker exists for. Pinned so
+	// a future change to the name markers is a decision, not an accident.
+	if codes := releaseLanguageCodes(NormalizeRelease("Anthony Horowitz - The Danish Girl")); !slices.Contains(codes, "dan") {
+		t.Errorf("expected the pre-existing 'danish' name marker to still tag this title dan, got %v", codes)
+	}
+}
+
 func TestFilterByAllowedLanguagesTwoLetterAliases(t *testing.T) {
 	results := toResults(
 		"Il.Libro.ITALIANO.epub",
