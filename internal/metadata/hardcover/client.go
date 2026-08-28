@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -52,6 +53,12 @@ type Client struct {
 	http        *http.Client
 	token       string // API token; required for all queries (search included)
 	tokenSource func(context.Context) string
+	// throttle paces requests. It is shared, not per-client: Hardcover's
+	// limit is per account, and this process may hold several clients
+	// (aggregator, list syncer, import-list browse, the settings test
+	// button) all spending the same budget. Every copy below carries the
+	// pointer forward; TestThrottleSharedAcrossClientCopies guards that.
+	throttle *throttle
 }
 
 // NormalizeAPIToken accepts either the raw token copied from Hardcover or an
@@ -84,21 +91,22 @@ func NormalizeAPIToken(value string) string {
 // New creates a new Hardcover client.
 func New() *Client {
 	return &Client{
-		http: &http.Client{Timeout: 15 * time.Second, Transport: httpsec.DefaultProxyTransport()},
+		http:     &http.Client{Timeout: 15 * time.Second, Transport: httpsec.DefaultProxyTransport()},
+		throttle: defaultThrottle,
 	}
 }
 
 // WithToken returns a copy of the client configured to use the given API token.
 // Required for authenticated queries such as GetUserWishlist.
 func (c *Client) WithToken(token string) *Client {
-	return &Client{http: c.http, token: token}
+	return &Client{http: c.http, token: token, throttle: c.pacer()}
 }
 
 // WithTokenSource returns a copy of the client that resolves an API token
 // for each request. It is used for UI-managed credentials that can change
 // while the process is running.
 func (c *Client) WithTokenSource(source func(context.Context) string) *Client {
-	return &Client{http: c.http, token: c.token, tokenSource: source}
+	return &Client{http: c.http, token: c.token, tokenSource: source, throttle: c.pacer()}
 }
 
 // NewAuthenticated creates a new client that sends Authorization: Bearer <token>
@@ -109,8 +117,9 @@ func NewAuthenticated(token string) *Client {
 		// the Hardcover list syncer and import-list browse (the callers of
 		// NewAuthenticated) dial hardcover.app directly while every other
 		// Hardcover call is proxied (#proxy-bypass).
-		http:  &http.Client{Timeout: 15 * time.Second, Transport: httpsec.DefaultProxyTransport()},
-		token: token,
+		http:     &http.Client{Timeout: 15 * time.Second, Transport: httpsec.DefaultProxyTransport()},
+		token:    token,
+		throttle: defaultThrottle,
 	}
 }
 
@@ -634,15 +643,89 @@ type gqlError struct {
 	Extensions map[string]any `json:"extensions,omitempty"`
 }
 
+// query sends one GraphQL request, paced and retried by the shared throttle.
+//
+// Every Hardcover call in this package funnels through here, which is why the
+// rate-limit handling lives at this level rather than at the four call sites
+// #2075 reported: search authors, search series, get series catalog and get
+// book by ISBN are one defect, not four.
+//
+// Retries need no backoff of their own. A rejection calls throttle.penalize,
+// which pushes the shared "next allowed" time out by the server's own hint, so
+// the wait at the top of the next iteration already sleeps for exactly as long
+// as Hardcover asked — and so does every other goroutine queued behind it,
+// which a per-request backoff would not achieve.
 func (c *Client) query(ctx context.Context, q string, vars map[string]any, out interface{}) error {
 	body, err := json.Marshal(gqlRequest{Query: q, Variables: vars})
 	if err != nil {
 		return err
 	}
 
+	var lastErr error
+	for attempt := 0; attempt <= hardcoverMaxRetries; attempt++ {
+		if err := c.pacer().wait(ctx); err != nil {
+			if errors.Is(err, errThrottled) {
+				if lastErr != nil {
+					return lastErr
+				}
+				return rateLimited(err)
+			}
+			return err
+		}
+
+		status, header, raw, doErr := c.roundTrip(ctx, body)
+		if doErr != nil {
+			// A cancelled or expired context is never worth retrying, and
+			// neither is the last attempt.
+			if ctx.Err() != nil || attempt == hardcoverMaxRetries {
+				return doErr
+			}
+			lastErr = doErr
+			continue
+		}
+
+		if status != http.StatusOK {
+			statusErr := classifyHTTPError(status, raw)
+			if !isRetryableStatus(status) {
+				return statusErr
+			}
+			hint, ok := parseRetryAfterHeader(header.Get("Retry-After"))
+			if !ok {
+				hint, _ = parseRetryHint(statusErr.Error())
+			}
+			c.pacer().penalize(hint)
+			if status == http.StatusTooManyRequests {
+				statusErr = rateLimited(statusErr)
+			}
+			if attempt == hardcoverMaxRetries {
+				return statusErr
+			}
+			slog.Debug("hardcover rate limited, retrying",
+				"status", status, "attempt", attempt+1, "hint", hint, "error", statusErr)
+			lastErr = statusErr
+			continue
+		}
+
+		c.pacer().succeed()
+		var envelope struct {
+			Errors []gqlError `json:"errors"`
+		}
+		if err := json.Unmarshal(raw, &envelope); err == nil && len(envelope.Errors) > 0 {
+			return fmt.Errorf("GraphQL: %s", httpsec.RedactSecrets(formatGraphQLErrors(envelope.Errors)))
+		}
+		return json.Unmarshal(raw, out)
+	}
+	// Unreachable: the final iteration always returns. Kept so the compiler
+	// does not have to prove it.
+	return lastErr
+}
+
+// roundTrip performs one request and reads the response, returning the status,
+// headers and body separately so query can decide what to do with them.
+func (c *Client) roundTrip(ctx context.Context, body []byte) (int, http.Header, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, graphqlURL, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return 0, nil, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", useragent.Get())
@@ -652,26 +735,39 @@ func (c *Client) query(ctx context.Context, q string, vars map[string]any, out i
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return 0, nil, nil, err
 	}
 	defer resp.Body.Close()
 
+	limit := int64(hardcoverSuccessResponseBodyLimit)
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, hardcoverErrorResponseBodyLimit))
-		return classifyHTTPError(resp.StatusCode, b)
+		limit = hardcoverErrorResponseBodyLimit
 	}
-
-	b, err := io.ReadAll(io.LimitReader(resp.Body, hardcoverSuccessResponseBodyLimit))
+	// Deliberately NOT draining the remainder before close. The OpenLibrary
+	// client does, so a retry can reuse the pooled connection, but here the
+	// read caps are a security property with tests pinning the exact byte
+	// count (an upstream error page is attacker-influenced and arbitrarily
+	// large). Retries are seconds apart under the pacing above rather than
+	// immediate, so redialling on the rare retry is the cheaper trade.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
-		return err
+		return resp.StatusCode, resp.Header, nil, err
 	}
-	var envelope struct {
-		Errors []gqlError `json:"errors"`
+	return resp.StatusCode, resp.Header, raw, nil
+}
+
+// pacer returns the throttle this client shares with every other client for
+// the same Hardcover account. Every constructor attaches defaultThrottle, so
+// a nil throttle means a zero-value Client, which only in-package tests build;
+// those run unpaced, and every throttle method is nil-safe to make that work
+// without a branch at each call site. Deliberately NOT falling back to
+// defaultThrottle here: doing so would let one test's rate-limit case pace
+// every later test in the package through shared process state.
+func (c *Client) pacer() *throttle {
+	if c == nil {
+		return nil
 	}
-	if err := json.Unmarshal(b, &envelope); err == nil && len(envelope.Errors) > 0 {
-		return fmt.Errorf("GraphQL: %s", httpsec.RedactSecrets(formatGraphQLErrors(envelope.Errors)))
-	}
-	return json.Unmarshal(b, out)
+	return c.throttle
 }
 
 func (c *Client) authorizationToken(ctx context.Context) string {
