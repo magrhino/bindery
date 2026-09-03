@@ -135,6 +135,86 @@ func TestSeriesLinkBook(t *testing.T) {
 	}
 }
 
+// TestSeriesListBooksExcludesHidden covers #2302: ListBooksInSeries must skip
+// excluded books so series fill and genre apply do not act on them, while
+// ListBooksInSeriesIncludingExcluded still returns them for callers that count
+// every book in the series (e.g. import-run rollback).
+func TestSeriesListBooksExcludesHidden(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	authorRepo := NewAuthorRepo(database)
+	bookRepo := NewBookRepo(database)
+	seriesRepo := NewSeriesRepo(database)
+
+	author := &models.Author{
+		ForeignID: "OL-2302-A", Name: "Robert Jordan", SortName: "Jordan, Robert",
+		MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	kept := &models.Book{
+		ForeignID: "OL-2302-K", AuthorID: author.ID, Title: "The Eye of the World", SortTitle: "Eye of the World",
+		Status: models.BookStatusWanted, Genres: []string{}, MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := bookRepo.Create(ctx, kept); err != nil {
+		t.Fatal(err)
+	}
+	hidden := &models.Book{
+		ForeignID: "OL-2302-H", AuthorID: author.ID, Title: "New Spring", SortTitle: "New Spring",
+		Status: models.BookStatusWanted, Genres: []string{}, MetadataProvider: "openlibrary", Monitored: true,
+	}
+	if err := bookRepo.Create(ctx, hidden); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &models.Series{ForeignID: "ol-series:wheel-of-time", Title: "The Wheel of Time"}
+	if err := seriesRepo.CreateOrGet(ctx, s); err != nil {
+		t.Fatalf("CreateOrGet: %v", err)
+	}
+	if err := seriesRepo.LinkBook(ctx, s.ID, kept.ID, "1", true); err != nil {
+		t.Fatalf("LinkBook kept: %v", err)
+	}
+	if err := seriesRepo.LinkBook(ctx, s.ID, hidden.ID, "2", true); err != nil {
+		t.Fatalf("LinkBook hidden: %v", err)
+	}
+
+	// Exclude the second book after linking it.
+	if err := bookRepo.SetExcluded(ctx, hidden.ID, true); err != nil {
+		t.Fatalf("SetExcluded: %v", err)
+	}
+
+	// ListBooksInSeries hides the excluded book (used by series fill / genre apply).
+	visible, err := seriesRepo.ListBooksInSeries(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("ListBooksInSeries: %v", err)
+	}
+	if len(visible) != 1 || visible[0].ID != kept.ID {
+		t.Fatalf("ListBooksInSeries should hide the excluded book, got %+v", visible)
+	}
+
+	// ListBooksInSeriesIncludingExcluded still returns both (used by rollback counting).
+	all, err := seriesRepo.ListBooksInSeriesIncludingExcluded(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("ListBooksInSeriesIncludingExcluded: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("ListBooksInSeriesIncludingExcluded should return both books, got %d: %+v", len(all), all)
+	}
+	gotIDs := map[int64]bool{}
+	for _, b := range all {
+		gotIDs[b.ID] = true
+	}
+	if !gotIDs[kept.ID] || !gotIDs[hidden.ID] {
+		t.Fatalf("ListBooksInSeriesIncludingExcluded should include both the kept and the excluded book, got %+v", all)
+	}
+}
+
 func TestSeriesManualManagement(t *testing.T) {
 	database, err := OpenMemory()
 	if err != nil {

@@ -278,14 +278,33 @@ func (r *SeriesRepo) UpdateTitle(ctx context.Context, id int64, title string) er
 	return nil
 }
 
-// ListBooksInSeries returns all books linked to the given series, with status.
+// ListBooksInSeries returns the books linked to a series, skipping books the
+// user has excluded. Callers that act on the result (series fill, genre apply)
+// must not touch excluded books, the same way the author-level listings in
+// books.go filter them (#2302).
 func (r *SeriesRepo) ListBooksInSeries(ctx context.Context, seriesID int64) ([]models.Book, error) {
+	return r.listBooksInSeries(ctx, seriesID, false)
+}
+
+// ListBooksInSeriesIncludingExcluded is ListBooksInSeries without the excluded
+// filter, for callers that must account for every book in the series regardless
+// of its excluded flag (e.g. counting how many books an import-run rollback
+// leaves behind, where an excluded book still keeps the series non-empty).
+func (r *SeriesRepo) ListBooksInSeriesIncludingExcluded(ctx context.Context, seriesID int64) ([]models.Book, error) {
+	return r.listBooksInSeries(ctx, seriesID, true)
+}
+
+func (r *SeriesRepo) listBooksInSeries(ctx context.Context, seriesID int64, includeExcluded bool) ([]models.Book, error) {
+	where := "WHERE sb.series_id = ? AND b.excluded = 0"
+	if includeExcluded {
+		where = "WHERE sb.series_id = ?"
+	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT b.id, b.foreign_id, b.author_id, b.title, b.sort_title, b.status, b.monitored,
 		       b.image_url, b.release_date, b.language, b.media_type, b.created_at, b.updated_at
 		FROM series_books sb
 		JOIN books b ON b.id = sb.book_id
-		WHERE sb.series_id = ?`, seriesID)
+		`+where, seriesID)
 	if err != nil {
 		return nil, err
 	}

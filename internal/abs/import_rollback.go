@@ -1044,7 +1044,9 @@ func (i *Importer) hasMatchingProvenanceOutsideRun(ctx context.Context, entity m
 }
 
 func (i *Importer) remainingSeriesBooksAfterRunRollback(ctx context.Context, seriesID int64, runOwnedBookIDs map[int64]struct{}) (int, error) {
-	books, err := i.series.ListBooksInSeries(ctx, seriesID)
+	// Count every book still in the series, including excluded ones: an excluded
+	// book left behind still keeps the series non-empty (#2302).
+	books, err := i.series.ListBooksInSeriesIncludingExcluded(ctx, seriesID)
 	if err != nil {
 		return 0, err
 	}
