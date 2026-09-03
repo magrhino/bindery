@@ -96,6 +96,108 @@ func TestQualityAllowed_NotAllowedItem(t *testing.T) {
 	}
 }
 
+// TestQualityAllowed_AudiobookProfilePassesEbook is the #2307 report: a book's
+// author has one quality profile, so an author whose audiobooks are tracked
+// under an m4b/mp3/flac profile had every ebook release rejected with "format
+// \"epub\" not in quality profile". The profile was never asked about ebooks, so
+// it must not answer for them.
+func TestQualityAllowed_AudiobookProfilePassesEbook(t *testing.T) {
+	s := decision.QualityAllowed{Profile: &models.QualityProfile{
+		Name: "Audiobook",
+		Items: []models.QualityItem{
+			{Quality: "mp3", Allowed: true},
+			{Quality: "m4b", Allowed: true},
+			{Quality: "flac", Allowed: true},
+		},
+	}}
+	for _, format := range []string{"epub", "azw3", "pdf", "mobi"} {
+		if ok, reason := s.IsSatisfiedBy(release(withFormat(format)), emptyBook()); !ok {
+			t.Errorf("%s rejected by an audiobook-only profile: %s", format, reason)
+		}
+	}
+}
+
+// TestQualityAllowed_EbookProfilePassesAudiobook is the same case the other way
+// round, which is the commoner one: the default new profile is pdf/mobi/epub/azw3.
+func TestQualityAllowed_EbookProfilePassesAudiobook(t *testing.T) {
+	s := decision.QualityAllowed{Profile: &models.QualityProfile{
+		Name: "E-Book",
+		Items: []models.QualityItem{
+			{Quality: "pdf", Allowed: true},
+			{Quality: "epub", Allowed: true},
+			{Quality: "azw3", Allowed: true},
+		},
+	}}
+	for _, format := range []string{"m4b", "mp3", "flac", "m4a", "ogg"} {
+		if ok, reason := s.IsSatisfiedBy(release(withFormat(format)), emptyBook()); !ok {
+			t.Errorf("%s rejected by an ebook-only profile: %s", format, reason)
+		}
+	}
+}
+
+// TestQualityAllowed_StillRejectsWithinItsOwnMediaType: the narrowing must not
+// become "allow everything". Within a media type the profile has an opinion,
+// the allow-list is still authoritative.
+func TestQualityAllowed_StillRejectsWithinItsOwnMediaType(t *testing.T) {
+	s := decision.QualityAllowed{Profile: &models.QualityProfile{
+		Name: "Audiobook",
+		Items: []models.QualityItem{
+			{Quality: "m4b", Allowed: true},
+			{Quality: "mp3", Allowed: false},
+		},
+	}}
+	if ok, _ := s.IsSatisfiedBy(release(withFormat("mp3")), emptyBook()); ok {
+		t.Error("mp3 is listed and unticked in an audiobook profile; it must stay rejected")
+	}
+	if ok, _ := s.IsSatisfiedBy(release(withFormat("flac")), emptyBook()); ok {
+		t.Error("flac is absent from a profile that does list audiobook formats; it must stay rejected")
+	}
+	if ok, _ := s.IsSatisfiedBy(release(withFormat("m4b")), emptyBook()); !ok {
+		t.Error("m4b is ticked and must be allowed")
+	}
+}
+
+// TestQualityAllowed_MixedProfileJudgesEachMediaTypeSeparately: QualityTab
+// allows a profile that lists both, and such a profile has an opinion about
+// both, so nothing about it changes.
+func TestQualityAllowed_MixedProfileJudgesEachMediaTypeSeparately(t *testing.T) {
+	s := decision.QualityAllowed{Profile: &models.QualityProfile{
+		Name: "Mixed",
+		Items: []models.QualityItem{
+			{Quality: "epub", Allowed: true},
+			{Quality: "pdf", Allowed: false},
+			{Quality: "m4b", Allowed: true},
+			{Quality: "mp3", Allowed: false},
+		},
+	}}
+	for _, tc := range []struct {
+		format string
+		want   bool
+	}{
+		{"epub", true},
+		{"pdf", false},
+		{"m4b", true},
+		{"mp3", false},
+	} {
+		if ok, _ := s.IsSatisfiedBy(release(withFormat(tc.format)), emptyBook()); ok != tc.want {
+			t.Errorf("mixed profile: %s allowed = %v, want %v", tc.format, ok, tc.want)
+		}
+	}
+}
+
+// TestQualityAllowed_UnknownFormatTokenUsesTheWholeList: a format the token
+// vocabulary does not contain cannot be narrowed by, so the spec falls back to
+// comparing against every item rather than silently passing everything.
+func TestQualityAllowed_UnknownFormatTokenUsesTheWholeList(t *testing.T) {
+	s := decision.QualityAllowed{Profile: &models.QualityProfile{
+		Name:  "E-Book",
+		Items: []models.QualityItem{{Quality: "epub", Allowed: true}},
+	}}
+	if ok, _ := s.IsSatisfiedBy(release(withFormat("cbr7")), emptyBook()); ok {
+		t.Error("an unrecognised format token should not pass a profile that does not list it")
+	}
+}
+
 // --- QualityCutoff ---
 
 func TestQualityCutoff_NilProfile(t *testing.T) {

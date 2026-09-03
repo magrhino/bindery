@@ -219,3 +219,58 @@ func TestSearchAndGrabFormat_EmptyItemsIsUnfiltered(t *testing.T) {
 		t.Errorf("a profile with no format list means allow-all, got %d download(s)", len(rows))
 	}
 }
+
+// audiobookOnly is the profile shape a user gets when they build a profile for
+// an author they collect on audio: only audiobook containers listed, nothing
+// said about ebooks either way.
+func audiobookOnly() []models.QualityItem {
+	return []models.QualityItem{
+		{Quality: "mp3", Allowed: true},
+		{Quality: "m4a", Allowed: false},
+		{Quality: "m4b", Allowed: true},
+		{Quality: "flac", Allowed: false},
+	}
+}
+
+// TestSearchAndGrabFormat_AudiobookProfileDoesNotBlockEbookGrabs is the half of
+// #2307 with real consequences.
+//
+// quality_profile_id lives on authors, so an author tracked in both formats has
+// exactly one profile. With an audiobook profile attached, QualityAllowed
+// rejected every ebook release as "not in quality profile", and because the
+// scheduler uses the spec as a hard filter the book could never be auto-grabbed
+// at all. Interactive search only annotates, so that half was merely
+// misleading; this half was silent.
+func TestSearchAndGrabFormat_AudiobookProfileDoesNotBlockEbookGrabs(t *testing.T) {
+	ctx := context.Background()
+	s, downloads, book := qualityFixture(t, true, audiobookOnly(), "Quality.Book.2024.epub")
+
+	s.searchAndGrabFormat(ctx, book, models.MediaTypeEbook)
+
+	rows, err := downloads.List(ctx)
+	if err != nil {
+		t.Fatalf("downloads list: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("an audiobook-only profile must not block an ebook grab, got %d download(s)", len(rows))
+	}
+}
+
+// TestSearchAndGrabFormat_AudiobookProfileStillFiltersAudiobooks is the control
+// for the test above: within the media type the profile does list, the
+// allow-list is still authoritative. m4a is listed and unticked, so the grab
+// must not happen.
+func TestSearchAndGrabFormat_AudiobookProfileStillFiltersAudiobooks(t *testing.T) {
+	ctx := context.Background()
+	s, downloads, book := qualityFixture(t, true, audiobookOnly(), "Quality.Book.2024.m4a")
+
+	s.searchAndGrabFormat(ctx, book, models.MediaTypeAudiobook)
+
+	rows, err := downloads.List(ctx)
+	if err != nil {
+		t.Fatalf("downloads list: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("m4a is unticked in the profile and must stay rejected, got %d download(s)", len(rows))
+	}
+}

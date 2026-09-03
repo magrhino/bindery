@@ -331,15 +331,36 @@ func (s *Scanner) WithFormatEnforcement(profiles *db.QualityProfileRepo, blockli
 	return s
 }
 
-// allowedFormat reports whether format passes the author's quality profile,
-// and the rejection reason when it does not.
+// allowedFormat reports whether a file of the given format may fill the given
+// slot, and the rejection reason when it may not. slotMediaType is the media
+// type the download is being imported as (detectDownloadFormat's answer, or an
+// explicit formatHint).
 //
 // An empty format means the file could not be identified, which is passed for
 // the same reason decision.QualityAllowed passes an unparseable release name:
 // the filter can only speak to formats it can actually see, and rejecting on
 // ignorance would block legitimate books.
-func (s *Scanner) allowedFormat(ctx context.Context, author *models.Author, format string) (bool, string) {
-	if s.qualityProfiles == nil || author == nil || format == "" {
+//
+// The slot check runs BEFORE the quality profile and is not a profile question
+// at all (#2307). detectDownloadFormat routes a download by file extension
+// while formatsniff.Detect reads content, so the two disagree on an
+// extensionless or mis-extensioned file: an MP3 named with no extension is
+// routed to the ebook branch and sniffed as "mp3". Until #2307 the quality
+// profile happened to stop it, because an ebook-only profile rejected every
+// audio token. Now that a profile only answers for its own media type, nothing
+// else would, and the file would be recorded as the book's EBOOK and placed in
+// the ebook library. A file whose content belongs to the other media type is
+// wrong for this slot whatever the profile says, so say so here.
+func (s *Scanner) allowedFormat(ctx context.Context, author *models.Author, format, slotMediaType string) (bool, string) {
+	if format == "" {
+		return true, ""
+	}
+	if fileMediaType := indexer.MediaTypeForFormat(format); fileMediaType != "" &&
+		slotMediaType != "" && fileMediaType != slotMediaType {
+		return false, fmt.Sprintf("file format %q is a %s file but this download is being imported as %s",
+			format, fileMediaType, slotMediaType)
+	}
+	if s.qualityProfiles == nil || author == nil {
 		return true, ""
 	}
 	profile := db.ResolveAuthorQualityProfile(ctx, s.qualityProfiles, author)
@@ -1416,7 +1437,7 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 	// override throughout, on the same principle as the video guard below: a
 	// human declared the format, so their call wins.
 	if formatHint == "" && len(bookFiles) > 0 {
-		if reject, reason := s.rejectedDownloadFormat(ctx, author, bookFiles); reject {
+		if reject, reason := s.rejectedDownloadFormat(ctx, author, bookFiles, detectedFormat); reject {
 			// Record the path first so the queue's "Match to book" action can
 			// still force this in, then blocklist so the next scan does not
 			// grab the identical release and repeat the whole cycle.
@@ -1847,7 +1868,7 @@ func (s *Scanner) tryImportInternal(ctx context.Context, dl *models.Download, do
 		// the gate above blocks and blocklists it, because that is the case
 		// where importing anything would mean importing something unwanted.
 		if formatHint == "" {
-			if ok, reason := s.allowedFormat(ctx, author, formatsniff.Detect(srcFile)); !ok {
+			if ok, reason := s.allowedFormat(ctx, author, formatsniff.Detect(srcFile), detectedFormat); !ok {
 				slog.Info("skipping a file the quality profile disallows",
 					"file", srcFile, "reason", reason)
 				continue
@@ -3470,14 +3491,14 @@ func (s *Scanner) writeScanResultWithError(ctx context.Context, filesFound, reco
 //
 // Files whose format cannot be identified count as allowed, mirroring
 // QualityAllowed's own behaviour on an unparseable release name.
-func (s *Scanner) rejectedDownloadFormat(ctx context.Context, author *models.Author, files []string) (bool, string) {
-	if s.qualityProfiles == nil || author == nil || len(files) == 0 {
+func (s *Scanner) rejectedDownloadFormat(ctx context.Context, author *models.Author, files []string, slotMediaType string) (bool, string) {
+	if len(files) == 0 {
 		return false, ""
 	}
 	var firstReason string
 	for _, f := range files {
 		format := formatsniff.Detect(f)
-		ok, reason := s.allowedFormat(ctx, author, format)
+		ok, reason := s.allowedFormat(ctx, author, format, slotMediaType)
 		if ok {
 			return false, ""
 		}

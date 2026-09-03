@@ -21,6 +21,22 @@ import (
 // this filter into a near-total grab blackout the moment a user ticked any box,
 // which is the opposite of what the UI promises. The filter can only speak to
 // formats it can actually see.
+//
+// A release is judged only against the profile items of its own media type, and
+// passes when the profile lists none of them (#2307). models.QualityProfile has
+// no media-type column and quality_profile_id lives on authors, so an author who
+// tracks both formats gets exactly one profile: without this narrowing, a
+// profile listing m4b/mp3/flac would reject every epub with "format \"epub\" not
+// in quality profile", which is the spec asserting something it was never asked.
+// The consequences differed by path and the quiet one was the worse of the two —
+// interactive search only annotates, so Grab stayed enabled, but the scheduler
+// uses the same spec as a hard filter, so an ebook under an audiobook-only
+// profile could never be auto-grabbed at all. Narrowing here rather than at the
+// call sites is deliberate: the scheduler, interactive search and the importer's
+// format check all share this one spec and must not drift apart.
+//
+// A profile that deliberately mixes both media types has items in both buckets,
+// so both narrow to a non-empty set and behaviour is exactly what it was.
 type QualityAllowed struct {
 	Profile *models.QualityProfile
 }
@@ -32,10 +48,28 @@ func (s QualityAllowed) IsSatisfiedBy(r Release, _ models.Book) (bool, string) {
 	if r.Format == "" {
 		return true, ""
 	}
+
+	// indexer.MediaTypeForFormat is the single source of truth for the token →
+	// media-type mapping; a second copy of the token lists here is exactly the
+	// drift that function's doc comment warns about. It returns "" for a token
+	// Bindery does not recognise, on either side, in which case there is nothing
+	// to narrow by and every item is considered, as before.
+	mediaType := indexer.MediaTypeForFormat(r.Format)
+
+	sawSameMediaType := false
 	for _, item := range s.Profile.Items {
+		if mediaType != "" && indexer.MediaTypeForFormat(item.Quality) != mediaType {
+			continue
+		}
+		// Listed but unticked still counts as an opinion: a profile with epub
+		// explicitly turned off has been asked about ebooks and said no.
+		sawSameMediaType = true
 		if item.Allowed && strings.EqualFold(item.Quality, r.Format) {
 			return true, ""
 		}
+	}
+	if !sawSameMediaType {
+		return true, ""
 	}
 	return false, fmt.Sprintf("format %q not in quality profile %q", r.Format, s.Profile.Name)
 }

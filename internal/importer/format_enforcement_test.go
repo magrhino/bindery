@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/vavallee/bindery/internal/db"
@@ -286,5 +287,57 @@ func TestImport_NoEnforcementWiringIsInert(t *testing.T) {
 	got := f.reloadDownload(t)
 	if got.Status == models.StateImportBlocked {
 		t.Errorf("format enforcement ran without being wired up: %s", got.ErrorMessage)
+	}
+}
+
+func id3MP3Bytes() []byte {
+	b := make([]byte, 600)
+	copy(b, []byte("ID3\x03\x00\x00\x00\x00\x00\x00"))
+	return b
+}
+
+// TestImport_ExtensionlessAudioIsNotImportedAsAnEbook is the regression the
+// #2307 quality-profile narrowing would otherwise have introduced.
+//
+// detectDownloadFormat routes by extension and formatsniff.Detect reads content,
+// so an extensionless MP3 is routed to the EBOOK branch while sniffing as "mp3".
+// Until #2307 the quality profile happened to stop it, because an ebook-only
+// profile rejected every audio token. Once a profile only answers for its own
+// media type it no longer does, and without a slot check the MP3 was imported
+// and recorded as the book's ebook, in the ebook library, with a trailing-dot
+// filename.
+//
+// This is not a profile question: a file whose content belongs to the other
+// media type is wrong for this slot whatever the profile says.
+func TestImport_ExtensionlessAudioIsNotImportedAsAnEbook(t *testing.T) {
+	f := newFormatFixture(t)
+	name := "Will Wight - Bloodline- Cradle, Book 9"
+	f.writeFile(t, name, id3MP3Bytes())
+
+	f.scanner.tryImportInternal(context.Background(), f.dl, f.dir, "", "", "", nil,
+		[]string{filepath.Join(f.dir, name)})
+
+	got := f.reloadDownload(t)
+	if got.Status != models.StateImportBlocked {
+		t.Fatalf("status = %q, want %q; an MP3 was imported into the ebook slot", got.Status, models.StateImportBlocked)
+	}
+	if !strings.Contains(got.ErrorMessage, "audiobook") {
+		t.Errorf("reason = %q, want it to name the media-type mismatch", got.ErrorMessage)
+	}
+}
+
+// TestImport_AudioFileStillImportsIntoTheAudiobookSlot is the control: the slot
+// check must reject a cross-media file, not audio files generally.
+func TestImport_AudioFileStillImportsIntoTheAudiobookSlot(t *testing.T) {
+	f := newFormatFixture(t)
+	f.writeFile(t, "book.mp3", id3MP3Bytes())
+
+	f.scanner.tryImportInternal(context.Background(), f.dl, f.dir, "", "", "", nil,
+		[]string{filepath.Join(f.dir, "book.mp3")})
+
+	got := f.reloadDownload(t)
+	if got.Status == models.StateImportBlocked &&
+		strings.Contains(got.ErrorMessage, "being imported as") {
+		t.Fatalf("the slot check rejected an audio file on the audiobook branch: %q", got.ErrorMessage)
 	}
 }
