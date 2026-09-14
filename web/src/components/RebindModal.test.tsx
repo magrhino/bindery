@@ -172,6 +172,34 @@ describe('RebindModal', () => {
 describe('metadata search', () => {
   const hardcover = book({ foreignBookId: 'hc:state-of-the-union', title: 'State of the Union', author: { authorName: 'Correct Author' } as Book['author'] })
 
+  it('marks owned results, blocks other library rows, and still allows the current book', async () => {
+    vi.stubGlobal('__BINDERY_BASE__', '/bindery')
+    try {
+      vi.mocked(api.searchBooks).mockResolvedValue([
+        book({ foreignBookId: 'OL99W', title: 'Other library book', libraryBookId: 99 }),
+        book({ foreignBookId: 'OL7W', title: 'Current book', libraryBookId: 7 }),
+        hardcover,
+      ])
+      rebindBook.mockResolvedValueOnce(book())
+      render(<RebindModal book={book()} onClose={() => {}} onSuccess={() => {}} />)
+      fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+      const other = await screen.findByRole('radio', { name: /Other library book/ })
+      expect(other).toBeDisabled()
+      fireEvent.click(screen.getByText('Other library book'))
+      expect(screen.getByRole('button', { name: 'Re-bind' })).toBeDisabled()
+      expect(screen.getAllByText('In your library')).toHaveLength(2)
+      expect(screen.getByRole('link', { name: 'Open Other library book' })).toHaveAttribute('href', '/bindery/book/99')
+      expect(rebindBook).not.toHaveBeenCalled()
+      const current = screen.getByRole('radio', { name: /Current book/ })
+      expect(current).toBeEnabled()
+      fireEvent.click(current)
+      fireEvent.click(screen.getByRole('button', { name: 'Re-bind' }))
+      await waitFor(() => expect(rebindBook).toHaveBeenCalledExactlyOnceWith(7, 'openlibrary', 'OL7W', false))
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('uses the same identifier format rules for search candidates', async () => {
     vi.mocked(api.searchBooks).mockResolvedValue([
       hardcover,
