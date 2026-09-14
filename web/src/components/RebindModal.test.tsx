@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import RebindModal from './RebindModal'
-import '../i18n'
+import i18n from '../i18n'
 
 // Keep the real ApiError so `instanceof ApiError` works inside the component;
 // mock only the `api` surface so no real HTTP is made.
@@ -273,10 +273,26 @@ describe('metadata search', () => {
     fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'hardcover' } })
     fireEvent.change(screen.getByLabelText('Foreign ID'), { target: { value: '  hc:12345  ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Re-bind' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('a different book already uses that foreign ID')
+    expect(await screen.findByRole('alert')).toHaveTextContent('This metadata record conflicts with an existing book.')
     expect(rebindBook).toHaveBeenCalledWith(7, 'hardcover', 'hc:12345', false)
     expect(screen.queryByRole('button', { name: 'Re-bind anyway' })).not.toBeInTheDocument()
   })
+})
+
+
+it('translates duplicate-ID conflicts instead of displaying the server message', async () => {
+  await i18n.changeLanguage('fr')
+  try {
+    rebindBook.mockRejectedValueOnce(new ApiError(409, { error: 'a different book already uses that foreign ID' }, 'Conflict'))
+    render(<RebindModal book={book()} onClose={() => {}} onSuccess={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('bookRebind.manual') }))
+    fireEvent.change(screen.getByLabelText(i18n.t('bookRebind.identifier')), { target: { value: 'OL999W' } })
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('bookDetail.rebind') }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(i18n.t('bookRebind.conflict'))
+    expect(screen.queryByText('a different book already uses that foreign ID')).not.toBeInTheDocument()
+  } finally {
+    await act(async () => { await i18n.changeLanguage('en') })
+  }
 })
 
 

@@ -112,7 +112,7 @@ export default function RebindModal({ book, onClose, onSuccess }: Props) {
         if (body?.force_required) {
           setMismatch({ currentAuthor: body.current_author ?? '', upstreamAuthor: body.upstream_author ?? '' })
         } else {
-          setError(body?.error ?? t('bookRebind.conflict'))
+          setError(t('bookRebind.conflict'))
         }
       } else {
         setError(err instanceof Error ? err.message : t('bookRebind.failed'))
