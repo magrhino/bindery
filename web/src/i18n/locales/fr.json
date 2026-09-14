@@ -433,7 +433,7 @@
   "addToLibrary": {
     "inLibrary": "Dans votre bibliothèque",
     "open": "Ouvrir",
-    "openInLibrary": "Ouvrir {{title}}",
+    "openBook": "Ouvrir {{title}}",
     "searching": "Recherche en cours...",
     "select": "Sélectionner",
     "selectBook": "Sélectionner {{title}}",

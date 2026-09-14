@@ -431,7 +431,7 @@
   "addToLibrary": {
     "inLibrary": "In je bibliotheek",
     "open": "Openen",
-    "openInLibrary": "{{title}} openen",
+    "openBook": "{{title}} openen",
     "searching": "Zoeken...",
     "select": "Selecteren",
     "selectBook": "{{title}} selecteren",

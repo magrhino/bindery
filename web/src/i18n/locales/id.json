@@ -469,7 +469,7 @@
   "addToLibrary": {
     "inLibrary": "Di perpustakaan Anda",
     "open": "Buka",
-    "openInLibrary": "Buka {{title}}",
+    "openBook": "Buka {{title}}",
     "searching": "Mencari...",
     "select": "Pilih",
     "selectBook": "Pilih {{title}}",
