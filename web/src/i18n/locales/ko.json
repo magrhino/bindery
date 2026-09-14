@@ -734,6 +734,9 @@
     }
   },
   "addToLibrary": {
+    "inLibrary": "내 라이브러리에 있음",
+    "open": "열기",
+    "openInLibrary": "{{title}} 열기",
     "searching": "검색 중...",
     "select": "선택",
     "selectBook": "{{title}} 선택",

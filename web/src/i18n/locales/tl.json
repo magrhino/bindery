@@ -467,6 +467,9 @@
     }
   },
   "addToLibrary": {
+    "inLibrary": "Nasa iyong aklatan",
+    "open": "Buksan",
+    "openInLibrary": "Buksan ang {{title}}",
     "searching": "Naghahanap...",
     "select": "Piliin",
     "selectBook": "Piliin ang {{title}}",

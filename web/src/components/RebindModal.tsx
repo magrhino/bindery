@@ -208,9 +208,9 @@ export default function RebindModal({ book, onClose, onSuccess }: Props) {
                           </label>
                           {!!candidate.libraryBookId && (
                             <div className="ml-7 mt-2 flex items-center gap-2 text-xs">
-                              <span className="rounded-full bg-slate-200 px-2 py-0.5 dark:bg-zinc-700">{t('addBookModal.inLibrary')}</span>
-                              <a href={`${basePath()}/book/${candidate.libraryBookId}`} aria-label={t('addBookModal.openInLibrary', { title: candidate.title })} className="rounded underline focus-visible:outline-2 focus-visible:outline-emerald-600">
-                                {t('addBookModal.open')}
+                              <span className="rounded-full bg-slate-200 px-2 py-0.5 dark:bg-zinc-700">{t('addToLibrary.inLibrary')}</span>
+                              <a href={`${basePath()}/book/${candidate.libraryBookId}`} aria-label={t('addToLibrary.openInLibrary', { title: candidate.title })} className="rounded underline focus-visible:outline-2 focus-visible:outline-emerald-600">
+                                {t('addToLibrary.open')}
                               </a>
                             </div>
                           )}

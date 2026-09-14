@@ -471,6 +471,9 @@
     }
   },
   "addToLibrary": {
+    "inLibrary": "En tu biblioteca",
+    "open": "Abrir",
+    "openInLibrary": "Abrir {{title}}",
     "searching": "Buscando...",
     "select": "Seleccionar",
     "selectBook": "Seleccionar {{title}}",

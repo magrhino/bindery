@@ -429,6 +429,9 @@
     }
   },
   "addToLibrary": {
+    "inLibrary": "In deiner Bibliothek",
+    "open": "Öffnen",
+    "openInLibrary": "{{title}} öffnen",
     "searching": "Suche läuft...",
     "select": "Auswählen",
     "selectBook": "{{title}} auswählen",
