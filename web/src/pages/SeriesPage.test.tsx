@@ -61,6 +61,39 @@ describe('SeriesPage', () => {
     vi.mocked(api.searchHardcoverSeries).mockResolvedValue([])
   })
 
+  it('filters series by title and restores the list when search is cleared', async () => {
+    renderSeriesPage([
+      { id: 1, foreignSeriesId: 'series-1', title: 'The Stormlight Archive', description: '', monitored: true, books: [] },
+      { id: 2, foreignSeriesId: 'series-2', title: 'Café Chronicles', description: '', monitored: false, books: [] },
+    ])
+
+    expect(await screen.findByRole('heading', { name: 'The Stormlight Archive' })).toBeInTheDocument()
+    const search = screen.getByRole('searchbox', { name: 'Search series...' })
+    fireEvent.change(search, { target: { value: '  CAFE  ' } })
+    expect(screen.getByRole('heading', { name: 'Café Chronicles' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'The Stormlight Archive' })).not.toBeInTheDocument()
+
+    fireEvent.change(search, { target: { value: 'missing series' } })
+    expect(screen.getByRole('status')).toHaveTextContent('No series match "missing series"')
+    expect(screen.queryByRole('heading', { level: 3 })).not.toBeInTheDocument()
+    expect(screen.queryByText(/Series are populated automatically/)).not.toBeInTheDocument()
+
+    fireEvent.change(search, { target: { value: '' } })
+    expect(screen.getByRole('heading', { name: 'The Stormlight Archive' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Café Chronicles' })).toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(api.listSeries).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the empty-library guidance when there are no series to search', async () => {
+    renderSeriesPage([])
+
+    expect(await screen.findByText('No series found')).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Stormlight' } })
+    expect(screen.getByText(/Series are populated automatically/)).toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
   it('hides Hardcover controls when enhanced Hardcover API is disabled', async () => {
     renderSeriesPage([
       {

@@ -503,6 +503,8 @@
     }
   },
   "series": {
+    "searchPlaceholder": "Search series...",
+    "noMatch": "No series match \"{{query}}\"",
     "deleteConfirm": "Delete \"{{title}}\" from Series? Linked books will stay in your library.",
     "deleteTitle": "Remove series"
   },

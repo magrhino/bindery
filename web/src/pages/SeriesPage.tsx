@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { api, MediaType, Series, SeriesHardcoverDiff, SeriesHardcoverDiffBook, SeriesHardcoverLink, SeriesHardcoverSearchResult, SystemStatus } from '../api/client'
 import { hardcoverSeriesUrl } from '../util/metadataSource'
+import { foldedIncludes } from '../util/foldForSearch'
 import AddSeriesBookModal from '../components/AddSeriesBookModal'
 import HardcoverSeriesLinkModal from '../components/HardcoverSeriesLinkModal'
 import SeriesNameModal from '../components/SeriesNameModal'
@@ -15,6 +16,7 @@ export default function SeriesPage() {
   const { confirm, confirmDialog } = useConfirmDialog()
   const location = useLocation()
   const [seriesList, setSeriesList] = useState<Series[]>([])
+  const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState<number | null>(null)
   const [filling, setFilling] = useState<number | null>(null)
@@ -246,6 +248,8 @@ export default function SeriesPage() {
     }
   }
 
+  const filteredSeries = seriesList.filter(series => foldedIncludes(series.title, search))
+
   return (
     <div>
       {confirmDialog}
@@ -262,6 +266,17 @@ export default function SeriesPage() {
         </div>
       </div>
 
+      <div className="flex flex-col sm:flex-row gap-3 mb-4">
+        <input
+          type="search"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          aria-label={t('series.searchPlaceholder')}
+          placeholder={t('series.searchPlaceholder')}
+          className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-400 dark:focus:border-zinc-600 placeholder-slate-400 dark:placeholder-zinc-600"
+        />
+      </div>
+
       {loading ? (
         <div className="text-slate-600 dark:text-zinc-500">Loading...</div>
       ) : seriesList.length === 0 ? (
@@ -269,12 +284,16 @@ export default function SeriesPage() {
           <p className="text-lg mb-2">No series found</p>
           <p className="text-sm">Series are populated automatically from your monitored authors' books</p>
         </div>
+      ) : filteredSeries.length === 0 ? (
+        <div className="text-center py-16 text-slate-600 dark:text-zinc-500" role="status">
+          <p>{t('series.noMatch', { query: search })}</p>
+        </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 items-start">
           {/* items-start (#1682): CSS Grid defaults to align-items:stretch, so
               expanding one series card stretched every other card in the same
               row to match, making it hard to tell which one was actually open. */}
-          {seriesList.map(series => {
+          {filteredSeries.map(series => {
             const books = series.books ?? []
             const bookCount = books.length
             // Excluded books are not a gap: counting them showed a "missing" pill
