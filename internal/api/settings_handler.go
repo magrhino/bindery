@@ -245,7 +245,8 @@ func NewSettingsHandler(settings *db.SettingsRepo) *SettingsHandler {
 func isSecretSetting(key string) bool {
 	// 1. Explicit one-offs that don't match the patterns below.
 	switch key {
-	case SettingAuthAPIKey,
+	case "auth.hardcover_daily_holds",
+		SettingAuthAPIKey,
 		SettingAuthSessionSecret,
 		SettingAuthSessionSecretPrevious,
 		SettingAuthMode,

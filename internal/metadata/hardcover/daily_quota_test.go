@@ -268,3 +268,73 @@ func TestDailyQuotaRetriesFailedPersistenceBeforeRequests(t *testing.T) {
 		t.Fatalf("retried hold was not durable: %v", err)
 	}
 }
+
+func TestDailyQuotaResetBounds(t *testing.T) {
+	for _, seconds := range []int{0, 1, 86400, 86401, 9223372036} {
+		t.Run(fmt.Sprint(seconds), func(t *testing.T) {
+			q, _ := dailyFixture(t)
+			if err := q.observe(context.Background(), "example", dailyHeaders(0, seconds)); err != nil {
+				t.Fatal(err)
+			}
+			var daily *metadata.DailyQuotaError
+			held := errors.As(q.Check(context.Background(), "example"), &daily)
+			if held != (seconds > 0 && seconds <= 86400) {
+				t.Fatalf("held=%v for reset=%d", held, seconds)
+			}
+		})
+	}
+	q, _ := dailyFixture(t)
+	h := dailyHeaders(0, 3600)
+	h.Set("RateLimit-Policy", `"daily";w=60`)
+	if err := q.observe(context.Background(), "example", h); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Check(context.Background(), "example"); err != nil {
+		t.Fatalf("non-daily window held: %v", err)
+	}
+}
+
+func TestDailyQuotaStopsRequestAfterPacerWait(t *testing.T) {
+	q, _ := dailyFixture(t)
+	th, clk := newFakeThrottle()
+	q.now = clk.now
+	th.penalize(0)
+	th.sleep = func(ctx context.Context, d time.Duration) error {
+		if err := q.observe(ctx, "example", dailyHeaders(0, 3600)); err != nil {
+			return err
+		}
+		return clk.sleep(ctx, d)
+	}
+	c := New().WithToken("example").WithDailyQuota(q)
+	c.throttle = th
+	c.http = &http.Client{Transport: dailyTransport(func(*http.Request) (*http.Response, error) {
+		t.Fatal("request sent despite hold during pacing")
+		return nil, nil
+	})}
+	var out any
+	var daily *metadata.DailyQuotaError
+	if err := c.query(context.Background(), "query", nil, &out); !errors.As(err, &daily) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestDailyQuotaQueryReportsPersistenceFailure(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	q := NewDailyQuota(db.NewSettingsRepo(database))
+	c := New().WithToken("example").WithDailyQuota(q)
+	c.throttle, _ = newFakeThrottle()
+	c.http = &http.Client{Transport: dailyTransport(func(*http.Request) (*http.Response, error) {
+		if _, err := database.Exec(`CREATE TRIGGER fail_hold_write BEFORE INSERT ON settings BEGIN SELECT RAISE(FAIL, 'temporary write failure'); END`); err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{StatusCode: 200, Header: dailyHeaders(0, 3600), Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+	})}
+	var out any
+	if err := c.query(context.Background(), "query", nil, &out); err == nil || !strings.Contains(err.Error(), "persist Hardcover daily hold") {
+		t.Fatalf("got %v", err)
+	}
+}

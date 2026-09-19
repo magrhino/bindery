@@ -87,7 +87,7 @@ func (q *DailyQuota) observe(ctx context.Context, token string, headers http.Hea
 	daily := dailyParameters(strings.Join(headers.Values("RateLimit"), ","))
 	remaining, hasRemaining := daily["r"]
 	reset := daily["t"]
-	if !hasRemaining || remaining != 0 || reset <= 0 || reset > int64((time.Duration(1<<63-1))/time.Second) {
+	if !hasRemaining || remaining != 0 || reset <= 0 || reset > 86400 {
 		return nil
 	}
 	policy := dailyParameters(strings.Join(headers.Values("RateLimit-Policy"), ","))
