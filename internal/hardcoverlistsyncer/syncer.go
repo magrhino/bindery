@@ -70,6 +70,7 @@ type ListSyncer struct {
 
 	tokenSource   func(context.Context) string
 	clientFactory hardcoverClientFactory
+	dailyQuota    *hardcover.DailyQuota
 	enricher      bookhydrate.AudiobookEnricher
 
 	// searcher starts the one immediate indexer search a book earns when a
@@ -128,6 +129,13 @@ const (
 	listSyncSearchConcurrency = 2
 	listSyncSearchPace        = 3 * time.Second
 )
+
+// WithDailyQuota shares exhaustion holds with other Hardcover callers.
+func (s *ListSyncer) WithDailyQuota(q *hardcover.DailyQuota) *ListSyncer {
+	s.dailyQuota = q
+	s.clientFactory = func(token string) hardcoverClient { return hardcover.NewAuthenticated(token).WithDailyQuota(q) }
+	return s
+}
 
 // New creates a new ListSyncer.
 func New(importLists *db.ImportListRepo, authors *db.AuthorRepo, books *db.BookRepo) *ListSyncer {
@@ -541,6 +549,9 @@ func (s *ListSyncer) syncList(ctx context.Context, il models.ImportList) error {
 	var searchTargets []models.Book
 
 	for _, book := range books {
+		if err := s.dailyQuota.Check(ctx, token); err != nil {
+			return err
+		}
 		// The sync now runs on the shutdown-scoped background context (#1854),
 		// so cancellation means the process is going down: stop walking rather
 		// than grinding through the remaining books with a dead context and a

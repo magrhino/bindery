@@ -897,6 +897,10 @@ func (a *Aggregator) GetBookByISBNWithOutcome(ctx context.Context, isbn string) 
 		bound, _ := resolveCacheProvider(ctx, provider)
 		book, err := bound.GetBookByISBN(ctx, isbn)
 		if err != nil {
+			var daily *DailyQuotaError
+			if errors.As(err, &daily) {
+				return nil, newSearchOutcome(primaryName, []string{normalizedProviderName(providerName(provider))}, answered, err), err
+			}
 			if errors.Is(err, ErrProviderNotConfigured) {
 				skippedUnconfigured = true
 				slog.Debug("isbn provider not configured", "provider", provider.Name())
