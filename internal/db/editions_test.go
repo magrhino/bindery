@@ -246,6 +246,60 @@ func TestEditionRepo_UpsertMetadataFillsMissingFields(t *testing.T) {
 	}
 }
 
+func TestEditionRepo_UpsertMetadataReplacesWhitespaceASIN(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+
+	author := &models.Author{ForeignID: "OL-ASIN-A", Name: "A", SortName: "A", MetadataProvider: "openlibrary", Monitored: true}
+	if err := NewAuthorRepo(database).Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	book := &models.Book{ForeignID: "hc:asin-book", AuthorID: author.ID, Title: "Book", SortTitle: "Book", Status: "wanted", Genres: []string{}, MetadataProvider: "hardcover", Monitored: true}
+	if err := NewBookRepo(database).Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewEditionRepo(database)
+	for _, tc := range []struct{ name, blank string }{
+		{name: "ASCII whitespace", blank: " \t "},
+		{name: "Unicode whitespace", blank: "\u00a0\u2003"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			edition := &models.Edition{ForeignID: "hc:asin-" + tc.name, BookID: book.ID, Title: "Audio Edition", ASIN: &tc.blank}
+			if ok, err := repo.UpsertMetadata(ctx, edition); err != nil || !ok {
+				t.Fatalf("insert metadata edition: ok=%v err=%v", ok, err)
+			}
+			if edition.ASIN != nil {
+				t.Fatalf("blank ASIN should be stored as missing, got %q", *edition.ASIN)
+			}
+
+			// Simulate a legacy row written before whitespace ASINs were normalized.
+			if _, err := database.ExecContext(ctx, "UPDATE editions SET asin = ? WHERE id = ?", tc.blank, edition.ID); err != nil {
+				t.Fatal(err)
+			}
+			valid := "B012345678"
+			incoming := &models.Edition{ForeignID: edition.ForeignID, BookID: book.ID, Title: edition.Title, ASIN: &valid}
+			if ok, err := repo.UpsertMetadata(ctx, incoming); err != nil || !ok {
+				t.Fatalf("update metadata edition: ok=%v err=%v", ok, err)
+			}
+			if incoming.ASIN == nil || *incoming.ASIN != valid {
+				t.Fatalf("upsert returned ASIN %v, want %q", incoming.ASIN, valid)
+			}
+			stored, err := repo.GetByForeignID(ctx, edition.ForeignID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored == nil || stored.ASIN == nil || *stored.ASIN != valid {
+				t.Fatalf("persisted ASIN = %v, want %q", stored, valid)
+			}
+		})
+	}
+}
+
 func TestEditionRepo_UpsertMetadataSkipsDifferentBook(t *testing.T) {
 	database, err := OpenMemory()
 	if err != nil {

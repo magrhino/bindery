@@ -566,6 +566,10 @@ Things worth knowing:
 - **Google Books** (free API key) and **Audnexus/Audible** (audiobook
   narrator, duration, by ASIN) enrich further.
 
+For a Hardcover audiobook, the chosen audio edition can fill a missing book
+duration before indexer search. Audnex may update that duration when an ASIN is
+available.
+
 Which of those a given book actually came from is on the book page, under
 **Metadata source**. It names the provider, shows the identifier the book is
 bound to with a copy button, and lists any other provider ids the same book is

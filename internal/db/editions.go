@@ -165,6 +165,14 @@ func (r *EditionRepo) UpsertMetadata(ctx context.Context, e *models.Edition) (bo
 	if strings.TrimSpace(e.Title) == "" {
 		e.Title = "Unknown Edition"
 	}
+	if e.ASIN != nil {
+		asin := strings.TrimSpace(*e.ASIN)
+		if asin == "" {
+			e.ASIN = nil
+		} else {
+			e.ASIN = &asin
+		}
+	}
 
 	now := time.Now().UTC()
 	isEbook := 0
@@ -172,6 +180,9 @@ func (r *EditionRepo) UpsertMetadata(ctx context.Context, e *models.Edition) (bo
 		isEbook = 1
 	}
 	monitored := 1
+	// SQLite TRIM defaults to ASCII space; include Go's Unicode White_Space set
+	// so legacy blank ASINs use the same rule as incoming strings.TrimSpace.
+	const asinWhitespace = " \t\n\v\f\r\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
 
 	res, err := r.db.ExecContext(ctx, `
 		INSERT INTO editions (foreign_id, book_id, title, isbn_13, isbn_10, asin,
@@ -183,7 +194,7 @@ func (r *EditionRepo) UpsertMetadata(ctx context.Context, e *models.Edition) (bo
 		    title       = COALESCE(NULLIF(editions.title, ''), excluded.title),
 		    isbn_13     = COALESCE(NULLIF(editions.isbn_13, ''), excluded.isbn_13),
 		    isbn_10     = COALESCE(NULLIF(editions.isbn_10, ''), excluded.isbn_10),
-		    asin        = COALESCE(NULLIF(editions.asin, ''), excluded.asin),
+		    asin        = CASE WHEN TRIM(COALESCE(editions.asin, ''), ?) = '' THEN excluded.asin ELSE editions.asin END,
 		    publisher   = COALESCE(NULLIF(editions.publisher, ''), excluded.publisher),
 		    publish_date= COALESCE(editions.publish_date, excluded.publish_date),
 		    format      = COALESCE(NULLIF(editions.format, ''), excluded.format),
@@ -196,7 +207,7 @@ func (r *EditionRepo) UpsertMetadata(ctx context.Context, e *models.Edition) (bo
 		WHERE editions.book_id = excluded.book_id`,
 		e.ForeignID, e.BookID, e.Title, e.ISBN13, e.ISBN10, e.ASIN,
 		e.Publisher, timeArg(e.PublishDate), e.Format, e.NumPages, e.Language,
-		e.ImageURL, isEbook, e.EditionInfo, monitored, timeValueArg(now), timeValueArg(now))
+		e.ImageURL, isEbook, e.EditionInfo, monitored, timeValueArg(now), timeValueArg(now), asinWhitespace)
 	if err != nil {
 		return false, fmt.Errorf("upsert metadata edition %s: %w", e.ForeignID, err)
 	}

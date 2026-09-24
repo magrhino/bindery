@@ -167,6 +167,200 @@ func TestHydrateHardcoverEditionsDerivesAudiobookMetadataBeforeAudnex(t *testing
 	}
 }
 
+func TestHydrateHardcoverEditionsDerivesSelectedAudioDuration(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		mediaType       string
+		pinned          bool
+		bookDuration    int
+		bookASIN        string
+		editionDuration int
+		unknownFormat   bool
+		asinOnOther     bool
+		wantDuration    int
+		wantASIN        string
+	}{
+		{name: "missing duration", mediaType: models.MediaTypeAudiobook, editionDuration: 36000, wantDuration: 36000},
+		{name: "runtime without audio format", mediaType: models.MediaTypeAudiobook, editionDuration: 36000, unknownFormat: true, wantDuration: 36000},
+		{name: "whitespace ASIN", mediaType: models.MediaTypeAudiobook, bookASIN: "  ", editionDuration: 36000, wantDuration: 36000, wantASIN: "B000AUDIO1"},
+		{name: "known duration", mediaType: models.MediaTypeAudiobook, bookDuration: 42000, editionDuration: 36000, wantDuration: 42000},
+		{name: "missing edition duration", mediaType: models.MediaTypeAudiobook},
+		{name: "invalid edition duration", mediaType: models.MediaTypeAudiobook, editionDuration: -1},
+		{name: "ASIN chooses matching edition", mediaType: models.MediaTypeAudiobook, editionDuration: 36000, asinOnOther: true, wantDuration: 72000},
+		{name: "known ASIN chooses matching edition", mediaType: models.MediaTypeAudiobook, bookASIN: "B000AUDIO1", editionDuration: 36000, asinOnOther: true, wantDuration: 72000},
+		{name: "unmatched known ASIN", mediaType: models.MediaTypeAudiobook, bookASIN: "B000UNKNOWN", editionDuration: 36000},
+		{name: "pinned ebook", mediaType: models.MediaTypeEbook, pinned: true, editionDuration: 36000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			books, editions, book, ctx := newHydrateBook(t, "hc:duration-book", "hardcover", tc.mediaType)
+			book.DurationSeconds = tc.bookDuration
+			book.ASIN = tc.bookASIN
+			if tc.bookDuration > 0 || tc.bookASIN != "" {
+				if err := books.Update(ctx, book); err != nil {
+					t.Fatal(err)
+				}
+			}
+			audioASIN := "B000AUDIO1"
+			selectedASIN := &audioASIN
+			var otherASIN *string
+			if tc.asinOnOther {
+				selectedASIN, otherASIN = nil, &audioASIN
+			}
+			audioFormat := "Audiobook"
+			if tc.unknownFormat {
+				audioFormat = "Unknown"
+			}
+			result := HydrateHardcoverEditions(ctx, Options{
+				Book:            book,
+				Provider:        "hardcover",
+				Editions:        editions,
+				Books:           books,
+				MediaTypePinned: tc.pinned,
+				FetchEditions: func(context.Context, string) ([]models.Edition, error) {
+					return []models.Edition{
+						{ForeignID: "hc:print", Format: "Hardcover"},
+						{ForeignID: "hc:audio", Format: audioFormat, ASIN: selectedASIN, DurationSeconds: tc.editionDuration},
+						{ForeignID: "hc:other-audio", Format: "Audiobook", ASIN: otherASIN, DurationSeconds: 72000},
+					}, nil
+				},
+			})
+			if result.Err != nil {
+				t.Fatal(result.Err)
+			}
+			stored, err := books.GetByID(ctx, book.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.DurationSeconds != tc.wantDuration {
+				t.Errorf("stored DurationSeconds = %d, want %d; result=%+v", stored.DurationSeconds, tc.wantDuration, result)
+			}
+			if tc.wantASIN != "" && stored.ASIN != tc.wantASIN {
+				t.Errorf("stored ASIN = %q, want %q", stored.ASIN, tc.wantASIN)
+			}
+		})
+	}
+}
+
+func TestHydrateHardcoverEditionsPrefersRuntimeWhenEditionsHaveNoASIN(t *testing.T) {
+	books, editions, book, ctx := newHydrateBook(t, "hc:duration-book", "hardcover", models.MediaTypeAudiobook)
+	result := HydrateHardcoverEditions(ctx, Options{
+		Book: book, Provider: "hardcover", Editions: editions, Books: books,
+		FetchEditions: func(context.Context, string) ([]models.Edition, error) {
+			return []models.Edition{
+				{ForeignID: "hc:labeled", Format: "Audiobook"},
+				{ForeignID: "hc:runtime", Format: "Unknown", DurationSeconds: 36000},
+			}, nil
+		},
+	})
+	if result.Err != nil {
+		t.Fatal(result.Err)
+	}
+	stored, err := books.GetByID(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.DurationSeconds != 36000 || !result.BookUpdated {
+		t.Fatalf("runtime from unlabeled audio edition was lost: duration=%d result=%+v", stored.DurationSeconds, result)
+	}
+}
+
+func TestHydrateHardcoverEditionsDurationOnlyPreservesConcurrentChanges(t *testing.T) {
+	for _, replaceASIN := range []bool{false, true} {
+		name := "unrelated changes"
+		if replaceASIN {
+			name = "changed ASIN"
+		}
+		t.Run(name, func(t *testing.T) {
+			books, editions, book, ctx := newHydrateBook(t, "hc:duration-book", "hardcover", models.MediaTypeAudiobook)
+			book.ASIN = "B000AUDIO1"
+			if err := books.Update(ctx, book); err != nil {
+				t.Fatal(err)
+			}
+			result := HydrateHardcoverEditions(ctx, Options{
+				Book: book, Provider: "hardcover", Editions: editions, Books: books,
+				FetchEditions: func(ctx context.Context, _ string) ([]models.Edition, error) {
+					current, err := books.GetByID(ctx, book.ID)
+					if err != nil {
+						return nil, err
+					}
+					current.Monitored = false
+					current.Status = models.BookStatusSkipped
+					current.Narrator = "Concurrent narrator"
+					if replaceASIN {
+						current.ASIN = "B000OTHER1"
+					}
+					if err := books.Update(ctx, current); err != nil {
+						return nil, err
+					}
+					asin := "B000AUDIO1"
+					return []models.Edition{{ForeignID: "hc:audio", Format: "Audiobook", ASIN: &asin, DurationSeconds: 36000}}, nil
+				},
+			})
+			if result.Err != nil {
+				t.Fatal(result.Err)
+			}
+			if result.BookUpdated == replaceASIN {
+				t.Fatalf("BookUpdated=%v with replaceASIN=%v", result.BookUpdated, replaceASIN)
+			}
+			stored, err := books.GetByID(ctx, book.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantDuration := 36000
+			wantASIN := "B000AUDIO1"
+			if replaceASIN {
+				wantDuration = 0
+				wantASIN = "B000OTHER1"
+			}
+			if book.DurationSeconds != wantDuration {
+				t.Fatalf("in-memory duration = %d, want %d after persistence", book.DurationSeconds, wantDuration)
+			}
+			if stored.Monitored || stored.Status != models.BookStatusSkipped || stored.Narrator != "Concurrent narrator" ||
+				stored.ASIN != wantASIN || stored.DurationSeconds != wantDuration {
+				t.Fatalf("concurrent book changes were lost or stale duration persisted: %+v", stored)
+			}
+		})
+	}
+}
+
+func TestHydrateHardcoverEditionsAdoptsConcurrentDuration(t *testing.T) {
+	books, editions, book, ctx := newHydrateBook(t, "hc:duration-book", "hardcover", models.MediaTypeAudiobook)
+	book.ASIN = "B000AUDIO1"
+	if err := books.Update(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	asin := book.ASIN
+	result := HydrateHardcoverEditions(ctx, Options{
+		Book: book, Provider: "hardcover", Editions: editions, Books: books,
+		FetchEditions: func(ctx context.Context, _ string) ([]models.Edition, error) {
+			concurrentBook, err := books.GetByID(ctx, book.ID)
+			if err != nil {
+				return nil, err
+			}
+			concurrent := HydrateHardcoverEditions(ctx, Options{
+				Book: concurrentBook, Provider: "hardcover", Editions: editions, Books: books,
+				FetchEditions: func(context.Context, string) ([]models.Edition, error) {
+					return []models.Edition{{ForeignID: "hc:audio", Format: "Audiobook", ASIN: &asin, DurationSeconds: 42000}}, nil
+				},
+			})
+			if concurrent.Err != nil || !concurrent.BookUpdated {
+				t.Fatalf("concurrent hydration failed: %+v", concurrent)
+			}
+			return []models.Edition{{ForeignID: "hc:audio", Format: "Audiobook", ASIN: &asin, DurationSeconds: 36000}}, nil
+		},
+	})
+	if result.Err != nil || result.BookUpdated {
+		t.Fatalf("stale hydration should lose the guarded write: %+v", result)
+	}
+	stored, err := books.GetByID(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if book.DurationSeconds != 42000 || stored.DurationSeconds != 42000 {
+		t.Fatalf("in-memory duration=%d stored duration=%d, want concurrent runtime 42000", book.DurationSeconds, stored.DurationSeconds)
+	}
+}
+
 // TestHydrateHardcoverEditionsDoesNotClobberKnownAudiobookFields guards the
 // "unknown ⇒ don't overwrite known" invariant: Hardcover edition data must not
 // replace language/cover the book already carries.
@@ -355,11 +549,12 @@ func TestHydrateHardcoverEditionsPromotesStoredEditionASIN(t *testing.T) {
 		Books:    books,
 		FetchEditions: func(context.Context, string) ([]models.Edition, error) {
 			return []models.Edition{{
-				ForeignID: "hc:audio",
-				Title:     "Fetched Audio",
-				ASIN:      &replacementASIN,
-				Format:    "Audiobook",
-				Monitored: true,
+				ForeignID:       "hc:audio",
+				Title:           "Fetched Audio",
+				ASIN:            &replacementASIN,
+				Format:          "Audiobook",
+				DurationSeconds: 36000,
+				Monitored:       true,
 			}}, nil
 		},
 		Enricher: &fakeAudiobookEnricher{},
@@ -380,12 +575,62 @@ func TestHydrateHardcoverEditionsPromotesStoredEditionASIN(t *testing.T) {
 	if stored.ASIN != storedASIN {
 		t.Fatalf("stored book ASIN = %q, want %q", stored.ASIN, storedASIN)
 	}
+	if stored.DurationSeconds != 0 {
+		t.Fatalf("stored book duration = %d from mismatched fetched ASIN, want 0", stored.DurationSeconds)
+	}
 	edition, err := editions.GetByForeignID(ctx, "hc:audio")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if edition.ASIN == nil || *edition.ASIN != storedASIN {
 		t.Fatalf("edition ASIN was overwritten: %+v", edition)
+	}
+}
+
+func TestHydrateHardcoverEditionsUsesRuntimeMatchingRetainedASIN(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		storedASIN   string
+		fetchedASIN  string
+		siblingASIN  string
+		wantASIN     string
+		wantDuration int
+	}{
+		{name: "valid sibling after ASIN conflict", storedASIN: "B000RETAIN", fetchedASIN: "B000FETCHD", siblingASIN: "B000RETAIN", wantASIN: "B000RETAIN", wantDuration: 72000},
+		{name: "stored whitespace ASIN", storedASIN: "  ", fetchedASIN: "B000FETCHD", wantASIN: "B000FETCHD", wantDuration: 36000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			books, editions, book, ctx := newHydrateBook(t, "hc:duration-book", "hardcover", models.MediaTypeAudiobook)
+			if ok, err := editions.UpsertMetadata(ctx, &models.Edition{
+				ForeignID: "hc:audio", BookID: book.ID, Title: "Audio", Format: "Audiobook", ASIN: &tc.storedASIN,
+			}); err != nil || !ok {
+				t.Fatalf("seed edition ok=%v err=%v", ok, err)
+			}
+			result := HydrateHardcoverEditions(ctx, Options{
+				Book: book, Provider: "hardcover", Editions: editions, Books: books,
+				FetchEditions: func(context.Context, string) ([]models.Edition, error) {
+					fetched := []models.Edition{{
+						ForeignID: "hc:audio", Title: "Audio", Format: "Audiobook", ASIN: &tc.fetchedASIN, DurationSeconds: 36000,
+					}}
+					if tc.siblingASIN != "" {
+						fetched = append(fetched, models.Edition{
+							ForeignID: "hc:sibling", Title: "Sibling Audio", Format: "Audiobook", ASIN: &tc.siblingASIN, DurationSeconds: 72000,
+						})
+					}
+					return fetched, nil
+				},
+			})
+			if result.Err != nil {
+				t.Fatal(result.Err)
+			}
+			stored, err := books.GetByID(ctx, book.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.ASIN != tc.wantASIN || stored.DurationSeconds != tc.wantDuration {
+				t.Fatalf("stored ASIN=%q duration=%d, want ASIN=%q duration=%d; result=%+v", stored.ASIN, stored.DurationSeconds, tc.wantASIN, tc.wantDuration, result)
+			}
+		})
 	}
 }
 
