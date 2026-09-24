@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/vavallee/bindery/internal/models"
@@ -246,7 +247,7 @@ func TestEditionRepo_UpsertMetadataFillsMissingFields(t *testing.T) {
 	}
 }
 
-func TestEditionRepo_UpsertMetadataReplacesWhitespaceASIN(t *testing.T) {
+func TestEditionRepo_UpsertMetadataNormalizesBlankText(t *testing.T) {
 	database, err := OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -264,38 +265,70 @@ func TestEditionRepo_UpsertMetadataReplacesWhitespaceASIN(t *testing.T) {
 	}
 
 	repo := NewEditionRepo(database)
-	for _, tc := range []struct{ name, blank string }{
-		{name: "ASCII whitespace", blank: " \t "},
-		{name: "Unicode whitespace", blank: "\u00a0\u2003"},
+	textEdition := func(foreignID, value string) *models.Edition {
+		return &models.Edition{
+			ForeignID: foreignID, BookID: book.ID, Title: value,
+			ISBN13: &value, ISBN10: &value, ASIN: &value,
+			Publisher: value, Format: value, Language: value, ImageURL: value, EditionInfo: value,
+		}
+	}
+	assertText := func(t *testing.T, got *models.Edition, want string) {
+		t.Helper()
+		wantTitle := want
+		if want == "" {
+			wantTitle = "Unknown Edition"
+		}
+		if got.Title != wantTitle {
+			t.Errorf("title = %q, want %q", got.Title, wantTitle)
+		}
+		for name, value := range map[string]string{"publisher": got.Publisher, "format": got.Format, "language": got.Language, "image_url": got.ImageURL, "edition_info": got.EditionInfo} {
+			if value != want {
+				t.Errorf("%s = %q, want %q", name, value, want)
+			}
+		}
+		for name, value := range map[string]*string{"isbn_13": got.ISBN13, "isbn_10": got.ISBN10, "asin": got.ASIN} {
+			if want == "" {
+				if value != nil {
+					t.Errorf("%s = %q, want nil", name, *value)
+				}
+			} else if value == nil || *value != want {
+				t.Errorf("%s = %v, want %q", name, value, want)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name, stored string
+		want         string
+	}{
+		{name: "empty", stored: "", want: "replacement"},
+		{name: "ASCII whitespace", stored: " \t\n\v\f\r", want: "replacement"},
+		{name: "Unicode whitespace", stored: "\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000", want: "replacement"},
+		{name: "meaningful stored text", stored: " \u2003curated\t ", want: " \u2003curated\t "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			edition := &models.Edition{ForeignID: "hc:asin-" + tc.name, BookID: book.ID, Title: "Audio Edition", ASIN: &tc.blank}
+			edition := textEdition("hc:text-"+tc.name, tc.stored)
 			if ok, err := repo.UpsertMetadata(ctx, edition); err != nil || !ok {
-				t.Fatalf("insert metadata edition: ok=%v err=%v", ok, err)
+				t.Fatalf("insert: ok=%v err=%v", ok, err)
 			}
-			if edition.ASIN != nil {
-				t.Fatalf("blank ASIN should be stored as missing, got %q", *edition.ASIN)
-			}
-
-			// Simulate a legacy row written before whitespace ASINs were normalized.
-			if _, err := database.ExecContext(ctx, "UPDATE editions SET asin = ? WHERE id = ?", tc.blank, edition.ID); err != nil {
+			assertText(t, edition, strings.TrimSpace(tc.stored))
+			// Simulate legacy blank fields and curated text whose spacing must survive.
+			if _, err := database.ExecContext(ctx, `UPDATE editions SET title=?1, isbn_13=?1, isbn_10=?1, asin=?1,
+				publisher=?1, format=?1, language=?1, image_url=?1, edition_info=?1 WHERE id=?2`, tc.stored, edition.ID); err != nil {
 				t.Fatal(err)
 			}
-			valid := "B012345678"
-			incoming := &models.Edition{ForeignID: edition.ForeignID, BookID: book.ID, Title: edition.Title, ASIN: &valid}
+			incoming := textEdition(edition.ForeignID, " \u2003replacement\t ")
 			if ok, err := repo.UpsertMetadata(ctx, incoming); err != nil || !ok {
-				t.Fatalf("update metadata edition: ok=%v err=%v", ok, err)
+				t.Fatalf("update: ok=%v err=%v", ok, err)
 			}
-			if incoming.ASIN == nil || *incoming.ASIN != valid {
-				t.Fatalf("upsert returned ASIN %v, want %q", incoming.ASIN, valid)
-			}
+			assertText(t, incoming, tc.want)
 			stored, err := repo.GetByForeignID(ctx, edition.ForeignID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if stored == nil || stored.ASIN == nil || *stored.ASIN != valid {
-				t.Fatalf("persisted ASIN = %v, want %q", stored, valid)
+			if stored == nil {
+				t.Fatal("edition not persisted")
 			}
+			assertText(t, stored, tc.want)
 		})
 	}
 }
