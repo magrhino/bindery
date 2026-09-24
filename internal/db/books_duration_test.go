@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"testing"
@@ -28,9 +29,9 @@ func TestBookRepoFillMissingAudiobookDuration(t *testing.T) {
 
 	fetched := *book
 	fetched.DurationSeconds = 36000
-	updated, current, err := books.FillMissingAudiobookDuration(ctx, &fetched)
-	if err != nil || !updated || current != 36000 {
-		t.Fatalf("initial duration fill: updated=%v current=%d err=%v", updated, current, err)
+	updated, err := books.FillMissingAudiobookDuration(ctx, &fetched)
+	if err != nil || !updated || fetched.DurationSeconds != 36000 {
+		t.Fatalf("initial duration fill: updated=%v err=%v", updated, err)
 	}
 
 	stored, err := books.GetByID(ctx, book.ID)
@@ -48,15 +49,15 @@ func TestBookRepoFillMissingAudiobookDuration(t *testing.T) {
 	}
 
 	fetched.DurationSeconds = 72000
-	updated, current, err = books.FillMissingAudiobookDuration(ctx, &fetched)
-	if err != nil || updated || current != 36000 {
-		t.Fatalf("existing duration should win: updated=%v current=%d err=%v", updated, current, err)
+	updated, err = books.FillMissingAudiobookDuration(ctx, &fetched)
+	if err != nil || updated || fetched.DurationSeconds != 36000 {
+		t.Fatalf("existing duration should win: updated=%v err=%v", updated, err)
 	}
 	stored, err = books.GetByID(ctx, book.ID)
 	if err != nil || stored == nil {
 		t.Fatalf("reload stored book: %v", err)
 	}
-	if stored.DurationSeconds != 36000 || stored.Monitored || stored.Status != models.BookStatusSkipped || stored.Narrator != "Concurrent narrator" {
+	if stored.DurationSeconds != 36000 || stored.Monitored || stored.Status != models.BookStatusSkipped || stored.Narrator != "Concurrent narrator" || fetched.Monitored || fetched.Status != stored.Status || fetched.Narrator != stored.Narrator {
 		t.Fatalf("guarded write changed concurrent fields: %+v", stored)
 	}
 
@@ -65,36 +66,42 @@ func TestBookRepoFillMissingAudiobookDuration(t *testing.T) {
 	if err := books.Update(ctx, stored); err != nil {
 		t.Fatal(err)
 	}
-	updated, current, err = books.FillMissingAudiobookDuration(ctx, &fetched)
-	if err != nil || updated || current != 0 {
-		t.Fatalf("changed ASIN must not return another narration's duration: updated=%v current=%d err=%v", updated, current, err)
+	updated, err = books.FillMissingAudiobookDuration(ctx, &fetched)
+	if err != nil || updated {
+		t.Fatalf("changed ASIN must reload the current identity and duration: updated=%v err=%v", updated, err)
 	}
 	stored, err = books.GetByID(ctx, book.ID)
 	if err != nil || stored == nil {
 		t.Fatalf("reload changed book: %v", err)
 	}
-	if stored.ASIN != "B000OTHER1" || stored.DurationSeconds != 42000 {
+	if stored.ASIN != "B000OTHER1" || stored.DurationSeconds != 42000 || fetched.ASIN != stored.ASIN || fetched.DurationSeconds != stored.DurationSeconds {
 		t.Fatalf("changed book was overwritten: %+v", stored)
 	}
 
 	fetched.MediaType = models.MediaTypeEbook
-	updated, current, err = books.FillMissingAudiobookDuration(ctx, &fetched)
-	if err != nil || updated || current != 0 {
-		t.Fatalf("ebook must not receive audio duration: updated=%v current=%d err=%v", updated, current, err)
+	updated, err = books.FillMissingAudiobookDuration(ctx, &fetched)
+	if err != nil || updated {
+		t.Fatalf("ebook must not receive audio duration: updated=%v err=%v", updated, err)
 	}
 	fetched.MediaType = models.MediaTypeAudiobook
 	fetched.DurationSeconds = 0
-	if _, _, err := books.FillMissingAudiobookDuration(ctx, &fetched); err == nil {
+	if _, err := books.FillMissingAudiobookDuration(ctx, &fetched); err == nil {
 		t.Fatal("zero candidate duration should be rejected")
 	}
-	if _, _, err := books.FillMissingAudiobookDuration(ctx, nil); err == nil {
+	if _, err := books.FillMissingAudiobookDuration(ctx, nil); err == nil {
 		t.Fatal("nil book should be rejected")
 	}
 	fetched.DurationSeconds = 72000
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, _, err := books.FillMissingAudiobookDuration(cancelled, &fetched); !errors.Is(err, context.Canceled) {
+	if _, err := books.FillMissingAudiobookDuration(cancelled, &fetched); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled write error = %v, want context.Canceled", err)
+	}
+	if err := books.Delete(ctx, book.ID); err != nil {
+		t.Fatal(err)
+	}
+	if updated, err := books.FillMissingAudiobookDuration(ctx, &fetched); updated || !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("deleted book: updated=%v err=%v", updated, err)
 	}
 }
 
@@ -115,9 +122,59 @@ func TestBookRepoFillMissingAudiobookDurationForBoth(t *testing.T) {
 		t.Fatal(err)
 	}
 	book.DurationSeconds = 6300
-	updated, current, err := books.FillMissingAudiobookDuration(ctx, book)
-	if err != nil || updated || current != 5400 {
-		t.Fatalf("known dual-format duration should win: updated=%v current=%d err=%v", updated, current, err)
+	updated, err := books.FillMissingAudiobookDuration(ctx, book)
+	if err != nil || updated || book.DurationSeconds != 5400 {
+		t.Fatalf("known dual-format duration should win: updated=%v err=%v", updated, err)
+	}
+}
+
+func TestBookRepoUpdateHydratedMetadata(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	books := NewBookRepo(database)
+	author := mkAuthor(t, NewAuthorRepo(database), ctx, "OL-HYDRATED-A")
+	book := mkBook(t, books, ctx, author.ID, "hc:hydrated", "Original title", models.BookStatusWanted)
+	before := *book
+	book.Language, book.ImageURL = "eng", "https://example.com/cover.jpg"
+	book.MediaType, book.ASIN = models.MediaTypeAudiobook, "B000AUDIO1"
+	book.Narrator, book.DurationSeconds, book.Description = "Narrator", 36000, "Summary"
+	// A hydration update must not rewrite unrelated snapshot fields or locks.
+	book.Title = "Stale title"
+	book.LockField(models.BookFieldGenres)
+	updated, err := books.UpdateHydratedMetadata(ctx, book, before.UpdatedAt)
+	if err != nil || !updated {
+		t.Fatalf("initial write: updated=%v err=%v", updated, err)
+	}
+	stored, err := books.GetByID(ctx, book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Language != "eng" || stored.ImageURL != book.ImageURL || stored.MediaType != models.MediaTypeAudiobook || stored.ASIN != book.ASIN || stored.Narrator != "Narrator" || stored.DurationSeconds != 36000 || stored.Description != "Summary" || stored.Title != before.Title || len(stored.LockedFields) != 0 || !stored.UpdatedAt.Equal(book.UpdatedAt) {
+		t.Fatalf("incorrect metadata write: %+v", stored)
+	}
+	// A second attempt with the old timestamp loses, and reloads the winner.
+	book.Language = "ger"
+	updated, err = books.UpdateHydratedMetadata(ctx, book, before.UpdatedAt)
+	if err != nil || updated || book.Language != "eng" || book.Title != before.Title || len(book.LockedFields) != 0 {
+		t.Fatalf("stale write: updated=%v err=%v book=%+v", updated, err, book)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := books.UpdateHydratedMetadata(cancelled, book, book.UpdatedAt); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled write: %v", err)
+	}
+	if _, err := books.UpdateHydratedMetadata(ctx, nil, book.UpdatedAt); err == nil {
+		t.Fatal("nil snapshot should be rejected")
+	}
+	if err := books.Delete(ctx, book.ID); err != nil {
+		t.Fatal(err)
+	}
+	if updated, err := books.UpdateHydratedMetadata(ctx, book, book.UpdatedAt); updated || !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("deleted book: updated=%v err=%v", updated, err)
 	}
 }
 
@@ -131,7 +188,7 @@ func TestBookRepoFillMissingAudiobookDurationRequiresMatchingIdentity(t *testing
 		{"asin", "B000OTHER1"},
 	} {
 		// A zero stored duration pins the UPDATE clause; a known one pins the
-		// fallback SELECT, which must not report another identity's duration.
+		// reload, which must report the row's own duration, not the fetched one.
 		for _, storedDuration := range []int{0, 42000} {
 			t.Run(fmt.Sprintf("%s/stored=%d", field.column, storedDuration), func(t *testing.T) {
 				database, err := OpenMemory()
@@ -158,9 +215,9 @@ func TestBookRepoFillMissingAudiobookDurationRequiresMatchingIdentity(t *testing
 					t.Fatal(err)
 				}
 
-				updated, current, err := books.FillMissingAudiobookDuration(ctx, &fetched)
-				if err != nil || updated || current != 0 {
-					t.Fatalf("changed %s: updated=%v current=%d err=%v, want no write and no current duration", field.column, updated, current, err)
+				updated, err := books.FillMissingAudiobookDuration(ctx, &fetched)
+				if err != nil || updated || fetched.DurationSeconds != storedDuration {
+					t.Fatalf("changed %s: updated=%v duration=%d err=%v, want no write and the stored duration %d", field.column, updated, fetched.DurationSeconds, err, storedDuration)
 				}
 				var duration int
 				if err := database.QueryRowContext(ctx, "SELECT duration_seconds FROM books WHERE id = ?", book.ID).Scan(&duration); err != nil {
