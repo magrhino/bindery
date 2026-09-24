@@ -122,6 +122,11 @@ func HydrateHardcoverEditions(ctx context.Context, opts Options) Result {
 		result.Upserted++
 		// UpsertMetadata reloads persisted fields; runtime exists only in the provider response.
 		edition.DurationSeconds = editions[i].DurationSeconds
+		if !isLikelyAudioEdition(editions[i]) {
+			// A retained unknown format must not hide a fetched print format and
+			// turn that print edition into audio solely through its runtime.
+			edition.DurationSeconds = 0
+		}
 		if isLikelyAudioEdition(edition) {
 			if edition.ASIN != nil && strings.TrimSpace(*edition.ASIN) == "" {
 				// UpsertMetadata can retain a whitespace-only ASIN; use the fetched identity for hydration.
@@ -203,8 +208,8 @@ func HydrateHardcoverEditions(ctx context.Context, opts Options) Result {
 
 // preferredAudioEdition returns the audio-looking edition whose ASIN matches
 // the book, or the edition maybePromoteASIN will use when the book has no ASIN.
-// Among matching ASINs, prefer an edition with a known runtime, then the
-// highest audioEditionScore (first on ties).
+// Among matching ASINs, prefer the highest audioEditionScore, then an edition
+// with a known runtime (first on ties).
 func preferredAudioEdition(editions []models.Edition, bookASIN string) (models.Edition, bool) {
 	best := -1
 	targetASIN := strings.TrimSpace(bookASIN)
@@ -224,14 +229,18 @@ func preferredAudioEdition(editions []models.Edition, bookASIN string) (models.E
 			}
 			continue
 		}
+		score, bestScore := audioEditionScore(editions[i]), audioEditionScore(editions[best])
+		if score != bestScore {
+			if score > bestScore {
+				best = i
+			}
+			continue
+		}
 		if (matchesASIN || targetASIN == "") && (editions[i].DurationSeconds > 0) != (editions[best].DurationSeconds > 0) {
 			if editions[i].DurationSeconds > 0 {
 				best = i
 			}
 			continue
-		}
-		if audioEditionScore(editions[i]) > audioEditionScore(editions[best]) {
-			best = i
 		}
 	}
 	if best == -1 {
@@ -365,7 +374,9 @@ func isLikelyAudioEdition(edition models.Edition) bool {
 		edition.Format,
 		edition.EditionInfo,
 	}, " "))
-	return editionHasAudioMarker(text) || (edition.DurationSeconds > 0 && !edition.IsEbook)
+	format := strings.TrimSpace(edition.Format)
+	unknownFormat := format == "" || strings.EqualFold(format, "unknown")
+	return editionHasAudioMarker(text) || (unknownFormat && edition.DurationSeconds > 0 && !edition.IsEbook)
 }
 
 func editionHasAudioMarker(text string) bool {
