@@ -128,10 +128,6 @@ func HydrateHardcoverEditions(ctx context.Context, opts Options) Result {
 			edition.DurationSeconds = 0
 		}
 		if isLikelyAudioEdition(edition) {
-			if edition.ASIN != nil && strings.TrimSpace(*edition.ASIN) == "" {
-				// UpsertMetadata can retain a whitespace-only ASIN; use the fetched identity for hydration.
-				edition.ASIN = editions[i].ASIN
-			}
 			if editions[i].ASIN != nil && edition.ASIN != nil && strings.TrimSpace(*editions[i].ASIN) != "" &&
 				!strings.EqualFold(strings.TrimSpace(*editions[i].ASIN), strings.TrimSpace(*edition.ASIN)) {
 				// The stored ASIN belongs to a different narration than the fetched runtime.

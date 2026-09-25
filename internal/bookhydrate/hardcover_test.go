@@ -704,17 +704,29 @@ func TestHydrateHardcoverEditionsUsesRuntimeMatchingRetainedASIN(t *testing.T) {
 		storedASIN   string
 		fetchedASIN  string
 		siblingASIN  string
+		legacySeed   bool
 		wantASIN     string
 		wantDuration int
 	}{
 		{name: "valid sibling after ASIN conflict", storedASIN: "B000RETAIN", fetchedASIN: "B000FETCHD", siblingASIN: "B000RETAIN", wantASIN: "B000RETAIN", wantDuration: 72000},
-		{name: "stored whitespace ASIN", storedASIN: "  ", fetchedASIN: "B000FETCHD", wantASIN: "B000FETCHD", wantDuration: 36000},
+		{name: "legacy whitespace ASIN replaced by upsert", storedASIN: "  ", fetchedASIN: "B000FETCHD", legacySeed: true, wantASIN: "B000FETCHD", wantDuration: 36000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			books, editions, book, ctx := newHydrateBook(t, "hc:duration-book", "hardcover", models.MediaTypeAudiobook)
-			if ok, err := editions.UpsertMetadata(ctx, &models.Edition{
+			seed := &models.Edition{
 				ForeignID: "hc:audio", BookID: book.ID, Title: "Audio", Format: "Audiobook", ASIN: &tc.storedASIN,
-			}); err != nil || !ok {
+			}
+			if tc.legacySeed {
+				// Upsert stores the ASIN verbatim, leaving the whitespace-only row
+				// that UpsertMetadata normalizes; hydration must not see it.
+				if err := editions.Upsert(ctx, seed); err != nil {
+					t.Fatalf("seed legacy edition: %v", err)
+				}
+				stored, err := editions.GetByForeignID(ctx, "hc:audio")
+				if err != nil || stored == nil || stored.ASIN == nil || *stored.ASIN != tc.storedASIN {
+					t.Fatalf("legacy seed ASIN = %+v err=%v, want %q", stored, err, tc.storedASIN)
+				}
+			} else if ok, err := editions.UpsertMetadata(ctx, seed); err != nil || !ok {
 				t.Fatalf("seed edition ok=%v err=%v", ok, err)
 			}
 			result := HydrateHardcoverEditions(ctx, Options{
