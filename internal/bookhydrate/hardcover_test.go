@@ -2,6 +2,7 @@ package bookhydrate
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"testing"
@@ -29,6 +30,12 @@ func (f *fakeAudiobookEnricher) EnrichAudiobook(_ context.Context, book *models.
 }
 
 func newHydrateBook(t *testing.T, foreignID, provider, mediaType string) (*db.BookRepo, *db.EditionRepo, *models.Book, context.Context) {
+	t.Helper()
+	books, editions, book, ctx, _ := newHydrateBookWithDB(t, foreignID, provider, mediaType)
+	return books, editions, book, ctx
+}
+
+func newHydrateBookWithDB(t *testing.T, foreignID, provider, mediaType string) (*db.BookRepo, *db.EditionRepo, *models.Book, context.Context, *sql.DB) {
 	t.Helper()
 	database, err := db.OpenMemory()
 	if err != nil {
@@ -58,7 +65,7 @@ func newHydrateBook(t *testing.T, foreignID, provider, mediaType string) (*db.Bo
 	if err := books.Create(ctx, book); err != nil {
 		t.Fatal(err)
 	}
-	return books, editions, book, ctx
+	return books, editions, book, ctx, database
 }
 
 func TestHydrateHardcoverEditionsAssignsBookAndPromotesAudioASIN(t *testing.T) {
@@ -975,6 +982,41 @@ func TestHydrateHardcoverEditionsRespectsMediaTypePin(t *testing.T) {
 			}
 			if stored.MediaType != want {
 				t.Errorf("persisted MediaType = %q, want %q (pinned=%v)", stored.MediaType, want, pinned)
+			}
+		})
+	}
+}
+
+// A row last written as CURRENT_TIMESTAMP (migrations 082/084) or in the #914
+// time.String shape must still accept hydration from an unmodified snapshot,
+// e.g. the author-refresh title-dedup arm that hydrates a listed book (#2758).
+func TestHydrateHardcoverEditionsPersistsOverLegacyUpdatedAt(t *testing.T) {
+	for _, stored := range []string{"2026-09-01 10:00:00", "2026-09-01 10:00:00.123456789 +0000 UTC"} {
+		t.Run(stored, func(t *testing.T) {
+			books, editions, created, ctx, database := newHydrateBookWithDB(t, "hc:legacy-updated-at", "hardcover", models.MediaTypeAudiobook)
+			if _, err := database.ExecContext(ctx, "UPDATE books SET updated_at=? WHERE id=?", stored, created.ID); err != nil {
+				t.Fatal(err)
+			}
+			book, err := books.GetByID(ctx, created.ID)
+			if err != nil || book == nil {
+				t.Fatalf("load legacy book: %v", err)
+			}
+			asin := "B000LEGACY1"
+			result := HydrateHardcoverEditions(ctx, Options{
+				Book: book, Provider: "hardcover", Editions: editions, Books: books, Enricher: &fakeAudiobookEnricher{},
+				FetchEditions: func(context.Context, string) ([]models.Edition, error) {
+					return []models.Edition{{ForeignID: "hc:audio", Format: "Audiobook", ASIN: &asin, Language: "ger", ImageURL: "https://img.example/legacy.jpg"}}, nil
+				},
+			})
+			if result.Err != nil || !result.BookUpdated || !result.ASINPromoted || !result.MetadataDerived {
+				t.Fatalf("hydration over legacy updated_at was discarded: %+v", result)
+			}
+			persisted, err := books.GetByID(ctx, book.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if persisted.ASIN != asin || persisted.Language != "ger" || persisted.ImageURL != "https://img.example/legacy.jpg" || persisted.Narrator != "Kate Reading" {
+				t.Fatalf("hydrated metadata not persisted: %+v", persisted)
 			}
 		})
 	}

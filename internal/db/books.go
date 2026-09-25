@@ -34,6 +34,12 @@ func timeArg(t *time.Time) any {
 // timeValueArg is the non-pointer sibling of timeArg, used for columns that
 // are always populated (created_at, updated_at).
 func timeValueArg(t time.Time) any {
+	return timeValueText(t)
+}
+
+// timeValueText is timeValueArg's string form, for callers that must record
+// the exact text they stored.
+func timeValueText(t time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
@@ -163,7 +169,7 @@ const bookColumns = `books.id, books.foreign_id, books.author_id, books.title, b
 	books.any_edition_ok, books.selected_edition_id, books.file_path, books.language,
 	books.media_type, books.narrator, books.duration_seconds, books.asin,
 	books.calibre_id, books.metadata_provider, books.last_metadata_refresh_at,
-	books.created_at, books.updated_at,
+	books.created_at, books.updated_at, CAST(books.updated_at AS TEXT),
 	COALESCE(NULLIF(books.ebook_file_path, ''), fe.path, ''),
 	COALESCE(NULLIF(books.audiobook_file_path, ''), fa.path, ''),
 	books.excluded, COALESCE(books.dedup_key, ''),
@@ -666,6 +672,7 @@ func (r *BookRepo) Create(ctx context.Context, b *models.Book) error {
 	b.ID = id
 	b.CreatedAt = now
 	b.UpdatedAt = now
+	b.UpdatedAtRaw = timeValueText(now)
 
 	// Record the identities this book is known by (#1705). The primary id is
 	// always attached; HardcoverForeignID is attached too when the aggregator
@@ -754,6 +761,7 @@ func (r *BookRepo) Update(ctx context.Context, b *models.Book) error {
 		return fmt.Errorf("update book %d: %w", b.ID, err)
 	}
 	b.UpdatedAt = now
+	b.UpdatedAtRaw = timeValueText(now)
 	return nil
 }
 
@@ -761,8 +769,11 @@ func (r *BookRepo) Update(ctx context.Context, b *models.Book) error {
 // and audiobook enrichment, provided the book has not changed since fetching
 // began. A concurrent edit wins the entire write; b is reloaded in that case so
 // callers cannot act on discarded ASINs, metadata, or locks.
-func (r *BookRepo) UpdateHydratedMetadata(ctx context.Context, b *models.Book, expectedUpdatedAt time.Time) (bool, error) {
-	if b == nil || b.ID == 0 || expectedUpdatedAt.IsZero() {
+//
+// expectedUpdatedAt is the snapshot's UpdatedAtRaw. It is compared as stored
+// text because legacy rows hold shapes a reformatted time.Time never matches.
+func (r *BookRepo) UpdateHydratedMetadata(ctx context.Context, b *models.Book, expectedUpdatedAt string) (bool, error) {
+	if b == nil || b.ID == 0 || expectedUpdatedAt == "" {
 		return false, fmt.Errorf("update hydrated metadata: invalid book snapshot")
 	}
 	mediaType := b.MediaType
@@ -773,10 +784,10 @@ func (r *BookRepo) UpdateHydratedMetadata(ctx context.Context, b *models.Book, e
 	res, err := r.exec.ExecContext(ctx, `
 		UPDATE books SET language=?, image_url=?, media_type=?, status=?, asin=?,
 		                 narrator=?, duration_seconds=?, description=?, updated_at=?
-		WHERE id=? AND updated_at=?`,
+		WHERE id=? AND CAST(updated_at AS TEXT)=?`,
 		b.Language, b.ImageURL, mediaType, b.Status, b.ASIN,
 		b.Narrator, b.DurationSeconds, b.Description, timeValueArg(now),
-		b.ID, timeValueArg(expectedUpdatedAt))
+		b.ID, expectedUpdatedAt)
 	if err != nil {
 		return false, fmt.Errorf("update hydrated metadata for book %d: %w", b.ID, err)
 	}
@@ -786,6 +797,7 @@ func (r *BookRepo) UpdateHydratedMetadata(ctx context.Context, b *models.Book, e
 	}
 	if updated > 0 {
 		b.UpdatedAt = now
+		b.UpdatedAtRaw = timeValueText(now)
 		return true, nil
 	}
 	return false, r.ReloadHydratedBook(ctx, b)
@@ -1499,7 +1511,7 @@ func (r *BookRepo) query(ctx context.Context, q string, args []any) ([]models.Bo
 			&b.FilePath, &b.Language, &b.MediaType,
 			&b.Narrator, &b.DurationSeconds, &b.ASIN,
 			&b.CalibreID, &b.MetadataProvider, &lastMetadataRefreshAtStr,
-			&createdAtStr, &updatedAtStr,
+			&createdAtStr, &updatedAtStr, &b.UpdatedAtRaw,
 			&b.EbookFilePath, &b.AudiobookFilePath,
 			&excluded, &b.DedupKey,
 			&authorID, &authorForeignID, &authorName, &authorSortName,
