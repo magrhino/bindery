@@ -145,7 +145,7 @@ func TestBookRepoUpdateHydratedMetadata(t *testing.T) {
 	// A hydration update must not rewrite unrelated snapshot fields or locks.
 	book.Title = "Stale title"
 	book.LockField(models.BookFieldGenres)
-	updated, err := books.UpdateHydratedMetadata(ctx, book, before.UpdatedAt)
+	updated, err := books.UpdateHydratedMetadata(ctx, book, before.UpdatedAtRaw)
 	if err != nil || !updated {
 		t.Fatalf("initial write: updated=%v err=%v", updated, err)
 	}
@@ -153,27 +153,30 @@ func TestBookRepoUpdateHydratedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Language != "eng" || stored.ImageURL != book.ImageURL || stored.MediaType != models.MediaTypeAudiobook || stored.ASIN != book.ASIN || stored.Narrator != "Narrator" || stored.DurationSeconds != 36000 || stored.Description != "Summary" || stored.Title != before.Title || len(stored.LockedFields) != 0 || !stored.UpdatedAt.Equal(book.UpdatedAt) {
+	if stored.Language != "eng" || stored.ImageURL != book.ImageURL || stored.MediaType != models.MediaTypeAudiobook || stored.ASIN != book.ASIN || stored.Narrator != "Narrator" || stored.DurationSeconds != 36000 || stored.Description != "Summary" || stored.Title != before.Title || len(stored.LockedFields) != 0 || !stored.UpdatedAt.Equal(book.UpdatedAt) || stored.UpdatedAtRaw != book.UpdatedAtRaw {
 		t.Fatalf("incorrect metadata write: %+v", stored)
 	}
 	// A second attempt with the old timestamp loses, and reloads the winner.
 	book.Language = "ger"
-	updated, err = books.UpdateHydratedMetadata(ctx, book, before.UpdatedAt)
+	updated, err = books.UpdateHydratedMetadata(ctx, book, before.UpdatedAtRaw)
 	if err != nil || updated || book.Language != "eng" || book.Title != before.Title || len(book.LockedFields) != 0 {
 		t.Fatalf("stale write: updated=%v err=%v book=%+v", updated, err, book)
 	}
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err := books.UpdateHydratedMetadata(cancelled, book, book.UpdatedAt); !errors.Is(err, context.Canceled) {
+	if _, err := books.UpdateHydratedMetadata(cancelled, book, book.UpdatedAtRaw); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled write: %v", err)
 	}
-	if _, err := books.UpdateHydratedMetadata(ctx, nil, book.UpdatedAt); err == nil {
+	if _, err := books.UpdateHydratedMetadata(ctx, nil, book.UpdatedAtRaw); err == nil {
 		t.Fatal("nil snapshot should be rejected")
+	}
+	if _, err := books.UpdateHydratedMetadata(ctx, book, ""); err == nil {
+		t.Fatal("snapshot without a stored updated_at should be rejected")
 	}
 	if err := books.Delete(ctx, book.ID); err != nil {
 		t.Fatal(err)
 	}
-	if updated, err := books.UpdateHydratedMetadata(ctx, book, book.UpdatedAt); updated || !errors.Is(err, sql.ErrNoRows) {
+	if updated, err := books.UpdateHydratedMetadata(ctx, book, book.UpdatedAtRaw); updated || !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("deleted book: updated=%v err=%v", updated, err)
 	}
 }
@@ -219,6 +222,11 @@ func TestBookRepoFillMissingAudiobookDurationRequiresMatchingIdentity(t *testing
 				if err != nil || updated || fetched.DurationSeconds != storedDuration {
 					t.Fatalf("changed %s: updated=%v duration=%d err=%v, want no write and the stored duration %d", field.column, updated, fetched.DurationSeconds, err, storedDuration)
 				}
+				// The duration must arrive with the identity it belongs to.
+				reloaded := map[string]string{"foreign_id": fetched.ForeignID, "metadata_provider": fetched.MetadataProvider, "media_type": fetched.MediaType, "asin": fetched.ASIN}
+				if got := reloaded[field.column]; got != field.value {
+					t.Fatalf("changed %s: reloaded %q, want %q", field.column, got, field.value)
+				}
 				var duration int
 				if err := database.QueryRowContext(ctx, "SELECT duration_seconds FROM books WHERE id = ?", book.ID).Scan(&duration); err != nil {
 					t.Fatal(err)
@@ -228,5 +236,127 @@ func TestBookRepoFillMissingAudiobookDurationRequiresMatchingIdentity(t *testing
 				}
 			})
 		}
+	}
+}
+
+// books.updated_at holds every shape Bindery has ever written there. The
+// hydration guard must match each one as stored, or every refresh of a legacy
+// row silently discards its metadata (#2758).
+func TestBookRepoUpdateHydratedMetadataLegacyUpdatedAtShapes(t *testing.T) {
+	for _, tc := range []struct{ name, stored string }{
+		{"current_timestamp", "2026-09-01 10:00:00"},
+		{"go_time_string_914", "2026-09-01 10:00:00.123456789 +0000 UTC"},
+		{"rfc3339nano", "2026-09-01T10:00:00.123456789Z"},
+		{"unparseable", "not a time"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database, err := OpenMemory()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			ctx := context.Background()
+			books := NewBookRepo(database)
+			author := mkAuthor(t, NewAuthorRepo(database), ctx, "OL-LEGACY-A")
+			book := mkBook(t, books, ctx, author.ID, "hc:legacy", "Legacy", models.BookStatusWanted)
+			load := func() *models.Book {
+				t.Helper()
+				if _, err := database.ExecContext(ctx, "UPDATE books SET updated_at=? WHERE id=?", tc.stored, book.ID); err != nil {
+					t.Fatal(err)
+				}
+				loaded, err := books.GetByID(ctx, book.ID)
+				if err != nil || loaded == nil {
+					t.Fatalf("load legacy book: %v", err)
+				}
+				if loaded.UpdatedAtRaw != tc.stored {
+					t.Fatalf("UpdatedAtRaw = %q, want stored text %q", loaded.UpdatedAtRaw, tc.stored)
+				}
+				return loaded
+			}
+
+			loaded := load()
+			before := *loaded
+			loaded.Language = "eng"
+			updated, err := books.UpdateHydratedMetadata(ctx, loaded, before.UpdatedAtRaw)
+			if err != nil || !updated {
+				t.Fatalf("unchanged legacy row: updated=%v err=%v", updated, err)
+			}
+			stored, err := books.GetByID(ctx, book.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.Language != "eng" || stored.UpdatedAtRaw != loaded.UpdatedAtRaw || stored.UpdatedAtRaw == tc.stored {
+				t.Fatalf("hydrated write not persisted: language=%q raw=%q caller raw=%q", stored.Language, stored.UpdatedAtRaw, loaded.UpdatedAtRaw)
+			}
+
+			// A genuine edit after the snapshot still wins, whichever writer made
+			// it: each one must advance updated_at or hydration overwrites it.
+			target := mkAuthor(t, NewAuthorRepo(database), ctx, "OL-LEGACY-B")
+			for _, w := range []struct {
+				name    string
+				prepare string
+				write   func() error
+				check   func(*models.Book) bool
+			}{
+				{
+					name:  "SetLanguage",
+					write: func() error { return books.SetLanguage(ctx, book.ID, "fre") },
+					check: func(b *models.Book) bool { return b.Language == "fre" },
+				},
+				{
+					name:  "SetImageURL",
+					write: func() error { return books.SetImageURL(ctx, book.ID, "/covers/local.jpg") },
+					check: func(b *models.Book) bool { return b.ImageURL == "/covers/local.jpg" },
+				},
+				{
+					name:    "MarkWantedMonitored",
+					prepare: "UPDATE books SET status='skipped', monitored=0 WHERE id=?",
+					write:   func() error { return books.MarkWantedMonitored(ctx, book.ID) },
+					check:   func(b *models.Book) bool { return b.Status == models.BookStatusWanted && b.Monitored },
+				},
+				{
+					name:  "SetExcluded",
+					write: func() error { return books.SetExcluded(ctx, book.ID, true) },
+					check: func(b *models.Book) bool { return b.Excluded },
+				},
+				{
+					name: "AuthorMerge",
+					write: func() error {
+						_, err := NewAuthorAliasRepo(database).Merge(ctx, author.ID, target.ID, MergeOptions{})
+						return err
+					},
+					check: func(b *models.Book) bool { return b.AuthorID == target.ID },
+				},
+			} {
+				t.Run(w.name, func(t *testing.T) {
+					// Undo any write a previous case wrongly let through.
+					if _, err := database.ExecContext(ctx, "UPDATE books SET language='eng' WHERE id=?", book.ID); err != nil {
+						t.Fatal(err)
+					}
+					if w.prepare != "" {
+						if _, err := database.ExecContext(ctx, w.prepare, book.ID); err != nil {
+							t.Fatal(err)
+						}
+					}
+					loaded := load()
+					before := *loaded
+					if err := w.write(); err != nil {
+						t.Fatal(err)
+					}
+					loaded.Language = "ger"
+					updated, err := books.UpdateHydratedMetadata(ctx, loaded, before.UpdatedAtRaw)
+					if err != nil || updated || loaded.Language == "ger" || !w.check(loaded) {
+						t.Fatalf("concurrent edit: updated=%v err=%v book=%+v", updated, err, loaded)
+					}
+					stored, err := books.GetByID(ctx, book.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if stored.Language == "ger" || !w.check(stored) {
+						t.Fatalf("concurrent edit overwritten: %+v", stored)
+					}
+				})
+			}
+		})
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/vavallee/bindery/internal/models"
 )
@@ -23,7 +22,7 @@ type EditionUpserter interface {
 
 // BookUpdater persists book-level fields promoted during hydration.
 type BookUpdater interface {
-	UpdateHydratedMetadata(context.Context, *models.Book, time.Time) (bool, error)
+	UpdateHydratedMetadata(context.Context, *models.Book, string) (bool, error)
 	FillMissingAudiobookDuration(context.Context, *models.Book) (bool, error)
 	ReloadHydratedBook(context.Context, *models.Book) error
 }
@@ -197,7 +196,7 @@ func HydrateHardcoverEditions(ctx context.Context, opts Options) Result {
 				}
 			}
 		} else {
-			updated, err = opts.Books.UpdateHydratedMetadata(ctx, book, before.UpdatedAt)
+			updated, err = opts.Books.UpdateHydratedMetadata(ctx, book, before.UpdatedAtRaw)
 			if err == nil && !updated {
 				// The repository reloaded the concurrent edit; none of this
 				// attempt's derived fields or enrichment were persisted.
