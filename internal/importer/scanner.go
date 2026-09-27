@@ -28,7 +28,6 @@ import (
 	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/jobs"
 	"github.com/vavallee/bindery/internal/models"
-	"github.com/vavallee/bindery/internal/seriesmatch"
 	"github.com/vavallee/bindery/internal/textutil"
 )
 
@@ -2700,8 +2699,28 @@ func titleSigTokens(s string) []string {
 // every significant token but the number, which clears the two-token threshold
 // below. seriesmatch.DifferentVolumes is the check the series diff and ABS
 // import already apply for exactly this (#1682, #2538); without it here,
-// FindExisting bound a newly added volume 17 to volume 1's file (#2810).
+// FindExisting bound a newly added volume 17 to volume 1's file (#2810). It
+// runs through differentVolumes, which does not let a multi-file audiobook's
+// "Part N" stand in for a series position.
 func titleMatch(bookTitle, parsedTitle string) bool {
+	if parsedTitle == "" || bookTitle == "" {
+		return false
+	}
+	if normalizeTitle(bookTitle) == normalizeTitle(parsedTitle) {
+		return true
+	}
+	if differentVolumes(bookTitle, parsedTitle) {
+		return false
+	}
+	return titleWordsMatch(bookTitle, parsedTitle)
+}
+
+// titleWordsMatch is titleMatch without the volume veto: the exact fast path
+// and the significant-token overlap. Only a caller that has already settled
+// the volume from better evidence may use it. FindExisting does when the book
+// folder carries the number, because the filename's numbers are then track
+// numbers ("Defiance of the Fall 7/Defiance of the Fall 01.mp3").
+func titleWordsMatch(bookTitle, parsedTitle string) bool {
 	if parsedTitle == "" || bookTitle == "" {
 		return false
 	}
@@ -2709,10 +2728,6 @@ func titleMatch(bookTitle, parsedTitle string) bool {
 	// Fast path: exact match after normalization
 	if normalizeTitle(bookTitle) == normalizeTitle(parsedTitle) {
 		return true
-	}
-
-	if seriesmatch.DifferentVolumes(bookTitle, parsedTitle) {
-		return false
 	}
 
 	btTok := titleSigTokens(bookTitle)

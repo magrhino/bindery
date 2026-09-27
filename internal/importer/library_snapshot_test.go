@@ -248,3 +248,60 @@ func TestLibrarySnapshot_EbookFolderVolumeVetoes(t *testing.T) {
 		t.Errorf("volume 1: got %q, want %q", got, vol1)
 	}
 }
+
+// TestLibrarySnapshot_FlatVolumeFileVetoes covers a numbered file with no book
+// folder of its own: there the filename is the only volume evidence.
+func TestLibrarySnapshot_FlatVolumeFileVetoes(t *testing.T) {
+	abDir := t.TempDir()
+	vol1 := filepath.Join(abDir, "TheFirstDefier", "Defiance of the Fall 01.m4b")
+	writeFile(t, vol1)
+
+	snap := NewLibrarySnapshot("", abDir)
+	if got := snap.FindExisting(context.Background(), "Defiance of the Fall 17", "TheFirstDefier", models.MediaTypeAudiobook); got != "" {
+		t.Errorf("volume 17 bound to %q", got)
+	}
+	if got := snap.FindExisting(context.Background(), "Defiance of the Fall 1", "TheFirstDefier", models.MediaTypeAudiobook); got != vol1 {
+		t.Errorf("volume 1: got %q, want %q", got, vol1)
+	}
+}
+
+// TestLibrarySnapshot_TrackNumbersDoNotVetoNumberedFolder: inside a numbered
+// book folder the filename's trailing number counts tracks. Read as a volume
+// it vetoed volume 7's own files, because none of them is track 07.
+func TestLibrarySnapshot_TrackNumbersDoNotVetoNumberedFolder(t *testing.T) {
+	abDir := t.TempDir()
+	folder := filepath.Join(abDir, "TheFirstDefier", "Defiance of the Fall 7")
+	track1 := filepath.Join(folder, "Defiance of the Fall 01.mp3")
+	writeFile(t, track1)
+	writeFile(t, filepath.Join(folder, "Defiance of the Fall 02.mp3"))
+
+	snap := NewLibrarySnapshot("", abDir)
+	if got := snap.FindExisting(context.Background(), "Defiance of the Fall 7", "TheFirstDefier", models.MediaTypeAudiobook); got != track1 {
+		t.Errorf("volume 7: got %q, want %q", got, track1)
+	}
+	if got := snap.FindExisting(context.Background(), "Defiance of the Fall 17", "TheFirstDefier", models.MediaTypeAudiobook); got != "" {
+		t.Errorf("volume 17 bound to %q, which sits in volume 7's folder", got)
+	}
+}
+
+// TestLibrarySnapshot_PartFilesDoNotVetoSeriesPosition: a multi-file
+// audiobook split into "Part N" files or Part N/ folders is still the book a
+// catalogue title with "Book 4" names. The part number is not a volume.
+func TestLibrarySnapshot_PartFilesDoNotVetoSeriesPosition(t *testing.T) {
+	const wanted = "Rhythm of War (The Stormlight Archive, Book 4)"
+	for name, files := range map[string][]string{
+		"part files":   {"Rhythm of War/Rhythm of War Part 1.mp3", "Rhythm of War/Rhythm of War Part 2.mp3"},
+		"part folders": {"Rhythm of War/Part 1/Rhythm of War.mp3", "Rhythm of War/Part 2/Rhythm of War.mp3"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			abDir := t.TempDir()
+			for _, f := range files {
+				writeFile(t, filepath.Join(abDir, "Brandon Sanderson", filepath.FromSlash(f)))
+			}
+			snap := NewLibrarySnapshot("", abDir)
+			if got := snap.FindExisting(context.Background(), wanted, "Brandon Sanderson", models.MediaTypeAudiobook); got == "" {
+				t.Errorf("%s: the book's own files were vetoed", name)
+			}
+		})
+	}
+}

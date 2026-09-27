@@ -97,6 +97,14 @@ func TestTitleMatch(t *testing.T) {
 		{"Defiance of the Fall", "Defiance of the Fall 01", true},
 		// A number that is part of the title is not a volume.
 		{"Fahrenheit 451", "Ray Bradbury Fahrenheit 451", true},
+		{"Catch-22", "Catch 22", true},
+		{"11/22/63", "11-22-63", true},
+		// A multi-file audiobook's "Part N" counts files, not books, so it
+		// cannot veto a series position spelled another way. Two Part
+		// markers are still two halves of a split edition.
+		{"Rhythm of War (The Stormlight Archive, Book 4)", "Rhythm of War Part 1", true},
+		{"Rhythm of War (The Stormlight Archive #4)", "Rhythm of War Pt. 2 of 3", true},
+		{"The Way of Kings, Part 1", "The Way of Kings, Part 2", false},
 	}
 
 	for _, tt := range tests {

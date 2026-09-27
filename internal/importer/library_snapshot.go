@@ -53,10 +53,11 @@ type libraryEntry struct {
 	firstDir string
 	title    string
 	// layoutTitle is the cleaned book-folder name, "" when the file has no
-	// book folder of its own. It never makes a match, only vetoes one: a
-	// Libation-style "Series NN/Series_ASIN_….m4b" layout keeps the volume
-	// number only in the folder, and without it every volume's file looked
-	// like the one the next volume was asking for (#2810).
+	// book folder of its own. It never makes a match on its words, it only
+	// supplies the volume number when it carries one: a Libation-style
+	// "Series NN/Series_ASIN_….m4b" layout keeps the volume number only in
+	// the folder, and without it every volume's file looked like the one the
+	// next volume was asking for (#2810).
 	layoutTitle string
 	author      string
 }
@@ -90,10 +91,27 @@ func (ls *LibrarySnapshot) FindExisting(ctx context.Context, title, authorName, 
 			if authorName != "" && e.firstDir != "" && !authorMatch(authorName, e.firstDir) {
 				continue
 			}
-			if seriesmatch.DifferentVolumes(e.layoutTitle, title) {
+			if !authorMatch(authorName, e.author) {
 				continue
 			}
-			if titleMatch(e.title, title) && authorMatch(authorName, e.author) {
+			// The volume comes from the book folder when the folder carries
+			// a number, and from the filename otherwise. A numbered folder
+			// is the better evidence on both sides of #2810: in a Libation
+			// layout it is the only place the number appears, and beside
+			// track files named "Defiance of the Fall 01.mp3" inside
+			// "Defiance of the Fall 7" the filename's number counts tracks,
+			// so letting it veto would lose the book's own files.
+			folder, wanted := volumeTitles(e.layoutTitle, title)
+			if carriesVolumeNumber(folder) {
+				if seriesmatch.DifferentVolumes(folder, wanted) {
+					continue
+				}
+				if titleWordsMatch(e.title, title) {
+					return e.path
+				}
+				continue
+			}
+			if titleMatch(e.title, title) {
 				return e.path
 			}
 		}
