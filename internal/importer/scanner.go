@@ -28,6 +28,7 @@ import (
 	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/jobs"
 	"github.com/vavallee/bindery/internal/models"
+	"github.com/vavallee/bindery/internal/seriesmatch"
 	"github.com/vavallee/bindery/internal/textutil"
 )
 
@@ -2693,6 +2694,13 @@ func titleSigTokens(s string) []string {
 // titleMatch returns true when bookTitle and parsedTitle refer to the same work.
 // It handles numeric titles (1984, 2001), article normalization ("Title, The"),
 // and uses dynamic overlap thresholds so short titles still match correctly.
+//
+// Two volumes of one series are never the same work, however many words they
+// share: "Defiance of the Fall 01" and "Defiance of the Fall 17" overlap on
+// every significant token but the number, which clears the two-token threshold
+// below. seriesmatch.DifferentVolumes is the check the series diff and ABS
+// import already apply for exactly this (#1682, #2538); without it here,
+// FindExisting bound a newly added volume 17 to volume 1's file (#2810).
 func titleMatch(bookTitle, parsedTitle string) bool {
 	if parsedTitle == "" || bookTitle == "" {
 		return false
@@ -2701,6 +2709,10 @@ func titleMatch(bookTitle, parsedTitle string) bool {
 	// Fast path: exact match after normalization
 	if normalizeTitle(bookTitle) == normalizeTitle(parsedTitle) {
 		return true
+	}
+
+	if seriesmatch.DifferentVolumes(bookTitle, parsedTitle) {
+		return false
 	}
 
 	btTok := titleSigTokens(bookTitle)

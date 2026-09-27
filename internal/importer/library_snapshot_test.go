@@ -184,3 +184,67 @@ func TestLibrarySnapshot_TextOnlyLibraryStillMatches(t *testing.T) {
 		t.Errorf("got %q, want %q — a text-only library must keep matching", got, txt)
 	}
 }
+
+// TestLibrarySnapshot_VolumeNumberInFolderOnly pins #2810: in a Libation-style
+// layout every volume's file carries the same base title and an ASIN, and only
+// the book folder carries the volume number. Adding the next, unowned volume
+// used to bind it to volume 01's file, because the filename title shares every
+// significant word with the wanted title and FindExisting never read the
+// folder. The book is not in the library, so nothing may match.
+func TestLibrarySnapshot_VolumeNumberInFolderOnly(t *testing.T) {
+	abDir := t.TempDir()
+	author := filepath.Join(abDir, "TheFirstDefier")
+	vol1 := filepath.Join(author, "Defiance of the Fall 01", "Defiance of the Fall_B094JZMCJX_LC_128_44100_Stereo.m4b")
+	vol2 := filepath.Join(author, "Defiance of the Fall 02", "Defiance of the Fall_B099SH77S4_LC_64_22050_Stereo.m4b")
+	writeFile(t, vol1)
+	writeFile(t, vol2)
+
+	snap := NewLibrarySnapshot("", abDir)
+	if got := snap.FindExisting(context.Background(), "Defiance of the Fall 17", "TheFirstDefier", models.MediaTypeAudiobook); got != "" {
+		t.Errorf("volume 17 bound to %q — the folder's volume number is not reaching the match", got)
+	}
+}
+
+// TestLibrarySnapshot_EachVolumeFindsItsOwnFolder covers the author-sync
+// shape of #2810: every volume is created in one batch against an untracked
+// library, so each lookup must land on its own folder rather than all of them
+// collapsing onto the first one the walk yields. The first volume is often
+// catalogued without a number; it must still find folder 01.
+func TestLibrarySnapshot_EachVolumeFindsItsOwnFolder(t *testing.T) {
+	abDir := t.TempDir()
+	author := filepath.Join(abDir, "TheFirstDefier")
+	vol1 := filepath.Join(author, "Defiance of the Fall 01", "Defiance of the Fall_B094JZMCJX_LC_128_44100_Stereo.m4b")
+	vol2 := filepath.Join(author, "Defiance of the Fall 02", "Defiance of the Fall_B099SH77S4_LC_64_22050_Stereo.m4b")
+	vol10 := filepath.Join(author, "Defiance of the Fall 10", "Defiance of the Fall_B0C78G69ZW_LC_128_44100_Stereo.m4b")
+	for _, p := range []string{vol1, vol2, vol10} {
+		writeFile(t, p)
+	}
+
+	snap := NewLibrarySnapshot("", abDir)
+	for _, tc := range []struct{ title, want string }{
+		{"Defiance of the Fall", vol1},
+		{"Defiance of the Fall 2", vol2},
+		{"Defiance of the Fall, Book 10", vol10},
+	} {
+		if got := snap.FindExisting(context.Background(), tc.title, "TheFirstDefier", models.MediaTypeAudiobook); got != tc.want {
+			t.Errorf("FindExisting(%q) = %q, want %q", tc.title, got, tc.want)
+		}
+	}
+}
+
+// TestLibrarySnapshot_EbookFolderVolumeVetoes carries the #2810 veto to an
+// ebook, whose title comes from the filename first (#2171): the filename
+// drops the number, so only the book folder can tell volume 3 from volume 1.
+func TestLibrarySnapshot_EbookFolderVolumeVetoes(t *testing.T) {
+	libDir := t.TempDir()
+	vol1 := filepath.Join(libDir, "Jane Doe", "Long Series Name 01", "Long Series Name - Jane Doe.epub")
+	writeFile(t, vol1)
+
+	snap := NewLibrarySnapshot(libDir, "")
+	if got := snap.FindExisting(context.Background(), "Long Series Name 3", "Jane Doe", models.MediaTypeEbook); got != "" {
+		t.Errorf("volume 3 bound to %q, which sits in volume 01's folder", got)
+	}
+	if got := snap.FindExisting(context.Background(), "Long Series Name 1", "Jane Doe", models.MediaTypeEbook); got != vol1 {
+		t.Errorf("volume 1: got %q, want %q", got, vol1)
+	}
+}

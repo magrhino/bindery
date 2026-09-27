@@ -85,6 +85,18 @@ func TestTitleMatch(t *testing.T) {
 		// Noise titles with no overlap
 		{"Project Hail Mary", "The Lord of the Rings", false},
 		{"Dune", "Foundation Asimov", false},
+
+		// Volumes of one series are different works however many words they
+		// share (#2810): a bare trailing number and an explicit marker alike.
+		{"Defiance of the Fall 17", "Defiance of the Fall 01", false},
+		{"Defiance of the Fall 7", "Defiance of the Fall 17", false},
+		{"Overlord, Vol. 1", "Overlord, Vol. 9", false},
+		// The same volume still matches across zero padding, and an unnumbered
+		// first volume still matches its numbered folder.
+		{"Defiance of the Fall 1", "Defiance of the Fall 01", true},
+		{"Defiance of the Fall", "Defiance of the Fall 01", true},
+		// A number that is part of the title is not a volume.
+		{"Fahrenheit 451", "Ray Bradbury Fahrenheit 451", true},
 	}
 
 	for _, tt := range tests {

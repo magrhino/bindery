@@ -496,6 +496,11 @@ to the records. Things worth knowing before you judge the results:
   already own it: a cue sheet or notes file next to an audiobook is never taken
   as evidence you own the book, and a real ebook wins over a supplement-class
   file when both match (#2240).
+- That check never takes **another volume of the same series** as the book you
+  are adding. Volume numbers are compared whether they sit in the title or only
+  in the book folder, so in a `Defiance of the Fall 01/…_B094JZMCJX_….m4b`
+  layout, adding volume 17 no longer attaches volume 1's file and skips the
+  search (#2810).
 
 ## Adopting files already in your library
 
