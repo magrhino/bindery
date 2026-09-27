@@ -500,7 +500,8 @@ to the records. Things worth knowing before you judge the results:
   are adding. Volume numbers are compared whether they sit in the title or only
   in the book folder, so in a `Defiance of the Fall 01/…_B094JZMCJX_….m4b`
   layout, adding volume 17 no longer attaches volume 1's file and skips the
-  search (#2810).
+  search (#2810). A file that already belongs to another book is never
+  attached to the new one either; the new book stays wanted and is searched.
 
 ## Adopting files already in your library
 

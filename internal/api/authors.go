@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 	"github.com/vavallee/bindery/internal/bookhydrate"
 	"github.com/vavallee/bindery/internal/concurrency"
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/importer"
 	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/jobs"
 	"github.com/vavallee/bindery/internal/metadata"
@@ -2893,10 +2895,49 @@ func handleNewWantedBook(ctx context.Context, books *db.BookRepo, series *db.Ser
 	// Check if the user already owns this book before queuing a download.
 	if finder != nil {
 		if existingPath := finder.FindExisting(ctx, book.Title, authorName, book.MediaType); existingPath != "" {
+			if existingFileOwnedByOtherBook(ctx, books, existingPath, book.ID) {
+				slog.Info("library: matching file already belongs to another book, not binding it",
+					"title", book.Title, "path", existingPath)
+				return false
+			}
 			slog.Info("library: found existing file, skipping auto-search", "title", book.Title, "path", existingPath)
 			if err := books.SetFilePath(ctx, book.ID, existingPath); err != nil {
 				slog.Warn("authors: record existing file path", "error", err, "book_id", book.ID)
 			}
+			return true
+		}
+	}
+	return false
+}
+
+// existingFileOwnedByOtherBook reports whether a file FindExisting offered
+// for bookID is already in book_files under another book: the file itself,
+// or for an audio track the folder holding it, which is how an imported or
+// reconciled audiobook is recorded (#2716).
+//
+// FindExisting matches on the title alone and knows nothing about what is
+// tracked, so without this a new book could take a file another book owns.
+// That is how "Defiance of the Fall 17" was bound to volume 1's m4b (#2810).
+// The volume veto closes that layout, but not one where volume 1's folder
+// and file carry no number at all, which Libation's default naming produces.
+// Declining the bind leaves the book wanted and lets auto-search run, which
+// is the right outcome for a different book and a visible one for a
+// duplicate row. A lookup error keeps the old behaviour and binds.
+func existingFileOwnedByOtherBook(ctx context.Context, books *db.BookRepo, path string, bookID int64) bool {
+	if books == nil {
+		return false
+	}
+	candidates := []string{path}
+	if importer.IsAudioFile(path) {
+		candidates = append(candidates, filepath.Dir(path))
+	}
+	for _, p := range candidates {
+		owned, err := books.PathOwnedByOtherBook(ctx, p, bookID)
+		if err != nil {
+			slog.Warn("library: book_files owner lookup failed", "path", p, "error", err)
+			continue
+		}
+		if owned {
 			return true
 		}
 	}

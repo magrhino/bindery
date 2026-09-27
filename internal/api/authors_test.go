@@ -1188,6 +1188,63 @@ func TestFetchAuthorBooks_SkipsSearchForOwnedBooks(t *testing.T) {
 	}
 }
 
+// TestHandleNewWantedBook_DoesNotBindAnotherBooksFile is the ownership half of
+// #2810: FindExisting matches on the title alone, so a new book must not take
+// a file that book_files already gives to another book. Volume 1 owns its
+// audiobook folder; the match FindExisting offers volume 17 is the m4b inside
+// it. The book must stay unbound so auto-search runs. A file nobody owns is
+// still bound.
+func TestHandleNewWantedBook_DoesNotBindAnotherBooksFile(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	authorRepo := db.NewAuthorRepo(database)
+	bookRepo := db.NewBookRepo(database)
+	ctx := context.Background()
+
+	author := &models.Author{ForeignID: "hc:thefirstdefier", Name: "TheFirstDefier", SortName: "TheFirstDefier"}
+	if err := authorRepo.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	vol1Dir := "/books/audiobooks/TheFirstDefier/Defiance of the Fall"
+	vol1 := &models.Book{ForeignID: "hc:defiance-of-the-fall", AuthorID: author.ID, Title: "Defiance of the Fall",
+		Status: models.BookStatusImported, MediaType: models.MediaTypeAudiobook, Genres: []string{}}
+	if err := bookRepo.Create(ctx, vol1); err != nil {
+		t.Fatal(err)
+	}
+	if err := bookRepo.AddBookFile(ctx, vol1.ID, models.MediaTypeAudiobook, vol1Dir); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name, title, path string
+		wantBound         bool
+	}{
+		{"track inside an owned folder", "Defiance of the Fall 17", vol1Dir + "/Defiance of the Fall [B094JZMCJX].m4b", false},
+		{"the owned path itself", "Defiance of the Fall 18", vol1Dir, false},
+		{"a file nobody owns", "Defiance of the Fall 19", "/books/audiobooks/TheFirstDefier/Defiance of the Fall 19/Defiance of the Fall 19.m4b", true},
+	} {
+		book := &models.Book{ForeignID: "hc:" + tc.title, AuthorID: author.ID, Title: tc.title,
+			Status: models.BookStatusWanted, MediaType: models.MediaTypeAudiobook, Genres: []string{}}
+		if err := bookRepo.Create(ctx, book); err != nil {
+			t.Fatal(err)
+		}
+		finder := &stubLibraryFinder{ownedTitle: tc.title, ownedPath: tc.path}
+		if got := handleNewWantedBook(ctx, bookRepo, nil, finder, *book, author.Name); got != tc.wantBound {
+			t.Errorf("%s: handleNewWantedBook = %v, want %v", tc.name, got, tc.wantBound)
+		}
+		files, err := bookRepo.ListFiles(ctx, book.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bound := len(files) > 0; bound != tc.wantBound {
+			t.Errorf("%s: book_files rows = %v, want bound=%v", tc.name, files, tc.wantBound)
+		}
+	}
+}
+
 // TestFetchAuthorBooks_SkipsSearchWhenNotMonitored confirms that books added
 // for an unmonitored author do NOT trigger an indexer search — the user has
 // opted out of automatic activity for this author.
