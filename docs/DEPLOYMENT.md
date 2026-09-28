@@ -603,7 +603,10 @@ slugs, and different providers remain distinct; Hardcover still tries the slug
 before its numeric-ID fallback. Live Hardcover token changes select a different
 cache namespace, and a fetch uses one token across all pages. Old namespaces
 expire under the same bounds. Direct provider calls remain uncached for callers
-that explicitly fetch fresh metadata.
+that explicitly fetch fresh metadata, and a manual author **Refresh Metadata**
+still skips the cached author profile and catalogue (see
+`POST /api/v1/author/{id}/refresh` in [API.md](API.md)); its nested edition,
+cover and ISBN lookups keep using these caches.
 
 Caches are discarded on restart. Local edition rows can come from partial
 imports or embedded book metadata and have no complete-provider-snapshot

@@ -3,6 +3,7 @@ package metadata
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -328,7 +329,12 @@ func (a *Aggregator) enrichBook(ctx context.Context, book *models.Book) {
 	for i, enricher := range enrichers {
 		enriched, err := a.searchBoundProviderBooks(ctx, enricher, scopes[i], book.Title)
 		if err != nil {
-			cacheable = false
+			// An enricher with no credentials (Hardcover without a token is
+			// registered on every install) never answers, so it must not keep
+			// the snapshot out of the cache the way a real failure does.
+			if !errors.Is(err, ErrProviderNotConfigured) {
+				cacheable = false
+			}
 			slog.Debug("enrichment failed", "provider", enricher.Name(), "error", err)
 			continue
 		}
