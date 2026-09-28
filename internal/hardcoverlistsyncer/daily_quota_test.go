@@ -2,9 +2,12 @@ package hardcoverlistsyncer
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,7 +26,15 @@ func TestDailyQuotaListSyncStopsBeforeWrites(t *testing.T) {
 	ctx := context.Background()
 	settings := db.NewSettingsRepo(database)
 	token := "example-only"
-	if err := settings.Set(ctx, "auth.hardcover_daily_holds", fmt.Sprintf(`{"%x":%q}`, sha256.Sum256([]byte(token)), time.Now().Add(time.Hour).UTC().Format(time.RFC3339))); err != nil {
+	// Example-only install secret so the test can compute the fingerprint.
+	secret := strings.Repeat("ab", 32)
+	if err := settings.Set(ctx, "auth.hardcover_daily_hold_secret", secret); err != nil {
+		t.Fatal(err)
+	}
+	key, _ := hex.DecodeString(secret)
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(token))
+	if err := settings.Set(ctx, "auth.hardcover_daily_holds", fmt.Sprintf(`{"%x":%q}`, mac.Sum(nil), time.Now().Add(time.Hour).UTC().Format(time.RFC3339))); err != nil {
 		t.Fatal(err)
 	}
 	s := New(db.NewImportListRepo(database), db.NewAuthorRepo(database), db.NewBookRepo(database)).WithDailyQuota(hardcover.NewDailyQuota(settings))
