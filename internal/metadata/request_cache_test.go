@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -390,6 +391,29 @@ func TestCachedRequestRecoversProviderPanic(t *testing.T) {
 	got, err := a.searchProviderBooks(context.Background(), p, "q")
 	if err != nil || len(got) != 1 || calls.Load() != 2 {
 		t.Fatalf("after panic: %v %v calls=%d, want a fresh fetch", got, err, calls.Load())
+	}
+}
+
+// Every slice on the sync summary must be copied, including ones added after
+// cloneAuthor was written, or a caller editing a cached author's summary
+// rewrites the cache entry.
+func TestCloneAuthorCopiesEverySyncSummarySlice(t *testing.T) {
+	summary := &models.AuthorSyncSummary{}
+	v := reflect.ValueOf(summary).Elem()
+	for i := 0; i < v.NumField(); i++ {
+		if f := v.Field(i); f.Kind() == reflect.Slice {
+			f.Set(reflect.MakeSlice(f.Type(), 1, 1))
+		}
+	}
+	clone := cloneAuthor(&models.Author{LastSync: summary}).LastSync
+	if clone == summary {
+		t.Fatal("LastSync pointer shared with the cached author")
+	}
+	cv := reflect.ValueOf(clone).Elem()
+	for i := 0; i < v.NumField(); i++ {
+		if f := v.Field(i); f.Kind() == reflect.Slice && f.Pointer() == cv.Field(i).Pointer() {
+			t.Errorf("LastSync.%s shares its backing array with the cached author", v.Type().Field(i).Name)
+		}
 	}
 }
 
