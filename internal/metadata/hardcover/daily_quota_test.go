@@ -2,6 +2,9 @@ package hardcover
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -230,7 +233,7 @@ func TestDailyQuotaPrunesExpiredAndNeverShortensHolds(t *testing.T) {
 	if err := q.observe(ctx, "new", dailyHeaders(0, 3600)); err != nil {
 		t.Fatal(err)
 	}
-	if _, exists := q.holds[dailyTokenKey("expired")]; exists {
+	if _, exists := q.holds[q.tokenKey("expired")]; exists {
 		t.Fatal("expired token state retained")
 	}
 }
@@ -254,18 +257,106 @@ func TestDailyQuotaRetriesFailedPersistenceBeforeRequests(t *testing.T) {
 	if err := q.observe(ctx, "example", dailyHeaders(0, 3600)); err == nil {
 		t.Fatal("failed write was hidden")
 	}
-	if err := q.Check(ctx, "example"); err == nil || !strings.Contains(err.Error(), "temporary write failure") {
+	// The held token still reports its pause; others are refused until the
+	// pending hold is durable.
+	var daily *metadata.DailyQuotaError
+	if err := q.Check(ctx, "example"); !errors.As(err, &daily) || !strings.Contains(err.Error(), "temporary write failure") {
+		t.Fatalf("held token during pending persistence: %v", err)
+	}
+	if err := q.Check(ctx, "other"); err == nil || errors.As(err, &daily) || !strings.Contains(err.Error(), "temporary write failure") {
 		t.Fatalf("pending persistence ignored: %v", err)
 	}
 	if _, err := database.Exec(`DROP TRIGGER fail_hold_write`); err != nil {
 		t.Fatal(err)
 	}
-	var daily *metadata.DailyQuotaError
+	if err := q.Check(ctx, "other"); err != nil {
+		t.Fatalf("retried persistence: %v", err)
+	}
 	if err := q.Check(ctx, "example"); !errors.As(err, &daily) {
 		t.Fatalf("hold after retry: %v", err)
 	}
 	if err := NewDailyQuota(settings).Check(ctx, "example"); !errors.As(err, &daily) {
 		t.Fatalf("retried hold was not durable: %v", err)
+	}
+}
+
+func TestDailyQuotaFingerprintsWithInstallSecret(t *testing.T) {
+	ctx := context.Background()
+	q, settings := dailyFixture(t)
+	if err := q.observe(ctx, "example-only-token", dailyHeaders(0, 3600)); err != nil {
+		t.Fatal(err)
+	}
+	secretRow, err := settings.Get(ctx, dailyHoldSecretSetting)
+	if err != nil || secretRow == nil {
+		t.Fatalf("install secret: %v", err)
+	}
+	secret, err := hex.DecodeString(secretRow.Value)
+	if err != nil || len(secret) != 32 {
+		t.Fatalf("install secret = %q", secretRow.Value)
+	}
+	row, err := settings.Get(ctx, dailyHoldSetting)
+	if err != nil || row == nil {
+		t.Fatal(err)
+	}
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte("example-only-token"))
+	if plain := fmt.Sprintf("%x", sha256.Sum256([]byte("example-only-token"))); strings.Contains(row.Value, plain) {
+		t.Fatal("hold keyed by unsalted token hash")
+	}
+	if !strings.Contains(row.Value, hex.EncodeToString(mac.Sum(nil))) {
+		t.Fatalf("hold not keyed by install HMAC: %s", row.Value)
+	}
+	// A restart reuses the stored secret rather than orphaning holds.
+	restarted := NewDailyQuota(settings)
+	var daily *metadata.DailyQuotaError
+	if err := restarted.Check(ctx, "example-only-token"); !errors.As(err, &daily) {
+		t.Fatalf("hold after restart: %v", err)
+	}
+	if again, _ := settings.Get(ctx, dailyHoldSecretSetting); again == nil || again.Value != secretRow.Value {
+		t.Fatal("install secret regenerated")
+	}
+	// A different install cannot map the same token to the same fingerprint.
+	other, otherSettings := dailyFixture(t)
+	if err := other.Check(ctx, "example-only-token"); err != nil {
+		t.Fatal(err)
+	}
+	if otherRow, _ := otherSettings.Get(ctx, dailyHoldSecretSetting); otherRow == nil || otherRow.Value == secretRow.Value {
+		t.Fatal("install secrets are not independent")
+	}
+}
+
+func TestDailyQuotaCorruptSecretIsVisible(t *testing.T) {
+	q, settings := dailyFixture(t)
+	if err := settings.Set(context.Background(), dailyHoldSecretSetting, "not-hex"); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Check(context.Background(), "example"); err == nil {
+		t.Fatal("corrupt secret was silently ignored")
+	}
+}
+
+func TestDailyQuotaAdmissionDoesNotWaitOnSettingsWrite(t *testing.T) {
+	q, _ := dailyFixture(t)
+	ctx := context.Background()
+	if err := q.observe(ctx, "held", dailyHeaders(0, 3600)); err != nil {
+		t.Fatal(err)
+	}
+	// Stand in for a slow in-flight write.
+	q.writeMu.Lock()
+	defer q.writeMu.Unlock()
+	done := make(chan error, 2)
+	go func() { done <- q.Check(ctx, "held") }()
+	go func() { done <- q.Check(ctx, "free") }()
+	var daily *metadata.DailyQuotaError
+	for range 2 {
+		select {
+		case err := <-done:
+			if err != nil && !errors.As(err, &daily) {
+				t.Fatal(err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("admission waited on a settings write")
+		}
 	}
 }
 

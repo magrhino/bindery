@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -23,7 +25,15 @@ func TestDailyQuotaAPIClientsShareHold(t *testing.T) {
 	if err := settings.Set(ctx, SettingHardcoverAPIToken, token); err != nil {
 		t.Fatal(err)
 	}
-	if err := settings.Set(ctx, "auth.hardcover_daily_holds", fmt.Sprintf(`{"%x":%q}`, sha256.Sum256([]byte(token)), until)); err != nil {
+	// Example-only install secret so the test can compute the fingerprint.
+	secret := strings.Repeat("ab", 32)
+	if err := settings.Set(ctx, "auth.hardcover_daily_hold_secret", secret); err != nil {
+		t.Fatal(err)
+	}
+	key, _ := hex.DecodeString(secret)
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(token))
+	if err := settings.Set(ctx, "auth.hardcover_daily_holds", fmt.Sprintf(`{"%x":%q}`, mac.Sum(nil), until)); err != nil {
 		t.Fatal(err)
 	}
 	hold := hardcover.NewDailyQuota(settings)
