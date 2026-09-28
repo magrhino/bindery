@@ -70,7 +70,7 @@ type ListSyncer struct {
 
 	tokenSource   func(context.Context) string
 	clientFactory hardcoverClientFactory
-	dailyQuota    *hardcover.DailyQuota
+	dailyQuota    quotaChecker
 	enricher      bookhydrate.AudiobookEnricher
 
 	// searcher starts the one immediate indexer search a book earns when a
@@ -112,6 +112,12 @@ type seriesLinker interface {
 }
 
 type hardcoverClientFactory func(string) hardcoverClient
+
+// quotaChecker is the slice of *hardcover.DailyQuota the pass loop needs.
+// Declared as an interface so tests can raise a hold mid-pass.
+type quotaChecker interface {
+	Check(ctx context.Context, token string) error
+}
 
 // wantedSearcher is the slice of the scheduler the syncer needs to start an
 // immediate search for a book a pass just made wanted. Declared here so this
@@ -548,9 +554,14 @@ func (s *ListSyncer) syncList(ctx context.Context, il models.ImportList) error {
 	// waits on (#2722).
 	var searchTargets []models.Book
 
+	// A hold raised mid-pass stops further writes, but books this pass already
+	// made wanted still get their search: the next pass sees them as tracked.
+	var quotaErr error
 	for _, book := range books {
-		if err := s.dailyQuota.Check(ctx, token); err != nil {
-			return err
+		if s.dailyQuota != nil {
+			if quotaErr = s.dailyQuota.Check(ctx, token); quotaErr != nil {
+				break
+			}
 		}
 		// The sync now runs on the shutdown-scoped background context (#1854),
 		// so cancellation means the process is going down: stop walking rather
@@ -725,7 +736,7 @@ func (s *ListSyncer) syncList(ctx context.Context, il models.ImportList) error {
 		})
 	}
 
-	return nil
+	return quotaErr
 }
 
 // enrichAudiobook applies the best-effort Audnex enrichment for an ASIN that
