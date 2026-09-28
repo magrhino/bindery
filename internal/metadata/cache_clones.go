@@ -75,6 +75,7 @@ func cloneAuthors(authors []models.Author) []models.Author {
 			s.SkippedMissingDateSample = slices.Clone(s.SkippedMissingDateSample)
 			s.SkippedMinPagesSample = slices.Clone(s.SkippedMinPagesSample)
 			s.SkippedMissingISBNSample = slices.Clone(s.SkippedMissingISBNSample)
+			s.SkippedThinClusterSample = slices.Clone(s.SkippedThinClusterSample)
 		}
 	}
 	return out
