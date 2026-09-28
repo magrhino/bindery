@@ -2,7 +2,10 @@ package metadata
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -139,7 +142,7 @@ func cachedRequest[T any](ctx context.Context, a *Aggregator, cache *ttlCache, k
 		})
 		r.flights[key] = f
 		go func() {
-			value, err := fetch(workCtx)
+			value, err := recoverFetch(workCtx, key, fetch)
 			if err == nil {
 				value = clone(value)
 			}
@@ -178,6 +181,28 @@ func cachedRequest[T any](ctx context.Context, a *Aggregator, cache *ttlCache, k
 		}
 		return clone(f.value.(T)), nil
 	}
+}
+
+// errFetchPanicked is what every waiter on a shared fetch gets when the
+// provider panicked. It is deliberately generic: the waiters can belong to
+// different users, and the panic detail goes to the log instead.
+var errFetchPanicked = errors.New("metadata provider request failed unexpectedly")
+
+// recoverFetch runs fetch and turns a panic into errFetchPanicked. The shared
+// fetch runs on its own goroutine, outside net/http's per-request recovery, so
+// an unrecovered provider panic would take down the whole process. Only the
+// key's operation prefix is logged; the rest holds the query and the provider
+// scope.
+func recoverFetch[T any](ctx context.Context, key string, fetch func(context.Context) (T, error)) (value T, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			op, _, _ := strings.Cut(key, ":")
+			slog.Error("metadata provider fetch panicked", "op", op, "panic", rec, "stack", string(debug.Stack()))
+			var zero T
+			value, err = zero, errFetchPanicked
+		}
+	}()
+	return fetch(ctx)
 }
 
 func (a *Aggregator) searchProviderBooks(ctx context.Context, p Provider, query string) ([]models.Book, error) {

@@ -355,6 +355,44 @@ func TestEnrichmentFailureRemainsRetryable(t *testing.T) {
 	}
 }
 
+func TestEnrichmentSnapshotCachesPastUnconfiguredEnricher(t *testing.T) {
+	primary := &mockProvider{name: "openlibrary", getBook: &models.Book{ForeignID: "OL1W", Title: "Dune"}}
+	unconfigured := &mockProvider{name: "hardcover", searchBookErr: ErrProviderNotConfigured}
+	covers := &mockProvider{name: "googlebooks", searchBooks: []models.Book{{Title: "Dune", ImageURL: "cover"}}}
+	a := newTestAggregator(primary, unconfigured, covers)
+	for i := 0; i < 2; i++ {
+		book, err := a.GetBook(context.Background(), "OL1W")
+		if err != nil || book.ImageURL != "cover" {
+			t.Fatalf("call %d: %+v %v", i, book, err)
+		}
+	}
+	// Failures are never search cached, so a second query here means the
+	// enrichment snapshot was not stored.
+	if n := len(unconfigured.searchBookQueries); n != 1 {
+		t.Fatalf("unconfigured enricher searched %d times, want 1 (snapshot not cached)", n)
+	}
+}
+
+func TestCachedRequestRecoversProviderPanic(t *testing.T) {
+	var calls atomic.Int32
+	p := &cacheTestProvider{mockProvider: &mockProvider{name: "openlibrary"}}
+	p.books = func(context.Context, string) ([]models.Book, error) {
+		if calls.Add(1) == 1 {
+			panic("provider bug")
+		}
+		return []models.Book{{Title: "Dune"}}, nil
+	}
+	a := newRequestTestAggregator(p)
+	_, err := a.searchProviderBooks(context.Background(), p, "q")
+	if !errors.Is(err, errFetchPanicked) || strings.Contains(err.Error(), "provider bug") {
+		t.Fatalf("panicking fetch: err = %v, want the generic errFetchPanicked", err)
+	}
+	got, err := a.searchProviderBooks(context.Background(), p, "q")
+	if err != nil || len(got) != 1 || calls.Load() != 2 {
+		t.Fatalf("after panic: %v %v calls=%d, want a fresh fetch", got, err, calls.Load())
+	}
+}
+
 func TestEditionCacheDoesNotNormalizeProviderInputTwice(t *testing.T) {
 	p := &cacheTestProvider{mockProvider: &mockProvider{name: "hardcover"}}
 	var calls []string
