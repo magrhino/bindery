@@ -68,3 +68,53 @@ func TestDailyQuotaListSyncStopsBeforeWrites(t *testing.T) {
 		t.Fatalf("wrote %d books, %d authors", len(books), len(authors))
 	}
 }
+
+// holdAfter admits the first n checks, then reports a daily hold.
+type holdAfter struct {
+	n     int
+	daily *metadata.DailyQuotaError
+}
+
+func (h *holdAfter) Check(context.Context, string) error {
+	if h.n == 0 {
+		return h.daily
+	}
+	h.n--
+	return nil
+}
+
+func TestDailyQuotaMidPassHoldStillSearchesWantedBooks(t *testing.T) {
+	s, repo, searcher := newSearchingSyncer(t)
+	ctx := context.Background()
+	il := testImportList("Held mid-pass", "hardcover", true)
+	il.MonitorNew = true
+	if err := repo.Create(ctx, &il); err != nil {
+		t.Fatal(err)
+	}
+	author := &models.Author{ForeignID: "hc:list-author", Name: "List Author", MetadataProvider: "hardcover"}
+	s.WithClientFactory(func(string) hardcoverClient {
+		return &fakeHardcoverClient{
+			lists: []hardcover.HCList{{ID: 7, Slug: il.URL, Name: il.Name}},
+			books: []models.Book{
+				{ForeignID: "hc:before-hold", Title: "Before Hold", MetadataProvider: "hardcover", Author: author},
+				{ForeignID: "hc:after-hold", Title: "After Hold", MetadataProvider: "hardcover", Author: author},
+			},
+		}
+	})
+	daily := &metadata.DailyQuotaError{ResetAt: time.Now().Add(time.Hour)}
+	s.dailyQuota = &holdAfter{n: 1, daily: daily}
+
+	if err := s.syncList(ctx, il); !errors.Is(err, daily) {
+		t.Fatalf("syncList = %v, want the daily hold", err)
+	}
+	created, err := s.books.GetByForeignID(ctx, "hc:before-hold")
+	if err != nil || created == nil {
+		t.Fatalf("book before hold not created: %v", err)
+	}
+	if skipped, _ := s.books.GetByForeignID(ctx, "hc:after-hold"); skipped != nil {
+		t.Fatal("book written after the hold")
+	}
+	if call := searcher.waitForCall(t, time.Second); call.ID != created.ID {
+		t.Errorf("search started for book %d, want %d", call.ID, created.ID)
+	}
+}

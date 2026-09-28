@@ -587,9 +587,11 @@ setting) and reset times are hidden from generic settings endpoints.
 
 Settings → API Keys shows when the configured token can be used again. Bulk
 metadata imports and background catalogue work stop on the daily hold rather
-than repeatedly asking an exhausted key. Retry interrupted imports after the
-shown time; already committed records remain, and ABS keeps its checkpoint on
-the interrupted item. Scheduled jobs can run again on their next scheduled pass.
+than repeatedly asking an exhausted key. A Hardcover list sync that hits the
+hold partway through still starts searches for books it already made wanted.
+Retry interrupted imports after the shown time; already committed records
+remain, and ABS keeps its checkpoint on the interrupted item. Scheduled jobs
+can run again on their next scheduled pass.
 This does not add automatic edition-hydration recovery or request accounting.
 Different tokens have separate holds, even if they belong to the same account.
 
