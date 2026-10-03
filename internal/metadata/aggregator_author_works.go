@@ -345,7 +345,7 @@ func (a *Aggregator) rawPrimaryAuthorWorks(ctx context.Context, authorForeignID 
 	if provider == nil {
 		return nil, nil
 	}
-	return cachedRequest(ctx, a, a.cache, key, func(ctx context.Context) ([]models.Book, error) {
+	return cachedRequest(ctx, a, a.cache, "authorworks-raw", key, func(ctx context.Context) ([]models.Book, error) {
 		return a.primaryAuthorWorks(ctx, provider, scope, authorForeignID)
 	}, cloneBooks)
 }

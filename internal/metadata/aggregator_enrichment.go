@@ -319,8 +319,11 @@ func (a *Aggregator) enrichBook(ctx context.Context, book *models.Book) {
 	}
 	if cacheKey != "" {
 		if cached, ok := a.cache.get(cacheKey); ok {
-			snap := cached.(enrichmentSnapshot)
-			applyEnrichmentSnapshot(book, snap)
+			applyEnrichmentSnapshot(book, cached.(enrichmentSnapshot))
+			return
+		}
+		if cached, ok := a.requests.shortCache().get(cacheKey); ok {
+			applyEnrichmentSnapshot(book, cached.(enrichmentSnapshot))
 			return
 		}
 	}
@@ -400,15 +403,24 @@ func (a *Aggregator) enrichBook(ctx context.Context, book *models.Book) {
 	// book rather than hand one user's hand written text to another's library
 	// (#2767). A locked book is rare, so this costs one extra enricher round
 	// trip in a case that barely happens; every unlocked book caches as before.
-	if cacheKey != "" && cacheable && ctx.Err() == nil &&
+	if cacheKey != "" && ctx.Err() == nil &&
 		book.CanWrite(models.BookFieldDescription) && book.CanWrite(models.BookFieldGenres) {
-		a.cache.set(cacheKey, enrichmentSnapshot{
+		snap := enrichmentSnapshot{
 			description:   book.Description,
 			imageURL:      book.ImageURL,
 			averageRating: book.AverageRating,
 			ratingsCount:  book.RatingsCount,
 			genres:        slices.Clone(book.Genres),
-		})
+		}
+		if cacheable {
+			a.cache.set(cacheKey, snap)
+		} else {
+			// An enricher failed, so this snapshot is incomplete and must stay
+			// retryable, but not on every cache hit: GetBook enriches each
+			// hit, and a failing or rate limited enricher would otherwise be
+			// asked once per call. The five minute cache bounds that.
+			a.requests.shortCache().set(cacheKey, snap)
+		}
 	}
 }
 

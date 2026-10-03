@@ -341,19 +341,35 @@ func TestGetBookEnrichmentHonorsLiveScope(t *testing.T) {
 	}
 }
 
+// A failing enricher is asked once per five minute window, not on every
+// GetBook cache hit, and is asked again once the window passes.
 func TestEnrichmentFailureRemainsRetryable(t *testing.T) {
-	primary := &mockProvider{name: "openlibrary", getBook: &models.Book{ForeignID: "OL1W", Title: "Dune"}}
-	enricher := &mockProvider{name: "hardcover", searchBookErr: errors.New("offline")}
-	a := newTestAggregator(primary, enricher)
-	if _, err := a.GetBook(context.Background(), "OL1W"); err != nil {
-		t.Fatal(err)
-	}
-	enricher.searchBookErr = nil
-	enricher.searchBooks = []models.Book{{Title: "Dune", ImageURL: "cover"}}
-	book, err := a.GetBook(context.Background(), "OL1W")
-	if err != nil || book.ImageURL != "cover" || len(enricher.searchBookQueries) != 2 {
-		t.Fatalf("failed enrichment cached: %+v %v", book, err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		primary := &mockProvider{name: "openlibrary", getBook: &models.Book{ForeignID: "OL1W", Title: "Dune"}}
+		enricher := &mockProvider{name: "hardcover", searchBookErr: errors.New("rate limited")}
+		a := newRequestTestAggregator(primary)
+		a.enrichers = []Provider{enricher}
+		for range 5 {
+			if _, err := a.GetBook(context.Background(), "OL1W"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if n := len(enricher.searchBookQueries); n != 1 {
+			t.Fatalf("failing enricher asked %d times in one window, want 1", n)
+		}
+		enricher.searchBookErr = nil
+		enricher.searchBooks = []models.Book{{Title: "Dune", ImageURL: "cover"}}
+		time.Sleep(5*time.Minute + time.Nanosecond)
+		book, err := a.GetBook(context.Background(), "OL1W")
+		if err != nil || book.ImageURL != "cover" || len(enricher.searchBookQueries) != 2 {
+			t.Fatalf("failed enrichment not retried after the window: %+v %v", book, err)
+		}
+		// The complete snapshot now holds for the long TTL.
+		time.Sleep(5*time.Minute + time.Nanosecond)
+		if _, err := a.GetBook(context.Background(), "OL1W"); err != nil || len(enricher.searchBookQueries) != 2 {
+			t.Fatalf("complete snapshot not cached: %v, %d queries", err, len(enricher.searchBookQueries))
+		}
+	})
 }
 
 func TestEnrichmentSnapshotCachesPastUnconfiguredEnricher(t *testing.T) {
@@ -446,7 +462,7 @@ func TestCachedRequestSchedulingBudgetFollowsRemainingWaiters(t *testing.T) {
 		fetch := func(ctx context.Context) (int, error) {
 			// Composed reads must carry the outer callers' budget through a
 			// second shared fetch without losing deadlines or locking recursively.
-			return cachedRequest(ctx, a, a.cache, "inner", func(ctx context.Context) (int, error) {
+			return cachedRequest(ctx, a, a.cache, "inner", "inner", func(ctx context.Context) (int, error) {
 				calls++
 				upstream = ctx
 				select {
@@ -460,7 +476,7 @@ func TestCachedRequestSchedulingBudgetFollowsRemainingWaiters(t *testing.T) {
 		start := func(ctx context.Context) <-chan error {
 			result := make(chan error, 1)
 			go func() {
-				_, err := cachedRequest(ctx, a, a.cache, "outer", fetch, clone)
+				_, err := cachedRequest(ctx, a, a.cache, "outer", "outer", fetch, clone)
 				result <- err
 			}()
 			synctest.Wait()

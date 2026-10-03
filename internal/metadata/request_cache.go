@@ -24,9 +24,21 @@ type CacheScopedProvider interface {
 }
 
 type requestCache struct {
-	mu       sync.Mutex
+	mu sync.Mutex
+	// searches is the five minute cache: provider search responses, and
+	// enrichment snapshots built while an enricher was failing.
 	searches *ttlCache
 	flights  map[string]*metadataFlight
+}
+
+// shortCache returns the five minute cache, creating it on first use.
+func (r *requestCache) shortCache() *ttlCache {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.searches == nil {
+		r.searches = newTTLCacheWithCap(5*time.Minute, 1000)
+	}
+	return r.searches
 }
 
 type metadataFlight struct {
@@ -107,19 +119,18 @@ func SchedulingDeadline(ctx context.Context) (time.Time, bool) {
 
 // cachedRequest shares only successful snapshots. Each waiter owns its return
 // value and cancellation; the upstream request is canceled when nobody needs it.
-func cachedRequest[T any](ctx context.Context, a *Aggregator, cache *ttlCache, key string, fetch func(context.Context) (T, error), clone func(T) T) (T, error) {
+// op names the operation for logs; key, which holds the query and provider
+// scope, is never logged.
+func cachedRequest[T any](ctx context.Context, a *Aggregator, cache *ttlCache, op, key string, fetch func(context.Context) (T, error), clone func(T) T) (T, error) {
 	var zero T
 	if err := ctx.Err(); err != nil {
 		return zero, err
 	}
 	r := &a.requests
-	r.mu.Lock()
 	if cache == nil {
-		if r.searches == nil {
-			r.searches = newTTLCacheWithCap(5*time.Minute, 1000)
-		}
-		cache = r.searches
+		cache = r.shortCache()
 	}
+	r.mu.Lock()
 	if value, ok := cache.get(key); ok {
 		r.mu.Unlock()
 		return clone(value.(T)), nil
@@ -142,7 +153,7 @@ func cachedRequest[T any](ctx context.Context, a *Aggregator, cache *ttlCache, k
 		})
 		r.flights[key] = f
 		go func() {
-			value, err := recoverFetch(workCtx, key, fetch)
+			value, err := recoverFetch(workCtx, op, fetch)
 			if err == nil {
 				value = clone(value)
 			}
@@ -190,13 +201,11 @@ var errFetchPanicked = errors.New("metadata provider request failed unexpectedly
 
 // recoverFetch runs fetch and turns a panic into errFetchPanicked. The shared
 // fetch runs on its own goroutine, outside net/http's per-request recovery, so
-// an unrecovered provider panic would take down the whole process. Only the
-// key's operation prefix is logged; the rest holds the query and the provider
-// scope.
-func recoverFetch[T any](ctx context.Context, key string, fetch func(context.Context) (T, error)) (value T, err error) {
+// an unrecovered provider panic would take down the whole process. Only op is
+// logged, never the cache key.
+func recoverFetch[T any](ctx context.Context, op string, fetch func(context.Context) (T, error)) (value T, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			op, _, _ := strings.Cut(key, ":")
 			slog.Error("metadata provider fetch panicked", "op", op, "panic", rec, "stack", string(debug.Stack()))
 			var zero T
 			value, err = zero, errFetchPanicked
@@ -211,14 +220,14 @@ func (a *Aggregator) searchProviderBooks(ctx context.Context, p Provider, query 
 }
 
 func (a *Aggregator) searchBoundProviderBooks(ctx context.Context, p Provider, scope, query string) ([]models.Book, error) {
-	return cachedRequest(ctx, a, nil, "search-books:"+scope+":"+query, func(ctx context.Context) ([]models.Book, error) {
+	return cachedRequest(ctx, a, nil, "search-books", "search-books:"+scope+":"+query, func(ctx context.Context) ([]models.Book, error) {
 		return p.SearchBooks(ctx, query)
 	}, cloneBooks)
 }
 
 func (a *Aggregator) searchProviderAuthors(ctx context.Context, p Provider, query string) ([]models.Author, error) {
 	p, scope := resolveCacheProvider(ctx, p)
-	return cachedRequest(ctx, a, nil, "search-authors:"+scope+":"+query, func(ctx context.Context) ([]models.Author, error) {
+	return cachedRequest(ctx, a, nil, "search-authors", "search-authors:"+scope+":"+query, func(ctx context.Context) ([]models.Author, error) {
 		return p.SearchAuthors(ctx, query)
 	}, cloneAuthors)
 }
@@ -231,7 +240,7 @@ func (a *Aggregator) providerEditions(ctx context.Context, p Provider, id string
 	if normalizedProviderName(p.Name()) == "hardcover" {
 		cacheID = strings.TrimSpace(strings.TrimPrefix(id, "hc:"))
 	}
-	return cachedRequest(ctx, a, a.cache, "editions:"+scope+":"+cacheID, func(ctx context.Context) ([]models.Edition, error) {
+	return cachedRequest(ctx, a, a.cache, "editions", "editions:"+scope+":"+cacheID, func(ctx context.Context) ([]models.Edition, error) {
 		return p.GetEditions(ctx, id)
 	}, cloneEditions)
 }

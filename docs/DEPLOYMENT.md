@@ -690,7 +690,9 @@ deadlines to avoid reserving slots none can use. Each caller can cancel
 independently; the upstream fetch is canceled when its last caller leaves. Failures are not cached as empty results, and returned values
 are copied so callers cannot modify another request's results. Book responses
 are cached before enrichment; enrichment snapshots also track live credential
-scopes and input metadata, and are not saved after search-provider failures.
+scopes and input metadata. After a search-provider failure a snapshot is kept
+for only five minutes, so the failing provider is retried once per window
+rather than on every lookup.
 Cover-only providers retain their best-effort empty-result behavior. Raw and
 derived author catalogues also include provider scopes; a catalogue fetch uses
 one configuration snapshot across its primary, supplemental, and cover reads.

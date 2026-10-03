@@ -785,7 +785,7 @@ func (a *Aggregator) GetAuthor(ctx context.Context, foreignID string) (*models.A
 		a.cache.set(key, cloneAuthor(author))
 		return author, nil
 	}
-	return cachedRequest(ctx, a, a.cache, key, func(ctx context.Context) (*models.Author, error) {
+	return cachedRequest(ctx, a, a.cache, "author", key, func(ctx context.Context) (*models.Author, error) {
 		return provider.GetAuthor(ctx, foreignID)
 	}, cloneAuthor)
 }
@@ -799,7 +799,7 @@ func (a *Aggregator) GetBook(ctx context.Context, foreignID string) (*models.Boo
 	provider, scope := resolveCacheProvider(ctx, provider)
 	// Cache the provider response before enrichment, so a live enricher's
 	// configuration is checked on every call, including primary cache hits.
-	book, err := cachedRequest(ctx, a, a.cache, "book:"+scope+":"+foreignID, func(ctx context.Context) (*models.Book, error) {
+	book, err := cachedRequest(ctx, a, a.cache, "book", "book:"+scope+":"+foreignID, func(ctx context.Context) (*models.Book, error) {
 		return provider.GetBook(ctx, foreignID)
 	}, cloneBook)
 	if err != nil || book == nil {
