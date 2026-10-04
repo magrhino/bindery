@@ -70,7 +70,6 @@ type ListSyncer struct {
 
 	tokenSource   func(context.Context) string
 	clientFactory hardcoverClientFactory
-	dailyQuota    quotaChecker
 	enricher      bookhydrate.AudiobookEnricher
 
 	// searcher starts the one immediate indexer search a book earns when a
@@ -113,12 +112,6 @@ type seriesLinker interface {
 
 type hardcoverClientFactory func(string) hardcoverClient
 
-// quotaChecker is the slice of *hardcover.DailyQuota the pass loop needs.
-// Declared as an interface so tests can raise a hold mid-pass.
-type quotaChecker interface {
-	Check(ctx context.Context, token string) error
-}
-
 // wantedSearcher is the slice of the scheduler the syncer needs to start an
 // immediate search for a book a pass just made wanted. Declared here so this
 // package does not import scheduler; *scheduler.Scheduler satisfies it.
@@ -136,9 +129,10 @@ const (
 	listSyncSearchPace        = 3 * time.Second
 )
 
-// WithDailyQuota shares exhaustion holds with other Hardcover callers.
+// WithDailyQuota shares exhaustion holds with other Hardcover callers. Only
+// the list fetches before the pass loop call Hardcover, so a hold stops the
+// sync there; the loop itself writes data that was already fetched.
 func (s *ListSyncer) WithDailyQuota(q *hardcover.DailyQuota) *ListSyncer {
-	s.dailyQuota = q
 	s.clientFactory = func(token string) hardcoverClient { return hardcover.NewAuthenticated(token).WithDailyQuota(q) }
 	return s
 }
@@ -554,15 +548,7 @@ func (s *ListSyncer) syncList(ctx context.Context, il models.ImportList) error {
 	// waits on (#2722).
 	var searchTargets []models.Book
 
-	// A hold raised mid-pass stops further writes, but books this pass already
-	// made wanted still get their search: the next pass sees them as tracked.
-	var quotaErr error
 	for _, book := range books {
-		if s.dailyQuota != nil {
-			if quotaErr = s.dailyQuota.Check(ctx, token); quotaErr != nil {
-				break
-			}
-		}
 		// The sync now runs on the shutdown-scoped background context (#1854),
 		// so cancellation means the process is going down: stop walking rather
 		// than grinding through the remaining books with a dead context and a
@@ -736,7 +722,7 @@ func (s *ListSyncer) syncList(ctx context.Context, il models.ImportList) error {
 		})
 	}
 
-	return quotaErr
+	return nil
 }
 
 // enrichAudiobook applies the best-effort Audnex enrichment for an ASIN that
