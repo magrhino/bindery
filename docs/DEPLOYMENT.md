@@ -692,7 +692,9 @@ are copied so callers cannot modify another request's results. Book responses
 are cached before enrichment; enrichment snapshots also track live credential
 scopes and input metadata. After a search-provider failure a snapshot is kept
 for only five minutes, so the failing provider is retried once per window
-rather than on every lookup.
+rather than on every lookup. Those short-lived snapshots share the 1,000-entry
+five-minute cache with search responses, so a large refresh during an enricher
+outage can evict recent searches early; they are refetched on next use.
 Cover-only providers retain their best-effort empty-result behavior. Raw and
 derived author catalogues also include provider scopes; a catalogue fetch uses
 one configuration snapshot across its primary, supplemental, and cover reads.

@@ -372,6 +372,65 @@ func TestEnrichmentFailureRemainsRetryable(t *testing.T) {
 	})
 }
 
+// An enricher failure stores a short-lived snapshot, but never for a book
+// with a locked field (#2767) or a cancelled request.
+func TestEnrichmentFailureShortCachesOnlyUnlockedLiveRequests(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		lock, cancel bool
+		want         int
+	}{
+		{name: "unlocked", want: 1},
+		{name: "locked description", lock: true},
+		{name: "cancelled", cancel: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newRequestTestAggregator(&mockProvider{name: "openlibrary"})
+			a.enrichers = []Provider{&mockProvider{name: "hardcover", searchBookErr: errors.New("rate limited")}}
+			book := models.Book{ForeignID: "OL1W", Title: "Dune"}
+			if tc.lock {
+				book.LockField(models.BookFieldDescription)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			if tc.cancel {
+				cancel()
+			}
+			defer cancel()
+			a.enrichBook(ctx, &book)
+			if n := len(a.requests.searches.state.items); n != tc.want {
+				t.Fatalf("short cache holds %d entries, want %d", n, tc.want)
+			}
+			if n := len(a.cache.state.items); n != 0 {
+				t.Fatalf("24h cache holds %d entries, want 0", n)
+			}
+		})
+	}
+}
+
+// A complete snapshot in the 24h cache wins over a short-lived one under the
+// same key.
+func TestEnrichmentCompleteSnapshotBeatsShortOne(t *testing.T) {
+	a := newRequestTestAggregator(&mockProvider{name: "openlibrary"})
+	a.enrichers = []Provider{&mockProvider{name: "hardcover", searchBooks: []models.Book{{Title: "Dune", ImageURL: "cover"}}}}
+	first := models.Book{ForeignID: "OL1W", Title: "Dune"}
+	a.enrichBook(context.Background(), &first)
+	var key string
+	for k := range a.cache.state.items {
+		if strings.HasPrefix(k, "enrich") {
+			key = k
+		}
+	}
+	if key == "" {
+		t.Fatal("complete snapshot not stored in the 24h cache")
+	}
+	a.requests.searches.set(key, enrichmentSnapshot{imageURL: "stale"})
+	second := models.Book{ForeignID: "OL1W", Title: "Dune"}
+	a.enrichBook(context.Background(), &second)
+	if second.ImageURL != "cover" {
+		t.Fatalf("ImageURL = %q, want the complete snapshot's cover", second.ImageURL)
+	}
+}
+
 func TestEnrichmentSnapshotCachesPastUnconfiguredEnricher(t *testing.T) {
 	primary := &mockProvider{name: "openlibrary", getBook: &models.Book{ForeignID: "OL1W", Title: "Dune"}}
 	unconfigured := &mockProvider{name: "hardcover", searchBookErr: ErrProviderNotConfigured}
