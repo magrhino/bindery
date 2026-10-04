@@ -196,19 +196,22 @@ func TestDailyQuotaFinalSuccessAndTokenRotation(t *testing.T) {
 	}
 }
 
-func TestDailyQuotaStorageFailureIsVisible(t *testing.T) {
+func TestDailyQuotaCorruptHoldsRecover(t *testing.T) {
+	ctx := context.Background()
 	q, settings := dailyFixture(t)
-	if err := settings.Set(context.Background(), dailyHoldSetting, `invalid`); err != nil {
+	if err := settings.Set(ctx, dailyHoldSetting, `invalid`); err != nil {
 		t.Fatal(err)
 	}
-	if err := q.Check(context.Background(), "example"); err == nil {
-		t.Fatal("corrupt hold was silently ignored")
+	// A corrupt row must not block every token for good.
+	if err := q.Check(ctx, "example"); err != nil {
+		t.Fatalf("corrupt hold blocked admission: %v", err)
 	}
-	if err := settings.Set(context.Background(), dailyHoldSetting, `{}`); err != nil {
+	if err := q.observe(ctx, "example", dailyHeaders(0, 3600)); err != nil {
 		t.Fatal(err)
 	}
-	if err := q.Check(context.Background(), "example"); err != nil {
-		t.Fatal(err)
+	var daily *metadata.DailyQuotaError
+	if err := NewDailyQuota(settings).Check(ctx, "example"); !errors.As(err, &daily) {
+		t.Fatalf("hold after rewriting corrupt row: %v", err)
 	}
 }
 
@@ -325,13 +328,30 @@ func TestDailyQuotaFingerprintsWithInstallSecret(t *testing.T) {
 	}
 }
 
-func TestDailyQuotaCorruptSecretIsVisible(t *testing.T) {
-	q, settings := dailyFixture(t)
-	if err := settings.Set(context.Background(), dailyHoldSecretSetting, "not-hex"); err != nil {
-		t.Fatal(err)
-	}
-	if err := q.Check(context.Background(), "example"); err == nil {
-		t.Fatal("corrupt secret was silently ignored")
+func TestDailyQuotaCorruptSecretRegenerates(t *testing.T) {
+	ctx := context.Background()
+	for _, corrupt := range []string{"not-hex", ""} {
+		q, settings := dailyFixture(t)
+		if err := settings.Set(ctx, dailyHoldSecretSetting, corrupt); err != nil {
+			t.Fatal(err)
+		}
+		if err := q.Check(ctx, "example"); err != nil {
+			t.Fatalf("corrupt secret %q blocked admission: %v", corrupt, err)
+		}
+		row, err := settings.Get(ctx, dailyHoldSecretSetting)
+		if err != nil || row == nil {
+			t.Fatal(err)
+		}
+		if secret, err := hex.DecodeString(row.Value); err != nil || len(secret) != 32 {
+			t.Fatalf("secret %q not replaced: %q", corrupt, row.Value)
+		}
+		if err := q.observe(ctx, "example", dailyHeaders(0, 3600)); err != nil {
+			t.Fatal(err)
+		}
+		var daily *metadata.DailyQuotaError
+		if err := NewDailyQuota(settings).Check(ctx, "example"); !errors.As(err, &daily) {
+			t.Fatalf("hold after regenerating secret: %v", err)
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -63,7 +64,10 @@ func (q *DailyQuota) load(ctx context.Context) error {
 	holds := make(map[string]time.Time)
 	if row != nil {
 		if err := json.Unmarshal([]byte(row.Value), &holds); err != nil {
-			return fmt.Errorf("decode Hardcover daily hold: %w", err)
+			// Failing closed here would block every token for good: the API
+			// cannot write this row. Start empty; the next hold rewrites it.
+			slog.Warn("Hardcover daily hold is corrupt; starting with no holds", "error", err)
+			holds = nil
 		}
 	}
 	if holds == nil {
@@ -74,31 +78,53 @@ func (q *DailyQuota) load(ctx context.Context) error {
 	return nil
 }
 
-// loadSecret reads the fingerprint key, creating it on first use.
+// loadSecret reads the fingerprint key, creating it on first use and
+// replacing it when corrupt.
 func (q *DailyQuota) loadSecret(ctx context.Context) ([]byte, error) {
 	row, err := q.settings.Get(ctx, dailyHoldSecretSetting)
 	if err != nil {
 		return nil, fmt.Errorf("read Hardcover daily hold key: %w", err)
 	}
-	if row == nil {
-		secret := make([]byte, 32)
-		if _, err := rand.Read(secret); err != nil {
-			return nil, fmt.Errorf("generate Hardcover daily hold key: %w", err)
+	if row != nil {
+		if secret, err := hex.DecodeString(row.Value); err == nil && len(secret) > 0 {
+			return secret, nil
 		}
-		if _, err := q.settings.SetIfAbsent(ctx, dailyHoldSecretSetting, hex.EncodeToString(secret)); err != nil {
+		// A corrupt key would block every token for good, and the API cannot
+		// write it. Replace it; holds keyed by the old one expire on their own.
+		slog.Warn("Hardcover daily hold key is corrupt; generating a new one")
+		secret, err := newDailyHoldSecret()
+		if err != nil {
+			return nil, err
+		}
+		if err := q.settings.Set(ctx, dailyHoldSecretSetting, hex.EncodeToString(secret)); err != nil {
 			return nil, fmt.Errorf("persist Hardcover daily hold key: %w", err)
 		}
-		// Re-read so a concurrent creator's key wins consistently.
-		if row, err = q.settings.Get(ctx, dailyHoldSecretSetting); err != nil {
-			return nil, fmt.Errorf("read Hardcover daily hold key: %w", err)
-		}
-		if row == nil {
-			return nil, errors.New("read Hardcover daily hold key: missing after create")
-		}
+		return secret, nil
 	}
-	secret, err := hex.DecodeString(row.Value)
-	if err != nil || len(secret) == 0 {
+	secret, err := newDailyHoldSecret()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := q.settings.SetIfAbsent(ctx, dailyHoldSecretSetting, hex.EncodeToString(secret)); err != nil {
+		return nil, fmt.Errorf("persist Hardcover daily hold key: %w", err)
+	}
+	// Re-read so a concurrent creator's key wins consistently.
+	if row, err = q.settings.Get(ctx, dailyHoldSecretSetting); err != nil {
+		return nil, fmt.Errorf("read Hardcover daily hold key: %w", err)
+	}
+	if row == nil {
+		return nil, errors.New("read Hardcover daily hold key: missing after create")
+	}
+	if secret, err = hex.DecodeString(row.Value); err != nil || len(secret) == 0 {
 		return nil, errors.New("decode Hardcover daily hold key: invalid value")
+	}
+	return secret, nil
+}
+
+func newDailyHoldSecret() ([]byte, error) {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return nil, fmt.Errorf("generate Hardcover daily hold key: %w", err)
 	}
 	return secret, nil
 }
