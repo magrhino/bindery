@@ -897,8 +897,10 @@ func (a *Aggregator) GetBookByISBNWithOutcome(ctx context.Context, isbn string) 
 		bound, _ := resolveCacheProvider(ctx, provider)
 		book, err := bound.GetBookByISBN(ctx, isbn)
 		if err != nil {
+			// A held primary stops the lookup; a held enricher is just a failed
+			// provider, so the primary's answer and later fallbacks still count.
 			var daily *DailyQuotaError
-			if errors.As(err, &daily) {
+			if idx == 0 && errors.As(err, &daily) {
 				return nil, newSearchOutcome(primaryName, []string{normalizedProviderName(providerName(provider))}, answered, err), err
 			}
 			if errors.Is(err, ErrProviderNotConfigured) {
