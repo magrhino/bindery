@@ -90,3 +90,38 @@ func TestDailyQuotaHoldHiddenFromAdminSettings(t *testing.T) {
 		t.Fatalf("get: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// holdAfterProvider admits the first n quota checks, then reports a hold.
+type holdAfterProvider struct {
+	*stubMetaProvider
+	admit int
+	daily error
+}
+
+func (p *holdAfterProvider) CheckQuota(context.Context) error {
+	if p.admit == 0 {
+		return p.daily
+	}
+	p.admit--
+	return nil
+}
+
+func TestDailyQuotaCatalogueHoldMidRunFinishesCreatedBooks(t *testing.T) {
+	daily := &metadata.DailyQuotaError{ResetAt: time.Now().Add(time.Hour)}
+	// One check at the start of the run, one for the first work.
+	provider := &holdAfterProvider{stubMetaProvider: &stubMetaProvider{works: missingDateTestWorks()[:2]}, admit: 2, daily: daily}
+	f := newRelinkUpstreamFixture(t, provider)
+	author := f.createAuthor(t, &models.Author{Name: "Example", ForeignID: "OL930A", MetadataProvider: "openlibrary"})
+	added, err := f.handler.runCatalogueSync(f.ctx, author, catalogueSyncOptions{})
+	if added != 1 || !errors.Is(err, daily) {
+		t.Fatalf("added=%d err=%v", added, err)
+	}
+	books, err := f.books.ListByAuthor(f.ctx, author.ID)
+	if err != nil || len(books) != 1 {
+		t.Fatalf("books=%d err=%v", len(books), err)
+	}
+	// The created book still went through the post-create pass.
+	if summary := f.handler.syncSummaries.get(author.ID); summary == nil || summary.Added != 1 {
+		t.Fatalf("summary = %+v", summary)
+	}
+}

@@ -2350,9 +2350,13 @@ func (h *AuthorHandler) runCatalogueSync(ctx context.Context, author *models.Aut
 		})
 	}
 
+	// A daily hold stops creating books, but the books this run already created
+	// still get hydration, file matching, search and the summary below: the
+	// next sync treats them as existing, so skipping that work would strand them.
+	var quotaErr error
 	for _, b := range candidates {
-		if err := h.meta.CheckQuota(ctx); err != nil {
-			return added, err
+		if quotaErr = h.meta.CheckQuota(ctx); quotaErr != nil {
+			break
 		}
 		// A cancelled or timed out run stops creating books rather than
 		// logging one failed insert per remaining work.
@@ -2790,8 +2794,9 @@ func (h *AuthorHandler) runCatalogueSync(ctx context.Context, author *models.Aut
 		seededEditions[editionTarget{ForeignID: foreignID}.cacheKey()] = editions
 	}
 	editionCache := h.prefetchHardcoverEditions(ctx, createdTargets, seededEditions)
-	if err := h.meta.CheckQuota(ctx); err != nil {
-		return added, err
+	if quotaErr == nil {
+		// Held calls below fail fast, so record the hold and finish local work.
+		quotaErr = h.meta.CheckQuota(ctx)
 	}
 
 	// The author's catalogue as this sync leaves it, for the rival title
@@ -2838,7 +2843,7 @@ func (h *AuthorHandler) runCatalogueSync(ctx context.Context, author *models.Aut
 	if singleWork {
 		slog.Info("single-work catalogue fallback complete",
 			"author", author.Name, "foreignId", opts.onlyForeignID, "added", added)
-		return added, nil
+		return added, quotaErr
 	}
 
 	h.announceDiscoveredBooks(context.WithoutCancel(ctx), author, opts, populatedBefore, createdBooks)
@@ -2899,10 +2904,10 @@ func (h *AuthorHandler) runCatalogueSync(ctx context.Context, author *models.Aut
 	if failed+skippedLang+skippedJunk+skippedMediaType+skippedPartBooks+skippedMissingDate+
 		skippedMinPages+skippedMissingISBN+skippedThinCluster > 0 {
 		slog.Warn("author books synced", logArgs...)
-		return added, nil
+		return added, quotaErr
 	}
 	slog.Info("author books synced", logArgs...)
-	return added, nil
+	return added, quotaErr
 }
 
 // keepWorkWithForeignID narrows a provider works list to the single work the
