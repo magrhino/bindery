@@ -45,6 +45,22 @@ func TestDailyQuotaImmediatelyTripsImportBreaker(t *testing.T) {
 	}
 }
 
+func TestDailyQuotaHeldEnricherDoesNotTripImportBreaker(t *testing.T) {
+	daily := &metadata.DailyQuotaError{ResetAt: time.Now().Add(time.Hour)}
+	p := &primaryOutage{}
+	// OpenLibrary answered; only the Hardcover enricher was held.
+	held := metadata.SearchOutcome{
+		Primary: "openlibrary", Answered: []string{"openlibrary"}, FailedProviders: []string{"hardcover"},
+		FirstErr: fmt.Errorf("hardcover: %w", daily),
+	}
+	for range primaryOutageThreshold + 1 {
+		p.observe("csv", held)
+	}
+	if p.down() {
+		t.Fatalf("held enricher tripped the breaker: %s", p.reason())
+	}
+}
+
 func TestDailyQuotaRerunQueuesCommittedEmptyCatalogues(t *testing.T) {
 	database := newTestDB(t)
 	authors, settings := db.NewAuthorRepo(database), db.NewSettingsRepo(database)
@@ -104,5 +120,29 @@ func TestDailyQuotaRerunQueuesCommittedEmptyCatalogues(t *testing.T) {
 	result := newResult()
 	if got := resolveAndCreateAuthor(ctx, "csv", "First", true, authors, settings, agg, &primaryOutage{}, newLibraryAuthors(authors), result); got != nil {
 		t.Fatal("previously populated author requeued")
+	}
+}
+
+func TestDailyQuotaFailedCatalogueReadCountsOnce(t *testing.T) {
+	database := newTestDB(t)
+	authors, settings := db.NewAuthorRepo(database), db.NewSettingsRepo(database)
+	ctx := context.Background()
+	if err := authors.Create(ctx, &models.Author{Name: "Existing", ForeignID: "hc:Existing", MetadataProvider: "hardcover"}); err != nil {
+		t.Fatal(err)
+	}
+	// Only the catalogue marker read uses this column, so this fails just that read.
+	if _, err := database.Exec(`ALTER TABLE authors RENAME COLUMN catalogue_populated_at TO catalogue_populated_at_gone`); err != nil {
+		t.Fatal(err)
+	}
+	p := &dailyProvider{stubProvider: stubProvider{name: "hardcover"}}
+	p.searchAuthorsFn = func(_ context.Context, name string) ([]models.Author, error) {
+		return []models.Author{{Name: name, ForeignID: "hc:" + name}}, nil
+	}
+	res := newResult()
+	if got := resolveAndCreateAuthor(ctx, "csv", "Existing", true, authors, settings, metadata.NewAggregator(p), &primaryOutage{}, res); got != nil {
+		t.Fatal("author requeued despite failed marker read")
+	}
+	if res.Errors != 1 || res.Skipped != 0 {
+		t.Fatalf("errors=%d skipped=%d, want 1 and 0", res.Errors, res.Skipped)
 	}
 }

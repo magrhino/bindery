@@ -162,15 +162,16 @@ func resolveAndCreateAuthor(
 
 	// Skip if already present. Nothing is written, so this needs no guard.
 	if existing, _ := authors.GetByAnyForeignID(ctx, top.ForeignID); existing != nil {
-		res.Skipped++
 		// A daily hold can interrupt the initial catalogue after the author was
 		// committed. A rerun must queue it again, without repopulating a catalogue
 		// the user deliberately emptied (the marker survives book deletion).
 		populated, err := authors.CataloguePopulatedAt(ctx, existing.ID)
 		if err != nil {
+			// Counted once, as a failure, not also as skipped.
 			res.fail(name, err.Error())
 			return nil
 		}
+		res.Skipped++
 		if populated == nil {
 			return existing
 		}

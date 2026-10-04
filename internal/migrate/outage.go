@@ -64,7 +64,9 @@ type primaryOutage struct {
 func (p *primaryOutage) observe(source string, o metadata.SearchOutcome) {
 	var daily *metadata.DailyQuotaError
 	switch {
-	case errors.As(o.FirstErr, &daily):
+	// Only the primary's hold stops the import. A held enricher's error can be
+	// FirstErr while the primary answered, and that lookup is fine.
+	case o.PrimaryFailed && errors.As(o.FirstErr, &daily):
 		p.streak, p.last = primaryOutageThreshold, o
 	case o.Primary != "" && slices.Contains(o.Answered, o.Primary):
 		p.streak = 0
