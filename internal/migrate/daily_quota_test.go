@@ -139,7 +139,7 @@ func TestDailyQuotaFailedCatalogueReadCountsOnce(t *testing.T) {
 		return []models.Author{{Name: name, ForeignID: "hc:" + name}}, nil
 	}
 	res := newResult()
-	if got := resolveAndCreateAuthor(ctx, "csv", "Existing", true, authors, settings, metadata.NewAggregator(p), &primaryOutage{}, res); got != nil {
+	if got := resolveAndCreateAuthor(ctx, "csv", "Existing", true, authors, settings, metadata.NewAggregator(p), &primaryOutage{}, newLibraryAuthors(authors), res); got != nil {
 		t.Fatal("author requeued despite failed marker read")
 	}
 	if res.Errors != 1 || res.Skipped != 0 {
